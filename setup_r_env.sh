@@ -366,205 +366,142 @@ fn_setup_bspm() {
     if [[ ! -d "$r_profile_dir" ]]; then _run_command "Create Rprofile.site dir ${r_profile_dir}" mkdir -p "$r_profile_dir"; fi
     if [[ ! -f "$R_PROFILE_SITE_PATH" && ! -L "$R_PROFILE_SITE_PATH" ]]; then _run_command "Touch Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"; fi
 
-    _log "INFO" "Adding R2U repository..."
+    _log "INFO" "Adding R2U repository (for bspm and binary R packages)..."
     if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "R2U repository already configured."
     else
         local r2u_add_script_url="${R2U_REPO_URL_BASE}/add_cranapt_${UBUNTU_CODENAME}.sh"
         _log "INFO" "Downloading R2U setup script: ${r2u_add_script_url}"
         _run_command "Download R2U setup script" curl -sSLf "${r2u_add_script_url}" -o /tmp/add_cranapt.sh
-        _log "INFO" "Executing R2U repository setup script..."
-        _run_command "Execute R2U repository setup script" bash /tmp/add_cranapt.sh
+        _log "INFO" "Executing R2U repository setup script (this will run apt update)..."
+        # The script from eddelbuettel itself should handle errors and output.
+        if ! bash /tmp/add_cranapt.sh >> "$LOG_FILE" 2>&1; then
+            _log "ERROR" "R2U repository setup script failed. Check log for details from the script."
+            # Optionally, display tail of log here
+            rm -f /tmp/add_cranapt.sh
+            return 1 # Critical failure
+        fi
+        _log "INFO" "R2U repository setup script executed."
         rm -f /tmp/add_cranapt.sh
     fi
 
-    _log "INFO" "Installing bspm R package..."
-    local bspm_check_cmd='if(requireNamespace("bspm", quietly=TRUE)) "installed" else "not_installed"'
-    if [[ $(Rscript -e "$bspm_check_cmd" 2>/dev/null) == "installed" ]]; then
+    _log "INFO" "Installing 'bspm' R package if not already present..."
+    # Check if bspm is installed using a simple R command
+    # Redirect stderr to /dev/null to suppress 'cannot open file ... : No such file or directory' if Rprofile.site doesn't exist yet or is empty
+    # This specific Rscript call should not rely on Rprofile.site for bspm to be loadable for this check.
+    if Rscript -e 'if(!requireNamespace("bspm", quietly=TRUE)) q(status=1)' 2>/dev/null; then
         _log "INFO" "bspm R package already installed."
     else
-        _run_command "Install bspm R package" Rscript -e "install.packages('bspm', repos='${CRAN_REPO_URL_SRC}')"
-    fi
-
-    _backup_file "$R_PROFILE_SITE_PATH"
-    _log "INFO" "Ensuring correct bspm activation in ${R_PROFILE_SITE_PATH} (for all users and non-root)..."
-    
-    # Create a more robust bspm configuration block
-    local bspm_config_block=$(cat <<'EOB'
-# Begin bspm configuration block
-if (requireNamespace("bspm", quietly = TRUE)) {
-  # Allow system requirements to be installed without prompting
-  options(bspm.allow.sysreqs = TRUE)
-  
-  # Enable bspm for package management
-  tryCatch({
-    suppressMessages(bspm::enable())
-    
-    # Verify bspm is managing packages
-    if (!isTRUE(getOption("bspm.MANAGES"))) {
-      warning("bspm::enable() did not set bspm.MANAGES to TRUE. Trying again with explicit parameters.")
-      suppressMessages(bspm::enable(global = TRUE))
-    }
-  }, error = function(e) {
-    warning("Error in bspm::enable(): ", conditionMessage(e), 
-            "\nPackages will be installed via standard methods.")
-  })
-}
-# End bspm configuration block
-EOB
-)
-
-    # Check if the bspm configuration block already exists
-    if grep -qF "Begin bspm configuration block" "$R_PROFILE_SITE_PATH"; then
-        _log "INFO" "bspm configuration block already exists in Rprofile.site. Updating..."
-        # Remove existing block and add the new one
-        local temp_file=$(mktemp)
-        sed '/# Begin bspm configuration block/,/# End bspm configuration block/d' "$R_PROFILE_SITE_PATH" > "$temp_file"
-        echo "$bspm_config_block" >> "$temp_file"
-        _run_command "Update bspm config in ${R_PROFILE_SITE_PATH}" cat "$temp_file" > "$R_PROFILE_SITE_PATH"
-        rm -f "$temp_file"
-    else
-        # Check for simple enable lines and remove them if found
-        if grep -qE 'bspm::enable\(\)|bspm\.allow\.sysreqs' "$R_PROFILE_SITE_PATH"; then
-            _log "INFO" "Found simple bspm lines. Replacing with full configuration block..."
-            local temp_file=$(mktemp)
-            grep -v -E 'bspm::enable\(\)|bspm\.allow\.sysreqs' "$R_PROFILE_SITE_PATH" > "$temp_file"
-            echo "$bspm_config_block" >> "$temp_file"
-            _run_command "Replace simple bspm lines with config block in ${R_PROFILE_SITE_PATH}" cat "$temp_file" > "$R_PROFILE_SITE_PATH"
-            rm -f "$temp_file"
-        else
-            # Just append the block
-            _run_command "Append bspm config block to ${R_PROFILE_SITE_PATH}" sh -c "echo '$bspm_config_block' >> '$R_PROFILE_SITE_PATH'"
-        fi
-    fi
-    
-    _log "INFO" "bspm.allow.sysreqs=TRUE and bspm::enable() ensured in Rprofile.site."
-    
-    _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
-    ( cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 2>&1 ) || _log "WARN" "Could not display Rprofile.site content."
-
-    _log "INFO" "Checking bspm status and activation as per official documentation..."
-    
-    # Create a robust verification script
-    local bspm_verify_r_script 
-    read -r -d '' bspm_verify_r_script << 'EOF'
-# First, ensure we have the bspm package
-if (!requireNamespace("bspm", quietly = TRUE)) {
-  stop("bspm package is not installed.")
-}
-
-# Source the Rprofile.site file directly to ensure configuration is loaded
-site_path <- Sys.getenv("R_PROFILE_SITE_PATH")
-if (file.exists(site_path)) {
-  cat("Sourcing Rprofile.site from:", site_path, "\n")
-  source(site_path)
-} else {
-  cat("Warning: Cannot find Rprofile.site at:", site_path, "\n")
-}
-
-# Check if bspm is managing packages
-bspm_manages <- getOption("bspm.MANAGES")
-cat("Current bspm.MANAGES value:", ifelse(is.null(bspm_manages), "NULL", as.character(bspm_manages)), "\n")
-
-# If not managing, try to enable it directly
-if (!isTRUE(bspm_manages)) {
-  cat("bspm.MANAGES is not TRUE. Attempting direct activation...\n")
-  
-  # Try with explicit parameters
-  tryCatch({
-    suppressMessages(bspm::enable(global = TRUE))
-    bspm_manages <- getOption("bspm.MANAGES")
-    cat("After direct enable, bspm.MANAGES is now:", ifelse(is.null(bspm_manages), "NULL", as.character(bspm_manages)), "\n")
-  }, error = function(e) {
-    cat("Error during direct bspm::enable():", conditionMessage(e), "\n")
-  })
-}
-
-# Final verification
-bspm_manages <- getOption("bspm.MANAGES")
-if (!isTRUE(bspm_manages)) {
-  stop("bspm is installed but NOT managing packages (bspm.MANAGES!=TRUE).")
-}
-
-cat("Success: bspm is properly configured and managing packages.\n")
-EOF
-
-    # Pass the R_PROFILE_SITE_PATH to the R script
-    set +e
-    bspm_status_output=$(R_PROFILE_SITE_PATH="$R_PROFILE_SITE_PATH" Rscript -e "$bspm_verify_r_script" 2>&1)
-    bspm_status_rc=$?
-    set -e
-    
-    # Test a small package installation if verification succeeded
-    if [[ $bspm_status_rc -eq 0 ]]; then
-        _log "INFO" "bspm verification successful. Testing package installation..."
-        
-        # Create a test script to verify package installation works
-        local bspm_test_install_script
-        read -r -d '' bspm_test_install_script << 'EOF'
-# Source the Rprofile.site file directly
-site_path <- Sys.getenv("R_PROFILE_SITE_PATH")
-if (file.exists(site_path)) {
-  source(site_path)
-}
-
-# Verify bspm is managing packages
-if (!requireNamespace("bspm", quietly = TRUE)) {
-  stop("bspm package is not installed.")
-}
-
-if (!isTRUE(getOption("bspm.MANAGES"))) {
-  stop("bspm is not managing packages. Check configuration.")
-}
-
-# Try to install a small test package
-cat("Testing package installation via bspm...\n")
-test_pkg <- "jsonlite"  # Small package for testing
-
-if (requireNamespace(test_pkg, quietly = TRUE)) {
-  cat("Test package", test_pkg, "is already installed.\n")
-} else {
-  cat("Installing test package", test_pkg, "via bspm...\n")
-  install.packages(test_pkg)
-  
-  if (requireNamespace(test_pkg, quietly = TRUE)) {
-    cat("Successfully installed", test_pkg, "via bspm.\n")
-  } else {
-    stop("Failed to install test package via bspm.")
-  }
-}
-
-cat("bspm package management test completed successfully.\n")
-EOF
-
-        set +e
-        test_install_output=$(R_PROFILE_SITE_PATH="$R_PROFILE_SITE_PATH" Rscript -e "$bspm_test_install_script" 2>&1)
-        test_install_rc=$?
-        set -e
-        
-        if [[ $test_install_rc -eq 0 ]]; then
-            _log "INFO" "bspm package installation test successful."
-            _log "INFO" "bspm setup and verification completed successfully."
-            return 0
-        else
-            _log "ERROR" "bspm package installation test failed (RC: $test_install_rc)."
-            _log "ERROR" "Test output: $test_install_output"
+        _log "INFO" "bspm R package not found or not loadable, attempting installation..."
+        _run_command "Install 'bspm' R package" Rscript -e "install.packages('bspm', repos='${CRAN_REPO_URL_SRC}')"
+        # Verify installation
+        if ! Rscript -e 'if(!requireNamespace("bspm", quietly=TRUE)) q(status=1)' 2>/dev/null; then
+            _log "ERROR" "Failed to install 'bspm' R package."
             return 1
         fi
+        _log "INFO" "bspm R package installed successfully."
+    fi
+
+
+    _backup_file "$R_PROFILE_SITE_PATH"
+    _log "INFO" "Ensuring correct bspm activation in ${R_PROFILE_SITE_PATH}..."
+    # Recommended lines for bspm activation
+    local bspm_line1='options(bspm.allow.sysreqs=TRUE)'
+    local bspm_line2='if (interactive() || Sys.getenv("RSTUDIO") == "1") { suppressMessages(bspm::enable()) }'
+    # Alternative for non-interactive Rscript where bspm might still be desired
+    # local bspm_line2='suppressMessages(bspm::enable())' 
+    # For server environments, often the non-interactive case is also important for bspm (e.g. installing packages in scripts)
+    # The R2U project often suggests the simpler `suppressMessages(bspm::enable())` for system-wide `Rprofile.site`.
+
+    # Remove any existing bspm lines to avoid duplicates or old configurations
+    if grep -q 'bspm::enable()' "$R_PROFILE_SITE_PATH" || grep -q 'bspm.allow.sysreqs' "$R_PROFILE_SITE_PATH"; then
+        _log "INFO" "Found existing bspm lines in Rprofile.site. Removing them before adding updated lines."
+        # Create a temporary file without the bspm lines
+        grep -v 'bspm::enable()' "$R_PROFILE_SITE_PATH" | grep -v 'bspm.allow.sysreqs' > "${R_PROFILE_SITE_PATH}.tmp"
+        # Check if tmp file is smaller (meaning lines were removed), then move
+        if [ "$(wc -c < "${R_PROFILE_SITE_PATH}.tmp")" -lt "$(wc -c < "$R_PROFILE_SITE_PATH")" ] || \
+           [ ! -s "$R_PROFILE_SITE_PATH" ] ; then # Or if original was empty
+            _run_command "Move temp Rprofile.site" mv "${R_PROFILE_SITE_PATH}.tmp" "$R_PROFILE_SITE_PATH"
+        else
+            _log "INFO" "No bspm lines were actually removed by grep -v. Keeping original or .tmp is same."
+            rm -f "${R_PROFILE_SITE_PATH}.tmp" # Clean up if no change
+        fi
+    fi
+
+    # Add the lines ensuring they are at the end of the file or a suitable place
+    # Using printf for better control over newlines
+    printf "\n# BSPM Configuration (added by setup_r_env.sh)\n%s\n%s\n" "$bspm_line1" "$bspm_line2" >> "$R_PROFILE_SITE_PATH"
+    _log "INFO" "'${bspm_line1}' and '${bspm_line2}' ensured in Rprofile.site."
+    
+    _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
+    (cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE") || _log "WARN" "Could not display Rprofile.site content."
+
+    _log "INFO" "Verifying bspm activation (by checking getOption('bspm.MANAGES') in a new R session)..."
+    # This Rscript MUST run with --vanilla to ensure it freshly reads Rprofile.site
+    # It also needs to be run as a user that would normally use R, but since we are root,
+    # R's site-wide profile should apply.
+    # Adding a small delay to ensure filesystem changes are synced, though likely not needed.
+    # sleep 1 
+    
+    # Run Rscript with set +e locally to capture its output and RC
+    set +e # Temporarily disable exit on error
+    local r_verify_output
+    local r_verify_rc
+    r_verify_output=$(Rscript --vanilla -e '
+        cat("Starting bspm verification R script...\n")
+        # Rprofile.site should have been processed by now if --vanilla is used.
+        
+        bspm_loaded <- requireNamespace("bspm", quietly = TRUE)
+        cat(paste("bspm package loadable:", bspm_loaded, "\n"))
+
+        if (!bspm_loaded) {
+            cat("ERROR: bspm package could not be loaded.\n", file=stderr())
+            quit(status = 10) # Custom exit code for not loadable
+        }
+
+        # Explicitly call bspm::config() to see what it thinks
+        # bspm::config() prints its status.
+        cat("Output of bspm::config():\n")
+        tryCatch({
+            print(bspm::config())
+        }, error = function(e) {
+            cat(paste("Error calling bspm::config():", conditionMessage(e), "\n"), file=stderr())
+        })
+        
+        bspm_manages_opt <- getOption("bspm.MANAGES")
+        cat(paste0("getOption(\"bspm.MANAGES\") is: ", ifelse(is.null(bspm_manages_opt), "NULL", as.character(bspm_manages_opt)), "\n"))
+
+        if (isTRUE(bspm_manages_opt)) {
+            cat("SUCCESS: bspm appears active and managing packages.\n")
+            quit(status = 0)
+        } else {
+            cat("ERROR: bspm is installed but NOT managing packages (getOption(\"bspm.MANAGES\") is not TRUE).\n", file=stderr())
+            # Further debug info
+            cat("Sys.getenv(\"PATH\"): ", Sys.getenv("PATH"), "\n")
+            cat("Sys.which(\"apt-get\"): ", Sys.which("apt-get"), "\n")
+            cat("Sys.which(\"sudo\"): ", Sys.which("sudo"), "\n")
+            quit(status = 11) # Custom exit code for not managing
+        }
+    ')
+    r_verify_rc=$?
+    set -e # Re-enable exit on error
+
+    _log "INFO" "BSPM Verification R Script Output:\n${r_verify_output}"
+    # Also tee to main log
+    echo -e "BSPM Verification R Script Output (RC: $r_verify_rc):\n${r_verify_output}" >> "$LOG_FILE"
+
+
+    if [[ $r_verify_rc -eq 0 ]]; then
+        _log "INFO" "bspm setup and verification completed successfully."
     else
-        _log "ERROR" "bspm verification failed (RC: $bspm_status_rc)."
-        _log "ERROR" "Verification output: $bspm_status_output"
-        return 1
+        _log "ERROR" "bspm verification FAILED (Rscript RC: $r_verify_rc)."
+        _log "ERROR" "Check R output above and in the log. Common issues:"
+        _log "ERROR" "- Rprofile.site not processed correctly by 'Rscript --vanilla'."
+        _log "ERROR" "- bspm::enable() failing silently due to permissions or environment issues for apt."
+        _log "ERROR" "- Ensure 'apt-get' and potentially 'sudo' are in PATH for Rscript if bspm needs them."
+        return 1 # Signal failure of fn_setup_bspm
     fi
 }
-
-_install_r_pkg_list() {
-    local pkg_type="$1"; shift; local r_packages_list=("${@}")
-    if [[ ${#r_packages_list[@]} -eq 0 ]]; then _log "INFO" "No ${pkg_type} R pkgs in list."; return; fi
-
-    _log "INFO" "bspm setup and verification completed."
-}
-
 
 _install_r_pkg_list() {
     local pkg_type="$1"; shift; local r_packages_list=("${@}")
