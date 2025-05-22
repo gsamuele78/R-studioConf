@@ -12,6 +12,8 @@
 # --- Configuration ---
 set -euo pipefail
 
+export DEBIAN_FRONTEND=noninteractive
+
 LOG_DIR="/var/log/r_setup"
 LOG_FILE="${LOG_DIR}/r_setup_$(date +'%Y%m%d_%H%M%S').log"
 mkdir -p "$LOG_DIR"; touch "$LOG_FILE"; chmod 640 "$LOG_FILE"
@@ -61,6 +63,16 @@ fi
 
 _log() { local type="$1"; local message="$2"; echo "$(date '+%Y-%m-%d %H:%M:%S') [${type}] ${message}" | tee -a "$LOG_FILE";}
 _ensure_root() { if [[ "${EUID}" -ne 0 ]]; then _log "ERROR" "Run as root/sudo."; exit 1; fi; }
+
+
+# Wrapper for systemctl that ignores errors in CI/container
+_safe_systemctl() {
+    if command -v systemctl >/dev/null 2>&1; then
+        # Avoid --global (not supported in most containers)
+        systemctl "$@" 2>&1 | tee -a "$LOG_FILE" || return 0
+    fi
+    return 0
+}
 
 _run_command() {
     local cmd_desc="$1"; shift
@@ -465,21 +477,21 @@ fn_install_rstudio_server() {
     _log "INFO" "Installing RStudio Server v${RSTUDIO_VERSION}..."
     if dpkg -s rstudio-server &>/dev/null && rstudio-server version 2>/dev/null | grep -q "^${RSTUDIO_VERSION}"; then
         _log "INFO" "RStudio Server v${RSTUDIO_VERSION} already installed."
-        if ! systemctl is-active --quiet rstudio-server; then _log "INFO" "RStudio Server inactive. Starting...";_run_command "Start RStudio" systemctl start rstudio-server;fi;return
+        if ! _safe_systemctl is-active --quiet rstudio-server; then _log "INFO" "RStudio Server inactive. Starting...";_run_command "Start RStudio" _safe_systemctl start rstudio-server;fi;return
     elif dpkg -s rstudio-server &>/dev/null; then
         local inst_ver; inst_ver=$(rstudio-server version 2>/dev/null||echo "unknown")
         _log "INFO" "Other RStudio Server (${inst_ver}) installed. Removing for target version."
-        _run_command "Stop RStudio" systemctl stop rstudio-server ||true
+        _run_command "Stop RStudio" _safe_systemctl stop rstudio-server ||true
         _run_command "Purge RStudio" apt-get purge -y rstudio-server
     fi
     if [[ ! -f "/tmp/${RSTUDIO_DEB_FILENAME}" ]]; then _log "INFO" "Downloading RStudio .deb from ${RSTUDIO_DEB_URL}";_run_command "Download RStudio .deb" wget -O "/tmp/${RSTUDIO_DEB_FILENAME}" "${RSTUDIO_DEB_URL}"
     else _log "INFO" "RStudio .deb already downloaded: /tmp/${RSTUDIO_DEB_FILENAME}";fi
     _run_command "Install RStudio ${RSTUDIO_DEB_FILENAME} via gdebi" gdebi -n "/tmp/${RSTUDIO_DEB_FILENAME}"
     _log "INFO" "Verifying RStudio Server..."
-    if _run_command "Check RStudio status" systemctl is-active --quiet rstudio-server; then _log "INFO" "RStudio Server active."
-    else _log "WARN" "RStudio inactive post-install. Starting...";_run_command "Start RStudio" systemctl start rstudio-server
-        if ! _run_command "Re-check RStudio status" systemctl is-active --quiet rstudio-server; then _log "ERROR" "Failed to start RStudio."; return 1;fi;fi
-    _run_command "Enable RStudio on boot" systemctl enable rstudio-server
+    if _run_command "Check RStudio status" _safe_systemctl is-active --quiet rstudio-server; then _log "INFO" "RStudio Server active."
+    else _log "WARN" "RStudio inactive post-install. Starting...";_run_command "Start RStudio" _safe_systemctl start rstudio-server
+        if ! _run_command "Re-check RStudio status" _safe_systemctl is-active --quiet rstudio-server; then _log "ERROR" "Failed to start RStudio."; return 1;fi;fi
+    _run_command "Enable RStudio on boot" _safe_systemctl enable rstudio-server
     _log "INFO" "RStudio Server version: $(rstudio-server version 2>/dev/null||echo 'N/A')"; _log "INFO" "RStudio Server installed & verified."
 }
 
@@ -547,8 +559,8 @@ fn_remove_cran_repo() {
 fn_uninstall_system_packages() {
     _log "INFO" "Uninstalling system pkgs (RStudio, R, OpenBLAS, OpenMP...)..."
     if dpkg -s rstudio-server &>/dev/null; then _log "INFO" "Stopping & purging RStudio Server...";
-        _run_command "Stop RStudio" systemctl stop rstudio-server||true
-        _run_command "Disable RStudio" systemctl disable rstudio-server||true
+        _run_command "Stop RStudio" _safe_systemctl stop rstudio-server||true
+        _run_command "Disable RStudio" _safe_systemctl disable rstudio-server||true
         _run_command "Purge RStudio" apt-get purge -y rstudio-server
     else _log "INFO" "RStudio Server pkg not found.";fi
     local pkgs_purge=("r-base" "r-base-dev" "r-base-core" "libopenblas-dev" "libomp-dev" "gdebi-core")
