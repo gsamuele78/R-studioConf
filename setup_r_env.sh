@@ -14,12 +14,12 @@
 set -euo pipefail 
 
 # Logging
-LOG_DIR="/tmp/var/log/r_setup"
+LOG_DIR="/var/log/r_setup"
 LOG_FILE="${LOG_DIR}/r_setup_$(date +'%Y%m%d_%H%M%S').log"
 mkdir -p "$LOG_DIR"; touch "$LOG_FILE"; chmod 640 "$LOG_FILE" 
 
 # Backup
-BACKUP_DIR="/tmp/opt/r_setup_backups"; mkdir -p "$BACKUP_DIR"
+BACKUP_DIR="/opt/r_setup_backups"; mkdir -p "$BACKUP_DIR"
 
 # System
 # UBUNTU_CODENAME_DETECTED is an initial detection. UBUNTU_CODENAME (global) will be finalized in fn_pre_flight_checks.
