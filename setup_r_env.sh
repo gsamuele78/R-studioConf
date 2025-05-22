@@ -175,7 +175,6 @@ fn_get_latest_rstudio_info() {
     RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
 }
 
-
 # --- Core Functions ---
 fn_pre_flight_checks() {
     _log "INFO" "Performing pre-flight checks..."; _ensure_root
