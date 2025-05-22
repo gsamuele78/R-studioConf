@@ -105,7 +105,7 @@ _get_r_profile_site_path() {
 
 fn_get_latest_rstudio_info() {
     _log "INFO" "Attempting to detect latest RStudio Server for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}..."
-    local download_page_content="" latest_url="" temp_version="" grep_output="" grep_rc=0 curl_rc=0
+    local download_page_content="" latest_url="" temp_version=""
 
     local current_rstudio_version="$RSTUDIO_VERSION"
     local current_rstudio_deb_url="$RSTUDIO_DEB_URL"
@@ -127,9 +127,9 @@ fn_get_latest_rstudio_info() {
     fi
 
     _log "INFO" "Fetching RStudio download page..."
-    download_page_content=$(curl --fail --location --connect-timeout 15 -sS "https://posit.co/download/rstudio-server/") || curl_rc=$?
-    if [[ -z "$download_page_content" || ${curl_rc:-0} -ne 0 ]]; then
-        _log "WARN" "curl failed to fetch RStudio page (RC:${curl_rc:-0}). Using fallback version: ${current_rstudio_version}"
+    download_page_content=$(curl --fail --location --connect-timeout 15 -sS "https://posit.co/download/rstudio-server/")
+    if [[ -z "$download_page_content" ]]; then
+        _log "WARN" "RStudio download page empty. Using fallback version: ${current_rstudio_version}"
         RSTUDIO_VERSION="$current_rstudio_version"
         RSTUDIO_DEB_URL="$current_rstudio_deb_url"
         RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
@@ -137,7 +137,6 @@ fn_get_latest_rstudio_info() {
     fi
 
     grep_output=$(echo "$download_page_content" | grep -Eo "https://download[0-9]*\.rstudio\.org/server/${UBUNTU_CODENAME}/${RSTUDIO_ARCH}/rstudio-server-([0-9A-Za-z._-]+)-${RSTUDIO_ARCH}\.deb" | head -n 1)
-    grep_rc=$?
 
     if [[ -z "$grep_output" ]]; then
         _log "WARN" "Could not find a RStudio Server .deb URL for ${UBUNTU_CODENAME}/${RSTUDIO_ARCH} on the download page. Falling back to default version."
@@ -175,6 +174,8 @@ fn_get_latest_rstudio_info() {
     RSTUDIO_DEB_URL="$current_rstudio_deb_url"
     RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
 }
+
+
 # --- Core Functions ---
 fn_pre_flight_checks() {
     _log "INFO" "Performing pre-flight checks..."; _ensure_root
