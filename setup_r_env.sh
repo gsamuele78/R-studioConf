@@ -387,16 +387,15 @@ fn_setup_bspm() {
     fi
 
     _backup_file "$R_PROFILE_SITE_PATH"
-    _log "INFO" "Enabling bspm in ${R_PROFILE_SITE_PATH}..."
-    # FIX: Allow bspm to manage packages for non-root by setting option before enabling
-    local bspm_enable_line='options(bspm.allow.sysreqs=TRUE);suppressMessages(bspm::enable())'
-    if grep -qF -- "suppressMessages(bspm::enable())" "$R_PROFILE_SITE_PATH"; then
-        _log "INFO" "bspm enable line already present in Rprofile.site."
-    else
-        _run_command "Append bspm enable to ${R_PROFILE_SITE_PATH}" sh -c "echo '$bspm_enable_line' | tee -a '$R_PROFILE_SITE_PATH'"
-        _log "INFO" "bspm enabled in Rprofile.site."
-    fi
-    
+    _log "INFO" "Ensuring correct bspm activation in ${R_PROFILE_SITE_PATH} (for all users and non-root)..."
+    local bspm_first_line='options(bspm.allow.sysreqs=TRUE)'
+    local bspm_second_line='suppressMessages(bspm::enable())'
+    # Remove old bspm activation lines if present
+    sed -i '/bspm\.allow\.sysreqs/d;/bspm::enable()/d' "$R_PROFILE_SITE_PATH"
+    echo "$bspm_first_line" >> "$R_PROFILE_SITE_PATH"
+    echo "$bspm_second_line" >> "$R_PROFILE_SITE_PATH"
+    _log "INFO" "bspm.allow.sysreqs=TRUE and bspm::enable() ensured in Rprofile.site."
+
     _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
     ( cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 2>&1 ) || _log "WARN" "Could not display Rprofile.site content."
 
@@ -433,6 +432,7 @@ if (isTRUE(getOption("bspm.MANAGES"))) {
 
     _log "INFO" "bspm setup and verification completed."
 }
+
 
 _install_r_pkg_list() {
     local pkg_type="$1"; shift; local r_packages_list=("${@}")
