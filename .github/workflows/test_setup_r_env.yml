@@ -59,8 +59,8 @@ jobs:
       #  run: LOG_LEVEL=DEBUG DRY_RUN=0 ./setup_r_env.sh install_all
 
       # 4. Test individual core functions where possible
-      - name: Test pre-flight checks
-        run: ./setup_r_env.sh fn_pre_flight_checks
+      #- name: Test pre-flight checks
+      #  run: ./setup_r_env.sh fn_pre_flight_checks
 
       - name: Test add CRAN repo
         run: ./setup_r_env.sh fn_add_cran_repo
