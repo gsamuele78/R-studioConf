@@ -205,7 +205,8 @@ fn_pre_flight_checks() {
     RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${UBUNTU_CODENAME}/${RSTUDIO_ARCH}/rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
     RSTUDIO_DEB_FILENAME="rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
     
-    fn_get_latest_rstudio_info # Attempt to update RSTUDIO_VERSION, _DEB_URL, _DEB_FILENAME
+    #doen't work the parser
+    #fn_get_latest_rstudio_info # Attempt to update RSTUDIO_VERSION, _DEB_URL, _DEB_FILENAME
     
     CRAN_REPO_LINE="deb ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/" # Finalize CRAN repo line
     _log "INFO" "RStudio version to use: ${RSTUDIO_VERSION} (URL: ${RSTUDIO_DEB_URL})"
@@ -218,6 +219,14 @@ fn_pre_flight_checks() {
 
 fn_add_cran_repo() {
     _log "INFO" "Adding CRAN repository..."
+
+    # Ensure add-apt-repository is available
+    if ! command -v add-apt-repository >/dev/null 2>&1; then
+        _log "INFO" "add-apt-repository not found. Installing software-properties-common."
+        apt-get update -y
+        apt-get install -y software-properties-common
+    fi
+
     if grep -qrE "^deb .*${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "CRAN repository '${CRAN_REPO_LINE}' already configured."
     else
