@@ -77,7 +77,7 @@ fi
 
 
 # --- Helper Functions ---
-_log() { local type="$1"; local message="$2"; echo "$(date '+%Y-%m-%d %H:%M:%S') [${type}] ${message}" | tee -a "$LOG_FILE";}
+_log() { local type="$1"; local message="$2"; echo "$(date '+%Y-%m-%d %H:%M:%S') [${type}] ${message}" | tee -a "$LOG_FILE"; }
 _ensure_root() { if [[ "${EUID}" -ne 0 ]]; then _log "ERROR" "Run as root/sudo."; exit 1; fi; }
 
 _run_command() {
@@ -94,18 +94,28 @@ _run_command() {
 }
 
 _backup_file() { local fp="$1"; if [[ -f "$fp" || -L "$fp" ]]; then local bn; bn="$(basename "$fp")_$(date +'%Y%m%d%H%M%S').bak"; _log "INFO" "Backup ${fp} to ${BACKUP_DIR}/${bn}"; cp -a "$fp" "${BACKUP_DIR}/${bn}"; fi; }
+
 _restore_latest_backup() { local orig_fp="$1"; local fn_pat; local latest_bkp; fn_pat="$(basename "$orig_fp")_*.bak"; latest_bkp=$(find "$BACKUP_DIR" -name "$fn_pat" -print0|xargs -0 ls -1tr 2>/dev/null | tail -n 1); if [[ -n "$latest_bkp" && -f "$latest_bkp" ]]; then cp -a "$latest_bkp" "$orig_fp"; fi; }
 
 
 _get_r_profile_site_path() {
+    local log_details=false
+    if [[ -z "$R_PROFILE_SITE_PATH" && -z "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then log_details=true; fi
+    if $log_details; then _log "INFO" "Determining Rprofile.site path..."; fi
+
     if [[ -n "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then
-        R_PROFILE_SITE_PATH="$USER_SPECIFIED_R_PROFILE_SITE_PATH"
+        if [[ "$R_PROFILE_SITE_PATH" != "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then R_PROFILE_SITE_PATH="$USER_SPECIFIED_R_PROFILE_SITE_PATH"; _log "INFO" "Using user-specified R_PROFILE_SITE_PATH: ${USER_SPECIFIED_R_PROFILE_SITE_PATH}"; fi
         return
     fi
+
     if command -v R &>/dev/null; then
-        local r_h_o; r_h_o=$(R RHOME 2>/dev/null||echo ""); if [[ -n "$r_h_o" && -d "$r_h_o" ]]; then R_PROFILE_SITE_PATH="${r_h_o}/etc/Rprofile.site"; return; fi
+        local r_h_o; r_h_o=$(R RHOME 2>/dev/null||echo ""); if [[ -n "$r_h_o" && -d "$r_h_o" ]]; then local det_path="${r_h_o}/etc/Rprofile.site"; if [[ "$R_PROFILE_SITE_PATH" != "$det_path" ]]; then _log "INFO" "Auto R_PROFILE_SITE_PATH (R RHOME): ${det_path}"; fi; R_PROFILE_SITE_PATH="$det_path"; return; fi
     fi
-    R_PROFILE_SITE_PATH="/usr/lib/R/etc/Rprofile.site"
+    local def_apt="/usr/lib/R/etc/Rprofile.site"; local def_loc="/usr/local/lib/R/etc/Rprofile.site"; local new_det_path=""
+    if [[ -f "$def_apt" || -L "$def_apt" ]]; then new_det_path="$def_apt"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "Auto R_PROFILE_SITE_PATH (apt): ${new_det_path}"; fi
+    elif [[ -f "$def_loc" || -L "$def_loc" ]]; then new_det_path="$def_loc"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "Auto R_PROFILE_SITE_PATH (local): ${new_det_path}"; fi
+    else new_det_path="$def_apt"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "No Rprofile.site found. Default: ${new_det_path}"; fi; fi
+    R_PROFILE_SITE_PATH="$new_det_path"
 }
 
 # Wrapper for systemctl that ignores errors in CI/container
@@ -578,7 +588,6 @@ _install_r_pkg_list() {
 
 fn_install_r_build_deps() {
     _log "INFO" "Installing system dependencies for building R packages (devtools, etc)..."
-    # List of required system packages for building devtools and most common R extensions from source
     local build_deps=(
         build-essential
         libcurl4-openssl-dev
@@ -601,17 +610,48 @@ fn_install_r_build_deps() {
     sudo apt-get install -y "${build_deps[@]}"
 }
 
+_install_r_pkg_list() {
+    local pkg_type="$1"; shift; local r_packages_list=("${@}")
+    if [[ ${#r_packages_list[@]} -eq 0 ]]; then _log "INFO" "No ${pkg_type} R pkgs in list."; return; fi
+    _log "INFO" "Installing ${pkg_type} R packages: ${r_packages_list[*]}"
+    for pkg_name_full in "${r_packages_list[@]}"; do
+        local pkg_name_short; local install_script=""
+        if [[ "$pkg_type" == "CRAN" ]]; then
+            pkg_name_short="$pkg_name_full"
+            install_script="
+if (!requireNamespace('$pkg_name_short', quietly=TRUE)) {
+    cat('Pkg $pkg_name_short not found, installing...\\n')
+    if (requireNamespace('bspm',quietly=TRUE) && isTRUE(getOption('bspm.MANAGES',FALSE))) {
+        cat('Installing $pkg_name_short via bspm...\\n')
+        tryCatch(bspm::install.packages('$pkg_name_short',quiet=FALSE),
+            error=function(e){cat('bspm fail for $pkg_name_short:',conditionMessage(e),'\\nFallback...\\n');install.packages('$pkg_name_short',repos='${CRAN_REPO_URL_SRC}')})
+    } else { cat('bspm not managing. Using install.packages for $pkg_name_short...\\n');install.packages('$pkg_name_short',repos='${CRAN_REPO_URL_SRC}')}
+    if (!requireNamespace('$pkg_name_short',quietly=TRUE)) stop(paste('Failed to install R pkg:', '$pkg_name_short'))
+    else cat('OK R pkg: $pkg_name_short\\n')
+} else cat('R pkg $pkg_name_short already installed.\\n')
+"
+        elif [[ "$pkg_type" == "GitHub" ]]; then
+            pkg_name_short=$(basename "${pkg_name_full%.git}")
+            if [[ "$pkg_name_full" == *"://"* ]]; then
+                install_script="if(!requireNamespace('$pkg_name_short',quietly=TRUE))devtools::install_git('$pkg_name_full')else cat('R pkg $pkg_name_short (git) installed.\\n')"
+            else
+                install_script="if(!requireNamespace('$pkg_name_short',quietly=TRUE))devtools::install_github('$pkg_name_full')else cat('R pkg $pkg_name_short (GitHub) installed.\\n')"
+            fi
+        else _log "WARN" "Unknown pkg type: $pkg_type for $pkg_name_full. Skipping."; continue; fi
+        _run_command "Install/Verify R pkg: $pkg_name_full" Rscript -e "$install_script"
+    done
+    _log "INFO" "${pkg_type} R pkgs install process done."
+}
+
 fn_install_r_packages() {
-    # 1. Install build dependencies (always safe to do before any source build)
     fn_install_r_build_deps
 
-    # 2. Try to install devtools and its system dependencies using bspm (binary, if possible)
     _log "INFO" "Ensuring devtools via bspm if available..."
     local r_bspm_devtools_cmd
     r_bspm_devtools_cmd="
 if (requireNamespace('bspm', quietly=TRUE) && isTRUE(getOption('bspm.MANAGES', FALSE))) {
     tryCatch({
-        bspm::install_packages('devtools', ask=FALSE, quiet=FALSE)
+        bspm::install.packages('devtools', ask=FALSE, quiet=FALSE)
     }, error=function(e) {
         cat('bspm failed for devtools.\\n')
         quit(status=42)
@@ -623,7 +663,6 @@ if (requireNamespace('bspm', quietly=TRUE) && isTRUE(getOption('bspm.MANAGES', F
     local bspm_devtools_rc=$?
     set -e
 
-    # 3. If bspm did not succeed, install devtools build deps with apt and try install.packages
     if [[ $bspm_devtools_rc -ne 0 ]]; then
         _log "WARN" "bspm failed for devtools or not available (RC: $bspm_devtools_rc). Falling back to install via install.packages."
         local r_fallback_devtools_cmd="
@@ -639,10 +678,8 @@ if (!requireNamespace('devtools', quietly=TRUE)) {
         _log "INFO" "devtools installed via bspm."
     fi
 
-    # 4. Install all CRAN packages
     _install_r_pkg_list "CRAN" "${R_PACKAGES_CRAN[@]}"
 
-    # 5. Install GitHub packages using devtools
     if [[ ${#R_PACKAGES_GITHUB[@]} -gt 0 ]]; then
         _log "INFO" "Installing GitHub R packages using devtools..."
         _install_r_pkg_list "GitHub" "${R_PACKAGES_GITHUB[@]}"
@@ -650,7 +687,7 @@ if (!requireNamespace('devtools', quietly=TRUE)) {
         _log "INFO" "No GitHub R packages in list."
     fi
 
-    # 6. Print installed packages and how they were installed (bspm or source)
+    # Print installed packages and how they were installed (bspm or source)
     _log "INFO" "Listing installed R packages with install type (bspm/binary or source)..."
     local r_list_pkgs_cmd="
 get_install_type <- function(pkg) {
@@ -658,10 +695,9 @@ get_install_type <- function(pkg) {
     row <- ip[pkg, , drop = FALSE]
     if (is.na(row[1, 'Built'])) return('unknown')
     if (!is.na(row[1, 'Priority']) && nzchar(row[1, 'Priority'])) return('base/system')
-    bin_dir <- Sys.getenv('R_BSPM_BIN_DIR', '')
     if (requireNamespace('bspm', quietly=TRUE)) {
         info <- tryCatch(bspm::info(pkg), error=function(e) NULL)
-        if (!is.null(info) && isTRUE(info$binary)) return('bspm/binary')
+        if (!is.null(info) && !is.null(info[['binary']]) && isTRUE(info[['binary']])) return('bspm/binary')
     }
     src_dir <- row[1, 'LibPath']
     if (grepl('/site-library/', src_dir) || grepl('/user-library/', src_dir)) return('source')
@@ -670,16 +706,15 @@ get_install_type <- function(pkg) {
 ip <- as.data.frame(installed.packages(fields = c('Package', 'Version', 'LibPath', 'Built', 'Priority')))
 cat(sprintf('%-30s %-16s %-16s %-10s\\n', 'Package', 'Version', 'InstallType', 'LibPath'))
 for (i in seq_len(nrow(ip))) {
-    pkg <- ip$Package[i]
-    v <- ip$Version[i]
+    pkg <- ip[i, 'Package']
+    v <- ip[i, 'Version']
     t <- tryCatch(get_install_type(pkg), error=function(e) 'unknown')
-    l <- ip$LibPath[i]
+    l <- ip[i, 'LibPath']
     cat(sprintf('%-30s %-16s %-16s %-10s\\n', pkg, v, t, l))
 }
 "
     Rscript -e "$r_list_pkgs_cmd"
 }
-
 
 
 fn_install_rstudio_server() {
