@@ -5,56 +5,19 @@
 # Desc:   Installs R, OpenBLAS, OpenMP, RStudio Server, BSPM, and R packages.
 #         Includes auto-detection for latest RStudio Server, uninstall,
 #         and backup/restore for Rprofile.site.
-#         Compatible with both interactive VM use and GitHub Actions CI.
 # Author: Your Name/Team
 # Date:   $(date +%Y-%m-%d)
 ##############################################################################
-
-# --- Environment Detection ---
-# Detect if running in CI environment (GitHub Actions, etc.)
-IS_CI="${CI:-false}"
-if [[ "${GITHUB_ACTIONS:-}" == "true" || "${CI:-}" == "true" ]]; then
-    IS_CI="true"
-fi
-
-# Detect if running interactively
-IS_INTERACTIVE="false"
-if [[ -t 0 && -t 1 && "${IS_CI}" != "true" ]]; then
-    IS_INTERACTIVE="true"
-fi
 
 # --- Configuration ---
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-# Allow configurable paths via environment variables
-LOG_DIR="${R_SETUP_LOG_DIR:-/var/log/r_setup}"
-BACKUP_DIR="${R_SETUP_BACKUP_DIR:-/opt/r_setup_backups}"
-
-# Create log directory with fallback to user-accessible location if permission denied
-if ! mkdir -p "$LOG_DIR" 2>/dev/null; then
-    if [[ "$IS_CI" == "true" ]]; then
-        # In CI, use the home directory or workspace
-        LOG_DIR="${GITHUB_WORKSPACE:-$HOME}/.r_setup_logs"
-    else
-        # For interactive use, try current directory
-        LOG_DIR="$(pwd)/.r_setup_logs"
-    fi
-    mkdir -p "$LOG_DIR"
-    echo "Warning: Could not create log directory at original location. Using $LOG_DIR instead."
-fi
-
+LOG_DIR="/var/log/r_setup"
 LOG_FILE="${LOG_DIR}/r_setup_$(date +'%Y%m%d_%H%M%S').log"
-touch "$LOG_FILE" || { echo "Error: Cannot write to log file $LOG_FILE"; exit 1; }
-chmod 640 "$LOG_FILE" 2>/dev/null || true
-
-# Create backup directory with fallback
-if ! mkdir -p "$BACKUP_DIR" 2>/dev/null; then
-    BACKUP_DIR="${LOG_DIR}/backups"
-    mkdir -p "$BACKUP_DIR"
-    echo "Warning: Could not create backup directory at original location. Using $BACKUP_DIR instead."
-fi
+mkdir -p "$LOG_DIR"; touch "$LOG_FILE"; chmod 640 "$LOG_FILE"
+BACKUP_DIR="/opt/r_setup_backups"; mkdir -p "$BACKUP_DIR"
 
 UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown")
 UBUNTU_CODENAME="$UBUNTU_CODENAME_DETECTED"
@@ -98,24 +61,8 @@ if [[ -n "${CUSTOM_R_PROFILE_SITE_PATH_ENV:-}" ]]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO] Rprofile.site path from env: ${USER_SPECIFIED_R_PROFILE_SITE_PATH}" | tee -a "$LOG_FILE"
 fi
 
-_log() { 
-    local type="$1"; 
-    local message="$2"; 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [${type}] ${message}" | tee -a "$LOG_FILE";
-}
-
-_ensure_root() { 
-    # Skip root check in CI environments if SKIP_ROOT_CHECK is set
-    if [[ "$IS_CI" == "true" && "${SKIP_ROOT_CHECK:-false}" == "true" ]]; then
-        _log "WARN" "Root check skipped in CI environment with SKIP_ROOT_CHECK=true"
-        return 0
-    fi
-    
-    if [[ "${EUID}" -ne 0 ]]; then 
-        _log "ERROR" "This script requires root privileges. Please run with sudo or as root."
-        exit 1
-    fi
-}
+_log() { local type="$1"; local message="$2"; echo "$(date '+%Y-%m-%d %H:%M:%S') [${type}] ${message}" | tee -a "$LOG_FILE";}
+_ensure_root() { if [[ "${EUID}" -ne 0 ]]; then _log "ERROR" "Run as root/sudo."; exit 1; fi; }
 
 
 # Wrapper for systemctl that ignores errors in CI/container
@@ -408,16 +355,22 @@ EOF
 
 
 fn_setup_bspm() {
-    _log "INFO" "Setting up bspm (Binary R Package Manager)..."
-    _get_r_profile_site_path 
+    _log "INFO" "Setting up bspm (Binary R Package Manager) with system-wide installation, dependency checks, and sudo configuration..."
+    _get_r_profile_site_path
 
-    if [[ -z "$R_PROFILE_SITE_PATH" ]]; then 
-         _log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot setup bspm."; return 1
+    if [[ -z "$R_PROFILE_SITE_PATH" ]]; then
+        _log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot setup bspm."; return 1
     fi
-    
+
+    # Ensure directory exists
     local r_profile_dir; r_profile_dir=$(dirname "$R_PROFILE_SITE_PATH")
     if [[ ! -d "$r_profile_dir" ]]; then _run_command "Create Rprofile.site dir ${r_profile_dir}" mkdir -p "$r_profile_dir"; fi
-    if [[ ! -f "$R_PROFILE_SITE_PATH" && ! -L "$R_PROFILE_SITE_PATH" ]]; then _run_command "Touch Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"; fi
+
+    # Check if Rprofile.site exists and create it if it doesn't
+    if [[ ! -f "$R_PROFILE_SITE_PATH" && ! -L "$R_PROFILE_SITE_PATH" ]]; then
+        _log "INFO" "Rprofile.site does not exist, creating it..."
+        _run_command "Create Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"
+    fi
 
     _log "INFO" "Adding R2U repository..."
     if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/; then
@@ -431,196 +384,131 @@ fn_setup_bspm() {
         rm -f /tmp/add_cranapt.sh
     fi
 
-    _log "INFO" "Installing bspm R package..."
-    local bspm_check_cmd='if(requireNamespace("bspm", quietly=TRUE)) "installed" else "not_installed"'
-    if [[ $(Rscript -e "$bspm_check_cmd" 2>/dev/null) == "installed" ]]; then
-        _log "INFO" "bspm R package already installed."
-    else
-        _run_command "Install bspm R package" Rscript -e "install.packages('bspm', repos='${CRAN_REPO_URL_SRC}')"
-    fi
-
-    _backup_file "$R_PROFILE_SITE_PATH"
-    _log "INFO" "Ensuring correct bspm activation in ${R_PROFILE_SITE_PATH} (for all users and non-root)..."
-    
-    # Create a more robust bspm configuration block
-    local bspm_config_block
-    bspm_config_block=$(cat <<'EOB'
-# Begin bspm configuration block
-if (requireNamespace("bspm", quietly = TRUE)) {
-  # Allow system requirements to be installed without prompting
-  options(bspm.allow.sysreqs = TRUE)
-  
-  # Enable bspm for package management
-  tryCatch({
-    suppressMessages(bspm::enable())
-    
-    # Verify bspm is managing packages
-    if (!isTRUE(getOption("bspm.MANAGES"))) {
-      warning("bspm::enable() did not set bspm.MANAGES to TRUE. Trying again with explicit parameters.")
-      suppressMessages(bspm::enable(global = TRUE))
-    }
-  }, error = function(e) {
-    warning("Error in bspm::enable(): ", conditionMessage(e), 
-            "\nPackages will be installed via standard methods.")
-  })
-}
-# End bspm configuration block
-EOB
-)
-
-    # Check if the bspm configuration block already exists
-    if grep -qF "Begin bspm configuration block" "$R_PROFILE_SITE_PATH"; then
-        _log "INFO" "bspm configuration block already exists in Rprofile.site. Updating..."
-        # Remove existing block and add the new one
-        local temp_file
-        temp_file=$(mktemp)
-        sed '/# Begin bspm configuration block/,/# End bspm configuration block/d' "$R_PROFILE_SITE_PATH" > "$temp_file"
-        echo "$bspm_config_block" >> "$temp_file"
-        _run_command "Update bspm config in ${R_PROFILE_SITE_PATH}" cat "$temp_file" > "$R_PROFILE_SITE_PATH"
-        rm -f "$temp_file"
-    else
-        # Check for simple enable lines and remove them if found
-        if grep -qE 'bspm::enable\(\)|bspm\.allow\.sysreqs' "$R_PROFILE_SITE_PATH"; then
-            _log "INFO" "Found simple bspm lines. Replacing with full configuration block..."
-            local temp_file
-            temp_file=$(mktemp)
-            grep -v -E 'bspm::enable\(\)|bspm\.allow\.sysreqs' "$R_PROFILE_SITE_PATH" > "$temp_file"
-            echo "$bspm_config_block" >> "$temp_file"
-            _run_command "Replace simple bspm lines with config block in ${R_PROFILE_SITE_PATH}" cat "$temp_file" > "$R_PROFILE_SITE_PATH"
-            rm -f "$temp_file"
-        else
-            # Just append the block
-            _run_command "Append bspm config block to ${R_PROFILE_SITE_PATH}" sh -c "echo '$bspm_config_block' >> '$R_PROFILE_SITE_PATH'"
+    # Check for required system packages and install if missing
+    _log "INFO" "Checking for required system packages (r-base-core python3-dbus python3-gi python3-apt)..."
+    local missing_pkgs=()
+    for pkg in "r-base-core" "python3-dbus" "python3-gi" "python3-apt"; do
+        if ! dpkg -s "$pkg" &>/dev/null; then
+            missing_pkgs+=("$pkg")
         fi
+    done
+
+    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+        _log "INFO" "Installing missing system packages: ${missing_pkgs[*]}..."
+        if ! sudo apt-get install -y "${missing_pkgs[@]}"; then
+            _log "ERROR" "Failed to install required system packages."
+            return 1
+        else
+            _log "INFO" "Successfully installed required system packages."
+        fi
+    else
+        _log "INFO" "All required system packages are already installed."
     fi
-    
-    _log "INFO" "bspm.allow.sysreqs=TRUE and bspm::enable() ensured in Rprofile.site."
-    
+
+    # Export required environment variables (before installing bspm)
+    export BSPM_ALLOW_SYSREQS=TRUE
+    export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+
+    # Install bspm as a system package with sudo
+    _log "INFO" "Installing bspm as a system package..."
+    if ! sudo Rscript --vanilla -e 'install.packages("bspm", repos="https://cran.r-project.org")'; then
+        _log "ERROR" "Failed to install bspm as a system package."
+        return 1
+    fi
+
+    # Set bspm.sudo = TRUE in Rprofile.site
+    _log "INFO" "Configuring bspm to use sudo..."
+    local bspm_sudo_config="options(bspm.sudo = TRUE)"
+
+    # Ensure the line is added to Rprofile.site
+    if ! grep -qF "$bspm_sudo_config" "$R_PROFILE_SITE_PATH"; then
+        if ! echo "$bspm_sudo_config" >> "$R_PROFILE_SITE_PATH"; then
+            _log "ERROR" "Failed to add 'options(bspm.sudo = TRUE)' to Rprofile.site."
+            return 1
+        else
+            _log "INFO" "Added 'options(bspm.sudo = TRUE)' to Rprofile.site."
+        fi
+    else
+        _log "INFO" "'options(bspm.sudo = TRUE)' already present in Rprofile.site."
+    fi
+
+    # Set bspm.allow.sysreqs = TRUE and enable bspm with sudo
+    _log "INFO" "Enabling bspm with options(bspm.allow.sysreqs = TRUE)..."
+    local bspm_allow_sysreqs_config="options(bspm.allow.sysreqs = TRUE)"
+
+    # Ensure the line is added to Rprofile.site
+    if ! grep -qF "$bspm_allow_sysreqs_config" "$R_PROFILE_SITE_PATH"; then
+        if ! echo "$bspm_allow_sysreqs_config" >> "$R_PROFILE_SITE_PATH"; then
+            _log "ERROR" "Failed to add 'options(bspm.allow.sysreqs = TRUE)' to Rprofile.site."
+            return 1
+        else
+            _log "INFO" "Added 'options(bspm.allow.sysreqs = TRUE)' to Rprofile.site."
+        fi
+    else
+        _log "INFO" "'options(bspm.allow.sysreqs = TRUE)' already present in Rprofile.site."
+    fi
+
+	# Add bspm::enable() to Rprofile.site
+	local bspm_enable_line='suppressMessages(bspm::enable())'
+    if grep -qF -- "$bspm_enable_line" "$R_PROFILE_SITE_PATH"; then
+        _log "INFO" "bspm already enabled in Rprofile.site."
+    else
+        _run_command "Append bspm enable to ${R_PROFILE_SITE_PATH}" sh -c "echo '$bspm_enable_line' | tee -a '$R_PROFILE_SITE_PATH'"
+        _log "INFO" "bspm enabled in Rprofile.site."
+    fi
+
     _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
     ( cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 2>&1 ) || _log "WARN" "Could not display Rprofile.site content."
 
-    _log "INFO" "Checking bspm status and activation as per official documentation..."
-    
-    # Create a robust verification script
-    local bspm_verify_r_script 
-    read -r -d '' bspm_verify_r_script << 'EOF'
-# First, ensure we have the bspm package
-if (!requireNamespace("bspm", quietly = TRUE)) {
-  stop("bspm package is not installed.")
-}
-
-# Source the Rprofile.site file directly to ensure configuration is loaded
-site_path <- Sys.getenv("R_PROFILE_SITE_PATH")
-if (file.exists(site_path)) {
-  cat("Sourcing Rprofile.site from:", site_path, "\n")
-  source(site_path)
-} else {
-  cat("Warning: Cannot find Rprofile.site at:", site_path, "\n")
-}
-
-# Check if bspm is managing packages
-bspm_manages <- getOption("bspm.MANAGES")
-cat("Current bspm.MANAGES value:", ifelse(is.null(bspm_manages), "NULL", as.character(bspm_manages)), "\n")
-
-# If not managing, try to enable it directly
-if (!isTRUE(bspm_manages)) {
-  cat("bspm.MANAGES is not TRUE. Attempting direct activation...\n")
-  
-  # Try with explicit parameters
-  tryCatch({
-    suppressMessages(bspm::enable(global = TRUE))
-    bspm_manages <- getOption("bspm.MANAGES")
-    cat("After direct enable, bspm.MANAGES is now:", ifelse(is.null(bspm_manages), "NULL", as.character(bspm_manages)), "\n")
-  }, error = function(e) {
-    cat("Error during direct bspm::enable():", conditionMessage(e), "\n")
-  })
-}
-
-# Final verification
-bspm_manages <- getOption("bspm.MANAGES")
-if (!isTRUE(bspm_manages)) {
-  stop("bspm is installed but NOT managing packages (bspm.MANAGES!=TRUE).")
-}
-
-cat("Success: bspm is properly configured and managing packages.\n")
-EOF
-
-    # Pass the R_PROFILE_SITE_PATH to the R script
+    _log "INFO" "Verifying bspm activation..."
     set +e
-    bspm_status_output=$(R_PROFILE_SITE_PATH="$R_PROFILE_SITE_PATH" Rscript -e "$bspm_verify_r_script" 2>&1)
+    bspm_status_output=$(sudo R --vanilla -e '
+tryCatch({
+    if (!requireNamespace("bspm", quietly=TRUE)) {
+        cat("BSPM_NOT_INSTALLED\n")
+        quit(status=1)
+    }
+
+    # Enable bspm (this should use sudo)
+    options(bspm.sudo = TRUE)
+    options(bspm.allow.sysreqs = TRUE)
+    suppressMessages(bspm::enable())
+
+    # Check if it worked
+    if (isTRUE(getOption("bspm.MANAGES"))) {
+        cat("BSPM_WORKING\n")
+    } else {
+        cat("BSPM_NOT_MANAGING\n")
+        cat("Debug info:\n")
+        cat("PATH:", Sys.getenv("PATH"), "\n")
+        cat("apt-get path:", Sys.which("apt-get"), "\n")
+        cat("sudo path:", Sys.which("sudo"), "\n")
+        quit(status=2)
+    }
+}, error=function(e) {
+    cat("Error:", conditionMessage(e), "\n")
+    quit(status=3)
+})
+')
     bspm_status_rc=$?
     set -e
-    
-    # Test a small package installation if verification succeeded
-    if [[ $bspm_status_rc -eq 0 ]]; then
-        _log "INFO" "bspm verification successful. Testing package installation..."
-        
-        # Create a test script to verify package installation works
-        local bspm_test_install_script
-        read -r -d '' bspm_test_install_script << 'EOF'
-# Source the Rprofile.site file directly
-site_path <- Sys.getenv("R_PROFILE_SITE_PATH")
-if (file.exists(site_path)) {
-  source(site_path)
-}
 
-# Verify bspm is managing packages
-if (!requireNamespace("bspm", quietly = TRUE)) {
-  stop("bspm package is not installed.")
-}
-
-if (!isTRUE(getOption("bspm.MANAGES"))) {
-  stop("bspm is not managing packages. Check configuration.")
-}
-
-# Try to install a small test package
-cat("Testing package installation via bspm...\n")
-test_pkg <- "jsonlite"  # Small package for testing
-
-if (requireNamespace(test_pkg, quietly = TRUE)) {
-  cat("Test package", test_pkg, "is already installed.\n")
-} else {
-  cat("Installing test package", test_pkg, "via bspm...\n")
-  install.packages(test_pkg)
-  
-  if (requireNamespace(test_pkg, quietly = TRUE)) {
-    cat("Successfully installed", test_pkg, "via bspm.\n")
-  } else {
-    stop("Failed to install test package via bspm.")
-  }
-}
-
-cat("bspm package management test completed successfully.\n")
-EOF
-
-        set +e
-        test_install_output=$(R_PROFILE_SITE_PATH="$R_PROFILE_SITE_PATH" Rscript -e "$bspm_test_install_script" 2>&1)
-        test_install_rc=$?
-        set -e
-        
-        if [[ $test_install_rc -eq 0 ]]; then
-            _log "INFO" "bspm package installation test successful."
-            _log "INFO" "bspm setup and verification completed successfully."
-            return 0
-        else
-            _log "ERROR" "bspm package installation test failed (RC: $test_install_rc)."
-            _log "ERROR" "Test output: $test_install_output"
-            return 1
-        fi
+    if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_WORKING* ]]; then
+        _log "INFO" "bspm is installed and managing packages (bspm.MANAGES==TRUE)."
+    elif [[ "$bspm_status_output" == *BSPM_NOT_INSTALLED* ]]; then
+        _log "ERROR" "bspm is NOT installed properly."
+        return 2
+    elif [[ "$bspm_status_output" == *BSPM_NOT_MANAGING* ]]; then
+        _log "ERROR" "bspm is installed but NOT managing packages (bspm.MANAGES!=TRUE)."
+        _log "ERROR" "Debug output: $bspm_status_output"
+        return 3
     else
-        _log "ERROR" "bspm verification failed (RC: $bspm_status_rc)."
-        _log "ERROR" "Verification output: $bspm_status_output"
-        return 1
+        _log "ERROR" "Unknown bspm status: $bspm_status_output"
+        return 4
     fi
-}
-
-_install_r_pkg_list() {
-    local pkg_type="$1"; shift; local r_packages_list=("${@}")
-    if [[ ${#r_packages_list[@]} -eq 0 ]]; then _log "INFO" "No ${pkg_type} R pkgs in list."; return; fi
 
     _log "INFO" "bspm setup and verification completed."
 }
-
 
 _install_r_pkg_list() {
     local pkg_type="$1"; shift; local r_packages_list=("${@}")
@@ -863,15 +751,6 @@ usage() {
 
 interactive_menu() {
     _ensure_root
-    
-    # In CI or non-interactive mode, exit with help message
-    if [[ "$IS_INTERACTIVE" != "true" ]]; then
-        _log "INFO" "Non-interactive environment detected. Please use direct function calls instead of menu."
-        _log "INFO" "Example: $0 install_all"
-        usage
-        exit 0
-    fi
-    
     while true; do
         _get_r_profile_site_path 
         echo "";echo "R Environment Setup Menu (Log: ${LOG_FILE})";
@@ -904,30 +783,12 @@ interactive_menu() {
 
 main() {
     _log "INFO" "Script started. Log: ${LOG_FILE}"
-    _log "INFO" "Environment: CI=${IS_CI}, Interactive=${IS_INTERACTIVE}"
     _get_r_profile_site_path # Initial call to set R_PROFILE_SITE_PATH
-
-    # Handle GitHub Actions workflow commands if in CI
-    if [[ "$IS_CI" == "true" ]]; then
-        _log "INFO" "CI environment detected. Setting up GitHub Actions workflow commands."
-        echo "::group::R Environment Setup"
-        echo "::notice::Running in CI mode with log at ${LOG_FILE}"
-    fi
 
     if [[ $# -eq 0 ]]; then 
         interactive_menu
     else
-        # Only enforce root check for commands that need it
-        # Skip for informational commands or when explicitly allowed in CI
-        local needs_root=true
-        case "$1" in
-            help|--help|-h|usage) needs_root=false ;;
-        esac
-        
-        if [[ "$needs_root" == "true" ]]; then
-            _ensure_root
-        fi
-        
+        _ensure_root 
         local action_arg="$1"
         shift 
         
@@ -937,18 +798,11 @@ main() {
             interactive) interactive_menu; _log "INFO" "Script finished after interactive session."; exit 0;;
             fn_pre_flight_checks|fn_add_cran_repo|fn_install_r|fn_install_openblas_openmp) target_function="$action_arg";;
             fn_verify_openblas_openmp|fn_setup_bspm|fn_install_r_packages|fn_install_rstudio_server) target_function="$action_arg";;
-            fn_set_r_profile_path_interactive) 
-                if [[ "$IS_INTERACTIVE" != "true" ]]; then
-                    _log "WARN" "Cannot run interactive path configuration in non-interactive mode"
-                    _log "INFO" "Use CUSTOM_R_PROFILE_SITE_PATH_ENV environment variable instead"
-                    exit 1
-                fi
-                target_function="$action_arg";;
+            fn_set_r_profile_path_interactive) target_function="$action_arg";;
             toggle_aggressive_cleanup)
                 if [[ "$FORCE_USER_CLEANUP" == "yes" ]]; then FORCE_USER_CLEANUP="no"; _log "INFO" "Aggressive cleanup OFF."
                 else FORCE_USER_CLEANUP="yes"; _log "INFO" "Aggressive cleanup ON.";fi
                 _log "INFO" "Script finished."; exit 0;;
-            help|--help|-h|usage) usage; exit 0;;
             *) _log "ERROR" "Unknown direct action: $action_arg. For menu, run without arguments."; usage;;
         esac
         
@@ -959,12 +813,6 @@ main() {
             usage
         fi
     fi
-    
-    # Close GitHub Actions group if in CI
-    if [[ "$IS_CI" == "true" ]]; then
-        echo "::endgroup::"
-    fi
-    
     _log "INFO" "Script finished."
 }
 
