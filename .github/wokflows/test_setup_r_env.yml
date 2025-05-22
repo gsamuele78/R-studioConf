@@ -1,0 +1,78 @@
+name: Test setup_r_env.sh
+
+on:
+  push:
+    paths:
+      - 'setup_r_env.sh'
+      - '.github/workflows/test_setup_r_env.yml'
+  pull_request:
+    paths:
+      - 'setup_r_env.sh'
+      - '.github/workflows/test_setup_r_env.yml'
+  workflow_dispatch:
+
+jobs:
+  test-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show runner info
+        run: |
+          uname -a
+          lsb_release -a || cat /etc/os-release
+          df -h
+          free -h
+
+      - name: Make script executable
+        run: chmod +x setup_r_env.sh
+
+      - name: Syntax check (shellcheck)
+        uses: ludeeus/action-shellcheck@v2
+        with:
+          ignore_paths: .github
+
+      - name: Dry-run install (simulate)
+        run: |
+          sudo LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh install_all
+
+      - name: Full install (actual run)
+        run: |
+          sudo LOG_LEVEL=DEBUG DRY_RUN=0 ./setup_r_env.sh install_all
+
+      - name: Verify R installation
+        run: |
+          R --version
+          Rscript --version
+          Rscript -e "sessionInfo()"
+
+      - name: Verify RStudio Server installation
+        run: |
+          sudo systemctl status rstudio-server || true
+          which rstudio-server || true
+          rstudio-server version || true
+
+      - name: Test RStudio Server HTTP (port check)
+        run: |
+          sudo systemctl is-active rstudio-server && sleep 5
+          sudo netstat -ntlp | grep 8787 || sudo ss -ntlp | grep 8787
+
+      - name: Test uninstall_all (cleanup)
+        run: |
+          sudo LOG_LEVEL=DEBUG ./setup_r_env.sh uninstall_all || true
+
+      - name: Confirm removal of R, RStudio
+        run: |
+          ! command -v R || { echo "R still found!"; exit 1; }
+          ! command -v rstudio-server || { echo "RStudio still found!"; exit 1; }
+        shell: bash
+
+      - name: Archive installation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r_setup_logs
+          path: /var/log/r_setup/
