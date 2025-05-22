@@ -356,16 +356,21 @@ EOF
 
 fn_setup_bspm() {
     _log "INFO" "Setting up bspm (Binary R Package Manager)..."
-    _get_r_profile_site_path 
+    _get_r_profile_site_path
 
-    if [[ -z "$R_PROFILE_SITE_PATH" ]]; then 
-         _log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot setup bspm."; return 1
+    if [[ -z "$R_PROFILE_SITE_PATH" ]]; then
+        _log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot setup bspm."; return 1
     fi
-    
-    # Ensure directory exists and is writable
+
+    # Ensure directory exists
     local r_profile_dir; r_profile_dir=$(dirname "$R_PROFILE_SITE_PATH")
     if [[ ! -d "$r_profile_dir" ]]; then _run_command "Create Rprofile.site dir ${r_profile_dir}" mkdir -p "$r_profile_dir"; fi
-    if [[ ! -f "$R_PROFILE_SITE_PATH" && ! -L "$R_PROFILE_SITE_PATH" ]]; then _run_command "Touch Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"; fi
+
+    # Check if Rprofile.site exists and create it if it doesn't
+    if [[ ! -f "$R_PROFILE_SITE_PATH" && ! -L "$R_PROFILE_SITE_PATH" ]]; then
+        _log "INFO" "Rprofile.site does not exist, creating it..."
+        _run_command "Create Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"
+    fi
 
     _log "INFO" "Adding R2U repository..."
     if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/; then
@@ -393,7 +398,7 @@ fn_setup_bspm() {
 
     _backup_file "$R_PROFILE_SITE_PATH"
     _log "INFO" "Updating ${R_PROFILE_SITE_PATH} with bspm configuration..."
-    
+
     # Create a more robust Rprofile.site content
     local rprofile_content
     read -r -d '' rprofile_content << 'EOF'
@@ -421,8 +426,28 @@ options(bspm.allow.sysreqs=TRUE)
 .enable_bspm()
 EOF
 
-    echo "$rprofile_content" > "$R_PROFILE_SITE_PATH"
-    _log "INFO" "Updated Rprofile.site with robust bspm configuration."
+    # Try writing to the file, and handle errors
+    if ! echo "$rprofile_content" > "$R_PROFILE_SITE_PATH"; then
+        local write_error=$?
+        _log "ERROR" "Failed to write to Rprofile.site (RC: $write_error). Trying with sudo..."
+
+        # Attempt to use sudo if not already root
+        if [[ "$EUID" -ne 0 ]]; then
+            if ! sudo sh -c "echo '$rprofile_content' > '$R_PROFILE_SITE_PATH'"; then
+                local sudo_error=$?
+                _log "ERROR" "Failed to write to Rprofile.site even with sudo (RC: $sudo_error). Aborting."
+                _log "ERROR" "Check permissions or filesystem write protection."
+                return 1
+            else
+                _log "INFO" "Successfully wrote to Rprofile.site using sudo."
+            fi
+        else
+            _log "ERROR" "Failed to write to Rprofile.site and already running as root. Check permissions or filesystem write protection. Aborting."
+            return 1
+        fi
+    else
+        _log "INFO" "Successfully wrote to Rprofile.site."
+    fi
 
     _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
     ( cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 2>&1 ) || _log "WARN" "Could not display Rprofile.site content."
