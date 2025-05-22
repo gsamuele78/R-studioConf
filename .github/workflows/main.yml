@@ -1,0 +1,164 @@
+name: Test setup_r_env.sh (Comprehensive)
+
+on:
+  push:
+    paths:
+      - 'setup_r_env.sh'
+      - '.github/workflows/test_setup_r_env.yml'
+  pull_request:
+    paths:
+      - 'setup_r_env.sh'
+      - '.github/workflows/test_setup_r_env.yml'
+  workflow_dispatch:
+
+jobs:
+  test-script:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show runner info
+        run: |
+          uname -a
+          lsb_release -a || cat /etc/os-release
+          df -h
+          free -h
+
+      - name: Make script executable
+        run: chmod +x setup_r_env.sh
+
+      - name: Lint with ShellCheck
+        uses: ludeeus/action-shellcheck@v2
+        with:
+          ignore_paths: .github
+
+      # 1. DRY RUN SIMULATION
+      - name: Dry-run install (simulate)
+        run: |
+          sudo LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh install_all
+
+      # 2. FULL INSTALL
+      - name: Full install (actual run)
+        run: |
+          sudo LOG_LEVEL=DEBUG DRY_RUN=0 ./setup_r_env.sh install_all
+
+      # 3. RE-RUN install_all (Idempotency test)
+      - name: Re-run install_all for idempotency
+        run: |
+          sudo LOG_LEVEL=DEBUG DRY_RUN=0 ./setup_r_env.sh install_all
+
+      # 4. Test individual core functions where possible
+      - name: Test pre-flight checks
+        run: sudo ./setup_r_env.sh fn_pre_flight_checks
+
+      - name: Test add CRAN repo
+        run: sudo ./setup_r_env.sh fn_add_cran_repo
+
+      - name: Test install R
+        run: sudo ./setup_r_env.sh fn_install_r
+
+      - name: Test install OpenBLAS/OpenMP
+        run: sudo ./setup_r_env.sh fn_install_openblas_openmp
+
+      - name: Test setup bspm
+        run: sudo ./setup_r_env.sh fn_setup_bspm
+
+      - name: Test install R packages
+        run: sudo ./setup_r_env.sh fn_install_r_packages
+
+      - name: Test install RStudio Server
+        run: sudo ./setup_r_env.sh fn_install_rstudio_server
+
+      # 5. Verify system state
+      - name: Verify R installation
+        run: |
+          R --version
+          Rscript --version
+          Rscript -e "sessionInfo()"
+
+      - name: Verify CRAN/BSPM packages are installed
+        run: |
+          Rscript -e "pkgs <- c('terra','raster','sf','dismo','spThin','tidyverse','bspm'); print(sapply(pkgs, requireNamespace, quietly=TRUE))"
+
+      - name: Verify devtools & GitHub packages
+        run: |
+          Rscript -e "if (!requireNamespace('devtools', quietly=TRUE)) stop('devtools not installed')"
+          # Check one GitHub package as an example
+          Rscript -e "if (!requireNamespace('transformeR', quietly=TRUE)) warning('transformeR not installed')"
+
+      - name: Verify RStudio Server installation
+        run: |
+          sudo systemctl status rstudio-server || true
+          which rstudio-server || true
+          rstudio-server version || true
+
+      - name: Test RStudio Server HTTP (port check)
+        run: |
+          sudo systemctl is-active rstudio-server && sleep 5
+          sudo netstat -ntlp | grep 8787 || sudo ss -ntlp | grep 8787
+
+      # 6. Test uninstall_all (cleanup)
+      - name: Test uninstall_all (cleanup)
+        run: |
+          sudo LOG_LEVEL=DEBUG ./setup_r_env.sh uninstall_all || true
+
+      # 7. Confirm removal of R, RStudio, and packages
+      - name: Confirm removal of R, RStudio, packages
+        run: |
+          ! command -v R || { echo "R still found!"; exit 1; }
+          ! command -v rstudio-server || { echo "RStudio still found!"; exit 1; }
+          ! dpkg -s r-base || { echo "r-base still installed!"; exit 1; }
+          ! dpkg -s rstudio-server || { echo "rstudio-server still installed!"; exit 1; }
+          Rscript -e "q('no')" 2>/dev/null && { echo "Rscript still works!"; exit 1; } || true
+
+      # 8. Test uninstall_all idempotency (run again)
+      - name: Re-run uninstall_all (idempotency)
+        run: |
+          sudo LOG_LEVEL=DEBUG ./setup_r_env.sh uninstall_all || true
+
+      # 9. Test dry-run uninstall
+      - name: Dry-run uninstall_all
+        run: |
+          sudo LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh uninstall_all || true
+
+      # 10. Log: Archive installation logs (always)
+      - name: Archive installation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r_setup_logs
+          path: /var/log/r_setup/
+
+      # 11. Log: Show last lines of main log for debug
+      - name: Show main log tail
+        if: always()
+        run: |
+          tail -n 50 /var/log/r_setup/r_setup_*.log || true
+
+      # 12. (Optional) Test error handling with bad args
+      - name: Test bad argument handling
+        run: |
+          ! ./setup_r_env.sh not_a_real_action
+
+      # 13. (Optional) Test script as non-root (should fail gracefully)
+      - name: Test script as non-root
+        run: |
+          set +e
+          ./setup_r_env.sh install_all 2>&1 | tee non_root_output.txt
+          grep -iq "Run as root" non_root_output.txt
+
+      # 14. (Optional) Test DRY_RUN with LOG_LEVEL=DEBUG
+      - name: Test DRY_RUN and LOG_LEVEL
+        run: |
+          sudo LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh install_all
+
+      # 15. (Optional) Print environment for debugging
+      - name: Print environment
+        run: env | sort
+
+      # 16. (Optional) Test menu/help/usage output
+      - name: Menu/help/usage output
+        run: ./setup_r_env.sh || true
