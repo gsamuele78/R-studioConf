@@ -355,17 +355,13 @@ EOF
 
 fn_setup_bspm() {
     _log "INFO" "Setting up bspm (Binary R Package Manager)..."
-    _get_r_profile_site_path 
+    _get_r_profile_site_path
 
-    if [[ -z "$R_PROFILE_SITE_PATH" ]]; then 
+    if [[ -z "$R_PROFILE_SITE_PATH" ]]; then
          _log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot setup bspm."; return 1
     fi
-    
-    local r_profile_dir; r_profile_dir=$(dirname "$R_PROFILE_SITE_PATH")
-    if [[ ! -d "$r_profile_dir" ]]; then _run_command "Create Rprofile.site dir ${r_profile_dir}" mkdir -p "$r_profile_dir"; fi
-    if [[ ! -f "$R_PROFILE_SITE_PATH" && ! -L "$R_PROFILE_SITE_PATH" ]]; then _run_command "Touch Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"; fi
 
-    _log "INFO" "Adding R2U repository..."
+    # 1. Add the R2U/cran2deb4ubuntu repository (only if not present)
     if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "R2U repository already configured."
     else
@@ -377,73 +373,56 @@ fn_setup_bspm() {
         rm -f /tmp/add_cranapt.sh
     fi
 
-    _log "INFO" "Installing bspm R package..."
+    # 2. Install bspm R package from CRAN if not present
     local bspm_check_cmd='if(requireNamespace("bspm", quietly=TRUE)) "installed" else "not_installed"'
-    if [[ $(Rscript -e "$bspm_check_cmd" 2>/dev/null) == "installed" ]]; then _log "INFO" "bspm R package already installed."
-    else _run_command "Install bspm R package" Rscript -e "install.packages('bspm', repos='${CRAN_REPO_URL_SRC}')"; fi
+    if [[ $(Rscript -e "$bspm_check_cmd" 2>/dev/null) == "installed" ]]; then
+        _log "INFO" "bspm R package already installed."
+    else
+        _run_command "Install bspm R package" Rscript -e "install.packages('bspm', repos='${CRAN_REPO_URL_SRC}')"
+    fi
 
+    # 3. Ensure Rprofile.site contains the recommended activation line
     _backup_file "$R_PROFILE_SITE_PATH"
     _log "INFO" "Enabling bspm in ${R_PROFILE_SITE_PATH}..."
-    local bspm_enable_line='suppressMessages(bspm::enable())' 
-    if grep -qF -- "$bspm_enable_line" "$R_PROFILE_SITE_PATH"; then _log "INFO" "bspm already enabled in Rprofile.site."
-    else _run_command "Append bspm enable to ${R_PROFILE_SITE_PATH}" sh -c "echo '$bspm_enable_line' | tee -a '$R_PROFILE_SITE_PATH'"; _log "INFO" "bspm enabled in Rprofile.site."; fi
-    
-    _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
-    ( cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 2>&1 ) || _log "WARN" "Could not display Rprofile.site content."
+    local bspm_enable_line='suppressMessages(bspm::enable())'
+    if grep -qF -- "$bspm_enable_line" "$R_PROFILE_SITE_PATH"; then
+        _log "INFO" "bspm already enabled in Rprofile.site."
+    else
+        _run_command "Append bspm enable to ${R_PROFILE_SITE_PATH}" sh -c "echo '$bspm_enable_line' | tee -a '$R_PROFILE_SITE_PATH'"
+        _log "INFO" "bspm enabled in Rprofile.site."
+    fi
 
-    _log "INFO" "Debug: Testing bspm::enable() directly..."
-    local debug_bspm_r_script 
-    read -r -d '' debug_bspm_r_script << 'EOF'
-    cat("Attempting to load bspm...\n")
-    if (!requireNamespace("bspm", quietly = TRUE)) {
-        stop("bspm package is not installed for direct test.")
+    # 4. Check if bspm is working according to the docs (requireNamespace & MANAGES)
+    _log "INFO" "Checking bspm status and activation as per official documentation..."
+    set +e
+    local bspm_status_output
+    bspm_status_output=$(Rscript --vanilla -e '
+    if (!requireNamespace("bspm", quietly=TRUE)) {
+      cat("BSPM_NOT_INSTALLED\n"); quit(status=1)
     }
-    cat("bspm namespace loaded for direct test.\n")
-    
-    cat("Directly calling bspm::enable()...\n")
-    enable_error_msg <- NULL
-    tryCatch({
-        bspm::enable() 
-        cat("bspm::enable() called directly.\n")
-    }, error = function(e) {
-        enable_error_msg <<- conditionMessage(e) 
-        cat("ERROR during direct call to bspm::enable(): ", enable_error_msg, "\n", file=stderr())
-    })
-
-    bspm_manages_option_direct <- getOption("bspm.MANAGES")
-    cat(paste0("After direct bspm::enable(), getOption(\"bspm.MANAGES\") is: ", ifelse(is.null(bspm_manages_option_direct), "NULL", as.character(bspm_manages_option_direct)), "\n"))
-    
-    if (!is.null(enable_error_msg)) {
-        cat("bspm::enable() call resulted in an error. Check R output above.\n")
-    } else if (is.null(bspm_manages_option_direct) || !isTRUE(bspm_manages_option_direct)) {
-        cat("Direct call to bspm::enable() did not result in bspm.MANAGES being TRUE.\n")
+    suppressMessages(bspm::enable())
+    if (isTRUE(getOption("bspm.MANAGES"))) {
+      cat("BSPM_WORKING\n")
     } else {
-        cat("Direct call to bspm::enable() seems to have set bspm.MANAGES to TRUE.\n")
+      cat("BSPM_NOT_MANAGING\n")
+      quit(status=2)
     }
-    if (!is.null(enable_error_msg)) { 
-        stop("Error occurred during direct bspm::enable() test.")
-    }
-EOF
-    local debug_rc=0
-    ( Rscript -e "$debug_bspm_r_script" >> "$LOG_FILE" 2>&1 ) || debug_rc=$?
-    if [[ $debug_rc -ne 0 ]]; then _log "WARN" "BSPM direct enable debug script failed (RC: $debug_rc)."; fi
+    ')
+    local bspm_status_rc=$?
+    set -e
+    if [[ "$bspm_status_output" == *BSPM_WORKING* ]]; then
+        _log "INFO" "bspm is installed and managing packages (bspm.MANAGES==TRUE)."
+    elif [[ "$bspm_status_output" == *BSPM_NOT_INSTALLED* ]]; then
+        _log "ERROR" "bspm is NOT installed properly."
+        return 2
+    elif [[ "$bspm_status_output" == *BSPM_NOT_MANAGING* ]]; then
+        _log "ERROR" "bspm is installed but NOT managing packages (bspm.MANAGES!=TRUE)."
+        return 3
+    else
+        _log "ERROR" "Unknown bspm status: $bspm_status_output"
+        return 4
+    fi
 
-    _log "INFO" "Verifying bspm activation (relies on Rprofile.site effects)..."
-    local bspm_verify_r_script 
-    read -r -d '' bspm_verify_r_script << 'EOF'
-    if (!requireNamespace("bspm", quietly = TRUE)) {
-        stop("bspm package is not installed.")
-    }
-    bspm_manages_option <- getOption("bspm.MANAGES")
-    if (is.null(bspm_manages_option)) {
-        stop("bspm.MANAGES option is NULL. Check Rprofile.site and bspm::enable() effectiveness.")
-    }
-    if (!isTRUE(bspm_manages_option)) {
-        stop(paste0("bspm.MANAGES is ", bspm_manages_option, ", expected TRUE."))
-    }
-    cat("bspm appears active (getOption(\"bspm.MANAGES\") is TRUE).\n")
-EOF
-    _run_command "Verify bspm R script (checks getOption('bspm.MANAGES'))" Rscript -e "$bspm_verify_r_script"
     _log "INFO" "bspm setup and verification completed."
 }
 
