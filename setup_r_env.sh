@@ -900,6 +900,3 @@ main "$@"
 
     
 
-IGNORE_WHEN_COPYING_START
-Use code with caution. Bash
-IGNORE_WHEN_COPYING_END
