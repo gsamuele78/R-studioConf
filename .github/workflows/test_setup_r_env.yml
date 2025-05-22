@@ -30,10 +30,11 @@ jobs:
       - name: Make script executable
         run: chmod +x setup_r_env.sh
 
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
       - name: Lint with ShellCheck
-        uses: shellcheck-actions/github-action-shellcheck@v4
-        with:
-          check_together: 'setup_r_env.sh'
+        run: shellcheck setup_r_env.sh
 
       # 1. DRY RUN SIMULATION
       - name: Dry-run install (simulate)
