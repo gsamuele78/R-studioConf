@@ -31,7 +31,7 @@ jobs:
         run: chmod +x setup_r_env.sh
 
       - name: Lint with ShellCheck
-        uses: shellcheck-actions/github-action-shellcheck@v2
+        uses: shellcheck-actions/github-action-shellcheck@v4
         with:
           check_together: 'setup_r_env.sh'
 
