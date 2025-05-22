@@ -576,15 +576,111 @@ _install_r_pkg_list() {
     done; _log "INFO" "${pkg_type} R pkgs install process done."
 }
 
-fn_install_r_packages() {
-    _install_r_pkg_list "CRAN" "${R_PACKAGES_CRAN[@]}"
-    if [[ ${#R_PACKAGES_GITHUB[@]} -gt 0 ]]; then
-        _log "INFO" "Ensuring devtools for GitHub packages..."
-        local r_cmd_devtools; r_cmd_devtools="if(!requireNamespace('devtools',q=T)){install.packages('devtools',repos='${CRAN_REPO_URL_SRC}');if(!requireNamespace('devtools',q=T))stop('Fail devtools install')}"
-        _run_command "Ensure devtools R pkg installed" Rscript -e "${r_cmd_devtools}"
-        _install_r_pkg_list "GitHub" "${R_PACKAGES_GITHUB[@]}"
-    else _log "INFO" "No GitHub R packages in list."; fi
+fn_install_r_build_deps() {
+    _log "INFO" "Installing system dependencies for building R packages (devtools, etc)..."
+    # List of required system packages for building devtools and most common R extensions from source
+    local build_deps=(
+        build-essential
+        libcurl4-openssl-dev
+        libssl-dev
+        libxml2-dev
+        libgit2-dev
+        libssh2-1-dev
+        libffi-dev
+        libarchive-dev
+        libpng-dev
+        libjpeg-dev
+        zlib1g-dev
+        libbz2-dev
+        liblzma-dev
+        libreadline-dev
+        libicu-dev
+        libxt-dev
+    )
+    sudo apt-get update -y
+    sudo apt-get install -y "${build_deps[@]}"
 }
+
+fn_install_r_packages() {
+    # 1. Install build dependencies (always safe to do before any source build)
+    fn_install_r_build_deps
+
+    # 2. Try to install devtools and its system dependencies using bspm (binary, if possible)
+    _log "INFO" "Ensuring devtools via bspm if available..."
+    local r_bspm_devtools_cmd
+    r_bspm_devtools_cmd="
+if (requireNamespace('bspm', quietly=TRUE) && isTRUE(getOption('bspm.MANAGES', FALSE))) {
+    tryCatch({
+        bspm::install_packages('devtools', ask=FALSE, quiet=FALSE)
+    }, error=function(e) {
+        cat('bspm failed for devtools.\\n')
+        quit(status=42)
+    })
+}
+"
+    set +e
+    Rscript -e "$r_bspm_devtools_cmd" >> "$LOG_FILE" 2>&1
+    local bspm_devtools_rc=$?
+    set -e
+
+    # 3. If bspm did not succeed, install devtools build deps with apt and try install.packages
+    if [[ $bspm_devtools_rc -ne 0 ]]; then
+        _log "WARN" "bspm failed for devtools or not available (RC: $bspm_devtools_rc). Falling back to install via install.packages."
+        local r_fallback_devtools_cmd="
+if (!requireNamespace('devtools', quietly=TRUE)) {
+    install.packages('devtools', repos='https://cloud.r-project.org')
+    if (!requireNamespace('devtools', quietly=TRUE)) stop('Fail devtools install')
+} else {
+    cat('devtools already installed\\n')
+}
+"
+        _run_command "Ensure devtools R pkg installed (fallback)" Rscript -e "${r_fallback_devtools_cmd}"
+    else
+        _log "INFO" "devtools installed via bspm."
+    fi
+
+    # 4. Install all CRAN packages
+    _install_r_pkg_list "CRAN" "${R_PACKAGES_CRAN[@]}"
+
+    # 5. Install GitHub packages using devtools
+    if [[ ${#R_PACKAGES_GITHUB[@]} -gt 0 ]]; then
+        _log "INFO" "Installing GitHub R packages using devtools..."
+        _install_r_pkg_list "GitHub" "${R_PACKAGES_GITHUB[@]}"
+    else
+        _log "INFO" "No GitHub R packages in list."
+    fi
+
+    # 6. Print installed packages and how they were installed (bspm or source)
+    _log "INFO" "Listing installed R packages with install type (bspm/binary or source)..."
+    local r_list_pkgs_cmd="
+get_install_type <- function(pkg) {
+    ip <- utils::installed.packages(fields = c('Built', 'Priority'))
+    row <- ip[pkg, , drop = FALSE]
+    if (is.na(row[1, 'Built'])) return('unknown')
+    if (!is.na(row[1, 'Priority']) && nzchar(row[1, 'Priority'])) return('base/system')
+    bin_dir <- Sys.getenv('R_BSPM_BIN_DIR', '')
+    if (requireNamespace('bspm', quietly=TRUE)) {
+        info <- tryCatch(bspm::info(pkg), error=function(e) NULL)
+        if (!is.null(info) && isTRUE(info$binary)) return('bspm/binary')
+    }
+    src_dir <- row[1, 'LibPath']
+    if (grepl('/site-library/', src_dir) || grepl('/user-library/', src_dir)) return('source')
+    return('unknown')
+}
+ip <- as.data.frame(installed.packages(fields = c('Package', 'Version', 'LibPath', 'Built', 'Priority')))
+cat(sprintf('%-30s %-16s %-16s %-10s\\n', 'Package', 'Version', 'InstallType', 'LibPath'))
+for (i in seq_len(nrow(ip))) {
+    pkg <- ip$Package[i]
+    v <- ip$Version[i]
+    t <- tryCatch(get_install_type(pkg), error=function(e) 'unknown')
+    l <- ip$LibPath[i]
+    cat(sprintf('%-30s %-16s %-16s %-10s\\n', pkg, v, t, l))
+}
+"
+    Rscript -e "$r_list_pkgs_cmd"
+}
+
+
 
 fn_install_rstudio_server() {
     _log "INFO" "Installing RStudio Server v${RSTUDIO_VERSION}..."
