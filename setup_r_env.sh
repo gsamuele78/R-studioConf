@@ -388,9 +388,10 @@ fn_setup_bspm() {
 
     _backup_file "$R_PROFILE_SITE_PATH"
     _log "INFO" "Enabling bspm in ${R_PROFILE_SITE_PATH}..."
-    local bspm_enable_line='suppressMessages(bspm::enable())' 
-    if grep -qF -- "$bspm_enable_line" "$R_PROFILE_SITE_PATH"; then
-        _log "INFO" "bspm already enabled in Rprofile.site."
+    # FIX: Allow bspm to manage packages for non-root by setting option before enabling
+    local bspm_enable_line='options(bspm.allow.sysreqs=TRUE);suppressMessages(bspm::enable())'
+    if grep -qF -- "suppressMessages(bspm::enable())" "$R_PROFILE_SITE_PATH"; then
+        _log "INFO" "bspm enable line already present in Rprofile.site."
     else
         _run_command "Append bspm enable to ${R_PROFILE_SITE_PATH}" sh -c "echo '$bspm_enable_line' | tee -a '$R_PROFILE_SITE_PATH'"
         _log "INFO" "bspm enabled in Rprofile.site."
@@ -405,6 +406,7 @@ fn_setup_bspm() {
 if (!requireNamespace("bspm", quietly=TRUE)) {
   cat("BSPM_NOT_INSTALLED\n"); quit(status=1)
 }
+options(bspm.allow.sysreqs=TRUE)
 suppressMessages(bspm::enable())
 if (isTRUE(getOption("bspm.MANAGES"))) {
   cat("BSPM_WORKING\n")
@@ -431,7 +433,6 @@ if (isTRUE(getOption("bspm.MANAGES"))) {
 
     _log "INFO" "bspm setup and verification completed."
 }
-
 
 _install_r_pkg_list() {
     local pkg_type="$1"; shift; local r_packages_list=("${@}")
