@@ -24,7 +24,7 @@ BACKUP_DIR="/tmp/opt/r_setup_backups"; mkdir -p "$BACKUP_DIR"
 # System
 # UBUNTU_CODENAME_DETECTED is an initial detection. UBUNTU_CODENAME (global) will be finalized in fn_pre_flight_checks.
 UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown") 
-R_PROFILE_SITE_PATH="" 
+R_PROFILE_SITE_PATH="/etc/R" 
 USER_SPECIFIED_R_PROFILE_SITE_PATH="" 
 FORCE_USER_CLEANUP="no" 
 
