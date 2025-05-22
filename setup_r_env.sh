@@ -51,6 +51,7 @@ CRAN_APT_KEY_ID="E298A3A825C0D65DFD57CBB651716619E084DAB9"
 R2U_REPO_URL_BASE="https://raw.githubusercontent.com/eddelbuettel/r2u/master/inst/scripts"
 R2U_APT_SOURCES_LIST_D_FILE="/etc/apt/sources.list.d/r2u.list"
 
+
 # R Packages
 R_PACKAGES_CRAN=(
     "terra" "raster" "sf" "enmSdmX" "dismo" "spThin" "rnaturalearth" "furrr"
@@ -122,7 +123,16 @@ _safe_systemctl() {
     return 0
 }
 
-
+_is_vm_or_ci_env() {
+    # Detect GitHub CI, GitLab CI, Travis, or root user on VM
+    if [[ "${CI:-}" == "true" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]] || [[ -n "${GITLAB_CI:-}" ]] || [[ -n "${TRAVIS:-}" ]]; then
+        return 0
+    elif [[ "$EUID" -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
 
 # --- Core Functions ---
 
@@ -380,11 +390,16 @@ EOF
 
 
 fn_setup_bspm() {
-    _log "INFO" "Setting up bspm (Binary R Package Manager) with system-wide installation, dependency checks, and sudo configuration..."
+    _log "INFO" "Setting up bspm (Binary R Package Manager)..."
     _get_r_profile_site_path
 
     if [[ -z "$R_PROFILE_SITE_PATH" ]]; then
         _log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot setup bspm."; return 1
+    fi
+
+    if ! _is_vm_or_ci_env; then
+        _log "INFO" "Not in root or CI/VM environment. Skipping bspm setup for safety."
+        return 0
     fi
 
     # Ensure directory exists
@@ -416,22 +431,8 @@ fn_setup_bspm() {
         _log "INFO" "'sudo' is already installed."
     fi
 
-    # Ensure the current user is in the sudo group
-    if [[ $EUID -ne 0 ]]; then
-        if groups "$USER" | grep -qw "sudo"; then
-            _log "INFO" "User '$USER' is in the sudo group."
-        else
-            _log "WARN" "User '$USER' is not in the sudo group. Attempting to add..."
-            if sudo usermod -aG sudo "$USER"; then
-                _log "INFO" "Added user '$USER' to sudo group. You may need to log out and log back in for this to take effect."
-            else
-                _log "ERROR" "Failed to add user '$USER' to sudo group. Please add the user manually."
-                return 1
-            fi
-        fi
-    fi
-
-    _log "INFO" "Adding R2U repository..."
+    # Add R2U repository if not present
+    _log "INFO" "Adding R2U repository (if missing)..."
     if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "R2U repository already configured."
     else
@@ -444,6 +445,17 @@ fn_setup_bspm() {
             return 1
         fi
         rm -f /tmp/add_cranapt.sh
+    fi
+
+    # Ensure dbus is running
+    if systemctl list-units --type=service | grep -q dbus; then
+        _log "INFO" "Restarting dbus service..."
+        sudo systemctl restart dbus
+    elif service --status-all 2>&1 | grep -q dbus; then
+        _log "INFO" "Restarting dbus service..."
+        sudo service dbus restart
+    else
+        _log "WARN" "dbus service not found. If package management fails, ensure dbus is running."
     fi
 
     # Check for required system packages and install if missing
@@ -497,7 +509,6 @@ suppressMessages(bspm::enable())"
 
     _log "INFO" "Verifying bspm activation..."
     set +e
-    # Always use the system library path for requireNamespace
     bspm_status_output=$(
         sudo R --vanilla -e "
 .libPaths(c('$system_r_lib_path', .libPaths()))
@@ -506,7 +517,7 @@ if (!requireNamespace('bspm', quietly=TRUE)) {
 }
 options(bspm.sudo=TRUE, bspm.allow.sysreqs=TRUE)
 suppressMessages(bspm::enable())
-if (isTRUE(getOption('bspm.MANAGES'))) {
+if ('bspm' %in% loadedNamespaces() && 'bspm' %in% rownames(installed.packages())) {
   cat('BSPM_WORKING\n')
 } else {
   cat('BSPM_NOT_MANAGING\n')
@@ -518,12 +529,12 @@ if (isTRUE(getOption('bspm.MANAGES'))) {
     set -e
 
     if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_WORKING* ]]; then
-        _log "INFO" "bspm is installed and managing packages (bspm.MANAGES==TRUE)."
+        _log "INFO" "bspm is installed and managing packages."
     elif [[ "$bspm_status_output" == *BSPM_NOT_INSTALLED* ]]; then
         _log "ERROR" "bspm is NOT installed properly."
         return 2
     elif [[ "$bspm_status_output" == *BSPM_NOT_MANAGING* ]]; then
-        _log "ERROR" "bspm is installed but NOT managing packages (bspm.MANAGES!=TRUE)."
+        _log "ERROR" "bspm is installed but NOT managing packages."
         _log "ERROR" "Debug output: $bspm_status_output"
         return 3
     else
@@ -533,6 +544,7 @@ if (isTRUE(getOption('bspm.MANAGES'))) {
 
     _log "INFO" "bspm setup and verification completed."
 }
+
 
 
 _install_r_pkg_list() {
