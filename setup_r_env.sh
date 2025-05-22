@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 ##############################################################################
 # Script: setup_r_env.sh
 # Desc:   Installs R, OpenBLAS, OpenMP, RStudio Server, BSPM, and R packages.
@@ -95,7 +93,9 @@ _run_command() {
 
 _backup_file() { local fp="$1"; if [[ -f "$fp" || -L "$fp" ]]; then local bn; bn="$(basename "$fp")_$(date +'%Y%m%d%H%M%S').bak"; _log "INFO" "Backup ${fp} to ${BACKUP_DIR}/${bn}"; cp -a "$fp" "${BACKUP_DIR}/${bn}"; fi; }
 
+
 _restore_latest_backup() { local orig_fp="$1"; local fn_pat; local latest_bkp; fn_pat="$(basename "$orig_fp")_*.bak"; latest_bkp=$(find "$BACKUP_DIR" -name "$fn_pat" -print0|xargs -0 ls -1tr 2>/dev/null | tail -n 1); if [[ -n "$latest_bkp" && -f "$latest_bkp" ]]; then cp -a "$latest_bkp" "$orig_fp"; fi; }
+
 
 
 _get_r_profile_site_path() {
@@ -117,6 +117,7 @@ _get_r_profile_site_path() {
     else new_det_path="$def_apt"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "No Rprofile.site found. Default: ${new_det_path}"; fi; fi
     R_PROFILE_SITE_PATH="$new_det_path"
 }
+
 
 # Wrapper for systemctl that ignores errors in CI/container
 _safe_systemctl() {
@@ -557,35 +558,6 @@ if ('bspm' %in% loadedNamespaces() && 'bspm' %in% rownames(installed.packages())
 
 
 
-_install_r_pkg_list() {
-    local pkg_type="$1"; shift; local r_packages_list=("${@}")
-    if [[ ${#r_packages_list[@]} -eq 0 ]]; then _log "INFO" "No ${pkg_type} R pkgs in list."; return; fi
-    _log "INFO" "Installing ${pkg_type} R packages: ${r_packages_list[*]}"
-    for pkg_name_full in "${r_packages_list[@]}"; do
-        local pkg_name_short; local install_script=""
-        if [[ "$pkg_type" == "CRAN" ]]; then
-            pkg_name_short="$pkg_name_full" 
-            install_script="
-            if (!requireNamespace('$pkg_name_short', quietly=T)) {
-                cat('Pkg $pkg_name_short not found, installing...\\n')
-                if (requireNamespace('bspm',quietly=T) && getOption('bspm.MANAGES',F)) { 
-                    cat('Installing $pkg_name_short via bspm...\\n')
-                    tryCatch(bspm::install.packages('$pkg_name_short',quiet=F),
-                        error=function(e){cat('bspm fail for $pkg_name_short:',conditionMessage(e),'\\nFallback...\\n');install.packages('$pkg_name_short',repos='${CRAN_REPO_URL_SRC}')})
-                } else { cat('bspm not managing. Using install.packages for $pkg_name_short...\\n');install.packages('$pkg_name_short',repos='${CRAN_REPO_URL_SRC}')}
-                if (!requireNamespace('$pkg_name_short',quietly=T)) stop(paste('Failed to install R pkg:', '$pkg_name_short'))
-                else cat('OK R pkg: $pkg_name_short\\n')
-            } else cat('R pkg $pkg_name_short already installed.\\n')"
-        elif [[ "$pkg_type" == "GitHub" ]]; then
-            pkg_name_short=$(basename "${pkg_name_full%.git}") 
-            if [[ "$pkg_name_full" == *"://"* ]]; then 
-                 install_script="if(!requireNamespace('$pkg_name_short',q=T))devtools::install_git('$pkg_name_full')else cat('R pkg $pkg_name_short (git) installed.\\n')"
-            else install_script="if(!requireNamespace('$pkg_name_short',q=T))devtools::install_github('$pkg_name_full')else cat('R pkg $pkg_name_short (GitHub) installed.\\n')";fi
-        else _log "WARN" "Unknown pkg type: $pkg_type for $pkg_name_full. Skipping."; continue; fi
-        _run_command "Install/Verify R pkg: $pkg_name_full" Rscript -e "$install_script"
-    done; _log "INFO" "${pkg_type} R pkgs install process done."
-}
-
 fn_install_r_build_deps() {
     _log "INFO" "Installing system dependencies for building R packages (devtools, etc)..."
     local build_deps=(
@@ -610,12 +582,18 @@ fn_install_r_build_deps() {
     sudo apt-get install -y "${build_deps[@]}"
 }
 
+# SC2317: Marked unreachable because not called directly, so move to a function definition and call it.
 _install_r_pkg_list() {
-    local pkg_type="$1"; shift; local r_packages_list=("${@}")
-    if [[ ${#r_packages_list[@]} -eq 0 ]]; then _log "INFO" "No ${pkg_type} R pkgs in list."; return; fi
+    local pkg_type="$1"; shift
+    local r_packages_list=("$@")
+    if [[ ${#r_packages_list[@]} -eq 0 ]]; then
+        _log "INFO" "No ${pkg_type} R pkgs in list."
+        return
+    fi
     _log "INFO" "Installing ${pkg_type} R packages: ${r_packages_list[*]}"
     for pkg_name_full in "${r_packages_list[@]}"; do
-        local pkg_name_short; local install_script=""
+        local pkg_name_short
+        local install_script=""
         if [[ "$pkg_type" == "CRAN" ]]; then
             pkg_name_short="$pkg_name_full"
             install_script="
@@ -637,7 +615,10 @@ if (!requireNamespace('$pkg_name_short', quietly=TRUE)) {
             else
                 install_script="if(!requireNamespace('$pkg_name_short',quietly=TRUE))devtools::install_github('$pkg_name_full')else cat('R pkg $pkg_name_short (GitHub) installed.\\n')"
             fi
-        else _log "WARN" "Unknown pkg type: $pkg_type for $pkg_name_full. Skipping."; continue; fi
+        else
+            _log "WARN" "Unknown pkg type: $pkg_type for $pkg_name_full. Skipping."
+            continue
+        fi
         _run_command "Install/Verify R pkg: $pkg_name_full" Rscript -e "$install_script"
     done
     _log "INFO" "${pkg_type} R pkgs install process done."
@@ -715,6 +696,7 @@ for (i in seq_len(nrow(ip))) {
 "
     Rscript -e "$r_list_pkgs_cmd"
 }
+
 
 
 fn_install_rstudio_server() {
