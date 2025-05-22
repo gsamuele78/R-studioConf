@@ -372,6 +372,41 @@ fn_setup_bspm() {
         _run_command "Create Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"
     fi
 
+    # Check if sudo is installed, install if missing
+    if ! command -v sudo &>/dev/null; then
+        _log "WARN" "'sudo' is not installed. Attempting to install..."
+        if [[ $EUID -ne 0 ]]; then
+            _log "ERROR" "'sudo' is not installed and you are not running as root. Please run this script as root to install sudo."
+            return 1
+        else
+            _run_command "Install sudo" apt-get update -y
+            _run_command "Install sudo" apt-get install -y sudo
+            if ! command -v sudo &>/dev/null; then
+                _log "ERROR" "Failed to install sudo."
+                return 1
+            else
+                _log "INFO" "'sudo' successfully installed."
+            fi
+        fi
+    else
+        _log "INFO" "'sudo' is already installed."
+    fi
+
+    # Ensure the current user is in the sudo group
+    if [[ $EUID -ne 0 ]]; then
+        if groups "$USER" | grep -qw "sudo"; then
+            _log "INFO" "User '$USER' is in the sudo group."
+        else
+            _log "WARN" "User '$USER' is not in the sudo group. Attempting to add..."
+            if sudo usermod -aG sudo "$USER"; then
+                _log "INFO" "Added user '$USER' to sudo group. You may need to log out and log back in for this to take effect."
+            else
+                _log "ERROR" "Failed to add user '$USER' to sudo group. Please add the user manually."
+                return 1
+            fi
+        fi
+    fi
+
     _log "INFO" "Adding R2U repository..."
     if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "R2U repository already configured."
@@ -405,13 +440,18 @@ fn_setup_bspm() {
         _log "INFO" "All required system packages are already installed."
     fi
 
+    # Determine system R library path
+    local system_r_lib_path
+    system_r_lib_path=$(sudo Rscript -e 'cat(paste(.libPaths(), collapse="\n"))' | head -n 1)
+    _log "INFO" "System R library path: $system_r_lib_path"
+
     # Export required environment variables (before installing bspm)
     export BSPM_ALLOW_SYSREQS=TRUE
     export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
 
-    # Install bspm as a system package with sudo
+    # Install bspm as a system package with sudo, explicitly specifying lib path
     _log "INFO" "Installing bspm as a system package..."
-    if ! sudo Rscript --vanilla -e 'install.packages("bspm", repos="https://cran.r-project.org")'; then
+    if ! sudo Rscript -e "install.packages('bspm', repos='https://cran.r-project.org', lib='$system_r_lib_path')"; then
         _log "ERROR" "Failed to install bspm as a system package."
         return 1
     fi
@@ -420,7 +460,6 @@ fn_setup_bspm() {
     _log "INFO" "Configuring bspm to use sudo..."
     local bspm_sudo_config="options(bspm.sudo = TRUE)"
 
-    # Ensure the line is added to Rprofile.site
     if ! grep -qF "$bspm_sudo_config" "$R_PROFILE_SITE_PATH"; then
         if ! echo "$bspm_sudo_config" >> "$R_PROFILE_SITE_PATH"; then
             _log "ERROR" "Failed to add 'options(bspm.sudo = TRUE)' to Rprofile.site."
@@ -432,11 +471,9 @@ fn_setup_bspm() {
         _log "INFO" "'options(bspm.sudo = TRUE)' already present in Rprofile.site."
     fi
 
-    # Set bspm.allow.sysreqs = TRUE and enable bspm with sudo
     _log "INFO" "Enabling bspm with options(bspm.allow.sysreqs = TRUE)..."
     local bspm_allow_sysreqs_config="options(bspm.allow.sysreqs = TRUE)"
 
-    # Ensure the line is added to Rprofile.site
     if ! grep -qF "$bspm_allow_sysreqs_config" "$R_PROFILE_SITE_PATH"; then
         if ! echo "$bspm_allow_sysreqs_config" >> "$R_PROFILE_SITE_PATH"; then
             _log "ERROR" "Failed to add 'options(bspm.allow.sysreqs = TRUE)' to Rprofile.site."
@@ -448,8 +485,8 @@ fn_setup_bspm() {
         _log "INFO" "'options(bspm.allow.sysreqs = TRUE)' already present in Rprofile.site."
     fi
 
-	# Add bspm::enable() to Rprofile.site
-	local bspm_enable_line='suppressMessages(bspm::enable())'
+    # Add bspm::enable() to Rprofile.site
+    local bspm_enable_line='suppressMessages(bspm::enable())'
     if grep -qF -- "$bspm_enable_line" "$R_PROFILE_SITE_PATH"; then
         _log "INFO" "bspm already enabled in Rprofile.site."
     else
@@ -462,19 +499,16 @@ fn_setup_bspm() {
 
     _log "INFO" "Verifying bspm activation..."
     set +e
-    bspm_status_output=$(sudo R --vanilla -e '
+    bspm_status_output=$(sudo R -e '
+.libPaths(c("'"$system_r_lib_path"'", .libPaths()))
 tryCatch({
     if (!requireNamespace("bspm", quietly=TRUE)) {
         cat("BSPM_NOT_INSTALLED\n")
         quit(status=1)
     }
-
-    # Enable bspm (this should use sudo)
     options(bspm.sudo = TRUE)
     options(bspm.allow.sysreqs = TRUE)
     suppressMessages(bspm::enable())
-
-    # Check if it worked
     if (isTRUE(getOption("bspm.MANAGES"))) {
         cat("BSPM_WORKING\n")
     } else {
