@@ -426,6 +426,7 @@ fn_setup_bspm() {
     _log "INFO" "bspm setup and verification completed."
 }
 
+
 _install_r_pkg_list() {
     local pkg_type="$1"; shift; local r_packages_list=("${@}")
     if [[ ${#r_packages_list[@]} -eq 0 ]]; then _log "INFO" "No ${pkg_type} R pkgs in list."; return; fi
