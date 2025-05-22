@@ -58,7 +58,7 @@ jobs:
       #- name: Re-run install_all for idempotency
       #  run: LOG_LEVEL=DEBUG DRY_RUN=0 ./setup_r_env.sh install_all
 
-       4. Test individual core functions where possible
+      #4. Test individual core functions where possible
       - name: Test pre-flight checks
         run: ./setup_r_env.sh fn_pre_flight_checks
 
