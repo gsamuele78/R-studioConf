@@ -1,64 +1,52 @@
 #!/usr/bin/env bash
 
-# #############################################################################
+##############################################################################
 # Script: setup_r_env.sh
 # Desc:   Installs R, OpenBLAS, OpenMP, RStudio Server, BSPM, and R packages.
 #         Includes auto-detection for latest RStudio Server, uninstall,
 #         and backup/restore for Rprofile.site.
 # Author: Your Name/Team
 # Date:   $(date +%Y-%m-%d)
-# #############################################################################
+##############################################################################
 
 # --- Configuration ---
-# Script behavior
-set -euo pipefail 
+set -euo pipefail
 
-# Logging
 LOG_DIR="/var/log/r_setup"
 LOG_FILE="${LOG_DIR}/r_setup_$(date +'%Y%m%d_%H%M%S').log"
-mkdir -p "$LOG_DIR"; touch "$LOG_FILE"; chmod 640 "$LOG_FILE" 
-
-# Backup
+mkdir -p "$LOG_DIR"; touch "$LOG_FILE"; chmod 640 "$LOG_FILE"
 BACKUP_DIR="/opt/r_setup_backups"; mkdir -p "$BACKUP_DIR"
 
-# System
-# UBUNTU_CODENAME_DETECTED is an initial detection. UBUNTU_CODENAME (global) will be finalized in fn_pre_flight_checks.
-UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown") 
-R_PROFILE_SITE_PATH="/etc/R" 
-USER_SPECIFIED_R_PROFILE_SITE_PATH="" 
-FORCE_USER_CLEANUP="no" 
+UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown")
+UBUNTU_CODENAME="$UBUNTU_CODENAME_DETECTED"
+R_PROFILE_SITE_PATH=""
+USER_SPECIFIED_R_PROFILE_SITE_PATH=""
+FORCE_USER_CLEANUP="no"
 
-# RStudio - Fallback Version 
-RSTUDIO_VERSION_FALLBACK="2023.12.1-402" # Keep this updated
-RSTUDIO_ARCH_FALLBACK="amd64" 
-RSTUDIO_ARCH="${RSTUDIO_ARCH_FALLBACK}" 
-
+RSTUDIO_VERSION_FALLBACK="2023.12.1-402"
+RSTUDIO_ARCH_FALLBACK="amd64"
+RSTUDIO_ARCH="${RSTUDIO_ARCH_FALLBACK}"
 RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK"
-# Use a sensible default like "bionic" if UBUNTU_CODENAME_DETECTED is initially "unknown"
-# This will be properly set in fn_pre_flight_checks before use in fn_get_latest_rstudio_info
-RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${UBUNTU_CODENAME_DETECTED:-bionic}/${RSTUDIO_ARCH}/rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb" 
+RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${UBUNTU_CODENAME_DETECTED:-bionic}/${RSTUDIO_ARCH}/rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
 RSTUDIO_DEB_FILENAME="rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
 
-# CRAN Repository
-CRAN_REPO_URL_BASE="https://cloud.r-project.org" 
+CRAN_REPO_URL_BASE="https://cloud.r-project.org"
 CRAN_REPO_PATH_BIN="/bin/linux/ubuntu"
 CRAN_REPO_PATH_SRC="/src/contrib"
-CRAN_REPO_URL_BIN="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_BIN}" 
-CRAN_REPO_URL_SRC="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_SRC}" 
-CRAN_REPO_LINE="deb ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME_DETECTED:-bionic}-cran40/" # Will be updated in fn_pre_flight_checks
-CRAN_APT_KEY_ID="E298A3A825C0D65DFD57CBB651716619E084DAB9" 
+CRAN_REPO_URL_BIN="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_BIN}"
+CRAN_REPO_URL_SRC="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_SRC}"
+CRAN_REPO_LINE="deb ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME_DETECTED:-bionic}-cran40/"
+CRAN_APT_KEY_ID="E298A3A825C0D65DFD57CBB651716619E084DAB9"
 
-# R2U/BSP Repository 
 R2U_REPO_URL_BASE="https://raw.githubusercontent.com/eddelbuettel/r2u/master/inst/scripts"
-R2U_APT_SOURCES_LIST_D_FILE="/etc/apt/sources.list.d/r2u.list" 
+R2U_APT_SOURCES_LIST_D_FILE="/etc/apt/sources.list.d/r2u.list"
 
-# R Packages
 R_PACKAGES_CRAN=(
     "terra" "raster" "sf" "enmSdmX" "dismo" "spThin" "rnaturalearth" "furrr"
     "doParallel" "future" "caret" "CoordinateCleaner" "tictoc" "devtools"
     "tidyverse" "dplyr" "spatstat" "ggplot2" "iNEXT" "DHARMa" "lme4" "glmmTMB"
     "geodata" "osmdata" "parallel" "doSNOW" "progress" "nngeo" "wdpar" "rgee" "tidyrgee"
-    "data.table" 
+    "data.table"
 )
 R_PACKAGES_GITHUB=(
     "SantanderMetGroup/transformeR"
@@ -66,15 +54,11 @@ R_PACKAGES_GITHUB=(
     "HelgeJentsch/ClimDatDownloadR"
 )
 
-# Global UBUNTU_CODENAME that will be finalized in fn_pre_flight_checks
-UBUNTU_CODENAME="$UBUNTU_CODENAME_DETECTED" 
-
 if [[ -n "${CUSTOM_R_PROFILE_SITE_PATH_ENV:-}" ]]; then
     USER_SPECIFIED_R_PROFILE_SITE_PATH="${CUSTOM_R_PROFILE_SITE_PATH_ENV}"
     echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO] Rprofile.site path from env: ${USER_SPECIFIED_R_PROFILE_SITE_PATH}" | tee -a "$LOG_FILE"
 fi
 
-# --- Helper Functions ---
 _log() { local type="$1"; local message="$2"; echo "$(date '+%Y-%m-%d %H:%M:%S') [${type}] ${message}" | tee -a "$LOG_FILE";}
 _ensure_root() { if [[ "${EUID}" -ne 0 ]]; then _log "ERROR" "Run as root/sudo."; exit 1; fi; }
 
@@ -91,119 +75,90 @@ _run_command() {
     fi
 }
 
-_run_command_allow_no_alternatives() {
-    local cmd_desc="$1"; shift
-    _log "INFO" "Start: $cmd_desc"
-    local output; local exit_code
-    output=$( ( "$@" 2>&1 ) ); exit_code=$? 
-
-    if [[ -n "$output" ]]; then
-        while IFS= read -r line; do _log "INFO" "Output from '${cmd_desc}': ${line}"; done <<< "$output"
-    fi
-
-    if [[ $exit_code -eq 0 ]]; then
-        _log "INFO" "OK: $cmd_desc"; return 0
-    elif [[ "$1" == "update-alternatives" && "$2" == "--display" && $exit_code -eq 2 ]]; then
-        _log "WARN" "Cmd '${cmd_desc}' no alternatives (RC 2). Normal."; return 0
-    else
-        _log "ERROR" "FAIL: $cmd_desc (RC:$exit_code). Log:$LOG_FILE"; return $exit_code
-    fi
-}
-
-_backup_file() { local fp="$1"; if [[ -f "$fp" || -L "$fp" ]]; then local bn; bn="$(basename "$fp")_$(date +'%Y%m%d%H%M%S').bak"; _log "INFO" "Backup ${fp} to ${BACKUP_DIR}/${bn}"; cp -a "$fp" "${BACKUP_DIR}/${bn}"||_log "WARN" "Backup fail ${fp}"; else _log "INFO" "${fp} not found, no backup."; fi; }
-_restore_latest_backup() { local orig_fp="$1"; local fn_pat; local latest_bkp; fn_pat="$(basename "$orig_fp")_*.bak"; latest_bkp=$(find "$BACKUP_DIR" -name "$fn_pat" -print0|xargs -0 --no-run-if-empty ls -t 2>/dev/null|head -n1); if [[ -n "$latest_bkp" && -f "$latest_bkp" ]]; then _log "INFO" "Restore ${orig_fp} from ${latest_bkp}"; local tgt_dir; tgt_dir=$(dirname "$orig_fp"); mkdir -p "$tgt_dir"; cp -a "$latest_bkp" "$orig_fp"||_log "ERROR" "Restore fail ${orig_fp}"; else _log "WARN" "No backup for ${orig_fp} in ${BACKUP_DIR} matching ${fn_pat}."; if [ ! -f "$orig_fp" ]&&[ ! -L "$orig_fp" ]; then _log "INFO" "Original ${orig_fp} also non-existent."; else _log "WARN" "Original ${orig_fp} exists, no backup found."; fi; fi; }
+_backup_file() { local fp="$1"; if [[ -f "$fp" || -L "$fp" ]]; then local bn; bn="$(basename "$fp")_$(date +'%Y%m%d%H%M%S').bak"; cp -a "$fp" "${BACKUP_DIR}/${bn}"; fi; }
+_restore_latest_backup() { local orig_fp="$1"; local fn_pat; local latest_bkp; fn_pat="$(basename "$orig_fp")_*.bak"; latest_bkp=$(find "$BACKUP_DIR" -name "$fn_pat" -print0|xargs -0 ls -1tr 2>/dev/null | tail -n 1); if [[ -n "$latest_bkp" && -f "$latest_bkp" ]]; then cp -a "$latest_bkp" "$orig_fp"; fi; }
 
 _get_r_profile_site_path() {
-    local log_details=false
-    if [[ -z "$R_PROFILE_SITE_PATH" && -z "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then log_details=true; fi
-    if $log_details; then _log "INFO" "Determining Rprofile.site path..."; fi
-
     if [[ -n "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then
-        if [[ "$R_PROFILE_SITE_PATH" != "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then R_PROFILE_SITE_PATH="$USER_SPECIFIED_R_PROFILE_SITE_PATH"; _log "INFO" "Using user-specified R_PROFILE_SITE_PATH: ${R_PROFILE_SITE_PATH}"; fi
+        R_PROFILE_SITE_PATH="$USER_SPECIFIED_R_PROFILE_SITE_PATH"
         return
     fi
-
     if command -v R &>/dev/null; then
-        local r_h_o; r_h_o=$(R RHOME 2>/dev/null||echo ""); if [[ -n "$r_h_o" && -d "$r_h_o" ]]; then local det_path="${r_h_o}/etc/Rprofile.site"; if [[ "$R_PROFILE_SITE_PATH" != "$det_path" ]]; then R_PROFILE_SITE_PATH="$det_path"; _log "INFO" "Auto R_PROFILE_SITE_PATH (R RHOME): ${R_PROFILE_SITE_PATH}";fi; return; fi
+        local r_h_o; r_h_o=$(R RHOME 2>/dev/null||echo ""); if [[ -n "$r_h_o" && -d "$r_h_o" ]]; then R_PROFILE_SITE_PATH="${r_h_o}/etc/Rprofile.site"; return; fi
     fi
-    local def_apt="/usr/lib/R/etc/Rprofile.site"; local def_loc="/usr/local/lib/R/etc/Rprofile.site"; local new_det_path=""
-    if [[ -f "$def_apt" || -L "$def_apt" ]]; then new_det_path="$def_apt"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "Auto R_PROFILE_SITE_PATH (apt): ${new_det_path}";fi
-    elif [[ -f "$def_loc" || -L "$def_loc" ]]; then new_det_path="$def_loc"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "Auto R_PROFILE_SITE_PATH (local): ${new_det_path}";fi
-    else new_det_path="$def_apt"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "No Rprofile.site found. Default: ${new_det_path}";fi; fi
-    R_PROFILE_SITE_PATH="$new_det_path"
-}
-
-fn_set_r_profile_path_interactive() {
-    _log "INFO" "Rprofile.site path logic: 1.User (menu/env), 2.R RHOME, 3.Defaults."
-    _get_r_profile_site_path; _log "INFO" "Current Rprofile.site: ${R_PROFILE_SITE_PATH}"
-    read -r -p "Enter new Rprofile.site path (Enter to clear override): " new_p
-    if [[ -n "$new_p" ]]; then
-        if [[ ! "$new_p" =~ ^/ ]]; then 
-            _log "ERROR" "Invalid path: '${new_p}'. Must be absolute. Override cleared."
-            USER_SPECIFIED_R_PROFILE_SITE_PATH=""
-        else 
-            USER_SPECIFIED_R_PROFILE_SITE_PATH="$new_p"; _log "INFO" "Rprofile.site overridden: ${USER_SPECIFIED_R_PROFILE_SITE_PATH}"; _get_r_profile_site_path; _log "INFO" "Effective Rprofile.site: ${R_PROFILE_SITE_PATH}"; local p_d; p_d=$(dirname "$USER_SPECIFIED_R_PROFILE_SITE_PATH"); if [[ ! -d "$p_d" ]]; then _log "WARN" "Parent dir '${p_d}' missing."; read -r -p "Create '${p_d}'? (y/N): " cr_dir_conf; if [[ "$cr_dir_conf" =~ ^[Yy]$ ]]; then if _run_command "Create dir ${p_d}" mkdir -p "$p_d"; then _log "INFO" "Created dir: ${p_d}"; else _log "ERROR" "Failed create dir: ${p_d}.";fi;fi;fi;
-        fi
-    else 
-        USER_SPECIFIED_R_PROFILE_SITE_PATH=""; _log "INFO" "User override Rprofile.site cleared."; _get_r_profile_site_path; _log "INFO" "Effective Rprofile.site: ${R_PROFILE_SITE_PATH}";
-    fi
+    [[ -f "/usr/lib/R/etc/Rprofile.site" ]] && R_PROFILE_SITE_PATH="/usr/lib/R/etc/Rprofile.site" && return
+    [[ -f "/usr/local/lib/R/etc/Rprofile.site" ]] && R_PROFILE_SITE_PATH="/usr/local/lib/R/etc/Rprofile.site" && return
+    R_PROFILE_SITE_PATH="/usr/lib/R/etc/Rprofile.site"
 }
 
 fn_get_latest_rstudio_info() {
     _log "INFO" "Attempting to detect latest RStudio Server for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}..."
-    local download_page_content=""; local latest_url=""; local temp_version=""; local curl_rc=0; local grep_rc=0
+    local download_page_content="" latest_url="" temp_version="" grep_output="" grep_rc=0 curl_rc=0
 
-    local current_rstudio_version="$RSTUDIO_VERSION" 
+    local current_rstudio_version="$RSTUDIO_VERSION"
     local current_rstudio_deb_url="$RSTUDIO_DEB_URL"
     local current_rstudio_deb_filename="$RSTUDIO_DEB_FILENAME"
 
-    if [[ -z "$UBUNTU_CODENAME" || "$UBUNTU_CODENAME" == "unknown" ]]; then _log "WARN" "UBUNTU_CODENAME ('${UBUNTU_CODENAME}') invalid for RStudio detection. Using version: ${current_rstudio_version}"; RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"; return; fi
-    if [[ -z "$RSTUDIO_ARCH" ]]; then _log "WARN" "RSTUDIO_ARCH invalid. Using version: ${current_rstudio_version}"; RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"; return; fi
+    if [[ -z "$UBUNTU_CODENAME" || "$UBUNTU_CODENAME" == "unknown" ]]; then
+        _log "WARN" "UBUNTU_CODENAME invalid for RStudio detection. Using version: ${current_rstudio_version}"
+        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+        return
+    fi
+    if [[ -z "$RSTUDIO_ARCH" ]]; then
+        _log "WARN" "RSTUDIO_ARCH invalid. Using version: ${current_rstudio_version}"
+        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+        return
+    fi
 
     _log "INFO" "Fetching RStudio download page..."
     download_page_content=$(curl --fail --location --connect-timeout 15 -sS "https://posit.co/download/rstudio-server/")
-    curl_rc=$? 
-    
-    if [[ $curl_rc -ne 0 ]]; then _log "WARN" "curl failed to fetch RStudio page (RC:$curl_rc). Using version: ${current_rstudio_version}"; RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"; return; fi
-    if [[ -z "$download_page_content" ]]; then _log "WARN" "RStudio download page empty. Using version: ${current_rstudio_version}"; RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"; return; fi
+    curl_rc=$?
+
+    if [[ $curl_rc -ne 0 ]]; then
+        _log "WARN" "curl failed to fetch RStudio page (RC:$curl_rc). Using version: ${current_rstudio_version}"
+        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+        return
+    fi
+    if [[ -z "$download_page_content" ]]; then
+        _log "WARN" "RStudio download page empty. Using version: ${current_rstudio_version}"
+        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+        return
+    fi
     _log "INFO" "RStudio download page fetched. Parsing for URL..."
 
-    local grep_output="" # Initialize to empty
-    # Subshell for pipefail to avoid exiting main script if grep finds nothing
-    (
-      set -o pipefail 
-      grep_output=$(echo "$download_page_content" | \
-                    grep -Eo "https://download[0-9]*\.rstudio\.org/server/${UBUNTU_CODENAME}/${RSTUDIO_ARCH}/rstudio-server-([0-9A-Za-z._-]+)-${RSTUDIO_ARCH}\.deb" | \
-                    head -n 1)
-    )
-    grep_rc=$? 
+    # --- FIX: Avoid grep_output in subshell (fixes ShellCheck SC2030/SC2031) ---
+    grep_output=$(echo "$download_page_content" | grep -Eo "https://download[0-9]*\.rstudio\.org/server/${UBUNTU_CODENAME}/${RSTUDIO_ARCH}/rstudio-server-([0-9A-Za-z._-]+)-${RSTUDIO_ARCH}\.deb" | head -n 1)
+    grep_rc=$?
 
-    if [[ $grep_rc -ne 0 && -n "$grep_output" ]]; then _log "WARN" "RStudio URL pipeline (grep|head) non-zero exit (RC:$grep_rc), but output found ('$grep_output'). Proceeding."
-    elif [[ $grep_rc -ne 0 ]]; then _log "WARN" "RStudio URL pipeline (grep|head) failed (RC:$grep_rc) and no output. Using version: ${current_rstudio_version}"; RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"; return; fi
-    
+    if [[ $grep_rc -ne 0 && -n "$grep_output" ]]; then
+        _log "WARN" "RStudio URL pipeline (grep|head) non-zero exit (RC:$grep_rc), but output found ('$grep_output'). Proceeding."
+    elif [[ $grep_rc -ne 0 ]]; then
+        _log "WARN" "RStudio URL pipeline (grep|head) failed (RC:$grep_rc) and no output. Using version: ${current_rstudio_version}"
+        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+        return
+    fi
+
     latest_url="$grep_output"
 
     if [[ -n "$latest_url" ]]; then
         _log "INFO" "Found RStudio Server URL: ${latest_url}"
-        local RSTUDIO_DEB_URL_DETECTED="$latest_url" 
+        local RSTUDIO_DEB_URL_DETECTED="$latest_url"
         local RSTUDIO_DEB_FILENAME_DETECTED; RSTUDIO_DEB_FILENAME_DETECTED=$(basename "$RSTUDIO_DEB_URL_DETECTED")
-        temp_version=${RSTUDIO_DEB_FILENAME_DETECTED#"rstudio-server-"}; 
-        local RSTUDIO_VERSION_DETECTED; RSTUDIO_VERSION_DETECTED=${temp_version%"-${RSTUDIO_ARCH}.deb"}  
+        temp_version=${RSTUDIO_DEB_FILENAME_DETECTED#"rstudio-server-"}
+        local RSTUDIO_VERSION_DETECTED; RSTUDIO_VERSION_DETECTED=${temp_version%"-${RSTUDIO_ARCH}.deb"}
 
         if [[ -n "$RSTUDIO_VERSION_DETECTED" ]]; then
             _log "INFO" "Auto-detected RStudio Server version: ${RSTUDIO_VERSION_DETECTED}"
             RSTUDIO_VERSION="$RSTUDIO_VERSION_DETECTED"; RSTUDIO_DEB_URL="$RSTUDIO_DEB_URL_DETECTED"; RSTUDIO_DEB_FILENAME="$RSTUDIO_DEB_FILENAME_DETECTED"
-            _log "INFO" "Successfully updated to use detected RStudio version."
-        else 
+        else
             _log "WARN" "Could not parse version from detected URL '${latest_url}'. Using version: ${current_rstudio_version}"
             RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
         fi
-    else 
+    else
         _log "WARN" "Could not auto-detect RStudio URL for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}. Using version: ${current_rstudio_version}"
         RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
     fi
 }
-
 # --- Core Functions ---
 fn_pre_flight_checks() {
     _log "INFO" "Performing pre-flight checks..."; _ensure_root
