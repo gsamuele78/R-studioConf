@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 ##############################################################################
 # Script: setup_r_env.sh
 # Desc:   Installs R, OpenBLAS, OpenMP, RStudio Server, BSPM, and R packages.
