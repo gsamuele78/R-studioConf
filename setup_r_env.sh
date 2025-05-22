@@ -353,15 +353,20 @@ EOF
     _log "INFO" "OpenBLAS and OpenMP verification step finished."; return 0
 }
 
+
 fn_setup_bspm() {
     _log "INFO" "Setting up bspm (Binary R Package Manager)..."
-    _get_r_profile_site_path
+    _get_r_profile_site_path 
 
-    if [[ -z "$R_PROFILE_SITE_PATH" ]]; then
+    if [[ -z "$R_PROFILE_SITE_PATH" ]]; then 
          _log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot setup bspm."; return 1
     fi
+    
+    local r_profile_dir; r_profile_dir=$(dirname "$R_PROFILE_SITE_PATH")
+    if [[ ! -d "$r_profile_dir" ]]; then _run_command "Create Rprofile.site dir ${r_profile_dir}" mkdir -p "$r_profile_dir"; fi
+    if [[ ! -f "$R_PROFILE_SITE_PATH" && ! -L "$R_PROFILE_SITE_PATH" ]]; then _run_command "Touch Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"; fi
 
-    # 1. Add the R2U/cran2deb4ubuntu repository (only if not present)
+    _log "INFO" "Adding R2U repository..."
     if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "R2U repository already configured."
     else
@@ -373,7 +378,7 @@ fn_setup_bspm() {
         rm -f /tmp/add_cranapt.sh
     fi
 
-    # 2. Install bspm R package from CRAN if not present
+    _log "INFO" "Installing bspm R package..."
     local bspm_check_cmd='if(requireNamespace("bspm", quietly=TRUE)) "installed" else "not_installed"'
     if [[ $(Rscript -e "$bspm_check_cmd" 2>/dev/null) == "installed" ]]; then
         _log "INFO" "bspm R package already installed."
@@ -381,36 +386,37 @@ fn_setup_bspm() {
         _run_command "Install bspm R package" Rscript -e "install.packages('bspm', repos='${CRAN_REPO_URL_SRC}')"
     fi
 
-    # 3. Ensure Rprofile.site contains the recommended activation line
     _backup_file "$R_PROFILE_SITE_PATH"
     _log "INFO" "Enabling bspm in ${R_PROFILE_SITE_PATH}..."
-    local bspm_enable_line='suppressMessages(bspm::enable())'
+    local bspm_enable_line='suppressMessages(bspm::enable())' 
     if grep -qF -- "$bspm_enable_line" "$R_PROFILE_SITE_PATH"; then
         _log "INFO" "bspm already enabled in Rprofile.site."
     else
         _run_command "Append bspm enable to ${R_PROFILE_SITE_PATH}" sh -c "echo '$bspm_enable_line' | tee -a '$R_PROFILE_SITE_PATH'"
         _log "INFO" "bspm enabled in Rprofile.site."
     fi
+    
+    _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
+    ( cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 2>&1 ) || _log "WARN" "Could not display Rprofile.site content."
 
-    # 4. Check if bspm is working according to the docs (requireNamespace & MANAGES)
     _log "INFO" "Checking bspm status and activation as per official documentation..."
     set +e
-    local bspm_status_output
     bspm_status_output=$(Rscript --vanilla -e '
-    if (!requireNamespace("bspm", quietly=TRUE)) {
-      cat("BSPM_NOT_INSTALLED\n"); quit(status=1)
-    }
-    suppressMessages(bspm::enable())
-    if (isTRUE(getOption("bspm.MANAGES"))) {
-      cat("BSPM_WORKING\n")
-    } else {
-      cat("BSPM_NOT_MANAGING\n")
-      quit(status=2)
-    }
-    ')
-    local bspm_status_rc=$?
+if (!requireNamespace("bspm", quietly=TRUE)) {
+  cat("BSPM_NOT_INSTALLED\n"); quit(status=1)
+}
+suppressMessages(bspm::enable())
+if (isTRUE(getOption("bspm.MANAGES"))) {
+  cat("BSPM_WORKING\n")
+} else {
+  cat("BSPM_NOT_MANAGING\n")
+  quit(status=2)
+}
+')
+    bspm_status_rc=$?
     set -e
-    if [[ "$bspm_status_output" == *BSPM_WORKING* ]]; then
+
+    if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_WORKING* ]]; then
         _log "INFO" "bspm is installed and managing packages (bspm.MANAGES==TRUE)."
     elif [[ "$bspm_status_output" == *BSPM_NOT_INSTALLED* ]]; then
         _log "ERROR" "bspm is NOT installed properly."
