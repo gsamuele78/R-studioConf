@@ -112,46 +112,44 @@ fn_get_latest_rstudio_info() {
     local current_rstudio_deb_filename="$RSTUDIO_DEB_FILENAME"
 
     if [[ -z "$UBUNTU_CODENAME" || "$UBUNTU_CODENAME" == "unknown" ]]; then
-        _log "WARN" "UBUNTU_CODENAME invalid for RStudio detection. Using version: ${current_rstudio_version}"
-        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+        _log "WARN" "UBUNTU_CODENAME invalid for RStudio detection. Using fallback version: ${current_rstudio_version}"
+        RSTUDIO_VERSION="$current_rstudio_version"
+        RSTUDIO_DEB_URL="$current_rstudio_deb_url"
+        RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
         return
     fi
     if [[ -z "$RSTUDIO_ARCH" ]]; then
-        _log "WARN" "RSTUDIO_ARCH invalid. Using version: ${current_rstudio_version}"
-        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+        _log "WARN" "RSTUDIO_ARCH invalid. Using fallback version: ${current_rstudio_version}"
+        RSTUDIO_VERSION="$current_rstudio_version"
+        RSTUDIO_DEB_URL="$current_rstudio_deb_url"
+        RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
         return
     fi
 
     _log "INFO" "Fetching RStudio download page..."
-    download_page_content=$(curl --fail --location --connect-timeout 15 -sS "https://posit.co/download/rstudio-server/")
-    curl_rc=$?
-
-    if [[ $curl_rc -ne 0 ]]; then
-        _log "WARN" "curl failed to fetch RStudio page (RC:$curl_rc). Using version: ${current_rstudio_version}"
-        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+    download_page_content=$(curl --fail --location --connect-timeout 15 -sS "https://posit.co/download/rstudio-server/") || curl_rc=$?
+    if [[ -z "$download_page_content" || ${curl_rc:-0} -ne 0 ]]; then
+        _log "WARN" "curl failed to fetch RStudio page (RC:${curl_rc:-0}). Using fallback version: ${current_rstudio_version}"
+        RSTUDIO_VERSION="$current_rstudio_version"
+        RSTUDIO_DEB_URL="$current_rstudio_deb_url"
+        RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
         return
     fi
-    if [[ -z "$download_page_content" ]]; then
-        _log "WARN" "RStudio download page empty. Using version: ${current_rstudio_version}"
-        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
-        return
-    fi
-    _log "INFO" "RStudio download page fetched. Parsing for URL..."
 
-    # --- FIX: Avoid grep_output in subshell (fixes ShellCheck SC2030/SC2031) ---
     grep_output=$(echo "$download_page_content" | grep -Eo "https://download[0-9]*\.rstudio\.org/server/${UBUNTU_CODENAME}/${RSTUDIO_ARCH}/rstudio-server-([0-9A-Za-z._-]+)-${RSTUDIO_ARCH}\.deb" | head -n 1)
     grep_rc=$?
 
-    if [[ $grep_rc -ne 0 && -n "$grep_output" ]]; then
-        _log "WARN" "RStudio URL pipeline (grep|head) non-zero exit (RC:$grep_rc), but output found ('$grep_output'). Proceeding."
-    elif [[ $grep_rc -ne 0 ]]; then
-        _log "WARN" "RStudio URL pipeline (grep|head) failed (RC:$grep_rc) and no output. Using version: ${current_rstudio_version}"
-        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+    if [[ -z "$grep_output" ]]; then
+        _log "WARN" "Could not find a RStudio Server .deb URL for ${UBUNTU_CODENAME}/${RSTUDIO_ARCH} on the download page. Falling back to default version."
+        _log "DEBUG" "First 20 lines of RStudio download page for debugging:"
+        echo "$download_page_content" | head -20 | tee -a "$LOG_FILE"
+        RSTUDIO_VERSION="$current_rstudio_version"
+        RSTUDIO_DEB_URL="$current_rstudio_deb_url"
+        RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
         return
     fi
 
     latest_url="$grep_output"
-
     if [[ -n "$latest_url" ]]; then
         _log "INFO" "Found RStudio Server URL: ${latest_url}"
         local RSTUDIO_DEB_URL_DETECTED="$latest_url"
@@ -161,15 +159,21 @@ fn_get_latest_rstudio_info() {
 
         if [[ -n "$RSTUDIO_VERSION_DETECTED" ]]; then
             _log "INFO" "Auto-detected RStudio Server version: ${RSTUDIO_VERSION_DETECTED}"
-            RSTUDIO_VERSION="$RSTUDIO_VERSION_DETECTED"; RSTUDIO_DEB_URL="$RSTUDIO_DEB_URL_DETECTED"; RSTUDIO_DEB_FILENAME="$RSTUDIO_DEB_FILENAME_DETECTED"
+            RSTUDIO_VERSION="$RSTUDIO_VERSION_DETECTED"
+            RSTUDIO_DEB_URL="$RSTUDIO_DEB_URL_DETECTED"
+            RSTUDIO_DEB_FILENAME="$RSTUDIO_DEB_FILENAME_DETECTED"
+            return
         else
-            _log "WARN" "Could not parse version from detected URL '${latest_url}'. Using version: ${current_rstudio_version}"
-            RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+            _log "WARN" "Could not parse version from detected URL '${latest_url}'. Using fallback version: ${current_rstudio_version}"
         fi
     else
-        _log "WARN" "Could not auto-detect RStudio URL for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}. Using version: ${current_rstudio_version}"
-        RSTUDIO_VERSION="$current_rstudio_version"; RSTUDIO_DEB_URL="$current_rstudio_deb_url"; RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
+        _log "WARN" "Could not auto-detect RStudio URL for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}. Using fallback version: ${current_rstudio_version}"
     fi
+
+    # Fallback in all error cases
+    RSTUDIO_VERSION="$current_rstudio_version"
+    RSTUDIO_DEB_URL="$current_rstudio_deb_url"
+    RSTUDIO_DEB_FILENAME="$current_rstudio_deb_filename"
 }
 # --- Core Functions ---
 fn_pre_flight_checks() {
