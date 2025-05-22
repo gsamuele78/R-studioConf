@@ -31,9 +31,9 @@ jobs:
         run: chmod +x setup_r_env.sh
 
       - name: Lint with ShellCheck
-        uses: ludeeus/action-shellcheck@v2
+        uses: shellcheck-actions/github-action-shellcheck@v2
         with:
-          ignore_paths: .github
+          check_together: 'setup_r_env.sh'
 
       # 1. DRY RUN SIMULATION
       - name: Dry-run install (simulate)
