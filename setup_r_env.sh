@@ -469,82 +469,51 @@ fn_setup_bspm() {
 
     # Determine system R library path
     local system_r_lib_path
-    system_r_lib_path=$(sudo Rscript -e 'cat(paste(.libPaths(), collapse="\n"))' | head -n 1)
+    system_r_lib_path=$(sudo Rscript -e 'cat(.Library)' 2>/dev/null)
     _log "INFO" "System R library path: $system_r_lib_path"
 
     export BSPM_ALLOW_SYSREQS=TRUE
     export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
 
-    _log "INFO" "Installing bspm as a system package..."
-    if ! sudo Rscript -e "install.packages('bspm', repos='https://cran.r-project.org', lib='$system_r_lib_path')"; then
-        _log "ERROR" "Failed to install bspm as a system package."
+    _log "INFO" "Installing bspm as a system package (via apt)..."
+    if ! sudo apt-get install -y r-cran-bspm; then
+        _log "ERROR" "Failed to install bspm as a system package via apt."
         return 1
     fi
 
-    _log "INFO" "Configuring bspm to use sudo..."
-    local bspm_sudo_config="options(bspm.sudo = TRUE)"
-    if ! grep -qF "$bspm_sudo_config" "$R_PROFILE_SITE_PATH"; then
-        if ! echo "$bspm_sudo_config" >> "$R_PROFILE_SITE_PATH"; then
-            _log "ERROR" "Failed to add 'options(bspm.sudo = TRUE)' to Rprofile.site."
-            return 1
-        else
-            _log "INFO" "Added 'options(bspm.sudo = TRUE)' to Rprofile.site."
-        fi
-    else
-        _log "INFO" "'options(bspm.sudo = TRUE)' already present in Rprofile.site."
-    fi
-
-    _log "INFO" "Enabling bspm with options(bspm.allow.sysreqs = TRUE)..."
-    local bspm_allow_sysreqs_config="options(bspm.allow.sysreqs = TRUE)"
-    if ! grep -qF "$bspm_allow_sysreqs_config" "$R_PROFILE_SITE_PATH"; then
-        if ! echo "$bspm_allow_sysreqs_config" >> "$R_PROFILE_SITE_PATH"; then
-            _log "ERROR" "Failed to add 'options(bspm.allow.sysreqs = TRUE)' to Rprofile.site."
-            return 1
-        else
-            _log "INFO" "Added 'options(bspm.allow.sysreqs = TRUE)' to Rprofile.site."
-        fi
-    else
-        _log "INFO" "'options(bspm.allow.sysreqs = TRUE)' already present in Rprofile.site."
-    fi
-
-    local bspm_enable_line='suppressMessages(bspm::enable())'
-    if grep -qF -- "$bspm_enable_line" "$R_PROFILE_SITE_PATH"; then
-        _log "INFO" "bspm already enabled in Rprofile.site."
-    else
-        _run_command "Append bspm enable to ${R_PROFILE_SITE_PATH}" sh -c "echo '$bspm_enable_line' | tee -a '$R_PROFILE_SITE_PATH'"
-        _log "INFO" "bspm enabled in Rprofile.site."
-    fi
+    _log "INFO" "Configuring bspm to use sudo and system requirements..."
+    local rprofile_lines="options(bspm.sudo = TRUE)
+options(bspm.allow.sysreqs = TRUE)
+suppressMessages(bspm::enable())"
+    # Remove previous lines to avoid duplicates
+    sed -i '/options(bspm\.sudo *= *TRUE)/d' "$R_PROFILE_SITE_PATH"
+    sed -i '/options(bspm\.allow\.sysreqs *= *TRUE)/d' "$R_PROFILE_SITE_PATH"
+    sed -i '/suppressMessages(bspm::enable())/d' "$R_PROFILE_SITE_PATH"
+    # Add new config at the end
+    printf "\n%s\n" "$rprofile_lines" | tee -a "$R_PROFILE_SITE_PATH" >/dev/null
 
     _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
     tee -a "$LOG_FILE" < "$R_PROFILE_SITE_PATH" || _log "WARN" "Could not display Rprofile.site content."
 
     _log "INFO" "Verifying bspm activation..."
     set +e
-    bspm_status_output=$(sudo R -e '
-.libPaths(c("'"$system_r_lib_path"'", .libPaths()))
-tryCatch({
-    if (!requireNamespace("bspm", quietly=TRUE)) {
-        cat("BSPM_NOT_INSTALLED\n")
-        quit(status=1)
-    }
-    options(bspm.sudo = TRUE)
-    options(bspm.allow.sysreqs = TRUE)
-    suppressMessages(bspm::enable())
-    if (isTRUE(getOption("bspm.MANAGES"))) {
-        cat("BSPM_WORKING\n")
-    } else {
-        cat("BSPM_NOT_MANAGING\n")
-        cat("Debug info:\n")
-        cat("PATH:", Sys.getenv("PATH"), "\n")
-        cat("apt-get path:", Sys.which("apt-get"), "\n")
-        cat("sudo path:", Sys.which("sudo"), "\n")
-        quit(status=2)
-    }
-}, error=function(e) {
-    cat("Error:", conditionMessage(e), "\n")
-    quit(status=3)
-})
-')
+    # Always use the system library path for requireNamespace
+    bspm_status_output=$(
+        sudo R --vanilla -e "
+.libPaths(c('$system_r_lib_path', .libPaths()))
+if (!requireNamespace('bspm', quietly=TRUE)) {
+  cat('BSPM_NOT_INSTALLED\n'); quit(status=1)
+}
+options(bspm.sudo=TRUE, bspm.allow.sysreqs=TRUE)
+suppressMessages(bspm::enable())
+if (isTRUE(getOption('bspm.MANAGES'))) {
+  cat('BSPM_WORKING\n')
+} else {
+  cat('BSPM_NOT_MANAGING\n')
+  quit(status=2)
+}
+" 2>&1
+    )
     bspm_status_rc=$?
     set -e
 
