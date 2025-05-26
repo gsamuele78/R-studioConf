@@ -228,35 +228,41 @@ fn_get_latest_rstudio_info() {
     _log "INFO" "Using RStudio Server: ${RSTUDIO_VERSION} from ${RSTUDIO_DEB_URL}"
 }
 
-
 fn_pre_flight_checks() {
     _log "INFO" "Performing pre-flight checks..."
     _ensure_root 
 
-    if command -v lsb_release &>/dev/null; then
-        UBUNTU_CODENAME_DETECTED=$(lsb_release -cs | tr -d '[:space:]') 
-    else
-        _log "WARN" "lsb_release command not found. Attempting to install lsb-release."
-        apt-get update -y >>"$LOG_FILE" 2>&1 || _log "WARN" "apt update failed during lsb-release prerequisite."
-        apt-get install -y lsb-release >>"$LOG_FILE" 2>&1 || {
-            _log "ERROR" "Failed to install lsb-release. Cannot determine Ubuntu codename."
-            exit 1
-        }
+    # Use the robust detection method
+    UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown")
+
+    # If lsb_release was not found (and thus echoed "unknown" or failed silently before ||)
+    # or if it returned "unknown" literally, try to install lsb-release and detect again.
+    if [[ "$UBUNTU_CODENAME_DETECTED" == "unknown" ]] || ! command -v lsb_release &>/dev/null; then
+        if ! command -v lsb_release &>/dev/null; then # Check if it's actually missing
+             _log "WARN" "lsb_release command not found. Attempting to install lsb-release."
+        else # lsb_release exists but returned "unknown" or something problematic
+             _log "WARN" "lsb_release -cs returned '${UBUNTU_CODENAME_DETECTED}'. Attempting to ensure lsb-release is correctly installed/functional."
+        fi
+        
+        _run_command "Update apt cache for lsb-release" apt-get update -y
+        _run_command "Install lsb-release" apt-get install -y lsb-release
+        
         if command -v lsb_release &>/dev/null; then
-            UBUNTU_CODENAME_DETECTED=$(lsb_release -cs | tr -d '[:space:]') 
+            UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown_after_install")
         else
-            _log "ERROR" "lsb_release installed but still not found or codename undetectable. Exiting."
-            exit 1
+            _log "ERROR" "lsb_release still not found after attempting installation. Cannot determine Ubuntu codename."
+            UBUNTU_CODENAME_DETECTED="critical_failure_lsb_release" # Ensure it fails the next check
         fi
     fi
-    UBUNTU_CODENAME="$UBUNTU_CODENAME_DETECTED" 
-    export UBUNTU_CODENAME # Export it immediately
-    _log "DEBUG" "In fn_pre_flight_checks: UBUNTU_CODENAME_DETECTED='${UBUNTU_CODENAME_DETECTED}', UBUNTU_CODENAME assigned and exported as '${UBUNTU_CODENAME}'."
+    
+    # Assign to the global variable and sanitize (tr -d '[:space:]' is good here AFTER detection)
+    UBUNTU_CODENAME=$(echo "$UBUNTU_CODENAME_DETECTED" | tr -d '[:space:]')
+    export UBUNTU_CODENAME 
+    _log "DEBUG" "In fn_pre_flight_checks: UBUNTU_CODENAME_DETECTED (raw)='${UBUNTU_CODENAME_DETECTED}', UBUNTU_CODENAME (sanitized & exported)='${UBUNTU_CODENAME}'."
 
-
-    _log "INFO" "Detected Ubuntu codename: ${UBUNTU_CODENAME}"
-    if [[ -z "$UBUNTU_CODENAME" || "$UBUNTU_CODENAME" == "unknown" ]]; then # This check now uses the exported UBUNTU_CODENAME
-        _log "ERROR" "Ubuntu codename is invalid (value: '${UBUNTU_CODENAME}'). This is critical. Exiting."
+    _log "INFO" "Using Ubuntu codename: ${UBUNTU_CODENAME}"
+    if [[ -z "$UBUNTU_CODENAME" || "$UBUNTU_CODENAME" == "unknown" || "$UBUNTU_CODENAME" == "unknown_after_install" || "$UBUNTU_CODENAME" == "critical_failure_lsb_release" ]]; then
+        _log "ERROR" "Ubuntu codename is invalid or could not be determined (value: '${UBUNTU_CODENAME}'). This is critical. Exiting."
         exit 1
     fi
 
@@ -271,7 +277,7 @@ fn_pre_flight_checks() {
         _log "WARN" "dpkg command not found. Using fallback RStudio architecture: ${RSTUDIO_ARCH_FALLBACK}"
         RSTUDIO_ARCH="$RSTUDIO_ARCH_FALLBACK"
     fi
-    export RSTUDIO_ARCH # Export for fn_get_latest_rstudio_info
+    export RSTUDIO_ARCH
 
     fn_get_latest_rstudio_info 
 
@@ -297,6 +303,7 @@ fn_pre_flight_checks() {
     fi
     _log "INFO" "Pre-flight checks completed."
 }
+
 
 fn_add_cran_repo() {
     _log "INFO" "Adding CRAN repository..."
