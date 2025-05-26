@@ -24,9 +24,27 @@ jobs:
       - name: Install required packages
         run: |
           apt-get update
-          apt-get install -y sudo git curl ca-certificates lsb-release wget gdebi-core apt-transport-https gnupg2 shellcheck net-tools iputils-ping systemctl su
-          apt-get install -y openssh-client
+          # Removed 'su' as it's a command, not a package.
+          # 'systemctl' package provides the command, but its functionality is limited in containers.
+          apt-get install -y --no-install-recommends \
+            sudo \
+            git \
+            curl \
+            ca-certificates \
+            lsb-release \
+            wget \
+            gdebi-core \
+            apt-transport-https \
+            gnupg2 \
+            shellcheck \
+            net-tools \
+            iputils-ping \
+            systemctl \
+            openssh-client
+          # Workaround for systemctl in containers (may have limited effect)
           mkdir -p /run/systemd && echo 'docker' > /run/systemd/container
+          apt-get clean
+          rm -rf /var/lib/apt/lists/*
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,6 +55,9 @@ jobs:
           lsb_release -a || cat /etc/os-release
           df -h
           free -h
+          echo "User: $(whoami)"
+          echo "Sudo version: $(sudo --version || echo 'not found')"
+          echo "Systemctl path: $(which systemctl || echo 'not found')"
 
       - name: Make script executable
         run: chmod +x setup_r_env.sh
@@ -77,27 +98,50 @@ jobs:
 
       - name: Verify CRAN/BSPM packages are installed
         run: |
-          Rscript -e "pkgs <- c('terra','raster','sf','dismo','spThin','tidyverse','bspm'); print(sapply(pkgs, requireNamespace, quietly=TRUE))"
+          Rscript -e "pkgs <- c('terra','raster','sf','dismo','spThin','tidyverse','bspm'); print(sapply(pkgs, requireNamespace, quietly=TRUE)); if(!all(sapply(pkgs, requireNamespace, quietly=TRUE))) stop('One or more R packages not found')"
 
       - name: Verify devtools & GitHub packages
         run: |
           Rscript -e "if (!requireNamespace('devtools', quietly=TRUE)) stop('devtools not installed')"
-          Rscript -e "if (!requireNamespace('transformeR', quietly=TRUE)) warning('transformeR not installed')"
+          Rscript -e "if (!requireNamespace('transformeR', quietly=TRUE)) warning('transformeR not installed')" # This is a warning, not an error
 
       - name: Verify RStudio Server installation
         run: |
-          systemctl status rstudio-server || true
-          which rstudio-server || true
-          rstudio-server version || true
+          # systemctl status might not be reliable in container, but check if command runs
+          systemctl status rstudio-server || echo "systemctl status rstudio-server failed (may be expected in container)"
+          # Check if the binary exists and can report version
+          which rstudio-server
+          rstudio-server version || echo "rstudio-server version command failed"
 
       - name: Test RStudio Server HTTP (port check)
         run: |
-          systemctl is-active rstudio-server && sleep 5
-          netstat -ntlp | grep 8787 || ss -ntlp | grep 8787
+          echo "Waiting for RStudio Server to start (up to 60s)..."
+          # RStudio Server might take a while to start up and bind the port, especially on first run.
+          # We loop for a bit to give it a chance.
+          for i in $(seq 1 12); do
+            # Check with netstat (if available) or ss
+            if (command -v netstat && netstat -tulnp | grep -q ':8787') || \
+               (command -v ss && ss -tulnp | grep -q ':8787'); then
+              echo "RStudio Server is listening on port 8787."
+              exit 0
+            fi
+            echo "Port 8787 not yet open (attempt $i/12), waiting 5s..."
+            # Show rstudio-server related processes if any to help debug
+            ps aux | grep -E 'rstudio|rserver' || true
+            # Try to get service status if an init script exists (might be more reliable than systemctl in container)
+            if [ -f /etc/init.d/rstudio-server ]; then
+                echo "Status from /etc/init.d/rstudio-server:"
+                /etc/init.d/rstudio-server status || true
+            fi
+            sleep 5
+          done
+          echo "RStudio Server FAILED to listen on port 8787 after 60s."
+          echo "Final check for relevant processes:"
+          ps aux | grep -E 'rstudio|rserver' || true
+          exit 1
 
       # --- UNINSTALL/CLEANUP & IDPOTENCY TESTS ---
 
-      # 3. Uninstall all (cleanup)
       - name: Test uninstall_all (cleanup)
         run: LOG_LEVEL=DEBUG ./setup_r_env.sh uninstall_all || true
 
@@ -105,10 +149,12 @@ jobs:
       - name: Confirm removal of R, RStudio, packages
         run: |
           ! command -v R || { echo "R still found!"; exit 1; }
-          ! command -v rstudio-server || { echo "RStudio still found!"; exit 1; }
-          ! dpkg -s r-base || { echo "r-base still installed!"; exit 1; }
-          ! dpkg -s rstudio-server || { echo "rstudio-server still installed!"; exit 1; }
-          Rscript -e "q('no')" 2>/dev/null && { echo "Rscript still works!"; exit 1; } || true
+          ! command -v rstudio-server || { echo "RStudio Server still found!"; exit 1; }
+          # dpkg -s will return 1 if not installed, which is what we want
+          ! dpkg -s r-base >/dev/null 2>&1 || { echo "r-base still installed (checked with dpkg)!"; dpkg -s r-base; exit 1; }
+          ! dpkg -s rstudio-server >/dev/null 2>&1 || { echo "rstudio-server still installed (checked with dpkg)!"; dpkg -s rstudio-server; exit 1; }
+          # Test if Rscript can be invoked. If it errors (exit code > 0), it's good.
+          Rscript -e "q('no')" 2>/dev/null && { echo "Rscript still works!"; exit 1; } || echo "Rscript correctly not working or not found."
 
       # 5. Test uninstall_all idempotency (run again)
       - name: Re-run uninstall_all (idempotency)
@@ -131,28 +177,43 @@ jobs:
       - name: Show main log tail
         if: always()
         run: |
-          tail -n 50 /var/log/r_setup/r_setup_*.log || true
+          if ls /var/log/r_setup/r_setup_*.log 1> /dev/null 2>&1; then
+            tail -n 100 /var/log/r_setup/r_setup_*.log
+          else
+            echo "No r_setup logs found in /var/log/r_setup/"
+          fi
 
       # --- OPTIONAL/EDGE CASE TESTS ---
 
       - name: Test bad argument handling
         run: |
+          # Expect this to fail, hence the '!'
           ! ./setup_r_env.sh not_a_real_action
 
       - name: Test script as non-root (should fail gracefully)
         run: |
-          set +e
-          su -c "./setup_r_env.sh install_all" nobody 2>&1 | tee non_root_output.txt
-          grep -iq "Run as root" non_root_output.txt
+          set +e # Allow the command to fail without exiting the step
+          # Create 'nobody' user if it doesn't exist (it usually does)
+          id -u nobody >/dev/null 2>&1 || useradd nobody
+          # Run the script as 'nobody' user
+          output=$(su -s /bin/bash -c "./setup_r_env.sh install_all" nobody 2>&1)
+          echo "Output from non-root execution:"
+          echo "${output}"
+          set -e # Re-enable exit on error
+          # Check if the output contains the expected error message
+          echo "${output}" | grep -iq "Run as root" || \
+            { echo "Expected 'Run as root' message not found!"; exit 1; }
+          echo "Non-root test passed."
 
-      - name: Test DRY_RUN and LOG_LEVEL
+
+      - name: Test DRY_RUN and LOG_LEVEL for install_all
         run: LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh install_all
 
       - name: Print environment
         run: env | sort
 
       - name: Menu/help/usage output
-        run: ./setup_r_env.sh || true
+        run: ./setup_r_env.sh || true # Script might exit with non-zero on help, so allow it
 
       # --- (Uncomment these if you want full install/dry-run/idempotency of install) ---
       # - name: Dry-run install (simulate)
