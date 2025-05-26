@@ -97,8 +97,8 @@ _ensure_root() {
 _run_command() {
     local cmd_desc="$1"; shift
     _log "INFO" "Start: $cmd_desc"
-    _log "DEBUG" "Executing in _run_command: $*" # Log the exact command
-    if [[ "$1" == "mv" ]]; then # Specific debug for mv
+    _log "DEBUG" "Executing in _run_command: $*" 
+    if [[ "$1" == "mv" ]]; then 
         _log "DEBUG" "mv source details: $(ls -ld "$2" 2>&1 || echo "source $2 not found")"
         _log "DEBUG" "mv target details: $(ls -ld "$3" 2>&1 || echo "target $3 not found")"
         _log "DEBUG" "mv target parent dir details: $(ls -ld "$(dirname "$3")" 2>&1 || echo "target parent dir for $3 not found")"
@@ -684,15 +684,15 @@ fn_setup_bspm() {
     _log "INFO" "Setting up bspm (Binary R Package Manager from R2U)..."
     _get_r_profile_site_path 
 
-    if [[ ! -f "$R_PROFILE_SITE_PATH" ]]; then # Check if Rprofile.site exists before backup
+    if [[ ! -f "$R_PROFILE_SITE_PATH" ]]; then 
         _log "WARN" "Rprofile.site '${R_PROFILE_SITE_PATH}' does not exist. Attempting to create."
-        mkdir -p "$(dirname "$R_PROFILE_SITE_PATH")" # Ensure directory exists
+        mkdir -p "$(dirname "$R_PROFILE_SITE_PATH")" 
         if ! touch "$R_PROFILE_SITE_PATH"; then
             _log "ERROR" "Failed to create Rprofile.site at '${R_PROFILE_SITE_PATH}'. Cannot proceed with bspm config."
             return 1
         fi
     fi
-    _backup_file "$R_PROFILE_SITE_PATH"
+    _backup_file "$R_PROFILE_SITE_PATH" 
 
 
     if ! _is_vm_or_ci_env; then
@@ -716,12 +716,6 @@ fn_setup_bspm() {
     if [[ ! -d "$r_profile_dir" ]]; then
         _run_command "Create directory for Rprofile.site: ${r_profile_dir}" mkdir -p "$r_profile_dir"
     fi
-
-    # This touch was moved higher, before backup_file
-    # if [[ ! -f "$R_PROFILE_SITE_PATH" && ! -L "$R_PROFILE_SITE_PATH" ]]; then
-    #     _log "INFO" "Rprofile.site ('${R_PROFILE_SITE_PATH}') does not exist. Creating it..."
-    #     _run_command "Create Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"
-    # fi
 
 
     if ! command -v sudo &>/dev/null; then
@@ -805,8 +799,8 @@ EOF
     fi
     _log "DEBUG" "Temporary file for Rprofile.site update: ${temp_rprofile}"
 
-    if [[ ! -f "$R_PROFILE_SITE_PATH" ]]; then # Should have been created by touch earlier if it didn't exist
-        _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not a regular file or does not exist before sed. This should not happen."
+    if [[ ! -f "$R_PROFILE_SITE_PATH" ]]; then
+        _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not a regular file or does not exist before sed. Cannot update."
         rm -f "$temp_rprofile"
         return 1
     fi
@@ -841,14 +835,13 @@ EOF
     echo "..." >> "$LOG_FILE" 
 
     _log "INFO" "Attempting to directly move ${temp_rprofile} to ${R_PROFILE_SITE_PATH}"
-    # Using mv -f to force overwrite if target exists. Output of mv is redirected to main log.
     if mv -f "$temp_rprofile" "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 2>&1; then
         _log "INFO" "Successfully updated Rprofile.site with bspm configuration using direct mv."
     else
         local mv_rc=$?
         _log "ERROR" "Direct mv command FAILED (RC: ${mv_rc}) to update Rprofile.site from ${temp_rprofile} to ${R_PROFILE_SITE_PATH}."
         _log "ERROR" "Rprofile.site may not be updated or may be in an inconsistent state. Check permissions and paths. Last few lines of log might show mv error."
-        tail -n 5 "$LOG_FILE" # Show recent log lines which might include mv's specific error
+        tail -n 5 "$LOG_FILE" 
         rm -f "$temp_rprofile" 
         return 1 
     fi
