@@ -3,6 +3,8 @@
 ##############################################################################
 # Script: setup_r_env.sh
 # Desc:   Installs R, OpenBLAS, OpenMP, RStudio Server, BSPM, and R packages.
+#         Includes auto-detection for latest RStudio Server, uninstall,
+#         and backup/restore for Rprofile.site.
 # Author: Your Name/Team
 # Date:   $(date +%Y-%m-%d)
 ##############################################################################
@@ -15,13 +17,16 @@ export DEBIAN_FRONTEND=noninteractive
 # Logging
 LOG_DIR="/var/log/r_setup"
 LOG_FILE="${LOG_DIR}/r_setup_$(date +'%Y%m%d_%H%M%S').log"
-mkdir -p "$LOG_DIR"; touch "$LOG_FILE"; chmod 640 "$LOG_FILE"
+mkdir -p "$LOG_DIR"
+touch "$LOG_FILE"
+chmod 640 "$LOG_FILE" 
 
 # Backup
 BACKUP_DIR="/opt/r_setup_backups"; mkdir -p "$BACKUP_DIR"
 
-# System State File
+# System State File (for individual function calls)
 R_ENV_STATE_FILE="/tmp/r_env_setup_state.sh"
+
 
 # System
 UBUNTU_CODENAME_DETECTED="" 
@@ -33,19 +38,26 @@ FORCE_USER_CLEANUP="no"
 RSTUDIO_VERSION_FALLBACK="2023.12.1-402" 
 RSTUDIO_ARCH_FALLBACK="amd64"
 RSTUDIO_ARCH="${RSTUDIO_ARCH_FALLBACK}" 
+
 RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK"
 RSTUDIO_DEB_URL=""
 RSTUDIO_DEB_FILENAME=""
 
-# CRAN (Note: R2U script will primarily manage this)
-CRAN_REPO_URL_BASE="https://cloud.r-project.org" # Still useful for source installs
+
+# CRAN Repository
+CRAN_REPO_URL_BASE="https://cloud.r-project.org"
+CRAN_REPO_PATH_BIN="/bin/linux/ubuntu"
 CRAN_REPO_PATH_SRC="/src/contrib" 
+CRAN_REPO_URL_BIN="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_BIN}"
 CRAN_REPO_URL_SRC="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_SRC}" 
+CRAN_REPO_LINE="" # Will be: deb URL codename-cran40/
+CRAN_APT_KEY_URL="https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc" # Direct URL to ASCII key
+CRAN_APT_KEYRING_FILE="/etc/apt/trusted.gpg.d/cran_ubuntu_key.asc" # Path for ASCII key in trusted.gpg.d
+
 
 # R2U/BSP Repository
 R2U_REPO_URL_BASE="https://raw.githubusercontent.com/eddelbuettel/r2u/master/inst/scripts"
-R2U_APT_SOURCES_LIST_D_FILE="/etc/apt/sources.list.d/r2u.list" # Standard file from R2U script
-R2U_CRAN_SOURCES_LIST_D_FILE_PATTERN="/etc/apt/sources.list.d/*cloud.r-project.org*.list" # Pattern for lists R2U might create
+R2U_APT_SOURCES_LIST_D_FILE="/etc/apt/sources.list.d/r2u.list" 
 
 # R Packages
 R_PACKAGES_CRAN=(
@@ -70,65 +82,151 @@ fi
 
 # --- Helper Functions ---
 _log() {
-    local type="$1"; local message="$2"
+    local type="$1"
+    local message="$2"
     echo "$(date '+%Y-%m-%d %H:%M:%S') [${type}] ${message}" | tee -a "$LOG_FILE"
 }
-_ensure_root() { if [[ "${EUID}" -ne 0 ]]; then _log "ERROR" "This script must be run as root or with sudo."; exit 1; fi; }
+
+_ensure_root() {
+    if [[ "${EUID}" -ne 0 ]]; then
+        _log "ERROR" "This script must be run as root or with sudo."
+        exit 1
+    fi
+}
+
 _run_command() {
     local cmd_desc="$1"; shift
     _log "INFO" "Start: $cmd_desc"
-    if "$@" >>"$LOG_FILE" 2>&1; then _log "INFO" "OK: $cmd_desc"; return 0
+    if "$@" >>"$LOG_FILE" 2>&1; then
+        _log "INFO" "OK: $cmd_desc"
+        return 0
     else
-        local exit_code=$?; _log "ERROR" "FAIL: $cmd_desc (RC:$exit_code). See log: $LOG_FILE"
-        if [ -f "$LOG_FILE" ]; then tail -n 10 "$LOG_FILE" | sed 's/^/    /'; fi
+        local exit_code=$?
+        _log "ERROR" "FAIL: $cmd_desc (RC:$exit_code). See log: $LOG_FILE"
+        if [ -f "$LOG_FILE" ]; then
+            tail -n 10 "$LOG_FILE" | sed 's/^/    /' 
+        fi
         return "$exit_code"
     fi
 }
+
 _backup_file() {
-    local fp="$1"; if [[ -f "$fp" || -L "$fp" ]]; then local bn; bn="$(basename "$fp")_$(date +'%Y%m%d%H%M%S').bak"; _log "INFO" "Backing up '${fp}' to '${BACKUP_DIR}/${bn}'"; cp -a "$fp" "${BACKUP_DIR}/${bn}"; fi
+    local filepath="$1"
+    if [[ -f "$filepath" || -L "$filepath" ]]; then
+        local backup_filename
+        backup_filename="$(basename "$filepath")_$(date +'%Y%m%d%H%M%S').bak"
+        _log "INFO" "Backing up '${filepath}' to '${BACKUP_DIR}/${backup_filename}'"
+        cp -a "$filepath" "${BACKUP_DIR}/${backup_filename}"
+    else
+        _log "INFO" "File '${filepath}' not found for backup. Skipping."
+    fi
 }
+
+_restore_latest_backup() {
+    local original_filepath="$1"
+    local filename_pattern
+    local latest_backup
+    filename_pattern="$(basename "$original_filepath")_*.bak"
+    latest_backup=$(find "$BACKUP_DIR" -name "$filename_pattern" -print0 | xargs -0 ls -1tr 2>/dev/null | tail -n 1)
+    if [[ -n "$latest_backup" && -f "$latest_backup" ]]; then
+        _log "INFO" "Restoring '${original_filepath}' from latest backup '${latest_backup}'"
+        cp -a "$latest_backup" "$original_filepath"
+    else
+        _log "INFO" "No backup found for '${original_filepath}' in '${BACKUP_DIR}' with pattern '${filename_pattern}'. Skipping restore."
+    fi
+}
+
+
 _get_r_profile_site_path() {
-    # ... (function remains the same)
     local log_details=false
-    if [[ -z "$R_PROFILE_SITE_PATH" && -z "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then log_details=true; fi
+    if [[ -z "$R_PROFILE_SITE_PATH" && -z "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then
+        log_details=true
+    fi
+
     if $log_details; then _log "INFO" "Determining Rprofile.site path..."; fi
+
     if [[ -n "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then
-        if [[ "$R_PROFILE_SITE_PATH" != "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then R_PROFILE_SITE_PATH="$USER_SPECIFIED_R_PROFILE_SITE_PATH"; _log "INFO" "Using user-specified R_PROFILE_SITE_PATH: ${R_PROFILE_SITE_PATH}"; fi
+        if [[ "$R_PROFILE_SITE_PATH" != "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then
+            R_PROFILE_SITE_PATH="$USER_SPECIFIED_R_PROFILE_SITE_PATH"
+            _log "INFO" "Using user-specified R_PROFILE_SITE_PATH: ${R_PROFILE_SITE_PATH}"
+        fi
         return
     fi
+
     if command -v R &>/dev/null; then
-        local r_h_o; r_h_o=$(R RHOME 2>/dev/null||echo ""); if [[ -n "$r_h_o" && -d "$r_h_o" ]]; then local det_path="${r_h_o}/etc/Rprofile.site"; if [[ "$R_PROFILE_SITE_PATH" != "$det_path" ]]; then _log "INFO" "Auto-detected R_PROFILE_SITE_PATH (from R RHOME): ${det_path}"; fi; R_PROFILE_SITE_PATH="$det_path"; return; fi
+        local r_home_output
+        r_home_output=$(R RHOME 2>/dev/null || echo "") 
+        if [[ -n "$r_home_output" && -d "$r_home_output" ]]; then
+            local detected_path="${r_home_output}/etc/Rprofile.site"
+            if [[ "$R_PROFILE_SITE_PATH" != "$detected_path" ]]; then
+                _log "INFO" "Auto-detected R_PROFILE_SITE_PATH (from R RHOME): ${detected_path}"
+            fi
+            R_PROFILE_SITE_PATH="$detected_path"
+            return
+        fi
     fi
-    local def_apt="/usr/lib/R/etc/Rprofile.site"; local def_loc="/usr/local/lib/R/etc/Rprofile.site"; local new_det_path=""
-    if [[ -f "$def_apt" || -L "$def_apt" ]]; then new_det_path="$def_apt"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "Auto-detected R_PROFILE_SITE_PATH (apt default): ${new_det_path}"; fi
-    elif [[ -f "$def_loc" || -L "$def_loc" ]]; then new_det_path="$def_loc"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "Auto-detected R_PROFILE_SITE_PATH (local default): ${new_det_path}"; fi
-    else new_det_path="$def_apt"; if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_det_path" ]]; then _log "INFO" "No Rprofile.site found. Defaulting to standard location for creation: ${new_det_path}"; fi; fi
-    R_PROFILE_SITE_PATH="$new_det_path"
+
+    local default_apt_path="/usr/lib/R/etc/Rprofile.site"
+    local default_local_path="/usr/local/lib/R/etc/Rprofile.site"
+    local new_detected_path=""
+
+    if [[ -f "$default_apt_path" || -L "$default_apt_path" ]]; then
+        new_detected_path="$default_apt_path"
+        if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_detected_path" ]]; then
+            _log "INFO" "Auto-detected R_PROFILE_SITE_PATH (apt default): ${new_detected_path}"
+        fi
+    elif [[ -f "$default_local_path" || -L "$default_local_path" ]]; then
+        new_detected_path="$default_local_path"
+        if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_detected_path" ]]; then
+            _log "INFO" "Auto-detected R_PROFILE_SITE_PATH (local default): ${new_detected_path}"
+        fi
+    else
+        new_detected_path="$default_apt_path"
+        if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_detected_path" ]]; then
+            _log "INFO" "No Rprofile.site found. Defaulting to standard location for creation: ${new_detected_path}"
+        fi
+    fi
+    R_PROFILE_SITE_PATH="$new_detected_path"
 }
+
+
 _safe_systemctl() {
-    # ... (function remains the same)
     if command -v systemctl >/dev/null 2>&1; then
-        if systemctl "$@" >> "$LOG_FILE" 2>&1; then return 0
+        if systemctl "$@" >> "$LOG_FILE" 2>&1; then
+            return 0 
         else
             local exit_code=$?
-            if [[ "${CI:-false}" == "true" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]]; then _log "WARN" "systemctl command '$*' failed (RC:$exit_code). Ignoring in CI context."; return 0
-            else _log "ERROR" "systemctl command '$*' failed (RC:$exit_code)."; return "$exit_code"; fi
+            if [[ "${CI:-false}" == "true" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+                _log "WARN" "systemctl command '$*' failed (RC:$exit_code). Ignoring in CI context."
+                return 0 
+            else
+                _log "ERROR" "systemctl command '$*' failed (RC:$exit_code)."
+                return "$exit_code" 
+            fi
         fi
-    else _log "INFO" "systemctl command not found, skipping systemctl action: $*"; return 0; fi
+    else
+        _log "INFO" "systemctl command not found, skipping systemctl action: $*"
+        return 0 
+    fi
 }
+
+
 _is_vm_or_ci_env() {
-    # ... (function remains the same)
-    if [[ "${CI:-false}" == "true" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]] || [[ -n "${GITLAB_CI:-}" ]] || [[ -n "${TRAVIS:-}" ]]; then return 0
-    elif [[ "$EUID" -eq 0 ]]; then return 0
-    else return 1; fi
+    if [[ "${CI:-false}" == "true" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]] || [[ -n "${GITLAB_CI:-}" ]] || [[ -n "${TRAVIS:-}" ]]; then
+        return 0 
+    elif [[ "$EUID" -eq 0 ]]; then 
+        return 0 
+    else
+        return 1 
+    fi
 }
 
 # --- Core Functions ---
 fn_get_latest_rstudio_info() {
-    # ... (function remains the same - uses UBUNTU_CODENAME, RSTUDIO_ARCH from state or detection) ...
     _log "INFO" "Attempting to detect latest RStudio Server for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}..."
     _log "WARN" "RStudio Server auto-detection is fragile and currently disabled. Using fallback version: ${RSTUDIO_VERSION_FALLBACK}"
     RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK"
+    
     if [[ -z "${UBUNTU_CODENAME:-}" || -z "${RSTUDIO_ARCH:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
         _log "DEBUG" "fn_get_latest_rstudio_info: Sourcing state file as UBUNTU_CODENAME or RSTUDIO_ARCH is empty."
         # shellcheck source=/dev/null
@@ -158,7 +256,9 @@ fn_pre_flight_checks() {
         else 
              _log "WARN" "lsb_release -cs returned '${UBUNTU_CODENAME_DETECTED}'. Attempting to ensure lsb-release is correctly installed/functional."
         fi
+        
         _run_command "Install lsb-release" apt-get install -y lsb-release
+        
         if command -v lsb_release &>/dev/null; then
             UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown_after_install")
         else
@@ -190,8 +290,12 @@ fn_pre_flight_checks() {
     fi
     export RSTUDIO_ARCH
 
-    fn_get_latest_rstudio_info # This defines RSTUDIO_DEB_URL and RSTUDIO_DEB_FILENAME
-    
+    fn_get_latest_rstudio_info 
+
+    CRAN_REPO_LINE="deb ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
+    export CRAN_REPO_LINE 
+    _log "DEBUG" "In fn_pre_flight_checks: CRAN_REPO_LINE constructed and exported as: '${CRAN_REPO_LINE}'"
+    _log "DEBUG" "In fn_pre_flight_checks: CRAN_APT_KEYRING_FILE is: '${CRAN_APT_KEYRING_FILE}'"
     _log "INFO" "RStudio Server version to be used: ${RSTUDIO_VERSION} (URL: ${RSTUDIO_DEB_URL})"
 
     mkdir -p "$LOG_DIR" "$BACKUP_DIR" "/etc/apt/trusted.gpg.d" "/etc/apt/keyrings" 
@@ -211,46 +315,101 @@ fn_pre_flight_checks() {
     _log "INFO" "Pre-flight checks completed."
 
     _log "INFO" "Writing environment state to ${R_ENV_STATE_FILE}"
-    # CRAN_REPO_LINE and CRAN_APT_KEYRING_FILE are now primarily managed by R2U script if used.
-    # We still write them for reference or if R2U is skipped, but fn_add_cran_repo is now simplified.
-    local current_cran_repo_line="deb ${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_BIN} ${UBUNTU_CODENAME}-cran40/"
-
     {
         echo "export UBUNTU_CODENAME=\"${UBUNTU_CODENAME}\""
         echo "export RSTUDIO_ARCH=\"${RSTUDIO_ARCH}\""
         echo "export RSTUDIO_VERSION=\"${RSTUDIO_VERSION}\""
         echo "export RSTUDIO_DEB_URL=\"${RSTUDIO_DEB_URL}\""
         echo "export RSTUDIO_DEB_FILENAME=\"${RSTUDIO_DEB_FILENAME}\""
-        # The following are for context or if R2U is NOT used for CRAN setup.
-        echo "export CRAN_LEGACY_REPO_LINE=\"${current_cran_repo_line}\"" # For potential direct use if R2U fails
-        echo "export CRAN_LEGACY_APT_KEYRING_FILE=\"/etc/apt/trusted.gpg.d/cran_ubuntu_key.asc\"" # For legacy key path
-        echo "export CRAN_APT_KEY_URL=\"${CRAN_APT_KEY_URL}\""      
+        echo "export CRAN_REPO_LINE=\"${CRAN_REPO_LINE}\""
+        echo "export CRAN_APT_KEYRING_FILE=\"${CRAN_APT_KEYRING_FILE}\"" 
+        echo "export CRAN_APT_KEY_URL=\"${CRAN_APT_KEY_URL}\""         
     } > "$R_ENV_STATE_FILE"
-    _log "INFO" "State file written."
+    _log "INFO" "State file written. If running functions individually, subsequent steps might use this."
 }
 
 
 fn_add_cran_repo() {
-    # This function is now a placeholder or a simple apt-get update trigger
-    # as the R2U script (add_cranapt_*.sh) is expected to handle the CRAN and R2U repo setup.
-    _log "INFO" "Ensuring apt package lists are up-to-date (R2U script should have handled main CRAN setup)."
-    if [[ -z "${UBUNTU_CODENAME:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
-        _log "DEBUG" "fn_add_cran_repo: Sourcing state file."
-        # shellcheck source=/dev/null
-        source "$R_ENV_STATE_FILE"
+    _log "INFO" "Adding CRAN repository (using CRAN recommended method)..."
+    
+    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${CRAN_REPO_LINE:-}" || -z "${CRAN_APT_KEYRING_FILE:-}" || -z "${CRAN_APT_KEY_URL:-}" ]]; then
+        _log "WARN" "Key variables not set in current environment for fn_add_cran_repo."
+        if [[ -f "$R_ENV_STATE_FILE" ]]; then
+            _log "INFO" "Attempting to source state from ${R_ENV_STATE_FILE}"
+            # shellcheck source=/dev/null
+            source "$R_ENV_STATE_FILE"
+        else
+            _log "WARN" "State file ${R_ENV_STATE_FILE} not found."
+        fi
     fi
-    if [[ -z "$UBUNTU_CODENAME" ]]; then
-        _log "ERROR" "FATAL: UBUNTU_CODENAME is empty in fn_add_cran_repo. Run 'fn_pre_flight_checks' first. Aborting."
+
+    _log "DEBUG" "Entering fn_add_cran_repo: UBUNTU_CODENAME='${UBUNTU_CODENAME:-}', CRAN_REPO_LINE='${CRAN_REPO_LINE:-}', CRAN_APT_KEYRING_FILE='${CRAN_APT_KEYRING_FILE:-}'"
+
+    if [[ -z "$UBUNTU_CODENAME" || -z "$CRAN_REPO_LINE" || -z "$CRAN_APT_KEYRING_FILE" || -z "$CRAN_APT_KEY_URL" ]]; then
+        _log "ERROR" "FATAL: One or more critical CRAN variables is empty in fn_add_cran_repo. Run 'fn_pre_flight_checks' first. Aborting."
         return 1 
     fi
+
+    if ! command -v add-apt-repository &>/dev/null; then
+        _log "INFO" "'add-apt-repository' not found. Installing 'software-properties-common'."
+        _run_command "Install software-properties-common" apt-get install -y software-properties-common
+    fi
     
-    # The R2U script itself runs 'apt-get update'.
-    # We might run it again here for good measure if other sources were added before R2U.
-    _run_command "Update apt cache (fn_add_cran_repo)" apt-get update -y
-    _log "INFO" "fn_add_cran_repo: Primary CRAN/R2U setup deferred to R2U script in fn_setup_bspm."
+    if ! dpkg -s dirmngr &>/dev/null; then 
+        _log "INFO" "dirmngr package not found. Installing dirmngr."
+        _run_command "Install dirmngr" apt-get install -y dirmngr
+    fi
+
+    if [[ ! -f "$CRAN_APT_KEYRING_FILE" ]]; then
+        _log "INFO" "Adding CRAN GPG key to ${CRAN_APT_KEYRING_FILE}"
+        mkdir -p "$(dirname "$CRAN_APT_KEYRING_FILE")" 
+        local key_download_cmd_desc="Download CRAN GPG key from ${CRAN_APT_KEY_URL} to ${CRAN_APT_KEYRING_FILE}"
+        _log "INFO" "Start: ${key_download_cmd_desc}"
+        
+        local temp_key_file
+        temp_key_file=$(mktemp)
+        
+        if curl -fsSL "${CRAN_APT_KEY_URL}" -o "$temp_key_file" >> "$LOG_FILE" 2>&1; then
+            _log "DEBUG" "curl successfully downloaded key to $temp_key_file"
+            if tee "${CRAN_APT_KEYRING_FILE}" > /dev/null < "$temp_key_file"; then
+                 _log "INFO" "OK: ${key_download_cmd_desc}"
+                 if [[ ! -s "$CRAN_APT_KEYRING_FILE" ]]; then 
+                    _log "ERROR" "CRAN GPG key file ${CRAN_APT_KEYRING_FILE} is empty after download and tee. Key may not have been added correctly."
+                    rm -f "$CRAN_APT_KEYRING_FILE" 
+                    rm -f "$temp_key_file"
+                    return 1
+                 fi
+            else
+                local tee_rc=$?
+                _log "ERROR" "Failed to tee key from $temp_key_file to ${CRAN_APT_KEYRING_FILE} (RC: $tee_rc)"
+                rm -f "$temp_key_file"
+                return 1
+            fi
+            rm -f "$temp_key_file" 
+        else
+            local curl_rc=$? 
+            _log "ERROR" "FAIL: Curl command for ${key_download_cmd_desc} (RC:$curl_rc). See log: $LOG_FILE"
+            rm -f "$temp_key_file" 
+            return 1
+        fi
+    else
+        _log "INFO" "CRAN GPG key ${CRAN_APT_KEYRING_FILE} already exists."
+    fi
+    
+    local simple_grep_pattern_base
+    simple_grep_pattern_base=$(echo "${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/" | sed 's|[&/\]|\\&|g')
+    local simple_grep_pattern="^deb .*${simple_grep_pattern_base}"
+
+    if grep -qrE "$simple_grep_pattern" /etc/apt/sources.list /etc/apt/sources.list.d/; then
+        _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' (simple format) seems to be already configured."
+    else
+        _log "INFO" "CRAN repository line to add via add-apt-repository: ${CRAN_REPO_LINE}"
+        _run_command "Add CRAN repository entry" add-apt-repository -y -n "${CRAN_REPO_LINE}"
+        _run_command "Update apt cache after adding CRAN repo" apt-get update -y
+        _log "INFO" "CRAN repository added and apt cache updated."
+    fi
 }
 
-# ... (fn_install_r, fn_install_openblas_openmp, _display_blas_alternatives remain the same) ...
 fn_install_r() {
     _log "INFO" "Installing R..."
     if [[ -z "${UBUNTU_CODENAME:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then 
@@ -262,8 +421,6 @@ fn_install_r() {
     if dpkg -s r-base &>/dev/null; then
         _log "INFO" "R (r-base) is already installed. Version: $(dpkg-query -W -f='${Version}\n' r-base 2>/dev/null || echo 'N/A')"
     else
-        # R2U setup in fn_setup_bspm should make r-base available.
-        # If this runs before fn_setup_bspm, it might get R from standard Ubuntu repos.
         _run_command "Install R (r-base, r-base-dev, r-base-core)" apt-get install -y r-base r-base-dev r-base-core
         _log "INFO" "R installed. Version: $(R --version | head -n 1)"
     fi
@@ -308,6 +465,7 @@ _display_blas_alternatives() {
         update-alternatives --display "liblapack.so.3${arch_suffix}" >> "$LOG_FILE" 2>&1 || _log "INFO" "No arch-specific liblapack.so.3${arch_suffix} alternatives configured or error displaying."
     fi
 }
+
 
 fn_verify_openblas_openmp() {
     _log "INFO" "Verifying OpenBLAS and OpenMP integration with R..."
@@ -571,10 +729,10 @@ fn_setup_bspm() {
     fi
 
     _log "INFO" "Configuring R2U repository (provides bspm and binary R packages)..."
-    # R2U's add_cranapt_*.sh script handles adding both CRAN and R2U repos and their keys.
-    # We only need to run it.
-    if [[ ! -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || ! grep -q "r2u.stat.illinois.edu/ubuntu" "$R2U_APT_SOURCES_LIST_D_FILE"; then
-        local r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_jammy.sh" # Default
+    if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] && grep -q "r2u.stat.illinois.edu/ubuntu" "$R2U_APT_SOURCES_LIST_D_FILE"; then
+        _log "INFO" "R2U repository file '${R2U_APT_SOURCES_LIST_D_FILE}' seems to be already configured."
+    else
+        local r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_jammy.sh" 
         if [[ "$UBUNTU_CODENAME" == "noble" ]]; then
              r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_noble.sh" 
         elif [[ "$UBUNTU_CODENAME" == "focal" ]]; then
@@ -591,12 +749,7 @@ fn_setup_bspm() {
         fi
         _log "INFO" "R2U repository setup script executed. Apt cache likely updated by the script."
         rm -f "/tmp/add_r2u_repo.sh"
-    else
-        _log "INFO" "R2U repository file '${R2U_APT_SOURCES_LIST_D_FILE}' seems to be already configured."
-        _log "INFO" "Ensuring apt cache is updated."
-        _run_command "Update apt cache (R2U already configured)" apt-get update -y
     fi
-
 
     if _safe_systemctl list-units --type=service --all | grep -q 'dbus.service'; then
         _log "INFO" "dbus.service found. Ensuring it is active/restarted."
@@ -641,11 +794,14 @@ EOF
     _log "DEBUG" "Temporary file for Rprofile.site update: ${temp_rprofile}"
 
     if [[ ! -f "$R_PROFILE_SITE_PATH" ]]; then
-        _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not a regular file or does not exist before sed. Cannot update."
-        rm -f "$temp_rprofile"
-        return 1
+        _log "WARN" "Rprofile.site '${R_PROFILE_SITE_PATH}' does not exist. Creating it before modification."
+        if ! touch "$R_PROFILE_SITE_PATH"; then
+            _log "ERROR" "Failed to create Rprofile.site at '${R_PROFILE_SITE_PATH}'."
+            rm -f "$temp_rprofile"
+            return 1
+        fi
     fi
-    if [[ ! -w "$R_PROFILE_SITE_PATH" ]]; then
+    if [[ ! -w "$R_PROFILE_SITE_PATH" ]]; then 
         _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not writable. Cannot update."
         rm -f "$temp_rprofile"
         return 1
@@ -676,10 +832,13 @@ EOF
     echo "..." >> "$LOG_FILE" 
 
 
-    if _run_command "Update Rprofile.site with bspm configuration" mv "$temp_rprofile" "$R_PROFILE_SITE_PATH"; then
-        _log "INFO" "Rprofile.site updated with bspm configuration."
+    _log "INFO" "Attempting to move ${temp_rprofile} to ${R_PROFILE_SITE_PATH}"
+    if mv "$temp_rprofile" "$R_PROFILE_SITE_PATH"; then
+        _log "INFO" "Successfully updated Rprofile.site with bspm configuration."
     else
-        _log "ERROR" "Failed to move temporary file ${temp_rprofile} to ${R_PROFILE_SITE_PATH}. Rprofile.site may not be updated."
+        local mv_rc=$?
+        _log "ERROR" "mv command FAILED (RC: ${mv_rc}) to update Rprofile.site from ${temp_rprofile} to ${R_PROFILE_SITE_PATH}."
+        _log "ERROR" "Rprofile.site may not be updated or may be in an inconsistent state. Check permissions and paths."
         rm -f "$temp_rprofile" 
         return 1 
     fi
@@ -1208,12 +1367,6 @@ fn_remove_bspm_config() {
         _log "INFO" "Removing R2U GPG keyring file: '$key_file'"
         _run_command "Remove R2U GPG keyring '$key_file'" rm -f "$key_file"
     done
-    # Remove CRAN key installed by R2U script (often named this)
-    if [[ -f "/etc/apt/trusted.gpg.d/cran_ubuntu_key.asc" ]]; then
-        _log "INFO" "Removing CRAN GPG key potentially installed by R2U: /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc"
-        _run_command "Remove /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc" rm -f "/etc/apt/trusted.gpg.d/cran_ubuntu_key.asc"
-    fi
-
 
     _log "INFO" "R2U apt repository configuration removal process finished."
     _log "INFO" "Consider running 'apt-get update' after these changes."
@@ -1221,42 +1374,34 @@ fn_remove_bspm_config() {
 
 
 fn_remove_cran_repo() {
-    # This function is now more about cleaning up what R2U might have left,
-    # assuming R2U was the primary manager of CRAN repos.
-    _log "INFO" "Removing CRAN apt repository configurations potentially added by R2U script..."
-    if [[ -z "${UBUNTU_CODENAME:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
+    _log "INFO" "Removing this script's CRAN apt repository configuration..."
+    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${CRAN_REPO_LINE:-}" || -z "${CRAN_APT_KEYRING_FILE:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
         _log "DEBUG" "fn_remove_cran_repo: Sourcing state file."
         # shellcheck source=/dev/null
         source "$R_ENV_STATE_FILE"
     fi
-    if [[ -z "$UBUNTU_CODENAME" ]]; then
-       _log "WARN" "UBUNTU_CODENAME is empty in fn_remove_cran_repo. Cannot robustly identify R2U's CRAN repo line. Skipping some removals."
-       # We can still attempt to remove the key file if its path is fixed
-    else
-        local r2u_cran_line_pattern_base
-        # R2U script usually adds something like: deb https://cloud.r-project.org/bin/linux/ubuntu noble-cran40/
-        r2u_cran_line_pattern_base=$(printf '%s' "https://cloud.r-project.org/bin/linux/ubuntu ${UBUNTU_CODENAME}-cran40/" | sed 's|[&/\]|\\&|g')
-        local r2u_cran_line_pattern="^deb .*${r2u_cran_line_pattern_base}"
-
-        find /etc/apt/sources.list /etc/apt/sources.list.d/ -type f -name '*.list' -print0 | \
-        while IFS= read -r -d $'\0' apt_list_file; do
-            # Using grep -E since the exact whitespace might vary slightly
-            if grep -qE "$r2u_cran_line_pattern" "$apt_list_file"; then 
-                _log "INFO" "CRAN repository entry (likely from R2U) found in '${apt_list_file}'. Backing up and removing."
-                _backup_file "$apt_list_file"
-                # Using a different sed delimiter like '#' to avoid conflict with '/' in paths
-                _run_command "Remove CRAN entry from '${apt_list_file}'" sed -i.r2u_cran_removed_bak "\#${r2u_cran_line_pattern}#d" "$apt_list_file"
-            fi
-        done
+    if [[ -z "$UBUNTU_CODENAME" || -z "$CRAN_REPO_LINE" || -z "$CRAN_APT_KEYRING_FILE" ]]; then
+       _log "ERROR" "FATAL: UBUNTU_CODENAME, CRAN_REPO_LINE or CRAN_APT_KEYRING_FILE is empty in fn_remove_cran_repo. Aborting."
+       return 1
     fi
+    
+    local cran_line_pattern_to_remove_escaped
+    cran_line_pattern_to_remove_escaped=$(printf '%s' "$CRAN_REPO_LINE" | sed 's|[&/\]|\\&|g') 
 
-    # CRAN_APT_KEYRING_FILE is defined as /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc
-    # This is the key file R2U's add_cranapt_*.sh script adds.
-    if [[ -n "${CRAN_APT_KEYRING_FILE:-}" && -f "$CRAN_APT_KEYRING_FILE" ]]; then
-        _log "INFO" "Removing CRAN GPG key file (likely from R2U): '${CRAN_APT_KEYRING_FILE}'"
+    find /etc/apt/sources.list /etc/apt/sources.list.d/ -type f -name '*.list' -print0 | \
+    while IFS= read -r -d $'\0' apt_list_file; do
+        if grep -qF "${CRAN_REPO_LINE}" "$apt_list_file"; then 
+            _log "INFO" "CRAN repository entry (matching simple format) found in '${apt_list_file}'. Backing up and removing."
+            _backup_file "$apt_list_file"
+            _run_command "Remove CRAN entry from '${apt_list_file}'" sed -i.cran_removed_bak "\#${cran_line_pattern_to_remove_escaped}#d" "$apt_list_file"
+        fi
+    done
+
+    _log "INFO" "Removing CRAN GPG key file '${CRAN_APT_KEYRING_FILE}'..."
+    if [[ -f "$CRAN_APT_KEYRING_FILE" ]]; then
         _run_command "Remove CRAN GPG key file '${CRAN_APT_KEYRING_FILE}'" rm -f "$CRAN_APT_KEYRING_FILE"
     else
-        _log "INFO" "CRAN GPG key file '${CRAN_APT_KEYRING_FILE:-not set or not found}' not found or path not available."
+        _log "INFO" "CRAN GPG key file '${CRAN_APT_KEYRING_FILE}' not found."
     fi
     
     _log "INFO" "CRAN apt repository configuration removal finished."
@@ -1424,9 +1569,9 @@ fn_remove_leftover_files() {
 install_all() {
     _log "INFO" "--- Starting Full R Environment Installation ---"
     fn_pre_flight_checks
-    # fn_add_cran_repo is mostly handled by R2U script in fn_setup_bspm,
-    # but call it here to ensure apt lists are updated if needed.
-    fn_add_cran_repo 
+    _log "DEBUG" "After fn_pre_flight_checks in install_all: UBUNTU_CODENAME='${UBUNTU_CODENAME:-}', CRAN_REPO_LINE='${CRAN_REPO_LINE:-}'"
+    fn_add_cran_repo
+    _log "DEBUG" "After fn_add_cran_repo in install_all: UBUNTU_CODENAME='${UBUNTU_CODENAME:-}', CRAN_REPO_LINE='${CRAN_REPO_LINE:-}'"
     fn_install_r
     fn_install_openblas_openmp
     
@@ -1436,7 +1581,7 @@ install_all() {
         _log "INFO" "OpenBLAS/OpenMP verification passed."
     fi
     
-    if ! fn_setup_bspm; then # This now runs the R2U script which sets up CRAN+R2U repos
+    if ! fn_setup_bspm; then 
         _log "ERROR" "BSPM (R2U Binary Package Manager) setup failed. Subsequent R package installations might not use bspm correctly."
     else
         _log "INFO" "BSPM setup appears successful."
@@ -1468,9 +1613,9 @@ uninstall_all() {
     fi
 
     fn_uninstall_r_packages      
-    fn_remove_bspm_config        # This removes R2U specific apt source list too
-    fn_remove_cran_repo          # This now targets the key and general CRAN line R2U might add
+    fn_remove_bspm_config        
     fn_uninstall_system_packages 
+    fn_remove_cran_repo          
     fn_remove_leftover_files     
 
     _log "INFO" "--- Verification of Uninstallation ---"
@@ -1520,7 +1665,7 @@ usage() {
     echo ""
     echo "Individual functions (primarily for development/debugging - use with caution):"
     echo "  fn_pre_flight_checks        (Writes state to ${R_ENV_STATE_FILE})"
-    echo "  fn_add_cran_repo            (Placeholder if R2U script is used in fn_setup_bspm)"
+    echo "  fn_add_cran_repo            (May source state from ${R_ENV_STATE_FILE} if needed)"
     echo "  fn_install_r, fn_install_openblas_openmp, fn_verify_openblas_openmp"
     echo "  fn_setup_bspm, fn_install_r_packages, fn_install_rstudio_server"
     echo ""
