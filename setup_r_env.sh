@@ -347,7 +347,7 @@ fn_add_cran_repo() {
     if grep -qrE "${CRAN_REPO_URL_BIN}.*${UBUNTU_CODENAME}-cran40" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' seems to be already configured."
     else
-        _run_command "Add CRAN repository entry" add-apt-repository -y -n "${CRAN_REPO_LINE}" # -n to avoid auto apt update
+        _run_command "Add CRAN repository entry" add-apt-repository -y -n -S "${CRAN_REPO_LINE}" # -n to avoid auto apt update
         _run_command "Update apt cache after adding CRAN repo" apt-get update -y
         _log "INFO" "CRAN repository added and apt cache updated."
     fi
