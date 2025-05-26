@@ -363,11 +363,9 @@ fn_add_cran_repo() {
         
         local temp_key_file
         temp_key_file=$(mktemp)
-        # Download key to temp file first, logging curl's output/errors
+        
         if curl -fsSL "${CRAN_APT_KEY_URL}" -o "$temp_key_file" >> "$LOG_FILE" 2>&1; then
             _log "DEBUG" "curl successfully downloaded key to $temp_key_file"
-            # Now tee the content of the temp file to the actual keyring file
-            # and redirect tee's stdout to /dev/null so it doesn't go to main log again
             if tee "${CRAN_APT_KEYRING_FILE}" > /dev/null < "$temp_key_file"; then
                  _log "INFO" "OK: ${key_download_cmd_desc}"
                  if [[ ! -s "$CRAN_APT_KEYRING_FILE" ]]; then 
@@ -382,11 +380,11 @@ fn_add_cran_repo() {
                 rm -f "$temp_key_file"
                 return 1
             fi
-            rm -f "$temp_key_file" # Clean up temp file on success
+            rm -f "$temp_key_file" 
         else
             local curl_rc=$? 
             _log "ERROR" "FAIL: Curl command for ${key_download_cmd_desc} (RC:$curl_rc). See log: $LOG_FILE"
-            rm -f "$temp_key_file" # Clean up temp file on curl failure
+            rm -f "$temp_key_file" 
             return 1
         fi
     else
@@ -702,29 +700,46 @@ EOF
     local temp_rprofile
     temp_rprofile=$(mktemp)
     if [[ -z "$temp_rprofile" || ! -e "$temp_rprofile" ]]; then 
-        _log "ERROR" "Failed to create temporary file for Rprofile.site update."
+        _log "ERROR" "Failed to create temporary file for Rprofile.site update. mktemp output: '${temp_rprofile}'"
         return 1
     fi
     _log "DEBUG" "Temporary file for Rprofile.site update: ${temp_rprofile}"
 
+    if [[ ! -f "$R_PROFILE_SITE_PATH" ]]; then
+        _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not a regular file or does not exist before sed. Cannot update."
+        rm -f "$temp_rprofile"
+        return 1
+    fi
+    if [[ ! -w "$R_PROFILE_SITE_PATH" ]]; then
+        _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not writable. Cannot update."
+        rm -f "$temp_rprofile"
+        return 1
+    fi
+
+    _log "DEBUG" "Attempting sed command: sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' '${R_PROFILE_SITE_PATH}' > '${temp_rprofile}'"
     if sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' "$R_PROFILE_SITE_PATH" > "$temp_rprofile"; then
         _log "DEBUG" "sed command successfully wrote to ${temp_rprofile}"
     else
-        _log "ERROR" "sed command failed to process ${R_PROFILE_SITE_PATH} into ${temp_rprofile}"
+        local sed_rc=$?
+        _log "ERROR" "sed command failed (RC: $sed_rc) to process ${R_PROFILE_SITE_PATH} into ${temp_rprofile}"
         rm -f "$temp_rprofile"
         return 1
     fi
     
+    _log "DEBUG" "Attempting printf command to append to ${temp_rprofile}"
     if printf "\n%s\n" "$bspm_rprofile_config" >> "$temp_rprofile"; then
         _log "DEBUG" "printf successfully appended bspm config to ${temp_rprofile}"
     else
-        _log "ERROR" "printf command failed to append bspm config to ${temp_rprofile}"
+        local printf_rc=$?
+        _log "ERROR" "printf command failed (RC: $printf_rc) to append bspm config to ${temp_rprofile}"
         rm -f "$temp_rprofile"
         return 1
     fi
     
-    _log "DEBUG" "Contents of temporary Rprofile before mv:"
-    cat "$temp_rprofile" >> "$LOG_FILE" 
+    _log "DEBUG" "Contents of temporary Rprofile (${temp_rprofile}) before mv:"
+    head -c 1024 "$temp_rprofile" >> "$LOG_FILE" 
+    echo "..." >> "$LOG_FILE" 
+
 
     if _run_command "Update Rprofile.site with bspm configuration" mv "$temp_rprofile" "$R_PROFILE_SITE_PATH"; then
         _log "INFO" "Rprofile.site updated with bspm configuration."
