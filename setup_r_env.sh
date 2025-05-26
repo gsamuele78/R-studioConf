@@ -235,9 +235,6 @@ _is_vm_or_ci_env() {
 fn_get_latest_rstudio_info() {
     _log "INFO" "Attempting to detect latest RStudio Server for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}..."
     _log "WARN" "RStudio Server auto-detection is fragile and currently disabled. Using fallback version: ${RSTUDIO_VERSION_FALLBACK}"
-    # The original auto-detection logic is commented out due to its unreliability.
-    # If you wish to re-enable it, ensure the grep pattern is up-to-date with Posit's website.
-    # For now, we directly use the fallback.
     RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK"
     RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${UBUNTU_CODENAME}/${RSTUDIO_ARCH}/rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
     RSTUDIO_DEB_FILENAME="rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
@@ -247,11 +244,10 @@ fn_get_latest_rstudio_info() {
 
 fn_pre_flight_checks() {
     _log "INFO" "Performing pre-flight checks..."
-    _ensure_root # Script must run as root
+    _ensure_root 
 
-    # Determine Ubuntu Codename
     if command -v lsb_release &>/dev/null; then
-        UBUNTU_CODENAME_DETECTED=$(lsb_release -cs)
+        UBUNTU_CODENAME_DETECTED=$(lsb_release -cs | tr -d '[:space:]') # Sanitize
     else
         _log "WARN" "lsb_release command not found. Attempting to install lsb-release."
         apt-get update -y >>"$LOG_FILE" 2>&1 || _log "WARN" "apt update failed during lsb-release prerequisite."
@@ -260,20 +256,19 @@ fn_pre_flight_checks() {
             exit 1
         }
         if command -v lsb_release &>/dev/null; then
-            UBUNTU_CODENAME_DETECTED=$(lsb_release -cs)
+            UBUNTU_CODENAME_DETECTED=$(lsb_release -cs | tr -d '[:space:]') # Sanitize again
         else
             _log "ERROR" "lsb_release installed but still not found or codename undetectable. Exiting."
             exit 1
         fi
     fi
-    UBUNTU_CODENAME="$UBUNTU_CODENAME_DETECTED" # Set the global variable
+    UBUNTU_CODENAME="$UBUNTU_CODENAME_DETECTED" 
     _log "INFO" "Detected Ubuntu codename: ${UBUNTU_CODENAME}"
     if [[ -z "$UBUNTU_CODENAME" || "$UBUNTU_CODENAME" == "unknown" ]]; then
         _log "ERROR" "Ubuntu codename is invalid ('$UBUNTU_CODENAME'). Exiting."
         exit 1
     fi
 
-    # Determine System Architecture
     if command -v dpkg &>/dev/null; then
         RSTUDIO_ARCH=$(dpkg --print-architecture)
         _log "INFO" "Detected system architecture: ${RSTUDIO_ARCH}"
@@ -289,6 +284,7 @@ fn_pre_flight_checks() {
     fn_get_latest_rstudio_info 
 
     CRAN_REPO_LINE="deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
+    export CRAN_REPO_LINE # Ensure available to subshells if _run_command uses one
     _log "INFO" "CRAN repository line to be used: ${CRAN_REPO_LINE}"
     _log "INFO" "RStudio Server version to be used: ${RSTUDIO_VERSION} (URL: ${RSTUDIO_DEB_URL})"
 
@@ -326,11 +322,31 @@ fn_add_cran_repo() {
     else
         _log "INFO" "CRAN GPG key ${CRAN_APT_KEYRING_FILE} already exists."
     fi
+
+    if [[ -z "$UBUNTU_CODENAME" ]]; then # Check UBUNTU_CODENAME first
+        _log "ERROR" "CRITICAL: UBUNTU_CODENAME is empty in fn_add_cran_repo. Cannot construct or verify CRAN repository line."
+        return 1 
+    fi
+    # Ensure CRAN_REPO_LINE is set; if not, try to reconstruct it as a fallback.
+    # This indicates a potential logic flaw if fn_pre_flight_checks didn't set it globally.
+    if [[ -z "$CRAN_REPO_LINE" ]]; then
+        _log "ERROR" "CRITICAL: CRAN_REPO_LINE is empty in fn_add_cran_repo. Pre-flight checks might have failed to set it."
+        _log "WARN" "Attempting to reconstruct CRAN_REPO_LINE within fn_add_cran_repo as a fallback."
+        # Reconstruction must happen before it's used by grep or add-apt-repository
+        CRAN_REPO_LINE="deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
+        export CRAN_REPO_LINE # Re-export if reconstructed
+        if [[ -z "$CRAN_REPO_LINE" || "$CRAN_REPO_LINE" == "deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN} -cran40/" ]]; then 
+            # Check if still empty or malformed due to empty UBUNTU_CODENAME
+            _log "ERROR" "CRITICAL: Fallback reconstruction of CRAN_REPO_LINE also resulted in an empty or malformed string. Aborting CRAN repo addition."
+            return 1
+        fi
+    fi
+    _log "DEBUG" "In fn_add_cran_repo, value of CRAN_REPO_LINE before use: '${CRAN_REPO_LINE}'"
+    _log "DEBUG" "In fn_add_cran_repo, value of UBUNTU_CODENAME: '${UBUNTU_CODENAME}'"
     
     if grep -qrE "${CRAN_REPO_URL_BIN}.*${UBUNTU_CODENAME}-cran40" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' seems to be already configured."
     else
-        # Use -S to specify the full source line, which is more robust
         _run_command "Add CRAN repository entry" add-apt-repository -y -n -S "${CRAN_REPO_LINE}"
         _run_command "Update apt cache after adding CRAN repo" apt-get update -y
         _log "INFO" "CRAN repository added and apt cache updated."
