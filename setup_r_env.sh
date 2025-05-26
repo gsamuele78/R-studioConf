@@ -368,7 +368,7 @@ fn_add_cran_repo() {
             _log "DEBUG" "curl successfully downloaded key to $temp_key_file"
             # Now tee the content of the temp file to the actual keyring file
             # and redirect tee's stdout to /dev/null so it doesn't go to main log again
-            if cat "$temp_key_file" | tee "${CRAN_APT_KEYRING_FILE}" > /dev/null ; then
+            if tee "${CRAN_APT_KEYRING_FILE}" > /dev/null < "$temp_key_file"; then
                  _log "INFO" "OK: ${key_download_cmd_desc}"
                  if [[ ! -s "$CRAN_APT_KEYRING_FILE" ]]; then 
                     _log "ERROR" "CRAN GPG key file ${CRAN_APT_KEYRING_FILE} is empty after download and tee. Key may not have been added correctly."
