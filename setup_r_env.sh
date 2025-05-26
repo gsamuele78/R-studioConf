@@ -782,13 +782,16 @@ _install_r_pkg_list() {
             # Note: bspm::enable() should be in Rprofile.site for bspm to take effect
             r_install_cmd="
             pkg_short_name <- '${pkg_name_short}'
+            # Use half of physical cores, default to 1 if detection fails or gives less than 2
+            n_cpus <- max(1, parallel::detectCores(logical=FALSE) %/% 2)
+
             if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
                 message(paste0('R package ', pkg_short_name, ' not found, attempting installation...'))
                 installed_successfully <- FALSE
                 if (requireNamespace('bspm', quietly = TRUE) && isTRUE(getOption('bspm.MANAGES', FALSE))) {
                     message(paste0('Attempting to install ', pkg_short_name, ' via bspm (binary)...'))
                     tryCatch({
-                        bspm::install.packages(pkg_short_name, quiet = FALSE, Ncpus = parallel::detectCores(logical=FALSE) %/% 2 + 1) # Use half physical cores + 1
+                        bspm::install.packages(pkg_short_name, quiet = FALSE, Ncpus = n_cpus)
                         if (requireNamespace(pkg_short_name, quietly = TRUE)) {
                             installed_successfully <- TRUE
                             message(paste0('Successfully installed ', pkg_short_name, ' via bspm.'))
@@ -804,7 +807,7 @@ _install_r_pkg_list() {
                 }
 
                 if (!installed_successfully) {
-                    install.packages(pkg_short_name, repos = '${CRAN_REPO_URL_SRC}', Ncpus = parallel::detectCores(logical=FALSE) %/% 2 + 1)
+                    install.packages(pkg_short_name, repos = '${CRAN_REPO_URL_SRC}', Ncpus = n_cpus)
                 }
 
                 if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
@@ -830,16 +833,19 @@ _install_r_pkg_list() {
             r_install_cmd="
             pkg_short_name <- '${pkg_name_short}'
             pkg_full_name <- '${pkg_name_full}'
+            # Use half of physical cores, default to 1 if detection fails or gives less than 2
+            n_cpus <- max(1, parallel::detectCores(logical=FALSE) %/% 2)
+
             if (!requireNamespace('remotes', quietly = TRUE)) {
                 message('remotes package not found, installing it first...')
-                install.packages('remotes', repos = '${CRAN_REPO_URL_SRC}', Ncpus = parallel::detectCores(logical=FALSE) %/% 2 + 1)
+                install.packages('remotes', repos = '${CRAN_REPO_URL_SRC}', Ncpus = n_cpus)
                 if (!requireNamespace('remotes', quietly = TRUE)) stop('Failed to install remotes package.')
             }
             if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
                 message(paste0('R package ', pkg_short_name, ' (from GitHub: ', pkg_full_name, ') not found, attempting installation...'))
                 # Use GITHUB_PAT if set in the environment (remotes::install_github respects this)
                 # Force = TRUE can be useful to ensure it tries to build even if a SHA seems current but lib is broken
-                remotes::install_github(pkg_full_name, Ncpus = parallel::detectCores(logical=FALSE) %/% 2 + 1, force = TRUE, dependencies = TRUE)
+                remotes::install_github(pkg_full_name, Ncpus = n_cpus, force = TRUE, dependencies = TRUE)
                 if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
                     stop(paste0('Failed to install R package ', pkg_short_name, ' from GitHub: ', pkg_full_name))
                 } else {
@@ -873,18 +879,31 @@ fn_install_r_packages() {
     fn_install_r_build_deps # Ensure system build dependencies are present
 
     _log "INFO" "Ensuring 'devtools' and 'remotes' R packages are installed (needed for GitHub packages and useful generally)..."
-    # devtools is large, remotes is a lighter alternative for install_github
-    # We install both; bspm should handle them if enabled.
-    local core_r_dev_pkgs=("devtools" "remotes") # Add bspm here if not installed via apt as r-cran-bspm
+    local core_r_dev_pkgs=("devtools" "remotes")
+    
+    # Construct the R vector string like c("pkg1", "pkg2")
+    local r_pkgs_to_ensure_str="c("
+    local first_pkg=true
+    for pkg_name in "${core_r_dev_pkgs[@]}"; do
+        if [[ "$first_pkg" == "true" ]]; then
+            r_pkgs_to_ensure_str+="\"${pkg_name}\""
+            first_pkg=false
+        else
+            r_pkgs_to_ensure_str+=", \"${pkg_name}\""
+        fi
+    done
+    r_pkgs_to_ensure_str+=")"
+    # Now r_pkgs_to_ensure_str contains something like: c("devtools", "remotes")
     
     # Temporarily disable pipefail for this Rscript call if we want to check its specific exit code for bspm
     set +o pipefail
     Rscript_out_err=$(mktemp)
+    # Pass the pre-formatted string to R
     Rscript -e "
         # Use half of physical cores, default to 1 if detection fails or gives less than 2
         n_cpus <- max(1, parallel::detectCores(logical=FALSE) %/% 2)
 
-        pkgs_to_ensure <- c(${core_r_dev_pkgs[@]/#/\"}); # Creates R vector: c(\"pkg1\", \"pkg2\")
+        pkgs_to_ensure <- ${r_pkgs_to_ensure_str}; # Use the pre-constructed string
         # Explicitly enable bspm for this script part if it's meant to be used
         if (requireNamespace('bspm', quietly = TRUE)) {
           options(bspm.sudo = TRUE, bspm.allow.sysreqs = TRUE)
@@ -1119,35 +1138,47 @@ fn_uninstall_r_packages() {
         return
     fi
 
-    # Combine CRAN packages and base names of GitHub packages for removal
-    # Add 'bspm' here if it was installed as an R package and not r-cran-bspm
     local all_pkgs_to_remove_short_names=("${R_PACKAGES_CRAN[@]}") 
-    # Note: If bspm was installed via apt (r-cran-bspm), R's remove.packages won't touch it effectively.
-    # It will be removed by apt purge later.
-    # all_pkgs_to_remove_short_names+=("bspm") # Only if bspm was installed via install.packages('bspm')
-
     for gh_pkg_full_name in "${R_PACKAGES_GITHUB[@]}"; do
         all_pkgs_to_remove_short_names+=("$(basename "${gh_pkg_full_name%.git}")")
     done
 
-    # Get unique package names
-    local unique_pkgs_to_remove_str
-    unique_pkgs_to_remove_str=$(printf "%s\n" "${all_pkgs_to_remove_short_names[@]}" | sort -u | tr '\n' ' ')
-    
-    if [[ -z "$unique_pkgs_to_remove_str" ]]; then
-        _log "INFO" "No R packages found in script lists to attempt removal."
+    # Get unique package names into a bash array
+    local unique_pkgs_to_remove_list=()
+    # Read sorted unique package names into an array
+    mapfile -t unique_pkgs_to_remove_list < <(printf "%s\n" "${all_pkgs_to_remove_short_names[@]}" | sort -u)
+
+    if [[ ${#unique_pkgs_to_remove_list[@]} -eq 0 ]]; then
+        _log "INFO" "No R packages found in script lists to attempt removal after unique sort."
         return
     fi
 
-    _log "INFO" "Will attempt to remove these R packages: $unique_pkgs_to_remove_str"
+    _log "INFO" "Will attempt to remove these R packages: ${unique_pkgs_to_remove_list[*]}"
     
-    # Create R vector string like c("pkg1", "pkg2", "pkg3")
-    local r_vector_pkgs_str="c($(echo "$unique_pkgs_to_remove_str" | sed -e "s/ /', '/g" -e "s/^/'/" -e "s/',\$//"))" # Fixed trailing comma issue
-    if [[ "$r_vector_pkgs_str" == "c('')" || "$r_vector_pkgs_str" == "c()" ]]; then # Handle case of empty list after processing
-        _log "INFO" "Package list for R removal script is empty. Skipping."
+    # Declare r_vector_pkgs_str first (for SC2155)
+    local r_vector_pkgs_str
+    # Construct the R vector string like c("pkg1", "pkg2", "pkg3")
+    local r_vector_build="c("
+    if [[ ${#unique_pkgs_to_remove_list[@]} -gt 0 ]]; then
+        local first_pkg_in_vector=true # Renamed to avoid conflict with outer scope 'first_pkg'
+        for pkg_name in "${unique_pkgs_to_remove_list[@]}"; do
+            if [[ -z "$pkg_name" ]]; then continue; fi # Skip empty names if any due to processing
+            if [[ "$first_pkg_in_vector" == "true" ]]; then
+                r_vector_build+="\"${pkg_name}\""
+                first_pkg_in_vector=false
+            else
+                r_vector_build+=", \"${pkg_name}\""
+            fi
+        done
+    fi
+    r_vector_build+=")"
+    r_vector_pkgs_str="$r_vector_build"
+    # Now r_vector_pkgs_str contains something like: c("pkg1", "pkg2") or c() if list was empty
+
+    if [[ "$r_vector_pkgs_str" == "c()" ]]; then
+        _log "INFO" "Package list for R removal script is empty after processing. Skipping."
         return
     fi
-
 
     local r_pkg_removal_script_file="/tmp/uninstall_r_pkgs.R"
     # Quoted heredoc 'EOF' prevents Bash variable expansion inside the R script
@@ -1197,7 +1228,6 @@ EOF
         _log "INFO" "R package uninstallation script completed successfully."
     else
         _log "WARN" "R package uninstallation script finished with errors (Rscript Exit Code: $r_removal_rc). Check log for details."
-        # This is not necessarily fatal for the overall uninstall process.
     fi
     _log "INFO" "R package uninstallation attempt finished."
 }
@@ -1214,54 +1244,41 @@ fn_remove_bspm_config() {
         local temp_rprofile_cleaned
         temp_rprofile_cleaned=$(mktemp)
 
-        # Use sed to delete the block between the specific markers used during setup
-        # This is more robust than grepping individual lines if the block structure is consistent.
         sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' "$R_PROFILE_SITE_PATH" > "$temp_rprofile_cleaned"
         
-        # Check if the file content actually changed to avoid unnecessary mv
         if ! cmp -s "$R_PROFILE_SITE_PATH" "$temp_rprofile_cleaned"; then
             if _run_command "Update Rprofile.site (remove bspm block)" mv "$temp_rprofile_cleaned" "$R_PROFILE_SITE_PATH"; then
                  _log "INFO" "Removed bspm configuration block from '${R_PROFILE_SITE_PATH}'."
             else
                 _log "ERROR" "Failed to update Rprofile.site after attempting to remove bspm block. Restoring backup."
-                _restore_latest_backup "$R_PROFILE_SITE_PATH" # Attempt to restore if mv failed
-                # If mv failed, temp_rprofile_cleaned might still exist; remove it.
+                _restore_latest_backup "$R_PROFILE_SITE_PATH"
                 rm -f "$temp_rprofile_cleaned"
             fi
         else
             _log "INFO" "No bspm configuration block (matching markers) found in '${R_PROFILE_SITE_PATH}', or file was unchanged. Cleaning up temporary file."
             rm -f "$temp_rprofile_cleaned"
         fi
-        # Optionally, restore the very original Rprofile.site if this script made backups at multiple stages
-        # _restore_latest_backup "$R_PROFILE_SITE_PATH" # This would restore the version before *any* of this script's bspm changes
     else
         _log "INFO" "Rprofile.site ('${R_PROFILE_SITE_PATH:-not set or found}') not found or path not determined. Skipping bspm configuration removal from it."
     fi
 
     _log "INFO" "Removing R2U apt repository configuration..."
-    local r2u_apt_pattern="r2u.stat.illinois.edu" # Key part of the R2U repo URL
+    local r2u_apt_pattern="r2u.stat.illinois.edu" 
 
-    # Remove the specific R2U sources list file if it exists
     if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]]; then
         _log "INFO" "Removing R2U repository file: '${R2U_APT_SOURCES_LIST_D_FILE}'."
         _run_command "Remove R2U sources file '${R2U_APT_SOURCES_LIST_D_FILE}'" rm -f "$R2U_APT_SOURCES_LIST_D_FILE"
     fi
 
-    # Search and remove R2U entries from other apt sources files (more general cleanup)
-    # Using find -print0 and while read -d for safe filename handling
     find /etc/apt/sources.list /etc/apt/sources.list.d/ -type f -name '*.list' -print0 | \
     while IFS= read -r -d $'\0' apt_list_file; do
         if grep -q "$r2u_apt_pattern" "$apt_list_file"; then
             _log "INFO" "R2U entry found in '${apt_list_file}'. Backing up and removing entry."
-            _backup_file "$apt_list_file" # Backup before modifying
-            # Use sed to delete lines containing the pattern. Create a .r2u_removed_bak for sed's backup.
+            _backup_file "$apt_list_file" 
             _run_command "Remove R2U entry from '${apt_list_file}'" sed -i.r2u_removed_bak "/${r2u_apt_pattern}/d" "$apt_list_file"
         fi
     done
-    # Also remove R2U GPG key if it was added separately (R2U script might handle this)
-    # Example: find /etc/apt/keyrings/ -name "*r2u*" -o -name "*eddelbuettel*" -type f -delete
-    # For now, rely on apt purge of r-cran-bspm and removal of its source list. The R2U setup script should place its key in /etc/apt/keyrings
-    local r2u_keyring_pattern="r2u-cran-archive-keyring.gpg" # Common name for R2U keyring
+    local r2u_keyring_pattern="r2u-cran-archive-keyring.gpg" 
     find /etc/apt/keyrings/ -name "$r2u_keyring_pattern" -type f -print0 | while IFS= read -r -d $'\0' key_file; do
         _log "INFO" "Removing R2U GPG keyring file: '$key_file'"
         _run_command "Remove R2U GPG keyring '$key_file'" rm -f "$key_file"
@@ -1275,22 +1292,16 @@ fn_remove_bspm_config() {
 fn_remove_cran_repo() {
     _log "INFO" "Removing this script's CRAN apt repository configuration..."
     
-    # Escape special characters in the CRAN repo URL and codename for sed/grep
-    # This pattern specifically targets the line added by this script.
     local cran_line_pattern_escaped
-    # Example CRAN_REPO_LINE: deb [signed-by=/etc/apt/keyrings/cran-KEYID.gpg] https://url /bin/linux/ubuntu codename-cran40/
-    # We need a robust way to identify it. Using the signed-by part and cran40 is a good bet.
     cran_line_pattern_escaped=$(printf '%s' "${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/" | sed 's|[&/\]|\[]|\\&|g')
     local signed_by_pattern_escaped
     signed_by_pattern_escaped=$(printf '%s' "[signed-by=${CRAN_APT_KEYRING_FILE}]" | sed 's|[&/\]|\[]|\\&|g')
 
     find /etc/apt/sources.list /etc/apt/sources.list.d/ -type f -name '*.list' -print0 | \
     while IFS= read -r -d $'\0' apt_list_file; do
-        # Match lines containing both the signed-by attribute and the specific CRAN URL part
         if grep -qE "^\s*deb\s+${signed_by_pattern_escaped}\s+.*${cran_line_pattern_escaped}" "$apt_list_file"; then
             _log "INFO" "CRAN repository entry (matching this script's format) found in '${apt_list_file}'. Backing up and removing."
             _backup_file "$apt_list_file"
-            # Create a .cran_removed_bak for sed's backup
             _run_command "Remove CRAN entry from '${apt_list_file}'" sed -i.cran_removed_bak "\#^\s*deb\s+${signed_by_pattern_escaped}\s+.*${cran_line_pattern_escaped}#d" "$apt_list_file"
         fi
     done
@@ -1310,32 +1321,22 @@ fn_remove_cran_repo() {
 fn_uninstall_system_packages() {
     _log "INFO" "Uninstalling system packages installed by this script (RStudio Server, R, OpenBLAS, OpenMP, bspm)..."
 
-    # RStudio Server
     if dpkg -s rstudio-server &>/dev/null; then
         _log "INFO" "Stopping and purging RStudio Server..."
-        _run_command "Stop RStudio Server" _safe_systemctl stop rstudio-server # Allow failure if not running
-        _run_command "Disable RStudio Server from boot" _safe_systemctl disable rstudio-server # Allow failure
+        _run_command "Stop RStudio Server" _safe_systemctl stop rstudio-server 
+        _run_command "Disable RStudio Server from boot" _safe_systemctl disable rstudio-server 
         _run_command "Purge RStudio Server package" apt-get purge -y rstudio-server
     else
         _log "INFO" "RStudio Server package (rstudio-server) not found, or already removed."
     fi
 
-    # R, OpenBLAS, OpenMP, bspm (via apt), and other script dependencies
-    # List packages that this script might have installed directly via apt-get install
     local pkgs_to_purge=(
-        "r-base" "r-base-dev" "r-base-core"             # R components
-        "r-cran-bspm"                                  # BSPM via apt (from R2U)
-        "python3-dbus" "python3-gi" "python3-apt"      # BSPM dependencies
-        "libopenblas-dev" "libomp-dev"                 # BLAS/OpenMP
-        "gdebi-core" "software-properties-common"       # Script helper tools
-        # Add other specific system build deps if they are *only* for this script's purpose
-        # This list should mirror build deps installed in fn_install_r_build_deps if they are not expected to be shared
-        # For safety, only list those that are highly specific or less common system utilities.
-        # Example: "cargo" if only needed for R packages by this script.
-        # More common ones like libcurl4-openssl-dev are often used by many things.
-        # For a truly clean system, one might list more, but risk breaking other software.
+        "r-base" "r-base-dev" "r-base-core"            
+        "r-cran-bspm"                                 
+        "python3-dbus" "python3-gi" "python3-apt"     
+        "libopenblas-dev" "libomp-dev"                
+        "gdebi-core" "software-properties-common"      
     )
-    # Filter the list to only include packages that are actually installed
     local actual_pkgs_to_purge=()
     for pkg_name in "${pkgs_to_purge[@]}"; do
         if dpkg -s "$pkg_name" &>/dev/null; then
@@ -1363,27 +1364,18 @@ fn_uninstall_system_packages() {
 fn_remove_leftover_files() {
     _log "INFO" "Removing leftover R and RStudio Server related files and directories..."
 
-    # Define an array of paths commonly associated with R and RStudio Server installations.
-    # Be cautious with system-level directories if R was installed from distro repos initially.
-    # Paths here are more for custom/source installs or this script's managed components.
     declare -a paths_to_remove=(
-        # R paths (especially if compiled from source or installed to /usr/local)
-        "/usr/local/lib/R"          # Common for source installs of R
-        "/usr/local/bin/R"          # Symlink or binary for source R
-        "/usr/local/bin/Rscript"    # Symlink or binary for source Rscript
-        # RStudio Server specific data/run directories
-        "/var/lib/rstudio-server"   # RStudio Server data directory
-        "/var/run/rstudio-server"   # RStudio Server runtime PID/socket files
-        "/etc/rstudio"              # RStudio Server global config (usually removed by purge, but check)
+        "/usr/local/lib/R"         
+        "/usr/local/bin/R"         
+        "/usr/local/bin/Rscript"   
+        "/var/lib/rstudio-server"  
+        "/var/run/rstudio-server"  
+        "/etc/rstudio"             
     )
 
-    # /etc/R is tricky. If r-base was from Ubuntu repos, it's owned by that package.
-    # If this script installed R from CRAN repo, then purging r-base should handle /usr/lib/R and parts of /etc/R.
-    # Only remove /etc/R if we are sure no system package owns it.
     if [[ -d "/etc/R" ]]; then
-        # Check if /etc/R or its contents are owned by any installed package
         if dpkg-query -S "/etc/R" >/dev/null 2>&1 || dpkg-query -S "/etc/R/*" >/dev/null 2>&1; then
-            _log "INFO" "Directory '/etc/R' or its contents appear to be owned by an installed package. Skipping its direct removal. 'apt purge r-base' should handle it if appropriate."
+            _log "INFO" "Directory '/etc/R' or its contents appear to be owned by an installed package. Skipping its direct removal."
         else
             _log "INFO" "Directory '/etc/R' seems unowned by any package. Adding it to the removal list."
             paths_to_remove+=("/etc/R")
@@ -1402,8 +1394,6 @@ fn_remove_leftover_files() {
         fi
     done
 
-    # Remove downloaded RStudio .deb file from /tmp
-    # RSTUDIO_DEB_FILENAME should be set from pre_flight_checks or fn_get_latest_rstudio_info
     if [[ -n "${RSTUDIO_DEB_FILENAME:-}" && -f "/tmp/${RSTUDIO_DEB_FILENAME}" ]]; then
         _log "INFO" "Removing downloaded RStudio Server .deb file: '/tmp/${RSTUDIO_DEB_FILENAME}'"
         rm -f "/tmp/${RSTUDIO_DEB_FILENAME}"
@@ -1411,22 +1401,20 @@ fn_remove_leftover_files() {
         _log "INFO" "No RStudio .deb file matching known filename found in /tmp, or RSTUDIO_DEB_FILENAME not set."
     fi
 
-    # Aggressive user-level cleanup (optional and interactive by default)
     local is_interactive_shell=false
-    if [[ -t 0 && -t 1 ]]; then # Check if stdin and stdout are connected to a terminal
+    if [[ -t 0 && -t 1 ]]; then 
         is_interactive_shell=true
     fi
-    # Allow overriding prompt via environment variable (e.g., for automated full cleanup)
     local prompt_for_aggressive_cleanup="${PROMPT_AGGRESSIVE_CLEANUP_ENV:-yes}" 
 
     if [[ "${FORCE_USER_CLEANUP:-no}" == "yes" ]] || \
-       ( "$is_interactive_shell" == "true" && "$prompt_for_aggressive_cleanup" == "yes" ); then
+       [[ "$is_interactive_shell" == "true" && "$prompt_for_aggressive_cleanup" == "yes" ]]; then # SC2205, SC2284 FIX APPLIED HERE
         
         local perform_aggressive_user_cleanup=false
         if [[ "${FORCE_USER_CLEANUP:-no}" == "yes" ]]; then
             _log "INFO" "FORCE_USER_CLEANUP is 'yes'. Proceeding with aggressive user-level R data removal."
             perform_aggressive_user_cleanup=true
-        elif $is_interactive_shell; then # Only prompt if truly interactive
+        elif $is_interactive_shell; then 
             _log "WARN" "PROMPT: You are about to perform an AGGRESSIVE cleanup of R-related data from user home directories."
             _log "WARN" "This includes ~/.R, ~/R, ~/.config/R*, ~/.cache/R*, ~/.rstudio, etc., for ALL users with UID >= 1000."
             _log "WARN" "THIS IS DESTRUCTIVE AND CANNOT BE UNDONE."
@@ -1440,35 +1428,30 @@ fn_remove_leftover_files() {
 
         if [[ "$perform_aggressive_user_cleanup" == "true" ]]; then
             _log "INFO" "Starting aggressive user-level R configuration and library cleanup..."
-            # Find user home directories (UID >= 1000, non-system users)
             awk -F: '$3 >= 1000 && $3 < 60000 && $6 != "" && $6 != "/nonexistent" && $6 != "/" {print $6}' /etc/passwd | while IFS= read -r user_home_dir; do
                 if [[ -d "$user_home_dir" ]]; then 
                     _log "INFO" "Scanning user home directory for R data: '${user_home_dir}'"
-                    # Define patterns of R-related files/dirs in user homes
-                    # Be careful not to make these too broad (e.g., avoid simple "R*")
                     declare -a user_r_data_paths=(
                         "${user_home_dir}/.R"
                         "${user_home_dir}/.RData"
                         "${user_home_dir}/.Rhistory"
                         "${user_home_dir}/.Rprofile"
                         "${user_home_dir}/.Renviron"
-                        "${user_home_dir}/R" # Common directory for user R libraries (e.g., R/x86_64-pc-linux-gnu-library/version)
+                        "${user_home_dir}/R" 
                         "${user_home_dir}/.config/R"
                         "${user_home_dir}/.config/rstudio"
                         "${user_home_dir}/.cache/R"
                         "${user_home_dir}/.cache/rstudio"
                         "${user_home_dir}/.local/share/rstudio"
-                        "${user_home_dir}/.local/share/renv" # renv project manager
-                        # Add other common user-specific R tool paths if known
+                        "${user_home_dir}/.local/share/renv" 
                     )
                     for r_path_to_check in "${user_r_data_paths[@]}"; do
-                        if [[ -e "$r_path_to_check" ]]; then # -e checks for file, dir, or symlink
+                        if [[ -e "$r_path_to_check" ]]; then 
                             _log "WARN" "Aggressive Cleanup: Removing '${r_path_to_check}'"
-                            # Safety check: ensure we are not deleting the home directory itself or a top-level system dir
                             if [[ "$r_path_to_check" != "$user_home_dir" && "$r_path_to_check" == "$user_home_dir/"* ]]; then
                                 _run_command "Aggressively remove user R path '${r_path_to_check}'" rm -rf "$r_path_to_check"
                             else
-                                _log "ERROR" "Safety break: Skipped removing suspicious path '${r_path_to_check}' (not clearly under user home '${user_home_dir}'). This should not happen with current patterns."
+                                _log "ERROR" "Safety break: Skipped removing suspicious path '${r_path_to_check}'."
                             fi
                         fi
                     done
@@ -1479,7 +1462,7 @@ fn_remove_leftover_files() {
             _log "INFO" "Aggressive user-level R data cleanup attempt finished."
         fi
     else
-        _log "INFO" "Skipping aggressive user-level R data cleanup. (FORCE_USER_CLEANUP not 'yes', or not an interactive shell, or user declined prompt)."
+        _log "INFO" "Skipping aggressive user-level R data cleanup."
     fi
     _log "INFO" "Leftover file and directory removal process finished."
 }
@@ -1496,21 +1479,17 @@ install_all() {
     
     if ! fn_verify_openblas_openmp; then 
         _log "WARN" "OpenBLAS/OpenMP verification encountered issues or failed. Installation will continue, but performance or stability might be affected. Review logs carefully."
-        # Depending on policy, you might want to make this fatal: # exit 1
     else
         _log "INFO" "OpenBLAS/OpenMP verification passed."
     fi
     
     if ! fn_setup_bspm; then 
-        _log "ERROR" "BSPM (R2U Binary Package Manager) setup failed. Subsequent R package installations might not use bspm correctly (falling back to source builds) or could encounter further issues."
-        # This is a significant issue. Consider if it should be fatal.
-        # For now, we'll let it continue, but R package installs will be slower (source) and might miss system deps.
-        # return 1 # Uncomment to make bspm failure fatal for install_all
+        _log "ERROR" "BSPM (R2U Binary Package Manager) setup failed. Subsequent R package installations might not use bspm correctly."
     else
         _log "INFO" "BSPM setup appears successful."
     fi
     
-    fn_install_r_packages # This will use bspm if successfully set up
+    fn_install_r_packages 
     fn_install_rstudio_server
     
     _log "INFO" "--- Full R Environment Installation Completed ---"
@@ -1524,27 +1503,23 @@ install_all() {
 
 uninstall_all() {
     _log "INFO" "--- Starting Full R Environment Uninstallation ---"
-    _ensure_root # Uninstall actions also require root
+    _ensure_root 
 
-    # Determine R_PROFILE_SITE_PATH early for bspm config removal, even if R is already gone.
-    # This relies on the script's knowledge of where it *would* place/find it.
     _get_r_profile_site_path
 
-    fn_uninstall_r_packages      # Remove R packages installed by this script
-    fn_remove_bspm_config        # Remove bspm entries from Rprofile.site and R2U apt sources
-    fn_uninstall_system_packages # Purge R, RStudio, OpenBLAS, BSPM apt package, etc.
-    fn_remove_cran_repo          # Remove CRAN apt sources added by this script
-    fn_remove_leftover_files     # Clean up miscellaneous files/dirs, optionally user data
+    fn_uninstall_r_packages      
+    fn_remove_bspm_config        
+    fn_uninstall_system_packages 
+    fn_remove_cran_repo          
+    fn_remove_leftover_files     
 
     _log "INFO" "--- Verification of Uninstallation ---"
     local verification_issues_found=0
     
-    # Check for common commands
     if command -v R &>/dev/null; then _log "WARN" "VERIFICATION FAIL: 'R' command still found."; ((verification_issues_found++)); else _log "INFO" "VERIFICATION OK: 'R' command not found."; fi
     if command -v Rscript &>/dev/null; then _log "WARN" "VERIFICATION FAIL: 'Rscript' command still found."; ((verification_issues_found++)); else _log "INFO" "VERIFICATION OK: 'Rscript' command not found."; fi
-    if command -v rstudio-server &>/dev/null; then _log "WARN" "VERIFICATION FAIL: 'rstudio-server' command still found."; ((verification_issues_found++)); fi # No else needed if dpkg check is next
+    if command -v rstudio-server &>/dev/null; then _log "WARN" "VERIFICATION FAIL: 'rstudio-server' command still found."; ((verification_issues_found++)); fi
 
-    # Check for key packages
     local pkgs_to_check_absent=("rstudio-server" "r-base" "r-cran-bspm" "libopenblas-dev" "libomp-dev")
     for pkg_check in "${pkgs_to_check_absent[@]}"; do
         if dpkg -s "$pkg_check" &>/dev/null; then
@@ -1555,9 +1530,7 @@ uninstall_all() {
         fi
     done
 
-    # Check for apt sources (visual check of log for fn_remove_bspm_config / fn_remove_cran_repo output)
     _log "INFO" "VERIFICATION: Check logs from 'fn_remove_bspm_config' and 'fn_remove_cran_repo' to confirm apt sources were removed."
-    # Add more specific checks if desired, e.g., grep for the repo URLs in /etc/apt/
 
     if [[ $verification_issues_found -eq 0 ]]; then
         _log "INFO" "--- Full R Environment Uninstallation Completed Successfully (based on checks) ---"
@@ -1587,7 +1560,6 @@ usage() {
     echo "Individual functions (primarily for development/debugging - use with caution):"
     echo "  fn_pre_flight_checks, fn_add_cran_repo, fn_install_r, fn_install_openblas_openmp"
     echo "  fn_verify_openblas_openmp, fn_setup_bspm, fn_install_r_packages, fn_install_rstudio_server"
-    # Removed fn_set_r_profile_path_interactive and toggle_aggressive_cleanup as direct callables for simplicity, use env vars or menu.
     echo ""
     echo "Log file for this session will be in: ${LOG_DIR}/r_setup_YYYYMMDD_HHMMSS.log"
     exit 1
@@ -1595,18 +1567,11 @@ usage() {
 
 interactive_menu() {
     _ensure_root
-    # Initial call to determine paths for display, will be updated if R is installed.
-    # fn_pre_flight_checks might be better here if it sets UBUNTU_CODENAME etc. for RStudio version display.
-    # However, pre-flight can be long. For now, just get Rprofile path.
     _get_r_profile_site_path
 
     while true; do
-        # Refresh RStudio version info for menu display, requires UBUNTU_CODENAME and RSTUDIO_ARCH
-        # This might be slightly off if pre-flight hasn't run yet to detect them fully.
-        local display_rstudio_version="$RSTUDIO_VERSION_FALLBACK" # Default
+        local display_rstudio_version="$RSTUDIO_VERSION_FALLBACK" 
         if [[ -n "${UBUNTU_CODENAME:-}" && -n "${RSTUDIO_ARCH:-}" ]]; then
-            # Construct a temporary RStudio version string for display
-            # This doesn't call the full fn_get_latest_rstudio_info to avoid network calls in menu loop
             if [[ -n "$RSTUDIO_VERSION" && "$RSTUDIO_VERSION" != "$RSTUDIO_VERSION_FALLBACK" ]]; then
                 display_rstudio_version="$RSTUDIO_VERSION (Detected/Set)"
             fi
@@ -1641,18 +1606,15 @@ interactive_menu() {
         echo "============================================================"
         read -r -p "Choose an option: " option
         
-        # Optional: `clear` screen after input, or leave history for review
-        # clear 
-
         case "$option" in
             1) install_all ;;
             2) fn_pre_flight_checks ;;
-            3) fn_pre_flight_checks; fn_add_cran_repo; fn_install_r ;; # Sensible chain
-            4) fn_pre_flight_checks; fn_install_openblas_openmp ;; # Depends on pre-flight for apt
-            5) fn_pre_flight_checks; fn_install_r; fn_install_openblas_openmp; fn_verify_openblas_openmp ;; # Full chain for verification
-            6) fn_pre_flight_checks; fn_install_r; fn_setup_bspm ;; # BSPM needs R and system info
-            7) fn_pre_flight_checks; fn_install_r; fn_setup_bspm; fn_install_r_packages ;; # Pkgs need R, BSPM, build deps
-            8) fn_pre_flight_checks; fn_install_r; fn_install_rstudio_server ;; # RStudio needs R
+            3) fn_pre_flight_checks; fn_add_cran_repo; fn_install_r ;; 
+            4) fn_pre_flight_checks; fn_install_openblas_openmp ;; 
+            5) fn_pre_flight_checks; fn_install_r; fn_install_openblas_openmp; fn_verify_openblas_openmp ;; 
+            6) fn_pre_flight_checks; fn_install_r; fn_setup_bspm ;; 
+            7) fn_pre_flight_checks; fn_install_r; fn_setup_bspm; fn_install_r_packages ;; 
+            8) fn_pre_flight_checks; fn_install_r; fn_install_rstudio_server ;; 
             
             9) uninstall_all ;;
             
@@ -1670,28 +1632,20 @@ interactive_menu() {
         esac
         echo ""
         read -r -p "Action finished or selected. Press Enter to return to menu..."
-        # Optional: `clear` screen before showing menu again
-        # clear
     done
 }
 
 main() {
-    # Ensure log file is available from the very start
-    # Handled by global variable definitions now
-
     _log "INFO" "Script execution started. Logging to: ${LOG_FILE}"
-    # Initial determination of Rprofile.site path, might be refined later
     _get_r_profile_site_path 
 
     if [[ $# -eq 0 ]]; then
-        # No arguments, show interactive menu
         _log "INFO" "No action specified, entering interactive menu."
         interactive_menu
     else
-        # Action argument provided
-        _ensure_root # Most direct actions also require root
+        _ensure_root 
         local action_arg="$1"
-        shift # Remove the action from arguments, pass rest to function if needed
+        shift 
         
         local target_function_name=""
         case "$action_arg" in
@@ -1704,15 +1658,12 @@ main() {
                 _log "INFO" "Script finished after interactive session via direct call."
                 exit 0
                 ;;
-            # Expose individual functions if truly needed for non-interactive scripting
-            # Be cautious, as these might have implicit dependencies on prior steps.
             fn_pre_flight_checks|fn_add_cran_repo|fn_install_r|fn_install_openblas_openmp|\
             fn_verify_openblas_openmp|fn_setup_bspm|fn_install_r_packages|fn_install_rstudio_server|\
             fn_uninstall_r_packages|fn_remove_bspm_config|fn_uninstall_system_packages|fn_remove_cran_repo|fn_remove_leftover_files)
                 target_function_name="$action_arg"
                 _log "INFO" "Directly invoking function: ${target_function_name}"
                 ;;
-            # toggle_aggressive_cleanup could be a simple script utility
             toggle_aggressive_cleanup)
                 if [[ "$FORCE_USER_CLEANUP" == "yes" ]]; then
                     FORCE_USER_CLEANUP="no"
@@ -1721,20 +1672,18 @@ main() {
                     FORCE_USER_CLEANUP="yes"
                     _log "INFO" "Aggressive user data cleanup (FORCE_USER_CLEANUP) set to 'yes'."
                 fi
-                echo "FORCE_USER_CLEANUP is now: $FORCE_USER_CLEANUP" # Output for scripting
+                echo "FORCE_USER_CLEANUP is now: $FORCE_USER_CLEANUP" 
                 _log "INFO" "Script finished after toggling FORCE_USER_CLEANUP."
                 exit 0
                 ;;
             *)
                 _log "ERROR" "Unknown direct action: '$action_arg'."
                 _log "ERROR" "Run without arguments for interactive menu, or use a valid action like 'install_all' or 'uninstall_all'."
-                usage # Display usage information and exit
+                usage 
                 ;;
         esac
         
-        # Check if the determined target function actually exists
         if declare -f "$target_function_name" >/dev/null; then
-            # Call the target function, passing any remaining arguments
             "$target_function_name" "$@" 
         else 
             _log "ERROR" "Internal script error: Target function '${target_function_name}' for action '${action_arg}' is not defined or not callable."
@@ -1744,5 +1693,4 @@ main() {
     _log "INFO" "Script execution finished."
 }
 
-# Call main function with all script arguments
 main "$@"
