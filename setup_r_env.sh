@@ -358,30 +358,35 @@ fn_add_cran_repo() {
     if [[ ! -f "$CRAN_APT_KEYRING_FILE" ]]; then
         _log "INFO" "Adding CRAN GPG key to ${CRAN_APT_KEYRING_FILE}"
         mkdir -p "$(dirname "$CRAN_APT_KEYRING_FILE")" 
-        local key_download_cmd_desc="Download CRAN GPG key from ${CRAN_APT_KEY_URL}"
+        local key_download_cmd_desc="Download CRAN GPG key from ${CRAN_APT_KEY_URL} to ${CRAN_APT_KEYRING_FILE}"
         _log "INFO" "Start: ${key_download_cmd_desc}"
-        # Use a temporary file for curl output, then tee, to better capture curl errors
+        
         local temp_key_file
         temp_key_file=$(mktemp)
-        if curl -fsSL "${CRAN_APT_KEY_URL}" -o "$temp_key_file"; then
-            if tee "$temp_key_file" > "${CRAN_APT_KEYRING_FILE}"; then
-                 _log "INFO" "OK: ${key_download_cmd_desc} and teed to ${CRAN_APT_KEYRING_FILE}"
+        # Download key to temp file first, logging curl's output/errors
+        if curl -fsSL "${CRAN_APT_KEY_URL}" -o "$temp_key_file" >> "$LOG_FILE" 2>&1; then
+            _log "DEBUG" "curl successfully downloaded key to $temp_key_file"
+            # Now tee the content of the temp file to the actual keyring file
+            # and redirect tee's stdout to /dev/null so it doesn't go to main log again
+            if cat "$temp_key_file" | tee "${CRAN_APT_KEYRING_FILE}" > /dev/null ; then
+                 _log "INFO" "OK: ${key_download_cmd_desc}"
                  if [[ ! -s "$CRAN_APT_KEYRING_FILE" ]]; then 
-                    _log "ERROR" "CRAN GPG key file ${CRAN_APT_KEYRING_FILE} is empty after download. Key may not have been added correctly."
+                    _log "ERROR" "CRAN GPG key file ${CRAN_APT_KEYRING_FILE} is empty after download and tee. Key may not have been added correctly."
                     rm -f "$CRAN_APT_KEYRING_FILE" 
                     rm -f "$temp_key_file"
                     return 1
                  fi
             else
-                _log "ERROR" "Failed to tee key to ${CRAN_APT_KEYRING_FILE}"
+                local tee_rc=$?
+                _log "ERROR" "Failed to tee key from $temp_key_file to ${CRAN_APT_KEYRING_FILE} (RC: $tee_rc)"
                 rm -f "$temp_key_file"
                 return 1
             fi
-            rm -f "$temp_key_file"
+            rm -f "$temp_key_file" # Clean up temp file on success
         else
-            local exit_code=$?
-            _log "ERROR" "FAIL: ${key_download_cmd_desc} (RC:$exit_code). See log: $LOG_FILE"
-            rm -f "$temp_key_file"
+            local curl_rc=$? 
+            _log "ERROR" "FAIL: Curl command for ${key_download_cmd_desc} (RC:$curl_rc). See log: $LOG_FILE"
+            rm -f "$temp_key_file" # Clean up temp file on curl failure
             return 1
         fi
     else
@@ -396,7 +401,6 @@ fn_add_cran_repo() {
         _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' (simple format) seems to be already configured."
     else
         _log "INFO" "CRAN repository line to add via add-apt-repository: ${CRAN_REPO_LINE}"
-        # Use the simple form of CRAN_REPO_LINE directly with add-apt-repository
         _run_command "Add CRAN repository entry" add-apt-repository -y -n "${CRAN_REPO_LINE}"
         _run_command "Update apt cache after adding CRAN repo" apt-get update -y
         _log "INFO" "CRAN repository added and apt cache updated."
@@ -697,7 +701,7 @@ EOF
 
     local temp_rprofile
     temp_rprofile=$(mktemp)
-    if [[ -z "$temp_rprofile" || ! -e "$temp_rprofile" ]]; then # Check if mktemp failed or file doesn't exist
+    if [[ -z "$temp_rprofile" || ! -e "$temp_rprofile" ]]; then 
         _log "ERROR" "Failed to create temporary file for Rprofile.site update."
         return 1
     fi
@@ -720,7 +724,7 @@ EOF
     fi
     
     _log "DEBUG" "Contents of temporary Rprofile before mv:"
-    cat "$temp_rprofile" >> "$LOG_FILE" # Log content for debugging
+    cat "$temp_rprofile" >> "$LOG_FILE" 
 
     if _run_command "Update Rprofile.site with bspm configuration" mv "$temp_rprofile" "$R_PROFILE_SITE_PATH"; then
         _log "INFO" "Rprofile.site updated with bspm configuration."
@@ -1273,14 +1277,13 @@ fn_remove_cran_repo() {
     fi
     
     local cran_line_pattern_to_remove_escaped
-    cran_line_pattern_to_remove_escaped=$(printf '%s' "$CRAN_REPO_LINE" | sed 's|[&/\]|\\&|g') # CRAN_REPO_LINE is now simple
+    cran_line_pattern_to_remove_escaped=$(printf '%s' "$CRAN_REPO_LINE" | sed 's|[&/\]|\\&|g') 
 
     find /etc/apt/sources.list /etc/apt/sources.list.d/ -type f -name '*.list' -print0 | \
     while IFS= read -r -d $'\0' apt_list_file; do
-        if grep -qF "${CRAN_REPO_LINE}" "$apt_list_file"; then # Use -F for fixed string grep
+        if grep -qF "${CRAN_REPO_LINE}" "$apt_list_file"; then 
             _log "INFO" "CRAN repository entry (matching simple format) found in '${apt_list_file}'. Backing up and removing."
             _backup_file "$apt_list_file"
-            # Using a different sed delimiter like '#' to avoid conflict with '/' in paths
             _run_command "Remove CRAN entry from '${apt_list_file}'" sed -i.cran_removed_bak "\#${cran_line_pattern_to_remove_escaped}#d" "$apt_list_file"
         fi
     done
