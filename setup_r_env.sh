@@ -10,34 +10,32 @@
 ##############################################################################
 
 # --- Configuration ---
-set -euo pipefail # -e: exit on error, -u: treat unset variables as error, -o pipefail: causes a pipeline to fail if any command fails
+set -euo pipefail 
 
 export DEBIAN_FRONTEND=noninteractive
 
 # Logging
 LOG_DIR="/var/log/r_setup"
 LOG_FILE="${LOG_DIR}/r_setup_$(date +'%Y%m%d_%H%M%S').log"
-# Ensure log directory and file are writable by the script runner (root)
 mkdir -p "$LOG_DIR"
 touch "$LOG_FILE"
-chmod 640 "$LOG_FILE" # Group rwx, Other r-- (adjust if needed)
+chmod 640 "$LOG_FILE" 
 
 # Backup
 BACKUP_DIR="/opt/r_setup_backups"; mkdir -p "$BACKUP_DIR"
 
 # System
-UBUNTU_CODENAME_DETECTED="" # Will be detected in pre_flight_checks
+UBUNTU_CODENAME_DETECTED="" 
 R_PROFILE_SITE_PATH=""
 USER_SPECIFIED_R_PROFILE_SITE_PATH=""
 FORCE_USER_CLEANUP="no"
 
 # RStudio - Fallback Version
-RSTUDIO_VERSION_FALLBACK="2023.12.1-402" # Specify a known good recent version
+RSTUDIO_VERSION_FALLBACK="2023.12.1-402" 
 RSTUDIO_ARCH_FALLBACK="amd64"
-RSTUDIO_ARCH="${RSTUDIO_ARCH_FALLBACK}" # Will be detected or fallback
+RSTUDIO_ARCH="${RSTUDIO_ARCH_FALLBACK}" 
 
 RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK"
-# RSTUDIO_DEB_URL will be constructed after UBUNTU_CODENAME and RSTUDIO_ARCH are finalized
 RSTUDIO_DEB_URL=""
 RSTUDIO_DEB_FILENAME=""
 
@@ -45,19 +43,18 @@ RSTUDIO_DEB_FILENAME=""
 # CRAN Repository
 CRAN_REPO_URL_BASE="https://cloud.r-project.org"
 CRAN_REPO_PATH_BIN="/bin/linux/ubuntu"
-CRAN_REPO_PATH_SRC="/src/contrib" # Used for source package fallbacks
+CRAN_REPO_PATH_SRC="/src/contrib" 
 CRAN_REPO_URL_BIN="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_BIN}"
-CRAN_REPO_URL_SRC="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_SRC}" # For install.packages fallback
-# CRAN_REPO_LINE will be constructed after UBUNTU_CODENAME is finalized
+CRAN_REPO_URL_SRC="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_SRC}" 
 CRAN_REPO_LINE=""
 CRAN_APT_KEY_ID="E298A3A825C0D65DFD57CBB651716619E084DAB9"
 CRAN_APT_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${CRAN_APT_KEY_ID}"
 CRAN_APT_KEYRING_FILE="/etc/apt/keyrings/cran-${CRAN_APT_KEY_ID}.gpg"
 
 
-# R2U/BSP Repository (Binary System Package Manager for R)
+# R2U/BSP Repository
 R2U_REPO_URL_BASE="https://raw.githubusercontent.com/eddelbuettel/r2u/master/inst/scripts"
-R2U_APT_SOURCES_LIST_D_FILE="/etc/apt/sources.list.d/r2u.list" # Standard file name by r2u script
+R2U_APT_SOURCES_LIST_D_FILE="/etc/apt/sources.list.d/r2u.list" 
 
 # R Packages
 R_PACKAGES_CRAN=(
@@ -65,7 +62,7 @@ R_PACKAGES_CRAN=(
     "doParallel" "future" "caret" "CoordinateCleaner" "tictoc" "devtools"
     "tidyverse" "dplyr" "spatstat" "ggplot2" "iNEXT" "DHARMa" "lme4" "glmmTMB"
     "geodata" "osmdata" "parallel" "doSNOW" "progress" "nngeo" "wdpar" "rgee" "tidyrgee"
-    "data.table" "jsonlite" "httr" # Added jsonlite and httr as common devtools deps
+    "data.table" "jsonlite" "httr" 
 )
 R_PACKAGES_GITHUB=(
     "SantanderMetGroup/transformeR"
@@ -73,7 +70,7 @@ R_PACKAGES_GITHUB=(
     "HelgeJentsch/ClimDatDownloadR"
 )
 
-UBUNTU_CODENAME="" # Will be set by fn_pre_flight_checks
+UBUNTU_CODENAME="" 
 
 if [[ -n "${CUSTOM_R_PROFILE_SITE_PATH_ENV:-}" ]]; then
     USER_SPECIFIED_R_PROFILE_SITE_PATH="${CUSTOM_R_PROFILE_SITE_PATH_ENV}"
@@ -97,16 +94,14 @@ _ensure_root() {
 _run_command() {
     local cmd_desc="$1"; shift
     _log "INFO" "Start: $cmd_desc"
-    # Execute command, redirecting stdout and stderr to log file
     if "$@" >>"$LOG_FILE" 2>&1; then
         _log "INFO" "OK: $cmd_desc"
         return 0
     else
         local exit_code=$?
         _log "ERROR" "FAIL: $cmd_desc (RC:$exit_code). See log: $LOG_FILE"
-        # Show last few lines of log for context, prefixing with spaces for readability
         if [ -f "$LOG_FILE" ]; then
-            tail -n 10 "$LOG_FILE" | sed 's/^/    /' # Show more lines
+            tail -n 10 "$LOG_FILE" | sed 's/^/    /' 
         fi
         return "$exit_code"
     fi
@@ -129,7 +124,6 @@ _restore_latest_backup() {
     local filename_pattern
     local latest_backup
     filename_pattern="$(basename "$original_filepath")_*.bak"
-    # Find the latest backup file for the original file path
     latest_backup=$(find "$BACKUP_DIR" -name "$filename_pattern" -print0 | xargs -0 ls -1tr 2>/dev/null | tail -n 1)
     if [[ -n "$latest_backup" && -f "$latest_backup" ]]; then
         _log "INFO" "Restoring '${original_filepath}' from latest backup '${latest_backup}'"
@@ -142,7 +136,6 @@ _restore_latest_backup() {
 
 _get_r_profile_site_path() {
     local log_details=false
-    # Log details if R_PROFILE_SITE_PATH is currently empty and no user-specified path is given
     if [[ -z "$R_PROFILE_SITE_PATH" && -z "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then
         log_details=true
     fi
@@ -159,7 +152,7 @@ _get_r_profile_site_path() {
 
     if command -v R &>/dev/null; then
         local r_home_output
-        r_home_output=$(R RHOME 2>/dev/null || echo "") # Ensure it doesn't fail script if R not fully there
+        r_home_output=$(R RHOME 2>/dev/null || echo "") 
         if [[ -n "$r_home_output" && -d "$r_home_output" ]]; then
             local detected_path="${r_home_output}/etc/Rprofile.site"
             if [[ "$R_PROFILE_SITE_PATH" != "$detected_path" ]]; then
@@ -170,7 +163,6 @@ _get_r_profile_site_path() {
         fi
     fi
 
-    # Fallback paths if R RHOME fails or R is not yet installed
     local default_apt_path="/usr/lib/R/etc/Rprofile.site"
     local default_local_path="/usr/local/lib/R/etc/Rprofile.site"
     local new_detected_path=""
@@ -186,7 +178,6 @@ _get_r_profile_site_path() {
             _log "INFO" "Auto-detected R_PROFILE_SITE_PATH (local default): ${new_detected_path}"
         fi
     else
-        # If neither exists, default to the apt path for creation
         new_detected_path="$default_apt_path"
         if $log_details || [[ "$R_PROFILE_SITE_PATH" != "$new_detected_path" ]]; then
             _log "INFO" "No Rprofile.site found. Defaulting to standard location for creation: ${new_detected_path}"
@@ -198,36 +189,32 @@ _get_r_profile_site_path() {
 
 _safe_systemctl() {
     if command -v systemctl >/dev/null 2>&1; then
-        # Try to execute systemctl command
         if systemctl "$@" >> "$LOG_FILE" 2>&1; then
-            return 0 # Success
+            return 0 
         else
             local exit_code=$?
-            # In CI or non-systemd environments, systemctl might fail or not be fully functional.
-            # We log a warning but don't let it stop the script.
             if [[ "${CI:-false}" == "true" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]]; then
                 _log "WARN" "systemctl command '$*' failed (RC:$exit_code). Ignoring in CI context."
-                return 0 # Treat as non-fatal in CI
+                return 0 
             else
                 _log "ERROR" "systemctl command '$*' failed (RC:$exit_code)."
-                return "$exit_code" # Propagate error in non-CI
+                return "$exit_code" 
             fi
         fi
     else
         _log "INFO" "systemctl command not found, skipping systemctl action: $*"
-        return 0 # Command not found is not an error for this wrapper
+        return 0 
     fi
 }
 
 
 _is_vm_or_ci_env() {
-    # Detect GitHub CI, GitLab CI, Travis, or root user on VM
     if [[ "${CI:-false}" == "true" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]] || [[ -n "${GITLAB_CI:-}" ]] || [[ -n "${TRAVIS:-}" ]]; then
-        return 0 # True, is a CI environment
-    elif [[ "$EUID" -eq 0 ]]; then # Also consider root on a VM as a managed environment
-        return 0 # True, is root (likely a VM being provisioned)
+        return 0 
+    elif [[ "$EUID" -eq 0 ]]; then 
+        return 0 
     else
-        return 1 # False
+        return 1 
     fi
 }
 
@@ -247,7 +234,7 @@ fn_pre_flight_checks() {
     _ensure_root 
 
     if command -v lsb_release &>/dev/null; then
-        UBUNTU_CODENAME_DETECTED=$(lsb_release -cs | tr -d '[:space:]') # Sanitize
+        UBUNTU_CODENAME_DETECTED=$(lsb_release -cs | tr -d '[:space:]') 
     else
         _log "WARN" "lsb_release command not found. Attempting to install lsb-release."
         apt-get update -y >>"$LOG_FILE" 2>&1 || _log "WARN" "apt update failed during lsb-release prerequisite."
@@ -256,16 +243,20 @@ fn_pre_flight_checks() {
             exit 1
         }
         if command -v lsb_release &>/dev/null; then
-            UBUNTU_CODENAME_DETECTED=$(lsb_release -cs | tr -d '[:space:]') # Sanitize again
+            UBUNTU_CODENAME_DETECTED=$(lsb_release -cs | tr -d '[:space:]') 
         else
             _log "ERROR" "lsb_release installed but still not found or codename undetectable. Exiting."
             exit 1
         fi
     fi
     UBUNTU_CODENAME="$UBUNTU_CODENAME_DETECTED" 
+    export UBUNTU_CODENAME # Export it immediately
+    _log "DEBUG" "In fn_pre_flight_checks: UBUNTU_CODENAME_DETECTED='${UBUNTU_CODENAME_DETECTED}', UBUNTU_CODENAME assigned and exported as '${UBUNTU_CODENAME}'."
+
+
     _log "INFO" "Detected Ubuntu codename: ${UBUNTU_CODENAME}"
-    if [[ -z "$UBUNTU_CODENAME" || "$UBUNTU_CODENAME" == "unknown" ]]; then
-        _log "ERROR" "Ubuntu codename is invalid ('$UBUNTU_CODENAME'). Exiting."
+    if [[ -z "$UBUNTU_CODENAME" || "$UBUNTU_CODENAME" == "unknown" ]]; then # This check now uses the exported UBUNTU_CODENAME
+        _log "ERROR" "Ubuntu codename is invalid (value: '${UBUNTU_CODENAME}'). This is critical. Exiting."
         exit 1
     fi
 
@@ -280,12 +271,13 @@ fn_pre_flight_checks() {
         _log "WARN" "dpkg command not found. Using fallback RStudio architecture: ${RSTUDIO_ARCH_FALLBACK}"
         RSTUDIO_ARCH="$RSTUDIO_ARCH_FALLBACK"
     fi
+    export RSTUDIO_ARCH # Export for fn_get_latest_rstudio_info
 
     fn_get_latest_rstudio_info 
 
     CRAN_REPO_LINE="deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
-    export CRAN_REPO_LINE # Ensure available to subshells if _run_command uses one
-    _log "INFO" "CRAN repository line to be used: ${CRAN_REPO_LINE}"
+    export CRAN_REPO_LINE 
+    _log "DEBUG" "In fn_pre_flight_checks: CRAN_REPO_LINE constructed and exported as: '${CRAN_REPO_LINE}'"
     _log "INFO" "RStudio Server version to be used: ${RSTUDIO_VERSION} (URL: ${RSTUDIO_DEB_URL})"
 
     mkdir -p "$LOG_DIR" "$BACKUP_DIR" "/etc/apt/keyrings"
@@ -308,6 +300,16 @@ fn_pre_flight_checks() {
 
 fn_add_cran_repo() {
     _log "INFO" "Adding CRAN repository..."
+    _log "DEBUG" "Entering fn_add_cran_repo: UBUNTU_CODENAME='${UBUNTU_CODENAME}', CRAN_REPO_LINE='${CRAN_REPO_LINE}'"
+
+    if [[ -z "$UBUNTU_CODENAME" ]]; then
+        _log "ERROR" "FATAL: UBUNTU_CODENAME is empty in fn_add_cran_repo. fn_pre_flight_checks failed to set it or it was lost. Aborting."
+        return 1 
+    fi
+    if [[ -z "$CRAN_REPO_LINE" ]]; then
+        _log "ERROR" "FATAL: CRAN_REPO_LINE is empty in fn_add_cran_repo. fn_pre_flight_checks failed to set it or it was lost. Aborting."
+        return 1
+    fi
 
     if ! command -v add-apt-repository &>/dev/null; then
         _log "INFO" "'add-apt-repository' not found. Installing 'software-properties-common'."
@@ -322,31 +324,12 @@ fn_add_cran_repo() {
     else
         _log "INFO" "CRAN GPG key ${CRAN_APT_KEYRING_FILE} already exists."
     fi
-
-    if [[ -z "$UBUNTU_CODENAME" ]]; then # Check UBUNTU_CODENAME first
-        _log "ERROR" "CRITICAL: UBUNTU_CODENAME is empty in fn_add_cran_repo. Cannot construct or verify CRAN repository line."
-        return 1 
-    fi
-    # Ensure CRAN_REPO_LINE is set; if not, try to reconstruct it as a fallback.
-    # This indicates a potential logic flaw if fn_pre_flight_checks didn't set it globally.
-    if [[ -z "$CRAN_REPO_LINE" ]]; then
-        _log "ERROR" "CRITICAL: CRAN_REPO_LINE is empty in fn_add_cran_repo. Pre-flight checks might have failed to set it."
-        _log "WARN" "Attempting to reconstruct CRAN_REPO_LINE within fn_add_cran_repo as a fallback."
-        # Reconstruction must happen before it's used by grep or add-apt-repository
-        CRAN_REPO_LINE="deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
-        export CRAN_REPO_LINE # Re-export if reconstructed
-        if [[ -z "$CRAN_REPO_LINE" || "$CRAN_REPO_LINE" == "deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN} -cran40/" ]]; then 
-            # Check if still empty or malformed due to empty UBUNTU_CODENAME
-            _log "ERROR" "CRITICAL: Fallback reconstruction of CRAN_REPO_LINE also resulted in an empty or malformed string. Aborting CRAN repo addition."
-            return 1
-        fi
-    fi
-    _log "DEBUG" "In fn_add_cran_repo, value of CRAN_REPO_LINE before use: '${CRAN_REPO_LINE}'"
-    _log "DEBUG" "In fn_add_cran_repo, value of UBUNTU_CODENAME: '${UBUNTU_CODENAME}'"
     
-    if grep -qrE "${CRAN_REPO_URL_BIN}.*${UBUNTU_CODENAME}-cran40" /etc/apt/sources.list /etc/apt/sources.list.d/; then
-        _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' seems to be already configured."
+    local grep_pattern="${CRAN_REPO_URL_BIN}.*${UBUNTU_CODENAME}-cran40"
+    if grep -qrE "$grep_pattern" /etc/apt/sources.list /etc/apt/sources.list.d/; then
+        _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' matching pattern '${grep_pattern}' seems to be already configured."
     else
+        _log "INFO" "CRAN repository line to add: ${CRAN_REPO_LINE}"
         _run_command "Add CRAN repository entry" add-apt-repository -y -n -S "${CRAN_REPO_LINE}"
         _run_command "Update apt cache after adding CRAN repo" apt-get update -y
         _log "INFO" "CRAN repository added and apt cache updated."
@@ -1327,9 +1310,11 @@ fn_remove_leftover_files() {
 # --- Main Execution ---
 install_all() {
     _log "INFO" "--- Starting Full R Environment Installation ---"
-    
+    # set -x # Uncomment for deep debugging of variable states
     fn_pre_flight_checks
+    _log "DEBUG" "After fn_pre_flight_checks in install_all: UBUNTU_CODENAME='${UBUNTU_CODENAME}', CRAN_REPO_LINE='${CRAN_REPO_LINE}'"
     fn_add_cran_repo
+    _log "DEBUG" "After fn_add_cran_repo in install_all: UBUNTU_CODENAME='${UBUNTU_CODENAME}', CRAN_REPO_LINE='${CRAN_REPO_LINE}'"
     fn_install_r
     fn_install_openblas_openmp
     
@@ -1347,6 +1332,7 @@ install_all() {
     
     fn_install_r_packages 
     fn_install_rstudio_server
+    # set +x # Uncomment if set -x was used
     
     _log "INFO" "--- Full R Environment Installation Completed ---"
     _log "INFO" "Summary:"
