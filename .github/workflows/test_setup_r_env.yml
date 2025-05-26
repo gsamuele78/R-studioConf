@@ -47,8 +47,8 @@ jobs:
         run: shellcheck setup_r_env.sh
 
       # 1. DRY RUN SIMULATION
-      #- name: Dry-run install (simulate)
-      #  run: LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh install_all
+      - name: Dry-run install (simulate)
+        run: LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh install_all
 
       # 2. FULL INSTALL
       #- name: Full install (actual run)
