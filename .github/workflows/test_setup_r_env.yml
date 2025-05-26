@@ -59,6 +59,16 @@ jobs:
           echo "Sudo version: $(sudo --version || echo 'not found')"
           echo "Systemctl path: $(which systemctl || echo 'not found')"
 
+      - name: Ensure dbus is running
+        run: |
+          sudo apt-get install -y dbus
+          sudo systemctl start dbus || echo "Running without systemd"
+
+      #- name: Install bspm and dependencies
+      #   run: |
+      #    Rscript -e "install.packages('bspm', repos='http://cran.rstudio.com/')"
+      #    Rscript -e "bspm::enable()" || echo "Warning: bspm enable failed"
+
       - name: Make script executable
         run: chmod +x setup_r_env.sh
 
