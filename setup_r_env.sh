@@ -286,14 +286,13 @@ fn_pre_flight_checks() {
 
     fn_get_latest_rstudio_info 
 
-    # CRAN_REPO_LINE for add-apt-repository (simple form)
     CRAN_REPO_LINE="deb ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
     export CRAN_REPO_LINE 
     _log "DEBUG" "In fn_pre_flight_checks: CRAN_REPO_LINE constructed and exported as: '${CRAN_REPO_LINE}'"
     _log "DEBUG" "In fn_pre_flight_checks: CRAN_APT_KEYRING_FILE is: '${CRAN_APT_KEYRING_FILE}'"
     _log "INFO" "RStudio Server version to be used: ${RSTUDIO_VERSION} (URL: ${RSTUDIO_DEB_URL})"
 
-    mkdir -p "$LOG_DIR" "$BACKUP_DIR" "/etc/apt/trusted.gpg.d" "/etc/apt/keyrings" # Ensure all needed key dirs exist
+    mkdir -p "$LOG_DIR" "$BACKUP_DIR" "/etc/apt/trusted.gpg.d" "/etc/apt/keyrings" 
 
     local essential_deps=("wget" "gpg" "apt-transport-https" "ca-certificates" "curl" "gdebi-core" "software-properties-common" "dirmngr")
     local missing_deps=()
@@ -318,8 +317,8 @@ fn_pre_flight_checks() {
         echo "export RSTUDIO_DEB_URL=\"${RSTUDIO_DEB_URL}\""
         echo "export RSTUDIO_DEB_FILENAME=\"${RSTUDIO_DEB_FILENAME}\""
         echo "export CRAN_REPO_LINE=\"${CRAN_REPO_LINE}\""
-        echo "export CRAN_APT_KEYRING_FILE=\"${CRAN_APT_KEYRING_FILE}\"" # For key removal
-        echo "export CRAN_APT_KEY_URL=\"${CRAN_APT_KEY_URL}\""         # For key addition
+        echo "export CRAN_APT_KEYRING_FILE=\"${CRAN_APT_KEYRING_FILE}\"" 
+        echo "export CRAN_APT_KEY_URL=\"${CRAN_APT_KEY_URL}\""         
     } > "$R_ENV_STATE_FILE"
     _log "INFO" "State file written. If running functions individually, subsequent steps might use this."
 }
@@ -351,27 +350,38 @@ fn_add_cran_repo() {
         _run_command "Install software-properties-common" apt-get install -y software-properties-common
     fi
     
-    if ! dpkg -s dirmngr &>/dev/null; then # dirmngr is needed by apt-key/gpg for keyserver access
+    if ! dpkg -s dirmngr &>/dev/null; then 
         _log "INFO" "dirmngr package not found. Installing dirmngr."
         _run_command "Install dirmngr" apt-get install -y dirmngr
     fi
 
     if [[ ! -f "$CRAN_APT_KEYRING_FILE" ]]; then
         _log "INFO" "Adding CRAN GPG key to ${CRAN_APT_KEYRING_FILE}"
-        mkdir -p "$(dirname "$CRAN_APT_KEYRING_FILE")" # Ensure /etc/apt/trusted.gpg.d exists
-        # Fetch and tee the key. Using a temporary variable for curl output to check success.
+        mkdir -p "$(dirname "$CRAN_APT_KEYRING_FILE")" 
         local key_download_cmd_desc="Download CRAN GPG key from ${CRAN_APT_KEY_URL}"
         _log "INFO" "Start: ${key_download_cmd_desc}"
-        if curl -fsSL "${CRAN_APT_KEY_URL}" | tee "${CRAN_APT_KEYRING_FILE}" > /dev/null; then
-            _log "INFO" "OK: ${key_download_cmd_desc}"
-            if [[ ! -s "$CRAN_APT_KEYRING_FILE" ]]; then # Check if file is empty
-                _log "ERROR" "CRAN GPG key file ${CRAN_APT_KEYRING_FILE} is empty after download. Key may not have been added correctly."
-                rm -f "$CRAN_APT_KEYRING_FILE" # Clean up empty file
+        # Use a temporary file for curl output, then tee, to better capture curl errors
+        local temp_key_file
+        temp_key_file=$(mktemp)
+        if curl -fsSL "${CRAN_APT_KEY_URL}" -o "$temp_key_file"; then
+            if tee "$temp_key_file" > "${CRAN_APT_KEYRING_FILE}"; then
+                 _log "INFO" "OK: ${key_download_cmd_desc} and teed to ${CRAN_APT_KEYRING_FILE}"
+                 if [[ ! -s "$CRAN_APT_KEYRING_FILE" ]]; then 
+                    _log "ERROR" "CRAN GPG key file ${CRAN_APT_KEYRING_FILE} is empty after download. Key may not have been added correctly."
+                    rm -f "$CRAN_APT_KEYRING_FILE" 
+                    rm -f "$temp_key_file"
+                    return 1
+                 fi
+            else
+                _log "ERROR" "Failed to tee key to ${CRAN_APT_KEYRING_FILE}"
+                rm -f "$temp_key_file"
                 return 1
             fi
+            rm -f "$temp_key_file"
         else
             local exit_code=$?
             _log "ERROR" "FAIL: ${key_download_cmd_desc} (RC:$exit_code). See log: $LOG_FILE"
+            rm -f "$temp_key_file"
             return 1
         fi
     else
@@ -386,14 +396,12 @@ fn_add_cran_repo() {
         _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' (simple format) seems to be already configured."
     else
         _log "INFO" "CRAN repository line to add via add-apt-repository: ${CRAN_REPO_LINE}"
-        _run_command "Add CRAN repository entry" add-apt-repository -y -n "${CRAN_REPO_LINE}" # No -S
+        # Use the simple form of CRAN_REPO_LINE directly with add-apt-repository
+        _run_command "Add CRAN repository entry" add-apt-repository -y -n "${CRAN_REPO_LINE}"
         _run_command "Update apt cache after adding CRAN repo" apt-get update -y
         _log "INFO" "CRAN repository added and apt cache updated."
     fi
 }
-# ... (Rest of the script, including fn_remove_cran_repo, main, etc.) ...
-# Ensure fn_remove_cran_repo is also updated to use the correct CRAN_APT_KEYRING_FILE
-# and simple CRAN_REPO_LINE pattern for sed.
 
 fn_install_r() {
     _log "INFO" "Installing R..."
@@ -672,8 +680,12 @@ fn_setup_bspm() {
     read -r -d '' bspm_rprofile_config << EOF
 # Added by setup_r_env.sh for bspm configuration
 if (nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY"))) {
+    # Consider if bspm should be disabled by default in RStudio Server sessions
+    # options(bspm.enabled = FALSE) 
 } else if (interactive()) {
+    # For interactive non-RStudio, decide if auto-enable is desired
 } else {
+    # Enable bspm for non-interactive sessions (like this script's R calls)
     if (requireNamespace("bspm", quietly = TRUE)) {
         options(bspm.sudo = TRUE)
         options(bspm.allow.sysreqs = TRUE)
@@ -685,11 +697,40 @@ EOF
 
     local temp_rprofile
     temp_rprofile=$(mktemp)
-    sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' "$R_PROFILE_SITE_PATH" > "$temp_rprofile"
-    printf "\n%s\n" "$bspm_rprofile_config" >> "$temp_rprofile"
-    _run_command "Update Rprofile.site with bspm configuration" mv "$temp_rprofile" "$R_PROFILE_SITE_PATH"
+    if [[ -z "$temp_rprofile" || ! -e "$temp_rprofile" ]]; then # Check if mktemp failed or file doesn't exist
+        _log "ERROR" "Failed to create temporary file for Rprofile.site update."
+        return 1
+    fi
+    _log "DEBUG" "Temporary file for Rprofile.site update: ${temp_rprofile}"
 
-    _log "INFO" "Content of Rprofile.site (${R_PROFILE_SITE_PATH}) after bspm configuration:"
+    if sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' "$R_PROFILE_SITE_PATH" > "$temp_rprofile"; then
+        _log "DEBUG" "sed command successfully wrote to ${temp_rprofile}"
+    else
+        _log "ERROR" "sed command failed to process ${R_PROFILE_SITE_PATH} into ${temp_rprofile}"
+        rm -f "$temp_rprofile"
+        return 1
+    fi
+    
+    if printf "\n%s\n" "$bspm_rprofile_config" >> "$temp_rprofile"; then
+        _log "DEBUG" "printf successfully appended bspm config to ${temp_rprofile}"
+    else
+        _log "ERROR" "printf command failed to append bspm config to ${temp_rprofile}"
+        rm -f "$temp_rprofile"
+        return 1
+    fi
+    
+    _log "DEBUG" "Contents of temporary Rprofile before mv:"
+    cat "$temp_rprofile" >> "$LOG_FILE" # Log content for debugging
+
+    if _run_command "Update Rprofile.site with bspm configuration" mv "$temp_rprofile" "$R_PROFILE_SITE_PATH"; then
+        _log "INFO" "Rprofile.site updated with bspm configuration."
+    else
+        _log "ERROR" "Failed to move temporary file ${temp_rprofile} to ${R_PROFILE_SITE_PATH}. Rprofile.site may not be updated."
+        rm -f "$temp_rprofile" 
+        return 1 
+    fi
+
+    _log "INFO" "Content of Rprofile.site (${R_PROFILE_SITE_PATH}) after bspm configuration attempt:"
     cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 
 
     _log "INFO" "Verifying bspm activation status..."
@@ -1013,7 +1054,6 @@ fn_install_rstudio_server() {
         _log "INFO" "Key RStudio variables still missing. Re-running fn_get_latest_rstudio_info to define URLs."
         fn_get_latest_rstudio_info 
     fi
-    # After fn_get_latest_rstudio_info, RSTUDIO_DEB_URL and RSTUDIO_DEB_FILENAME should be set. Check them.
     if [[ -z "$RSTUDIO_DEB_URL" || -z "$RSTUDIO_DEB_FILENAME" ]]; then
         _log "ERROR" "FATAL: RStudio download details (URL/filename) could not be determined even after attempting to re-run info gathering. Aborting RStudio Server install."
         return 1
@@ -1233,21 +1273,18 @@ fn_remove_cran_repo() {
     fi
     
     local cran_line_pattern_to_remove_escaped
-    # CRAN_REPO_LINE is now the simple "deb URL codename-cran40/"
-    cran_line_pattern_to_remove_escaped=$(printf '%s' "$CRAN_REPO_LINE" | sed 's|[&/\]|\\&|g')
+    cran_line_pattern_to_remove_escaped=$(printf '%s' "$CRAN_REPO_LINE" | sed 's|[&/\]|\\&|g') # CRAN_REPO_LINE is now simple
 
     find /etc/apt/sources.list /etc/apt/sources.list.d/ -type f -name '*.list' -print0 | \
     while IFS= read -r -d $'\0' apt_list_file; do
-        # Match the exact simple line
-        if grep -qF "${CRAN_REPO_LINE}" "$apt_list_file"; then 
+        if grep -qF "${CRAN_REPO_LINE}" "$apt_list_file"; then # Use -F for fixed string grep
             _log "INFO" "CRAN repository entry (matching simple format) found in '${apt_list_file}'. Backing up and removing."
             _backup_file "$apt_list_file"
-            # Using \| as delimiter for sed to avoid conflict with / in paths
-            _run_command "Remove CRAN entry from '${apt_list_file}'" sed -i.cran_removed_bak "\|${cran_line_pattern_to_remove_escaped}|d" "$apt_list_file"
+            # Using a different sed delimiter like '#' to avoid conflict with '/' in paths
+            _run_command "Remove CRAN entry from '${apt_list_file}'" sed -i.cran_removed_bak "\#${cran_line_pattern_to_remove_escaped}#d" "$apt_list_file"
         fi
     done
 
-    # CRAN_APT_KEYRING_FILE is now /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc
     _log "INFO" "Removing CRAN GPG key file '${CRAN_APT_KEYRING_FILE}'..."
     if [[ -f "$CRAN_APT_KEYRING_FILE" ]]; then
         _run_command "Remove CRAN GPG key file '${CRAN_APT_KEYRING_FILE}'" rm -f "$CRAN_APT_KEYRING_FILE"
@@ -1494,7 +1531,7 @@ uninstall_all() {
         _log "ERROR" "--- Full R Environment Uninstallation Completed with ${verification_issues_found} verification issue(s). ---"
         _log "ERROR" "Manual inspection of the system and the log file ('${LOG_FILE}') is recommended to ensure complete removal."
     fi
-    # rm -f "$R_ENV_STATE_FILE" # Clean up state file after successful uninstall
+    # rm -f "$R_ENV_STATE_FILE" 
 }
 
 
@@ -1609,7 +1646,6 @@ interactive_menu() {
 main() {
     _log "INFO" "Script execution started. Logging to: ${LOG_FILE}"
     if [[ $# -gt 0 && "$1" != "install_all" && "$1" != "uninstall_all" && "$1" != "interactive" ]]; then
-        # If calling individual functions, try to source state file first.
         if [[ -f "$R_ENV_STATE_FILE" ]]; then
             _log "INFO" "Individual function call detected. Sourcing existing state file: ${R_ENV_STATE_FILE}"
             # shellcheck source=/dev/null
