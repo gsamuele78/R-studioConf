@@ -244,7 +244,6 @@ fn_pre_flight_checks() {
     _log "INFO" "Updating apt package lists..."
     if ! apt-get update -y >> "$LOG_FILE" 2>&1; then
         _log "ERROR" "apt-get update failed. Subsequent package installations may fail. Check network and repository configuration."
-        # exit 1 # Consider making this fatal
     else
         _log "INFO" "apt-get update successful."
     fi
@@ -487,33 +486,91 @@ fn_verify_openblas_openmp() {
 
     local r_check_script_file="/tmp/check_r_blas_openmp.R"
 cat > "$r_check_script_file" << 'EOF'
+# Stricter error handling at the start
+options(warn=1) # Print warnings as they occur
+error_occurred <- FALSE
+current_step <- "Initialization"
+
+# Function to handle and log errors more gracefully
+handle_r_error <- function(e, step_name) {
+    error_occurred <<- TRUE
+    cat(paste0("ERROR during R script step: '", step_name, "'\n"), file = stderr())
+    cat("Error message: ", conditionMessage(e), "\n", file = stderr())
+    cat("Traceback:\n", file = stderr())
+    try(print(sys.calls()), silent=TRUE, file=stderr()) # Print call stack
+}
+
+# Global error handler
 options(error = quote({
-    cat("Unhandled R Error: ", geterrmessage(), "\n", file = stderr())
+    cat("------------------------------------------------------------\n", file = stderr())
+    cat(paste0("Unhandled R Error (likely during step: '", current_step, "'):\n"), file = stderr())
+    cat("Message: ", geterrmessage(), "\n", file = stderr())
+    cat("------------------------------------------------------------\n", file = stderr())
     cat("Dumping frames to .RData and Rplots.pdf for debugging (if permissions allow).\n", file=stderr())
     dump.frames(to.file = TRUE, include.GlobalEnv = TRUE) 
     q("no", status = 1, runLast = FALSE) 
 }))
+
+# Ensure necessary packages are loadable
+current_step <- "Loading required namespaces (utils, parallel)"
+if (!requireNamespace("utils", quietly = TRUE)) {
+    cat("ERROR: 'utils' namespace not found. This is a base R package and should be available.\n", file=stderr())
+    q("no", status = 10, runLast = FALSE)
+}
+if (!requireNamespace("parallel", quietly = TRUE)) {
+    cat("ERROR: 'parallel' namespace not found. This is a recommended R package.\n", file=stderr())
+    q("no", status = 11, runLast = FALSE)
+}
+
+
 cat("--- R Environment Details ---\n")
-cat("R version and platform:\n"); print(R.version)
-cat("\nSession Info (BLAS/LAPACK linkage by R):\n"); print(sessionInfo())
+
+current_step <- "Printing R.version"
+tryCatch({
+    cat("R version and platform:\n"); print(R.version)
+}, error = function(e) handle_r_error(e, current_step))
+if(error_occurred) q("no", status=1, runLast=FALSE)
+
+current_step <- "Printing sessionInfo()"
+tryCatch({
+    cat("\nSession Info (BLAS/LAPACK linkage by R):\n"); print(sessionInfo())
+}, error = function(e) handle_r_error(e, current_step))
+if(error_occurred) q("no", status=1, runLast=FALSE)
+
+current_step <- "Printing utils::extSoftVersion()"
 cat("\nExtended Software Version (BLAS/LAPACK versions used by R):\n")
-if (exists("extSoftVersion", where = "package:utils") && is.function(utils::extSoftVersion)) { print(utils::extSoftVersion()) } else { cat("utils::extSoftVersion() not available (requires utils package loaded, typically by default).\n") }
+if (exists("extSoftVersion", where = "package:utils") && is.function(utils::extSoftVersion)) {
+    tryCatch({
+        print(utils::extSoftVersion())
+    }, error = function(e) handle_r_error(e, current_step))
+} else {
+    cat("utils::extSoftVersion() not available (requires utils package loaded, typically by default).\n")
+}
+if(error_occurred) q("no", status=1, runLast=FALSE)
+
+current_step <- "Printing LD_LIBRARY_PATH"
 cat("\nChecking R's LD_LIBRARY_PATH:\n"); print(Sys.getenv("LD_LIBRARY_PATH"))
+
+current_step <- "Getting Loaded DLLs/Shared Objects"
 cat("\nLoaded DLLs/shared objects for BLAS/LAPACK:\n")
 if (exists("getLoadedDLLs", where="package:base") && is.function(getLoadedDLLs)) {
-  loaded_dlls_obj <- getLoadedDLLs()
-  if (is.list(loaded_dlls_obj) && length(loaded_dlls_obj) > 0) {
-    dll_names <- vapply(loaded_dlls_obj, function(dll) as.character(dll[["name"]]), FUN.VALUE = character(1))
-    dll_paths <- vapply(loaded_dlls_obj, function(dll) as.character(dll[["path"]]), FUN.VALUE = character(1))
-    dll_info_df <- data.frame(Name = dll_names, Path = dll_paths, stringsAsFactors = FALSE)
-    blas_lapack_pattern <- "blas|lapack|openblas|mkl|atlas|accelerate" 
-    blas_lapack_indices <- grepl(blas_lapack_pattern, dll_info_df$Name, ignore.case = TRUE) | grepl(blas_lapack_pattern, dll_info_df$Path, ignore.case = TRUE)
-    blas_lapack_dlls_found <- dll_info_df[blas_lapack_indices, , drop = FALSE] 
-    if (nrow(blas_lapack_dlls_found) > 0) { cat("Potential BLAS/LAPACK DLLs:\n"); print(blas_lapack_dlls_found) } else { cat("No DLLs matching BLAS/LAPACK patterns found via getLoadedDLLs().\n") }
-  } else { cat("getLoadedDLLs() returned empty or non-list.\n") }
+  tryCatch({
+    loaded_dlls_obj <- getLoadedDLLs()
+    if (is.list(loaded_dlls_obj) && length(loaded_dlls_obj) > 0) {
+      dll_names <- vapply(loaded_dlls_obj, function(dll) as.character(dll[["name"]]), FUN.VALUE = character(1))
+      dll_paths <- vapply(loaded_dlls_obj, function(dll) as.character(dll[["path"]]), FUN.VALUE = character(1))
+      dll_info_df <- data.frame(Name = dll_names, Path = dll_paths, stringsAsFactors = FALSE)
+      blas_lapack_pattern <- "blas|lapack|openblas|mkl|atlas|accelerate" 
+      blas_lapack_indices <- grepl(blas_lapack_pattern, dll_info_df$Name, ignore.case = TRUE) | grepl(blas_lapack_pattern, dll_info_df$Path, ignore.case = TRUE)
+      blas_lapack_dlls_found <- dll_info_df[blas_lapack_indices, , drop = FALSE] 
+      if (nrow(blas_lapack_dlls_found) > 0) { cat("Potential BLAS/LAPACK DLLs:\n"); print(blas_lapack_dlls_found) } else { cat("No DLLs matching BLAS/LAPACK patterns found via getLoadedDLLs().\n") }
+    } else { cat("getLoadedDLLs() returned empty or non-list.\n") }
+  }, error = function(e) handle_r_error(e, current_step))
 } else { cat("getLoadedDLLs() not found in base package.\n") }
+if(error_occurred) q("no", status=1, runLast=FALSE)
 
 cat("\n--- BLAS Performance Benchmark (crossprod) ---\n")
+current_step <- "BLAS Benchmark (crossprod)"
 N <- 1000; m <- matrix(rnorm(N*N), ncol=N)
 cat("Attempting matrix multiplication (crossprod(m)) for a ", N, "x", N, " matrix...\n")
 blas_benchmark_status <- "NOT_RUN"; blas_error_message <- ""
@@ -537,6 +594,7 @@ crossprod_result <- tryCatch({
 if (!crossprod_result) { cat("\nBLAS benchmark FAILED. Status:", blas_benchmark_status, "\n"); q("no", status = 2, runLast = FALSE) } else { cat("\nBLAS benchmark OK.\n") }
 
 cat("\n--- OpenMP Support Check (via parallel package) ---\n")
+current_step <- "OpenMP Check (parallel::mclapply)"
 omp_test <- function() {
     num_cores <- tryCatch(parallel::detectCores(logical=TRUE), error=function(e){cat("Warning: detectCores() failed:",conditionMessage(e),"\n");1L})
     if(!is.numeric(num_cores) || num_cores < 1L) num_cores <- 1L
@@ -545,7 +603,13 @@ omp_test <- function() {
         test_cores <- min(num_cores, 2L); 
         cat("Attempting parallel::mclapply test with", test_cores, "core(s)...\n")
         res <- tryCatch(parallel::mclapply(1:test_cores, function(x) Sys.getpid(), mc.cores=test_cores), 
-                        error=function(e){cat("Error during mclapply:",conditionMessage(e),"\n",file=stderr());NULL})
+                        error=function(e){
+                            cat("Error during mclapply:",conditionMessage(e),"\n",file=stderr())
+                            error_occurred <<- TRUE 
+                            NULL
+                        })
+        if(error_occurred) return() 
+
         if(!is.null(res) && length(res) > 0){
              cat("mclapply call successful. Unique PIDs from workers:",length(unique(unlist(res))),"\n")
              if (length(unique(unlist(res))) > 1) {
@@ -554,7 +618,7 @@ omp_test <- function() {
                 cat("Single PID returned by mclapply with multiple cores requested. This might indicate a problem with forking or OpenMP setup in R's parallel capabilities.\n")
              }
         } else {
-            cat("mclapply failed or returned no results.\n")
+            cat("mclapply failed or returned no results (check for previous errors if mclapply was caught by tryCatch).\n")
         }
     } else {
         cat("mclapply test skipped (not on a Unix-like OS).\n")
@@ -562,7 +626,14 @@ omp_test <- function() {
     cat("Note: True OpenMP usage in BLAS/LAPACK operations (like matrix multiplication) depends on how those libraries were compiled (e.g., OpenBLAS with USE_OPENMP=1).\n")
     cat("The sessionInfo() output can sometimes indicate OpenMP linkage if R itself was compiled with OpenMP support.\n")
 }
-omp_test()
+tryCatch({
+    omp_test()
+}, error = function(e) handle_r_error(e, current_step))
+
+if(error_occurred) {
+    cat("\nOne or more non-critical errors occurred during the R verification script. Check messages above.\n", file=stderr())
+    q("no", status=1, runLast=FALSE) 
+}
 
 cat("\n--- Verification Script Finished ---\n")
 if (!crossprod_result) { 
@@ -582,6 +653,8 @@ EOF
         if [[ $r_script_rc -eq 132 || $r_script_rc -eq 2 || $r_script_rc -eq 3 ]]; then 
             _log "ERROR" "Exit code ${r_script_rc} (often indicates 'Illegal Instruction' if 132) can occur in VMs/QEMU due to CPU feature incompatibility with the compiled BLAS library."
             _log "ERROR" "See R script output in the log for recommendations (e.g., QEMU CPU model, or using update-alternatives to switch to a reference BLAS)."
+        elif [[ $r_script_rc -eq 10 || $r_script_rc -eq 11 ]]; then
+             _log "ERROR" "R verification script failed due to missing base/recommended packages (utils/parallel). This indicates a severely broken R installation."
         fi
         rm -f "$r_check_script_file" Rplots.pdf .RData last.dump.rda
         return 1 
