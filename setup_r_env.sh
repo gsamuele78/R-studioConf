@@ -50,10 +50,9 @@ CRAN_REPO_PATH_BIN="/bin/linux/ubuntu"
 CRAN_REPO_PATH_SRC="/src/contrib" 
 CRAN_REPO_URL_BIN="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_BIN}"
 CRAN_REPO_URL_SRC="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_SRC}" 
-CRAN_REPO_LINE=""
-CRAN_APT_KEY_ID="E298A3A825C0D65DFD57CBB651716619E084DAB9"
-CRAN_APT_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${CRAN_APT_KEY_ID}"
-CRAN_APT_KEYRING_FILE="/etc/apt/keyrings/cran-${CRAN_APT_KEY_ID}.gpg"
+CRAN_REPO_LINE="" # Will be: deb URL codename-cran40/
+CRAN_APT_KEY_URL="https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc" # Direct URL to ASCII key
+CRAN_APT_KEYRING_FILE="/etc/apt/trusted.gpg.d/cran_ubuntu_key.asc" # Path for ASCII key in trusted.gpg.d
 
 
 # R2U/BSP Repository
@@ -227,7 +226,7 @@ fn_get_latest_rstudio_info() {
     _log "INFO" "Attempting to detect latest RStudio Server for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}..."
     _log "WARN" "RStudio Server auto-detection is fragile and currently disabled. Using fallback version: ${RSTUDIO_VERSION_FALLBACK}"
     RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK"
-    # Ensure UBUNTU_CODENAME and RSTUDIO_ARCH are available here, potentially source state file if empty
+    
     if [[ -z "${UBUNTU_CODENAME:-}" || -z "${RSTUDIO_ARCH:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
         _log "DEBUG" "fn_get_latest_rstudio_info: Sourcing state file as UBUNTU_CODENAME or RSTUDIO_ARCH is empty."
         # shellcheck source=/dev/null
@@ -287,14 +286,16 @@ fn_pre_flight_checks() {
 
     fn_get_latest_rstudio_info 
 
-    CRAN_REPO_LINE="deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
+    # CRAN_REPO_LINE for add-apt-repository (simple form)
+    CRAN_REPO_LINE="deb ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
     export CRAN_REPO_LINE 
     _log "DEBUG" "In fn_pre_flight_checks: CRAN_REPO_LINE constructed and exported as: '${CRAN_REPO_LINE}'"
+    _log "DEBUG" "In fn_pre_flight_checks: CRAN_APT_KEYRING_FILE is: '${CRAN_APT_KEYRING_FILE}'"
     _log "INFO" "RStudio Server version to be used: ${RSTUDIO_VERSION} (URL: ${RSTUDIO_DEB_URL})"
 
-    mkdir -p "$LOG_DIR" "$BACKUP_DIR" "/etc/apt/keyrings"
+    mkdir -p "$LOG_DIR" "$BACKUP_DIR" "/etc/apt/trusted.gpg.d" "/etc/apt/keyrings" # Ensure all needed key dirs exist
 
-    local essential_deps=("wget" "gpg" "apt-transport-https" "ca-certificates" "curl" "gdebi-core" "software-properties-common")
+    local essential_deps=("wget" "gpg" "apt-transport-https" "ca-certificates" "curl" "gdebi-core" "software-properties-common" "dirmngr")
     local missing_deps=()
     for dep in "${essential_deps[@]}"; do
         if ! command -v "$dep" &>/dev/null; then
@@ -317,16 +318,18 @@ fn_pre_flight_checks() {
         echo "export RSTUDIO_DEB_URL=\"${RSTUDIO_DEB_URL}\""
         echo "export RSTUDIO_DEB_FILENAME=\"${RSTUDIO_DEB_FILENAME}\""
         echo "export CRAN_REPO_LINE=\"${CRAN_REPO_LINE}\""
+        echo "export CRAN_APT_KEYRING_FILE=\"${CRAN_APT_KEYRING_FILE}\"" # For key removal
+        echo "export CRAN_APT_KEY_URL=\"${CRAN_APT_KEY_URL}\""         # For key addition
     } > "$R_ENV_STATE_FILE"
     _log "INFO" "State file written. If running functions individually, subsequent steps might use this."
 }
 
 
 fn_add_cran_repo() {
-    _log "INFO" "Adding CRAN repository..."
+    _log "INFO" "Adding CRAN repository (using CRAN recommended method)..."
     
-    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${CRAN_REPO_LINE:-}" ]]; then
-        _log "WARN" "UBUNTU_CODENAME or CRAN_REPO_LINE not set in current environment."
+    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${CRAN_REPO_LINE:-}" || -z "${CRAN_APT_KEYRING_FILE:-}" || -z "${CRAN_APT_KEY_URL:-}" ]]; then
+        _log "WARN" "Key variables not set in current environment for fn_add_cran_repo."
         if [[ -f "$R_ENV_STATE_FILE" ]]; then
             _log "INFO" "Attempting to source state from ${R_ENV_STATE_FILE}"
             # shellcheck source=/dev/null
@@ -336,15 +339,11 @@ fn_add_cran_repo() {
         fi
     fi
 
-    _log "DEBUG" "Entering fn_add_cran_repo: UBUNTU_CODENAME='${UBUNTU_CODENAME:-}', CRAN_REPO_LINE='${CRAN_REPO_LINE:-}'"
+    _log "DEBUG" "Entering fn_add_cran_repo: UBUNTU_CODENAME='${UBUNTU_CODENAME:-}', CRAN_REPO_LINE='${CRAN_REPO_LINE:-}', CRAN_APT_KEYRING_FILE='${CRAN_APT_KEYRING_FILE:-}'"
 
-    if [[ -z "$UBUNTU_CODENAME" ]]; then
-        _log "ERROR" "FATAL: UBUNTU_CODENAME is empty in fn_add_cran_repo. Run 'fn_pre_flight_checks' first or use 'install_all'. Aborting."
+    if [[ -z "$UBUNTU_CODENAME" || -z "$CRAN_REPO_LINE" || -z "$CRAN_APT_KEYRING_FILE" || -z "$CRAN_APT_KEY_URL" ]]; then
+        _log "ERROR" "FATAL: One or more critical CRAN variables is empty in fn_add_cran_repo. Run 'fn_pre_flight_checks' first. Aborting."
         return 1 
-    fi
-    if [[ -z "$CRAN_REPO_LINE" ]]; then
-        _log "ERROR" "FATAL: CRAN_REPO_LINE is empty in fn_add_cran_repo. Run 'fn_pre_flight_checks' first or use 'install_all'. Aborting."
-        return 1
     fi
 
     if ! command -v add-apt-repository &>/dev/null; then
@@ -352,28 +351,58 @@ fn_add_cran_repo() {
         _run_command "Install software-properties-common" apt-get install -y software-properties-common
     fi
     
+    if ! dpkg -s dirmngr &>/dev/null; then # dirmngr is needed by apt-key/gpg for keyserver access
+        _log "INFO" "dirmngr package not found. Installing dirmngr."
+        _run_command "Install dirmngr" apt-get install -y dirmngr
+    fi
+
     if [[ ! -f "$CRAN_APT_KEYRING_FILE" ]]; then
-        _log "INFO" "Adding CRAN GPG key ${CRAN_APT_KEY_ID} to ${CRAN_APT_KEYRING_FILE}"
-        _run_command "Download CRAN GPG key" curl -fsSL "${CRAN_APT_KEY_URL}" -o "/tmp/cran_key.asc"
-        _run_command "Import CRAN GPG key" gpg --dearmor -o "${CRAN_APT_KEYRING_FILE}" "/tmp/cran_key.asc"
-        rm -f "/tmp/cran_key.asc"
+        _log "INFO" "Adding CRAN GPG key to ${CRAN_APT_KEYRING_FILE}"
+        mkdir -p "$(dirname "$CRAN_APT_KEYRING_FILE")" # Ensure /etc/apt/trusted.gpg.d exists
+        # Fetch and tee the key. Using a temporary variable for curl output to check success.
+        local key_download_cmd_desc="Download CRAN GPG key from ${CRAN_APT_KEY_URL}"
+        _log "INFO" "Start: ${key_download_cmd_desc}"
+        if curl -fsSL "${CRAN_APT_KEY_URL}" | tee "${CRAN_APT_KEYRING_FILE}" > /dev/null; then
+            _log "INFO" "OK: ${key_download_cmd_desc}"
+            if [[ ! -s "$CRAN_APT_KEYRING_FILE" ]]; then # Check if file is empty
+                _log "ERROR" "CRAN GPG key file ${CRAN_APT_KEYRING_FILE} is empty after download. Key may not have been added correctly."
+                rm -f "$CRAN_APT_KEYRING_FILE" # Clean up empty file
+                return 1
+            fi
+        else
+            local exit_code=$?
+            _log "ERROR" "FAIL: ${key_download_cmd_desc} (RC:$exit_code). See log: $LOG_FILE"
+            return 1
+        fi
     else
         _log "INFO" "CRAN GPG key ${CRAN_APT_KEYRING_FILE} already exists."
     fi
     
-    local grep_pattern="${CRAN_REPO_URL_BIN}.*${UBUNTU_CODENAME}-cran40"
-    if grep -qrE "$grep_pattern" /etc/apt/sources.list /etc/apt/sources.list.d/; then
-        _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' matching pattern '${grep_pattern}' seems to be already configured."
+    local simple_grep_pattern_base
+    simple_grep_pattern_base=$(echo "${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/" | sed 's|[&/\]|\\&|g')
+    local simple_grep_pattern="^deb .*${simple_grep_pattern_base}"
+
+    if grep -qrE "$simple_grep_pattern" /etc/apt/sources.list /etc/apt/sources.list.d/; then
+        _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' (simple format) seems to be already configured."
     else
-        _log "INFO" "CRAN repository line to add: ${CRAN_REPO_LINE}"
-        _run_command "Add CRAN repository entry" add-apt-repository -y -n -S "${CRAN_REPO_LINE}"
+        _log "INFO" "CRAN repository line to add via add-apt-repository: ${CRAN_REPO_LINE}"
+        _run_command "Add CRAN repository entry" add-apt-repository -y -n "${CRAN_REPO_LINE}" # No -S
         _run_command "Update apt cache after adding CRAN repo" apt-get update -y
         _log "INFO" "CRAN repository added and apt cache updated."
     fi
 }
+# ... (Rest of the script, including fn_remove_cran_repo, main, etc.) ...
+# Ensure fn_remove_cran_repo is also updated to use the correct CRAN_APT_KEYRING_FILE
+# and simple CRAN_REPO_LINE pattern for sed.
 
 fn_install_r() {
     _log "INFO" "Installing R..."
+    if [[ -z "${UBUNTU_CODENAME:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then 
+        _log "DEBUG" "fn_install_r: Sourcing state file as UBUNTU_CODENAME is empty."
+        # shellcheck source=/dev/null
+        source "$R_ENV_STATE_FILE"
+    fi
+
     if dpkg -s r-base &>/dev/null; then
         _log "INFO" "R (r-base) is already installed. Version: $(dpkg-query -W -f='${Version}\n' r-base 2>/dev/null || echo 'N/A')"
     else
@@ -560,6 +589,17 @@ fn_setup_bspm() {
         _log "INFO" "Not detected as root or a CI/VM environment. Skipping bspm setup for safety (bspm modifies system Rprofile)."
         return 0
     fi
+
+    if [[ -z "${UBUNTU_CODENAME:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
+        _log "DEBUG" "fn_setup_bspm: Sourcing state file."
+        # shellcheck source=/dev/null
+        source "$R_ENV_STATE_FILE"
+    fi
+    if [[ -z "$UBUNTU_CODENAME" ]]; then 
+       _log "ERROR" "FATAL: UBUNTU_CODENAME is empty in fn_setup_bspm. Run 'fn_pre_flight_checks' first. Aborting."
+       return 1
+    fi
+
 
     local r_profile_dir
     r_profile_dir=$(dirname "$R_PROFILE_SITE_PATH")
@@ -963,6 +1003,22 @@ EOF
 
 fn_install_rstudio_server() {
     _log "INFO" "Installing RStudio Server v${RSTUDIO_VERSION}..."
+    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${RSTUDIO_ARCH:-}" || -z "${RSTUDIO_VERSION:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
+        _log "DEBUG" "fn_install_rstudio_server: Sourcing state file."
+        # shellcheck source=/dev/null
+        source "$R_ENV_STATE_FILE"
+    fi
+    
+    if [[ -z "$UBUNTU_CODENAME" || -z "$RSTUDIO_ARCH" || -z "$RSTUDIO_VERSION" ]]; then
+        _log "INFO" "Key RStudio variables still missing. Re-running fn_get_latest_rstudio_info to define URLs."
+        fn_get_latest_rstudio_info 
+    fi
+    # After fn_get_latest_rstudio_info, RSTUDIO_DEB_URL and RSTUDIO_DEB_FILENAME should be set. Check them.
+    if [[ -z "$RSTUDIO_DEB_URL" || -z "$RSTUDIO_DEB_FILENAME" ]]; then
+        _log "ERROR" "FATAL: RStudio download details (URL/filename) could not be determined even after attempting to re-run info gathering. Aborting RStudio Server install."
+        return 1
+    fi
+
 
     if dpkg -s rstudio-server &>/dev/null; then
         current_rstudio_version=$(rstudio-server version 2>/dev/null | awk '{print $1}')
@@ -1166,26 +1222,37 @@ fn_remove_bspm_config() {
 
 fn_remove_cran_repo() {
     _log "INFO" "Removing this script's CRAN apt repository configuration..."
+    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${CRAN_REPO_LINE:-}" || -z "${CRAN_APT_KEYRING_FILE:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
+        _log "DEBUG" "fn_remove_cran_repo: Sourcing state file."
+        # shellcheck source=/dev/null
+        source "$R_ENV_STATE_FILE"
+    fi
+    if [[ -z "$UBUNTU_CODENAME" || -z "$CRAN_REPO_LINE" || -z "$CRAN_APT_KEYRING_FILE" ]]; then
+       _log "ERROR" "FATAL: UBUNTU_CODENAME, CRAN_REPO_LINE or CRAN_APT_KEYRING_FILE is empty in fn_remove_cran_repo. Aborting."
+       return 1
+    fi
     
-    local cran_line_pattern_escaped
-    cran_line_pattern_escaped=$(printf '%s' "${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/" | sed 's|[&/\]|\[]|\\&|g')
-    local signed_by_pattern_escaped
-    signed_by_pattern_escaped=$(printf '%s' "[signed-by=${CRAN_APT_KEYRING_FILE}]" | sed 's|[&/\]|\[]|\\&|g')
+    local cran_line_pattern_to_remove_escaped
+    # CRAN_REPO_LINE is now the simple "deb URL codename-cran40/"
+    cran_line_pattern_to_remove_escaped=$(printf '%s' "$CRAN_REPO_LINE" | sed 's|[&/\]|\\&|g')
 
     find /etc/apt/sources.list /etc/apt/sources.list.d/ -type f -name '*.list' -print0 | \
     while IFS= read -r -d $'\0' apt_list_file; do
-        if grep -qE "^\s*deb\s+${signed_by_pattern_escaped}\s+.*${cran_line_pattern_escaped}" "$apt_list_file"; then
-            _log "INFO" "CRAN repository entry (matching this script's format) found in '${apt_list_file}'. Backing up and removing."
+        # Match the exact simple line
+        if grep -qF "${CRAN_REPO_LINE}" "$apt_list_file"; then 
+            _log "INFO" "CRAN repository entry (matching simple format) found in '${apt_list_file}'. Backing up and removing."
             _backup_file "$apt_list_file"
-            _run_command "Remove CRAN entry from '${apt_list_file}'" sed -i.cran_removed_bak "\#^\s*deb\s+${signed_by_pattern_escaped}\s+.*${cran_line_pattern_escaped}#d" "$apt_list_file"
+            # Using \| as delimiter for sed to avoid conflict with / in paths
+            _run_command "Remove CRAN entry from '${apt_list_file}'" sed -i.cran_removed_bak "\|${cran_line_pattern_to_remove_escaped}|d" "$apt_list_file"
         fi
     done
 
+    # CRAN_APT_KEYRING_FILE is now /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc
     _log "INFO" "Removing CRAN GPG key file '${CRAN_APT_KEYRING_FILE}'..."
     if [[ -f "$CRAN_APT_KEYRING_FILE" ]]; then
         _run_command "Remove CRAN GPG key file '${CRAN_APT_KEYRING_FILE}'" rm -f "$CRAN_APT_KEYRING_FILE"
     else
-        _log "INFO" "CRAN GPG key file '${CRAN_APT_KEYRING_FILE}' not found. Already removed or was never added by this script."
+        _log "INFO" "CRAN GPG key file '${CRAN_APT_KEYRING_FILE}' not found."
     fi
     
     _log "INFO" "CRAN apt repository configuration removal finished."
@@ -1210,7 +1277,7 @@ fn_uninstall_system_packages() {
         "r-cran-bspm"                                 
         "python3-dbus" "python3-gi" "python3-apt"     
         "libopenblas-dev" "libomp-dev"                
-        "gdebi-core" "software-properties-common"      
+        "gdebi-core" "software-properties-common" "dirmngr"   
     )
     local actual_pkgs_to_purge=()
     for pkg_name in "${pkgs_to_purge[@]}"; do
@@ -1238,6 +1305,12 @@ fn_uninstall_system_packages() {
 
 fn_remove_leftover_files() {
     _log "INFO" "Removing leftover R and RStudio Server related files and directories..."
+    if [[ -z "${RSTUDIO_DEB_FILENAME:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
+        _log "DEBUG" "fn_remove_leftover_files: Sourcing state file for RSTUDIO_DEB_FILENAME."
+        # shellcheck source=/dev/null
+        source "$R_ENV_STATE_FILE"
+    fi
+
 
     declare -a paths_to_remove=(
         "/usr/local/lib/R"         
@@ -1273,7 +1346,7 @@ fn_remove_leftover_files() {
         _log "INFO" "Removing downloaded RStudio Server .deb file: '/tmp/${RSTUDIO_DEB_FILENAME}'"
         rm -f "/tmp/${RSTUDIO_DEB_FILENAME}"
     else
-        _log "INFO" "No RStudio .deb file matching known filename found in /tmp, or RSTUDIO_DEB_FILENAME not set."
+        _log "INFO" "No RStudio .deb file matching known filename ('${RSTUDIO_DEB_FILENAME:-not set}') found in /tmp."
     fi
 
     local is_interactive_shell=false
@@ -1346,11 +1419,10 @@ fn_remove_leftover_files() {
 # --- Main Execution ---
 install_all() {
     _log "INFO" "--- Starting Full R Environment Installation ---"
-    # set -x # Uncomment for deep debugging of variable states
     fn_pre_flight_checks
-    _log "DEBUG" "After fn_pre_flight_checks in install_all: UBUNTU_CODENAME='${UBUNTU_CODENAME}', CRAN_REPO_LINE='${CRAN_REPO_LINE}'"
+    _log "DEBUG" "After fn_pre_flight_checks in install_all: UBUNTU_CODENAME='${UBUNTU_CODENAME:-}', CRAN_REPO_LINE='${CRAN_REPO_LINE:-}'"
     fn_add_cran_repo
-    _log "DEBUG" "After fn_add_cran_repo in install_all: UBUNTU_CODENAME='${UBUNTU_CODENAME}', CRAN_REPO_LINE='${CRAN_REPO_LINE}'"
+    _log "DEBUG" "After fn_add_cran_repo in install_all: UBUNTU_CODENAME='${UBUNTU_CODENAME:-}', CRAN_REPO_LINE='${CRAN_REPO_LINE:-}'"
     fn_install_r
     fn_install_openblas_openmp
     
@@ -1368,7 +1440,6 @@ install_all() {
     
     fn_install_r_packages 
     fn_install_rstudio_server
-    # set +x # Uncomment if set -x was used
     
     _log "INFO" "--- Full R Environment Installation Completed ---"
     _log "INFO" "Summary:"
@@ -1377,13 +1448,20 @@ install_all() {
     _log "INFO" "- RStudio Server URL: http://<YOUR_SERVER_IP>:8787 (if not firewalled)"
     _log "INFO" "- BSPM status: Check logs from fn_setup_bspm and fn_install_r_packages."
     _log "INFO" "- Main log file for this session: ${LOG_FILE}"
+    _log "INFO" "- State file (for individual function calls): ${R_ENV_STATE_FILE}"
 }
 
 uninstall_all() {
     _log "INFO" "--- Starting Full R Environment Uninstallation ---"
     _ensure_root 
 
-    _get_r_profile_site_path
+    _get_r_profile_site_path 
+
+    if [[ -f "$R_ENV_STATE_FILE" ]]; then
+        _log "INFO" "Uninstall: Sourcing state from ${R_ENV_STATE_FILE}"
+        # shellcheck source=/dev/null
+        source "$R_ENV_STATE_FILE"
+    fi
 
     fn_uninstall_r_packages      
     fn_remove_bspm_config        
@@ -1416,6 +1494,7 @@ uninstall_all() {
         _log "ERROR" "--- Full R Environment Uninstallation Completed with ${verification_issues_found} verification issue(s). ---"
         _log "ERROR" "Manual inspection of the system and the log file ('${LOG_FILE}') is recommended to ensure complete removal."
     fi
+    # rm -f "$R_ENV_STATE_FILE" # Clean up state file after successful uninstall
 }
 
 
@@ -1436,8 +1515,10 @@ usage() {
     echo "  interactive                 Show an interactive menu to run individual steps (default if no action)."
     echo ""
     echo "Individual functions (primarily for development/debugging - use with caution):"
-    echo "  fn_pre_flight_checks, fn_add_cran_repo, fn_install_r, fn_install_openblas_openmp"
-    echo "  fn_verify_openblas_openmp, fn_setup_bspm, fn_install_r_packages, fn_install_rstudio_server"
+    echo "  fn_pre_flight_checks        (Writes state to ${R_ENV_STATE_FILE})"
+    echo "  fn_add_cran_repo            (May source state from ${R_ENV_STATE_FILE} if needed)"
+    echo "  fn_install_r, fn_install_openblas_openmp, fn_verify_openblas_openmp"
+    echo "  fn_setup_bspm, fn_install_r_packages, fn_install_rstudio_server"
     echo ""
     echo "Log file for this session will be in: ${LOG_DIR}/r_setup_YYYYMMDD_HHMMSS.log"
     exit 1
@@ -1445,30 +1526,42 @@ usage() {
 
 interactive_menu() {
     _ensure_root
+    if [[ -f "$R_ENV_STATE_FILE" ]]; then
+        # shellcheck source=/dev/null
+        source "$R_ENV_STATE_FILE"
+    fi
     _get_r_profile_site_path
+
 
     while true; do
         local display_rstudio_version="$RSTUDIO_VERSION_FALLBACK" 
         if [[ -n "${UBUNTU_CODENAME:-}" && -n "${RSTUDIO_ARCH:-}" ]]; then
+            if [[ -f "$R_ENV_STATE_FILE" ]]; then 
+                # shellcheck source=/dev/null
+                source "$R_ENV_STATE_FILE"
+            fi
             if [[ -n "$RSTUDIO_VERSION" && "$RSTUDIO_VERSION" != "$RSTUDIO_VERSION_FALLBACK" ]]; then
-                display_rstudio_version="$RSTUDIO_VERSION (Detected/Set)"
+                display_rstudio_version="$RSTUDIO_VERSION (From State/Fallback)"
+            elif [[ -n "${RSTUDIO_DEB_FILENAME:-}" ]] ; then 
+                 display_rstudio_version="${RSTUDIO_VERSION} (Current Target)"
             fi
         else
-            display_rstudio_version="$RSTUDIO_VERSION_FALLBACK (Codename/Arch not yet set by pre-flight)"
+            display_rstudio_version="$RSTUDIO_VERSION_FALLBACK (Run Pre-flight to update)"
         fi
 
 
         echo ""
         echo "================ R Environment Setup Menu ================"
         echo "Log File: ${LOG_FILE}"
-        echo "Ubuntu Codename: ${UBUNTU_CODENAME:-Not yet detected}"
-        echo "System Architecture: ${RSTUDIO_ARCH:-Not yet detected}"
+        echo "State File: ${R_ENV_STATE_FILE} (used for individual step calls)"
+        echo "Ubuntu Codename: ${UBUNTU_CODENAME:-Not yet detected (Run Pre-flight)}"
+        echo "System Architecture: ${RSTUDIO_ARCH:-Not yet detected (Run Pre-flight)}"
         echo "Rprofile.site for bspm: ${R_PROFILE_SITE_PATH:-Not yet determined/set}"
         echo "RStudio Server version (target): ${display_rstudio_version}"
         echo "------------------------------------------------------------"
         echo " Installation Steps:"
         echo "  1. Full Installation (all steps below)"
-        echo "  2. Pre-flight Checks (detect OS, arch, install script deps)"
+        echo "  2. Pre-flight Checks (detect OS, arch, install script deps, write state file)"
         echo "  3. Add CRAN Repo & Install R"
         echo "  4. Install OpenBLAS & OpenMP"
         echo "  5. Verify OpenBLAS/OpenMP with R"
@@ -1515,6 +1608,18 @@ interactive_menu() {
 
 main() {
     _log "INFO" "Script execution started. Logging to: ${LOG_FILE}"
+    if [[ $# -gt 0 && "$1" != "install_all" && "$1" != "uninstall_all" && "$1" != "interactive" ]]; then
+        # If calling individual functions, try to source state file first.
+        if [[ -f "$R_ENV_STATE_FILE" ]]; then
+            _log "INFO" "Individual function call detected. Sourcing existing state file: ${R_ENV_STATE_FILE}"
+            # shellcheck source=/dev/null
+            source "$R_ENV_STATE_FILE"
+        else
+            _log "WARN" "Individual function call detected, but no state file (${R_ENV_STATE_FILE}) found. Variables might not be set."
+        fi
+    fi
+
+
     _get_r_profile_site_path 
 
     if [[ $# -eq 0 ]]; then
