@@ -39,6 +39,7 @@ jobs:
             iputils-ping \
             systemctl \
             dbus \
+            apt-utils \
             openssh-client
           # Workaround for systemctl in containers (may have limited effect but satisfies some scripts)
           # Note: systemd itself isn't fully running as PID 1 in most Docker containers.
