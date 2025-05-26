@@ -24,6 +24,10 @@ chmod 640 "$LOG_FILE"
 # Backup
 BACKUP_DIR="/opt/r_setup_backups"; mkdir -p "$BACKUP_DIR"
 
+# System State File (for individual function calls)
+R_ENV_STATE_FILE="/tmp/r_env_setup_state.sh"
+
+
 # System
 UBUNTU_CODENAME_DETECTED="" 
 R_PROFILE_SITE_PATH=""
@@ -223,6 +227,12 @@ fn_get_latest_rstudio_info() {
     _log "INFO" "Attempting to detect latest RStudio Server for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}..."
     _log "WARN" "RStudio Server auto-detection is fragile and currently disabled. Using fallback version: ${RSTUDIO_VERSION_FALLBACK}"
     RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK"
+    # Ensure UBUNTU_CODENAME and RSTUDIO_ARCH are available here, potentially source state file if empty
+    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${RSTUDIO_ARCH:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
+        _log "DEBUG" "fn_get_latest_rstudio_info: Sourcing state file as UBUNTU_CODENAME or RSTUDIO_ARCH is empty."
+        # shellcheck source=/dev/null
+        source "$R_ENV_STATE_FILE"
+    fi
     RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${UBUNTU_CODENAME}/${RSTUDIO_ARCH}/rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
     RSTUDIO_DEB_FILENAME="rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
     _log "INFO" "Using RStudio Server: ${RSTUDIO_VERSION} from ${RSTUDIO_DEB_URL}"
@@ -232,15 +242,12 @@ fn_pre_flight_checks() {
     _log "INFO" "Performing pre-flight checks..."
     _ensure_root 
 
-    # Use the robust detection method
     UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown")
 
-    # If lsb_release was not found (and thus echoed "unknown" or failed silently before ||)
-    # or if it returned "unknown" literally, try to install lsb-release and detect again.
     if [[ "$UBUNTU_CODENAME_DETECTED" == "unknown" ]] || ! command -v lsb_release &>/dev/null; then
-        if ! command -v lsb_release &>/dev/null; then # Check if it's actually missing
+        if ! command -v lsb_release &>/dev/null; then 
              _log "WARN" "lsb_release command not found. Attempting to install lsb-release."
-        else # lsb_release exists but returned "unknown" or something problematic
+        else 
              _log "WARN" "lsb_release -cs returned '${UBUNTU_CODENAME_DETECTED}'. Attempting to ensure lsb-release is correctly installed/functional."
         fi
         
@@ -251,11 +258,10 @@ fn_pre_flight_checks() {
             UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown_after_install")
         else
             _log "ERROR" "lsb_release still not found after attempting installation. Cannot determine Ubuntu codename."
-            UBUNTU_CODENAME_DETECTED="critical_failure_lsb_release" # Ensure it fails the next check
+            UBUNTU_CODENAME_DETECTED="critical_failure_lsb_release" 
         fi
     fi
     
-    # Assign to the global variable and sanitize (tr -d '[:space:]' is good here AFTER detection)
     UBUNTU_CODENAME=$(echo "$UBUNTU_CODENAME_DETECTED" | tr -d '[:space:]')
     export UBUNTU_CODENAME 
     _log "DEBUG" "In fn_pre_flight_checks: UBUNTU_CODENAME_DETECTED (raw)='${UBUNTU_CODENAME_DETECTED}', UBUNTU_CODENAME (sanitized & exported)='${UBUNTU_CODENAME}'."
@@ -302,19 +308,42 @@ fn_pre_flight_checks() {
         _run_command "Install essential dependencies: ${missing_deps[*]}" apt-get install -y "${missing_deps[@]}"
     fi
     _log "INFO" "Pre-flight checks completed."
+
+    _log "INFO" "Writing environment state to ${R_ENV_STATE_FILE}"
+    {
+        echo "export UBUNTU_CODENAME=\"${UBUNTU_CODENAME}\""
+        echo "export RSTUDIO_ARCH=\"${RSTUDIO_ARCH}\""
+        echo "export RSTUDIO_VERSION=\"${RSTUDIO_VERSION}\""
+        echo "export RSTUDIO_DEB_URL=\"${RSTUDIO_DEB_URL}\""
+        echo "export RSTUDIO_DEB_FILENAME=\"${RSTUDIO_DEB_FILENAME}\""
+        echo "export CRAN_REPO_LINE=\"${CRAN_REPO_LINE}\""
+    } > "$R_ENV_STATE_FILE"
+    _log "INFO" "State file written. If running functions individually, subsequent steps might use this."
 }
 
 
 fn_add_cran_repo() {
     _log "INFO" "Adding CRAN repository..."
-    _log "DEBUG" "Entering fn_add_cran_repo: UBUNTU_CODENAME='${UBUNTU_CODENAME}', CRAN_REPO_LINE='${CRAN_REPO_LINE}'"
+    
+    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${CRAN_REPO_LINE:-}" ]]; then
+        _log "WARN" "UBUNTU_CODENAME or CRAN_REPO_LINE not set in current environment."
+        if [[ -f "$R_ENV_STATE_FILE" ]]; then
+            _log "INFO" "Attempting to source state from ${R_ENV_STATE_FILE}"
+            # shellcheck source=/dev/null
+            source "$R_ENV_STATE_FILE"
+        else
+            _log "WARN" "State file ${R_ENV_STATE_FILE} not found."
+        fi
+    fi
+
+    _log "DEBUG" "Entering fn_add_cran_repo: UBUNTU_CODENAME='${UBUNTU_CODENAME:-}', CRAN_REPO_LINE='${CRAN_REPO_LINE:-}'"
 
     if [[ -z "$UBUNTU_CODENAME" ]]; then
-        _log "ERROR" "FATAL: UBUNTU_CODENAME is empty in fn_add_cran_repo. fn_pre_flight_checks failed to set it or it was lost. Aborting."
+        _log "ERROR" "FATAL: UBUNTU_CODENAME is empty in fn_add_cran_repo. Run 'fn_pre_flight_checks' first or use 'install_all'. Aborting."
         return 1 
     fi
     if [[ -z "$CRAN_REPO_LINE" ]]; then
-        _log "ERROR" "FATAL: CRAN_REPO_LINE is empty in fn_add_cran_repo. fn_pre_flight_checks failed to set it or it was lost. Aborting."
+        _log "ERROR" "FATAL: CRAN_REPO_LINE is empty in fn_add_cran_repo. Run 'fn_pre_flight_checks' first or use 'install_all'. Aborting."
         return 1
     fi
 
