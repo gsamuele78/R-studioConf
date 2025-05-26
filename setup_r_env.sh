@@ -241,6 +241,14 @@ fn_pre_flight_checks() {
     _log "INFO" "Performing pre-flight checks..."
     _ensure_root 
 
+    _log "INFO" "Updating apt package lists..."
+    if ! apt-get update -y >> "$LOG_FILE" 2>&1; then
+        _log "ERROR" "apt-get update failed. Subsequent package installations may fail. Check network and repository configuration."
+        # exit 1 # Consider making this fatal
+    else
+        _log "INFO" "apt-get update successful."
+    fi
+
     UBUNTU_CODENAME_DETECTED=$(lsb_release -cs 2>/dev/null || echo "unknown")
 
     if [[ "$UBUNTU_CODENAME_DETECTED" == "unknown" ]] || ! command -v lsb_release &>/dev/null; then
@@ -250,7 +258,6 @@ fn_pre_flight_checks() {
              _log "WARN" "lsb_release -cs returned '${UBUNTU_CODENAME_DETECTED}'. Attempting to ensure lsb-release is correctly installed/functional."
         fi
         
-        _run_command "Update apt cache for lsb-release" apt-get update -y
         _run_command "Install lsb-release" apt-get install -y lsb-release
         
         if command -v lsb_release &>/dev/null; then
@@ -304,7 +311,6 @@ fn_pre_flight_checks() {
 
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         _log "INFO" "Installing missing essential script dependencies: ${missing_deps[*]}"
-        _run_command "Update apt cache for dependencies" apt-get update -y
         _run_command "Install essential dependencies: ${missing_deps[*]}" apt-get install -y "${missing_deps[@]}"
     fi
     _log "INFO" "Pre-flight checks completed."
