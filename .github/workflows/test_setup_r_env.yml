@@ -15,19 +15,17 @@ jobs:
   test-script:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # Run all steps as root user
     container:
       image: ubuntu:24.04
       options: --user root
 
     steps:
+      # 0. Setup and dependencies
       - name: Install required packages
         run: |
           apt-get update
-          apt-get install -y sudo git curl ca-certificates lsb-release wget gdebi-core apt-transport-https gnupg2 shellcheck net-tools iputils-ping systemctl
-          # For GitHub Actions runner compatibility inside container
+          apt-get install -y sudo git curl ca-certificates lsb-release wget gdebi-core apt-transport-https gnupg2 shellcheck net-tools iputils-ping systemctl su
           apt-get install -y openssh-client
-          # Needed for systemctl in containers (simulate or replace if needed)
           mkdir -p /run/systemd && echo 'docker' > /run/systemd/container
 
       - name: Checkout repository
@@ -46,19 +44,9 @@ jobs:
       - name: Lint with ShellCheck
         run: shellcheck setup_r_env.sh
 
-      # 1. DRY RUN SIMULATION
-      #- name: Dry-run install (simulate)
-      #  run: LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh install_all
+      # --- INSTALLATION & VERIFICATION STEPS ---
 
-      # 2. FULL INSTALL
-      #- name: Full install (actual run)
-      #  run: LOG_LEVEL=DEBUG DRY_RUN=0 ./setup_r_env.sh install_all
-
-      # 3. RE-RUN install_all (Idempotency test)
-      #- name: Re-run install_all for idempotency
-      #  run: LOG_LEVEL=DEBUG DRY_RUN=0 ./setup_r_env.sh install_all
-
-      #4. Test individual core functions where possible
+      # 1. Test core install functions (individual)
       - name: Test pre-flight checks
         run: ./setup_r_env.sh fn_pre_flight_checks
 
@@ -80,7 +68,7 @@ jobs:
       - name: Test install RStudio Server
         run: ./setup_r_env.sh fn_install_rstudio_server
 
-      # 5. Verify system state
+      # 2. Verify state after install
       - name: Verify R installation
         run: |
           R --version
@@ -107,11 +95,13 @@ jobs:
           systemctl is-active rstudio-server && sleep 5
           netstat -ntlp | grep 8787 || ss -ntlp | grep 8787
 
-      # 6. Test uninstall_all (cleanup)
+      # --- UNINSTALL/CLEANUP & IDPOTENCY TESTS ---
+
+      # 3. Uninstall all (cleanup)
       - name: Test uninstall_all (cleanup)
         run: LOG_LEVEL=DEBUG ./setup_r_env.sh uninstall_all || true
 
-      # 7. Confirm removal of R, RStudio, and packages
+      # 4. Confirm removal of R, RStudio, and packages
       - name: Confirm removal of R, RStudio, packages
         run: |
           ! command -v R || { echo "R still found!"; exit 1; }
@@ -120,48 +110,56 @@ jobs:
           ! dpkg -s rstudio-server || { echo "rstudio-server still installed!"; exit 1; }
           Rscript -e "q('no')" 2>/dev/null && { echo "Rscript still works!"; exit 1; } || true
 
-      # 8. Test uninstall_all idempotency (run again)
+      # 5. Test uninstall_all idempotency (run again)
       - name: Re-run uninstall_all (idempotency)
         run: LOG_LEVEL=DEBUG ./setup_r_env.sh uninstall_all || true
 
-      # 9. Test dry-run uninstall
+      # 6. Test dry-run uninstall
       - name: Dry-run uninstall_all
         run: LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh uninstall_all || true
 
-      # 10. Log: Archive installation logs (always)
+      # --- LOGGING & DEBUGGING ---
+
       - name: Archive installation logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: r_setup_logs
           path: /var/log/r_setup/
+          if-no-files-found: ignore
 
-      # 11. Log: Show last lines of main log for debug
       - name: Show main log tail
         if: always()
         run: |
           tail -n 50 /var/log/r_setup/r_setup_*.log || true
 
-      # 12. (Optional) Test error handling with bad args
+      # --- OPTIONAL/EDGE CASE TESTS ---
+
       - name: Test bad argument handling
         run: |
           ! ./setup_r_env.sh not_a_real_action
 
-      # 13. (Optional) Test script as non-root (should fail gracefully)
-      - name: Test script as non-root
+      - name: Test script as non-root (should fail gracefully)
         run: |
           set +e
           su -c "./setup_r_env.sh install_all" nobody 2>&1 | tee non_root_output.txt
           grep -iq "Run as root" non_root_output.txt
 
-      # 14. (Optional) Test DRY_RUN with LOG_LEVEL=DEBUG
       - name: Test DRY_RUN and LOG_LEVEL
         run: LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh install_all
 
-      # 15. (Optional) Print environment for debugging
       - name: Print environment
         run: env | sort
 
-      # 16. (Optional) Test menu/help/usage output
       - name: Menu/help/usage output
         run: ./setup_r_env.sh || true
+
+      # --- (Uncomment these if you want full install/dry-run/idempotency of install) ---
+      # - name: Dry-run install (simulate)
+      #   run: LOG_LEVEL=DEBUG DRY_RUN=1 ./setup_r_env.sh install_all
+      #
+      # - name: Full install (actual run)
+      #   run: LOG_LEVEL=DEBUG DRY_RUN=0 ./setup_r_env.sh install_all
+      #
+      # - name: Re-run install_all for idempotency
+      #   run: LOG_LEVEL=DEBUG DRY_RUN=0 ./setup_r_env.sh install_all
