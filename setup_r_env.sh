@@ -242,14 +242,6 @@ fn_get_latest_rstudio_info() {
     RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${UBUNTU_CODENAME}/${RSTUDIO_ARCH}/rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
     RSTUDIO_DEB_FILENAME="rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
     _log "INFO" "Using RStudio Server: ${RSTUDIO_VERSION} from ${RSTUDIO_DEB_URL}"
-
-    # --- Original auto-detection logic (commented out) ---
-    # local download_page_content="" latest_url="" temp_version=""
-    # ... (rest of the original fn_get_latest_rstudio_info logic) ...
-    # if [[ -z "$grep_output" ]]; then
-    #     _log "WARN" "Could not find an RStudio Server .deb URL for ${UBUNTU_CODENAME}/${RSTUDIO_ARCH}. Using fallback."
-    # ...
-    # fi
 }
 
 
@@ -294,18 +286,14 @@ fn_pre_flight_checks() {
         RSTUDIO_ARCH="$RSTUDIO_ARCH_FALLBACK"
     fi
 
-    # Finalize RStudio URLs and CRAN repo line based on detected codename and arch
-    # Call fn_get_latest_rstudio_info to set RSTUDIO_VERSION, RSTUDIO_DEB_URL, RSTUDIO_DEB_FILENAME
-    fn_get_latest_rstudio_info # This will use fallback due to commented out auto-detection
+    fn_get_latest_rstudio_info 
 
     CRAN_REPO_LINE="deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
     _log "INFO" "CRAN repository line to be used: ${CRAN_REPO_LINE}"
     _log "INFO" "RStudio Server version to be used: ${RSTUDIO_VERSION} (URL: ${RSTUDIO_DEB_URL})"
 
-    # Ensure essential directories exist
     mkdir -p "$LOG_DIR" "$BACKUP_DIR" "/etc/apt/keyrings"
 
-    # Install missing essential dependencies for the script itself
     local essential_deps=("wget" "gpg" "apt-transport-https" "ca-certificates" "curl" "gdebi-core" "software-properties-common")
     local missing_deps=()
     for dep in "${essential_deps[@]}"; do
@@ -325,13 +313,11 @@ fn_pre_flight_checks() {
 fn_add_cran_repo() {
     _log "INFO" "Adding CRAN repository..."
 
-    # Check if software-properties-common is installed (for add-apt-repository)
     if ! command -v add-apt-repository &>/dev/null; then
         _log "INFO" "'add-apt-repository' not found. Installing 'software-properties-common'."
         _run_command "Install software-properties-common" apt-get install -y software-properties-common
     fi
     
-    # Add CRAN GPG key using the new method
     if [[ ! -f "$CRAN_APT_KEYRING_FILE" ]]; then
         _log "INFO" "Adding CRAN GPG key ${CRAN_APT_KEY_ID} to ${CRAN_APT_KEYRING_FILE}"
         _run_command "Download CRAN GPG key" curl -fsSL "${CRAN_APT_KEY_URL}" -o "/tmp/cran_key.asc"
@@ -341,13 +327,11 @@ fn_add_cran_repo() {
         _log "INFO" "CRAN GPG key ${CRAN_APT_KEYRING_FILE} already exists."
     fi
     
-    # Check if CRAN repository line already exists
-    # Note: grep -E pattern for CRAN_REPO_LINE needs to be crafted carefully if it contains special chars.
-    # For simplicity, we'll use a known part of the URL.
     if grep -qrE "${CRAN_REPO_URL_BIN}.*${UBUNTU_CODENAME}-cran40" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "CRAN repository for '${UBUNTU_CODENAME}-cran40' seems to be already configured."
     else
-        _run_command "Add CRAN repository entry" add-apt-repository -y -n -S "${CRAN_REPO_LINE}" # -n to avoid auto apt update
+        # Use -S to specify the full source line, which is more robust
+        _run_command "Add CRAN repository entry" add-apt-repository -y -n -S "${CRAN_REPO_LINE}"
         _run_command "Update apt cache after adding CRAN repo" apt-get update -y
         _log "INFO" "CRAN repository added and apt cache updated."
     fi
@@ -361,7 +345,7 @@ fn_install_r() {
         _run_command "Install R (r-base, r-base-dev, r-base-core)" apt-get install -y r-base r-base-dev r-base-core
         _log "INFO" "R installed. Version: $(R --version | head -n 1)"
     fi
-    _get_r_profile_site_path # Determine Rprofile.site path after R is installed
+    _get_r_profile_site_path 
 }
 
 fn_install_openblas_openmp() {
@@ -386,7 +370,6 @@ fn_install_openblas_openmp() {
 
 _display_blas_alternatives() {
     local arch_suffix=""
-    # Detect common architecture suffixes for BLAS libraries
     if [ -e "/usr/lib/x86_64-linux-gnu/libblas.so.3" ]; then
         arch_suffix="-x86_64-linux-gnu"
     elif [ -e "/usr/lib/aarch64-linux-gnu/libblas.so.3" ]; then
@@ -394,8 +377,6 @@ _display_blas_alternatives() {
     fi
 
     _log "INFO" "Displaying BLAS/LAPACK alternatives (if configured):"
-    # update-alternatives --display can return non-zero if the alternative is not configured.
-    # We capture output and log it, but don't fail the script.
     update-alternatives --display libblas.so.3 >> "$LOG_FILE" 2>&1 || _log "INFO" "No generic libblas.so.3 alternatives configured or error displaying."
     if [[ -n "$arch_suffix" ]]; then
         update-alternatives --display "libblas.so.3${arch_suffix}" >> "$LOG_FILE" 2>&1 || _log "INFO" "No arch-specific libblas.so.3${arch_suffix} alternatives configured or error displaying."
@@ -415,18 +396,16 @@ fn_verify_openblas_openmp() {
     fi
 
     _log "INFO" "Checking system BLAS/LAPACK alternatives configuration..."
-    _display_blas_alternatives # Call the helper to display alternatives
+    _display_blas_alternatives 
 
     if command -v openblas_get_config &>/dev/null; then
         _log "INFO" "Attempting to get OpenBLAS compile-time configuration..."
-        # This command might not always succeed or be relevant, so don't let it fail the script.
         ( openblas_get_config >> "$LOG_FILE" 2>&1 ) || _log "WARN" "openblas_get_config command executed with a non-zero exit code. Output (if any) is in the log."
     else
         _log "INFO" "openblas_get_config command not found. Skipping."
     fi
 
     local r_check_script_file="/tmp/check_r_blas_openmp.R"
-    # Using 'EOF' to prevent variable expansion inside the R script heredoc
 cat > "$r_check_script_file" << 'EOF'
 options(error = quote({
     cat("Unhandled R Error: ", geterrmessage(), "\n", file = stderr())
@@ -483,10 +462,8 @@ omp_test <- function() {
     if(!is.numeric(num_cores) || num_cores < 1L) num_cores <- 1L
     cat("Logical cores detected by R:", num_cores, "\n")
     if (.Platform$OS.type == "unix") {
-        test_cores <- min(num_cores, 2L); # Test with a small number of cores
+        test_cores <- min(num_cores, 2L); 
         cat("Attempting parallel::mclapply test with", test_cores, "core(s)...\n")
-        # mclapply relies on fork, which can be problematic in some contexts (like RStudio GUI)
-        # but should be fine in a script.
         res <- tryCatch(parallel::mclapply(1:test_cores, function(x) Sys.getpid(), mc.cores=test_cores), 
                         error=function(e){cat("Error during mclapply:",conditionMessage(e),"\n",file=stderr());NULL})
         if(!is.null(res) && length(res) > 0){
@@ -509,13 +486,12 @@ omp_test()
 
 cat("\n--- Verification Script Finished ---\n")
 if (!crossprod_result) { 
-    q("no", status = 3, runLast = FALSE) # Exit with status 3 if BLAS benchmark failed earlier
+    q("no", status = 3, runLast = FALSE) 
 }
 EOF
 
     _log "INFO" "Executing R verification script: ${r_check_script_file}"
     local r_script_rc=0
-    # Run Rscript, capturing its exit code
     ( Rscript "$r_check_script_file" >> "$LOG_FILE" 2>&1 ) || r_script_rc=$?
 
     if [[ $r_script_rc -eq 0 ]]; then
@@ -523,16 +499,14 @@ EOF
     else
         _log "ERROR" "OpenBLAS/OpenMP R verification script FAILED (Rscript Exit Code: ${r_script_rc})."
         _log "ERROR" "Check the main log file (${LOG_FILE}) for detailed R output and error messages."
-        if [[ $r_script_rc -eq 132 || $r_script_rc -eq 2 || $r_script_rc -eq 3 ]]; then # 132 is often SIGILL (Illegal Instruction)
+        if [[ $r_script_rc -eq 132 || $r_script_rc -eq 2 || $r_script_rc -eq 3 ]]; then 
             _log "ERROR" "Exit code ${r_script_rc} (often indicates 'Illegal Instruction' if 132) can occur in VMs/QEMU due to CPU feature incompatibility with the compiled BLAS library."
             _log "ERROR" "See R script output in the log for recommendations (e.g., QEMU CPU model, or using update-alternatives to switch to a reference BLAS)."
         fi
-        # Clean up temporary files and R dump files if they were created
         rm -f "$r_check_script_file" Rplots.pdf .RData last.dump.rda
-        return 1 # Indicate failure
+        return 1 
     fi
 
-    # Clean up temporary files
     rm -f "$r_check_script_file" Rplots.pdf .RData last.dump.rda
     _log "INFO" "OpenBLAS and OpenMP verification step finished."
     return 0
@@ -540,7 +514,7 @@ EOF
 
 fn_setup_bspm() {
     _log "INFO" "Setting up bspm (Binary R Package Manager from R2U)..."
-    _get_r_profile_site_path # Ensure R_PROFILE_SITE_PATH is set
+    _get_r_profile_site_path 
 
     if [[ -z "$R_PROFILE_SITE_PATH" ]]; then
         _log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot reliably setup bspm. Ensure R is installed or path is specified."
@@ -565,10 +539,9 @@ fn_setup_bspm() {
     _backup_file "$R_PROFILE_SITE_PATH"
 
 
-    # Check if sudo is installed (bspm might use it internally via options(bspm.sudo=TRUE))
     if ! command -v sudo &>/dev/null; then
         _log "WARN" "'sudo' command is not installed. bspm may require it. Attempting to install sudo..."
-        if [[ $EUID -ne 0 ]]; then # Should not happen due to _ensure_root
+        if [[ $EUID -ne 0 ]]; then 
             _log "ERROR" "'sudo' is not installed and script is not running as root. Cannot install sudo."
             return 1
         fi
@@ -582,15 +555,13 @@ fn_setup_bspm() {
         _log "INFO" "'sudo' command is already available."
     fi
 
-    # Add R2U repository using Dirk's script
     _log "INFO" "Configuring R2U repository (provides bspm and binary R packages)..."
-    # Check if R2U repo is already configured (based on r2u.list or content)
     if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] && grep -q "r2u.stat.illinois.edu/ubuntu" "$R2U_APT_SOURCES_LIST_D_FILE"; then
         _log "INFO" "R2U repository file '${R2U_APT_SOURCES_LIST_D_FILE}' seems to be already configured."
     else
-        local r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_jammy.sh" # Defaulting to jammy for wider compatibility, adjust if needed for noble specifically
+        local r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_jammy.sh" 
         if [[ "$UBUNTU_CODENAME" == "noble" ]]; then
-             r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_noble.sh" # Use noble if detected
+             r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_noble.sh" 
         elif [[ "$UBUNTU_CODENAME" == "focal" ]]; then
              r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_focal.sh"
         fi
@@ -598,7 +569,6 @@ fn_setup_bspm() {
         _run_command "Download R2U setup script" curl -fsSL "${r2u_setup_script_url}" -o "/tmp/add_r2u_repo.sh"
         
         _log "INFO" "Executing R2U repository setup script (/tmp/add_r2u_repo.sh)..."
-        # The R2U script itself uses sudo internally if needed. Running as root should be fine.
         if ! bash "/tmp/add_r2u_repo.sh" >> "$LOG_FILE" 2>&1; then
             _log "ERROR" "Failed to execute R2U repository setup script. Check log for details."
             rm -f "/tmp/add_r2u_repo.sh"
@@ -607,10 +577,7 @@ fn_setup_bspm() {
         _log "INFO" "R2U repository setup script executed. Apt cache likely updated by the script."
         rm -f "/tmp/add_r2u_repo.sh"
     fi
-    # R2U script should handle apt update. If issues, add: _run_command "Update apt cache after R2U setup" apt-get update -y
 
-    # Ensure dbus is running, as bspm/apt might need it
-    # Using _safe_systemctl for broader compatibility
     if _safe_systemctl list-units --type=service --all | grep -q 'dbus.service'; then
         _log "INFO" "dbus.service found. Ensuring it is active/restarted."
         _run_command "Restart dbus service via systemctl" _safe_systemctl restart dbus.service
@@ -621,81 +588,58 @@ fn_setup_bspm() {
         _log "WARN" "dbus service manager not detected or dbus not listed. If R package system dependency installation fails, ensure dbus is running."
     fi
 
-    # Install bspm and its Python dependencies (which are system packages)
     _log "INFO" "Installing bspm R package and its system dependencies (python3-dbus, python3-gi, python3-apt) via apt from R2U..."
-    # These are usually pulled in as recommends/depends of r-cran-bspm from R2U
     local bspm_system_pkgs=("r-cran-bspm" "python3-dbus" "python3-gi" "python3-apt")
     _run_command "Install r-cran-bspm and Python deps" apt-get install -y "${bspm_system_pkgs[@]}"
 
-    # Configure Rprofile.site for bspm
     _log "INFO" "Configuring bspm options in Rprofile.site: ${R_PROFILE_SITE_PATH}"
-    # Lines to add/ensure in Rprofile.site for bspm
     local bspm_rprofile_config
-    # bspm.sudo = TRUE is important for bspm to be able to call 'apt' for system dependencies.
-    # bspm.allow.sysreqs = TRUE allows bspm to manage system requirements.
     read -r -d '' bspm_rprofile_config << EOF
 # Added by setup_r_env.sh for bspm configuration
 if (nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY"))) {
-    # Do not run bspm::enable() in RStudio Server sessions initially,
-    # as it can interfere with RStudio's own package management if not careful.
-    # Users can enable it manually in their ~/.Rprofile if desired for RStudio.
-    # options(bspm.enabled = FALSE) # Alternative: disable bspm in RStudio
 } else if (interactive()) {
-    # Potentially skip for interactive non-RStudio sessions too, or prompt.
-    # For automated scripts, we want it enabled.
 } else {
-    # Enable bspm for non-interactive sessions (like this script's R calls)
-    # and potentially for console R sessions if not RStudio.
     if (requireNamespace("bspm", quietly = TRUE)) {
         options(bspm.sudo = TRUE)
         options(bspm.allow.sysreqs = TRUE)
         bspm::enable()
-        # options(bspm.MANAGES = "FALSE") # to check if it manages
     }
 }
 # End of bspm configuration
 EOF
 
-    # Remove existing bspm block to prevent duplication, then add the new one
     local temp_rprofile
     temp_rprofile=$(mktemp)
-    # Use sed to delete the block between markers. Using a unique marker.
     sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' "$R_PROFILE_SITE_PATH" > "$temp_rprofile"
-    # Append the new configuration block
     printf "\n%s\n" "$bspm_rprofile_config" >> "$temp_rprofile"
     _run_command "Update Rprofile.site with bspm configuration" mv "$temp_rprofile" "$R_PROFILE_SITE_PATH"
 
     _log "INFO" "Content of Rprofile.site (${R_PROFILE_SITE_PATH}) after bspm configuration:"
-    cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" # Log the content for debugging
+    cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 
 
-    # Verify bspm activation
     _log "INFO" "Verifying bspm activation status..."
     local bspm_check_script="
     if (!requireNamespace('bspm', quietly=TRUE)) {
       cat('BSPM_NOT_INSTALLED\n'); quit(save='no', status=1)
     }
-    # Explicitly enable for this check, mimicking non-interactive script context
     options(bspm.sudo = TRUE, bspm.allow.sysreqs = TRUE)
     if (requireNamespace('bspm', quietly=TRUE)) bspm::enable()
 
-    # Check if bspm is managing packages
     is_managing <- tryCatch(getOption('bspm.MANAGES', FALSE), error = function(e) FALSE)
     if (is_managing) {
       cat('BSPM_MANAGING\n')
       quit(save='no', status=0)
     } else {
       cat('BSPM_NOT_MANAGING\n')
-      # Try to get more info if possible
       cat('bspm::can_load():\n')
       try(print(bspm::can_load()))
-      cat('bspm:::.backend:\n') # Note: accessing internal, may change
+      cat('bspm:::.backend:\n') 
       try(print(bspm:::.backend))
       quit(save='no', status=2)
     }
     "
     local bspm_status_output
     local bspm_status_rc=0
-    # Run Rscript with error suppression for the command itself, check rc and output
     bspm_status_output=$(Rscript -e "$bspm_check_script" 2>>"$LOG_FILE") || bspm_status_rc=$?
 
     if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_MANAGING* ]]; then
@@ -715,48 +659,23 @@ EOF
     fi
 
     _log "INFO" "bspm setup and basic verification completed."
-    # Set environment variables for R scripts called later by this bash script
     export BSPM_ALLOW_SYSREQS=TRUE 
-    # export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1 # For older apt-key, less relevant now
 }
 
 fn_install_r_build_deps() {
     _log "INFO" "Installing common system dependencies for building R packages from source (e.g., for devtools)..."
-    # This list is fairly comprehensive for common R package build needs.
     local build_deps=(
-        build-essential      # Compilers, make, etc.
-        libcurl4-openssl-dev # For packages needing curl (RCurl, httr, devtools)
-        libssl-dev           # For SSL/TLS support
-        libxml2-dev          # For XML/HTML parsing packages (XML, xml2)
-        libgit2-dev          # For git operations within R (gert, devtools)
-        libfontconfig1-dev   # For font handling in graphics
-        libcairo2-dev        # For Cairo graphics
-        libharfbuzz-dev      # For text shaping
-        libfribidi-dev       # For bidirectional text
-        libfreetype6-dev     # For FreeType font rendering
-        libpng-dev           # For PNG image support
-        libtiff5-dev         # For TIFF image support
-        libjpeg-dev          # For JPEG image support
-        zlib1g-dev           # Compression library
-        libbz2-dev           # Bzip2 compression
-        liblzma-dev          # LZMA compression (used in xz)
-        libreadline-dev      # For R's command-line interface
-        libicu-dev           # International Components for Unicode
-        libxt-dev            # X11 Toolkit Intrinsics
-        cargo                # Rust compiler, for R packages with Rust components
-        # Geospatial libraries (often needed)
-        libgdal-dev          # GDAL for raster/vector data
-        libproj-dev          # PROJ for coordinate transformations
-        libgeos-dev          # GEOS for geometry operations
-        libudunits2-dev      # UDUNITS2 for units conversion (sf, stars)
+        build-essential libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev 
+        libfontconfig1-dev libcairo2-dev libharfbuzz-dev libfribidi-dev libfreetype6-dev 
+        libpng-dev libtiff5-dev libjpeg-dev zlib1g-dev libbz2-dev liblzma-dev 
+        libreadline-dev libicu-dev libxt-dev cargo libgdal-dev libproj-dev 
+        libgeos-dev libudunits2-dev
     )
-    # No need for sudo here if script is run as root
     _run_command "Update apt cache before installing build deps" apt-get update -y
     _run_command "Install R package build dependencies" apt-get install -y "${build_deps[@]}"
     _log "INFO" "System dependencies for R package building installed."
 }
 
-# Installs a list of R packages (either CRAN or GitHub)
 _install_r_pkg_list() {
     local pkg_type="$1"; shift
     local r_packages_list=("$@")
@@ -772,17 +691,13 @@ _install_r_pkg_list() {
     local github_pat_warning_shown=false
 
     for pkg_name_full in "${r_packages_list[@]}"; do
-        local pkg_name_short # Used for requireNamespace check
+        local pkg_name_short 
         local r_install_cmd
 
         if [[ "$pkg_type" == "CRAN" ]]; then
-            pkg_name_short="$pkg_name_full" # For CRAN, full name is short name
-            # R script for installing a CRAN package, trying bspm first
-            # Fallback to install.packages if bspm fails or is not managing
-            # Note: bspm::enable() should be in Rprofile.site for bspm to take effect
+            pkg_name_short="$pkg_name_full" 
             r_install_cmd="
             pkg_short_name <- '${pkg_name_short}'
-            # Use half of physical cores, default to 1 if detection fails or gives less than 2
             n_cpus <- max(1, parallel::detectCores(logical=FALSE) %/% 2)
 
             if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
@@ -820,20 +735,16 @@ _install_r_pkg_list() {
             }
             "
         elif [[ "$pkg_type" == "GitHub" ]]; then
-            # For GitHub, extract short name (repo name) from "owner/repo"
-            pkg_name_short=$(basename "${pkg_name_full%.git}") # Handles "owner/repo" or "owner/repo.git"
+            pkg_name_short=$(basename "${pkg_name_full%.git}") 
             
             if [[ -z "${GITHUB_PAT:-}" ]] && [[ "$github_pat_warning_shown" == "false" ]]; then
                 _log "WARN" "GITHUB_PAT environment variable is not set. GitHub API rate limits may be encountered for installing packages like '${pkg_name_full}'. See script comments for GITHUB_PAT setup."
-                github_pat_warning_shown=true # Show warning only once
+                github_pat_warning_shown=true 
             fi
 
-            # R script for installing a GitHub package using devtools/remotes
-            # Assumes devtools (or its lighter alternative remotes) is installed
             r_install_cmd="
             pkg_short_name <- '${pkg_name_short}'
             pkg_full_name <- '${pkg_name_full}'
-            # Use half of physical cores, default to 1 if detection fails or gives less than 2
             n_cpus <- max(1, parallel::detectCores(logical=FALSE) %/% 2)
 
             if (!requireNamespace('remotes', quietly = TRUE)) {
@@ -843,8 +754,6 @@ _install_r_pkg_list() {
             }
             if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
                 message(paste0('R package ', pkg_short_name, ' (from GitHub: ', pkg_full_name, ') not found, attempting installation...'))
-                # Use GITHUB_PAT if set in the environment (remotes::install_github respects this)
-                # Force = TRUE can be useful to ensure it tries to build even if a SHA seems current but lib is broken
                 remotes::install_github(pkg_full_name, Ncpus = n_cpus, force = TRUE, dependencies = TRUE)
                 if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
                     stop(paste0('Failed to install R package ', pkg_short_name, ' from GitHub: ', pkg_full_name))
@@ -857,31 +766,26 @@ _install_r_pkg_list() {
             "
         else
             _log "WARN" "Unknown package type '${pkg_type}' for package '${pkg_name_full}'. Skipping."
-            continue # Skip to the next package
+            continue 
         fi
 
         echo "$r_install_cmd" > "$pkg_install_script_path"
-        # Use _run_command for robust execution and logging
-        # Pass GITHUB_PAT if set; Rscript will inherit it if exported in bash
         if ! _run_command "Install/Verify R pkg ($pkg_type): $pkg_name_full" Rscript "$pkg_install_script_path"; then
             _log "ERROR" "Failed to install R package '${pkg_name_full}'. See R output in the log above."
-            # Decide if this should be a fatal error for the whole script
-            # For now, it logs error and _run_command returns non-zero, script might continue or exit based on set -e
         fi
     done
-    rm -f "$pkg_install_script_path" # Clean up the temporary R script
+    rm -f "$pkg_install_script_path" 
     _log "INFO" "${pkg_type} R packages installation process completed."
 }
 
 
 fn_install_r_packages() {
     _log "INFO" "Starting R package installation process..."
-    fn_install_r_build_deps # Ensure system build dependencies are present
+    fn_install_r_build_deps 
 
-    _log "INFO" "Ensuring 'devtools' and 'remotes' R packages are installed (needed for GitHub packages and useful generally)..."
+    _log "INFO" "Ensuring 'devtools' and 'remotes' R packages are installed..."
     local core_r_dev_pkgs=("devtools" "remotes")
     
-    # Construct the R vector string like c("pkg1", "pkg2")
     local r_pkgs_to_ensure_str="c("
     local first_pkg=true
     for pkg_name in "${core_r_dev_pkgs[@]}"; do
@@ -893,18 +797,12 @@ fn_install_r_packages() {
         fi
     done
     r_pkgs_to_ensure_str+=")"
-    # Now r_pkgs_to_ensure_str contains something like: c("devtools", "remotes")
     
-    # Temporarily disable pipefail for this Rscript call if we want to check its specific exit code for bspm
     set +o pipefail
     Rscript_out_err=$(mktemp)
-    # Pass the pre-formatted string to R
     Rscript -e "
-        # Use half of physical cores, default to 1 if detection fails or gives less than 2
         n_cpus <- max(1, parallel::detectCores(logical=FALSE) %/% 2)
-
-        pkgs_to_ensure <- ${r_pkgs_to_ensure_str}; # Use the pre-constructed string
-        # Explicitly enable bspm for this script part if it's meant to be used
+        pkgs_to_ensure <- ${r_pkgs_to_ensure_str}; 
         if (requireNamespace('bspm', quietly = TRUE)) {
           options(bspm.sudo = TRUE, bspm.allow.sysreqs = TRUE)
           bspm::enable()
@@ -943,20 +841,14 @@ fn_install_r_packages() {
 
     if [[ $r_script_rc -ne 0 ]]; then
         _log "ERROR" "Failed to install one or more core R development packages (devtools/remotes). RC: $r_script_rc. Check log."
-        # This could be critical, consider exiting
-        # return 1
     else
         _log "INFO" "Core R development packages (devtools/remotes) are installed/verified."
     fi
 
-
-    # Install CRAN packages
     _install_r_pkg_list "CRAN" "${R_PACKAGES_CRAN[@]}"
 
-    # Install GitHub packages
     if [[ ${#R_PACKAGES_GITHUB[@]} -gt 0 ]]; then
         _log "INFO" "Installing GitHub R packages using remotes/devtools..."
-        # Ensure GITHUB_PAT is exported if set, so Rscript inherits it
         [[ -n "${GITHUB_PAT:-}" ]] && export GITHUB_PAT
         _install_r_pkg_list "GitHub" "${R_PACKAGES_GITHUB[@]}"
     else
@@ -964,24 +856,14 @@ fn_install_r_packages() {
     fi
 
     _log "INFO" "Listing installed R packages and their installation type (bspm/binary or source)..."
-    # This R script is complex; keeping it as a heredoc for self-containment.
-    # Make sure it's robust.
     local r_list_pkgs_cmd_file="/tmp/list_installed_pkgs.R"
 cat > "$r_list_pkgs_cmd_file" <<'EOF'
-# Script to list installed R packages and attempt to determine install type
-# This is heuristic and may not be 100% accurate for all cases.
-
 get_install_type <- function(pkg_name, installed_pkgs_df) {
-    # Default type
     install_type <- "source/unknown"
-
-    # Check if it's a base or recommended package (part of R distribution)
     if (!is.na(installed_pkgs_df[pkg_name, "Priority"]) &&
         installed_pkgs_df[pkg_name, "Priority"] %in% c("base", "recommended")) {
         return("base/recommended")
     }
-
-    # Try to get bspm info if bspm is available and managing
     if (requireNamespace("bspm", quietly = TRUE) && isTRUE(getOption("bspm.MANAGES", FALSE))) {
         bspm_pkg_info <- tryCatch(
             suppressMessages(bspm::info(pkg_name)),
@@ -990,24 +872,16 @@ get_install_type <- function(pkg_name, installed_pkgs_df) {
         if (!is.null(bspm_pkg_info) && isTRUE(bspm_pkg_info$binary)) {
             install_type <- "bspm/binary"
         } else if (!is.null(bspm_pkg_info) && !is.null(bspm_pkg_info$source_available) && nzchar(bspm_pkg_info$source_available)) {
-            # If bspm knows about it but says it's not binary, it might be source via bspm context
             install_type <- "bspm/source_or_other"
         }
-        # If bspm provided a clear type, return it
         if (install_type != "source/unknown" && install_type != "bspm/source_or_other") return(install_type)
     }
-    
-    # Heuristic: Check 'Built' field for clues about source compilation vs binary
-    # Example format: "R 4.3.1; ; 2023-08-01 10:00:00 UTC; unix" (binary from CRAN-like repo)
-    # Example format: "R 4.3.1; x86_64-pc-linux-gnu; 2023-08-01 10:00:00 UTC; source" (compiled from source)
     built_info <- installed_pkgs_df[pkg_name, "Built"]
     if (!is.na(built_info)) {
         if (grepl("; source$", built_info, ignore.case = TRUE)) {
             install_type <- "source"
         } else if (grepl("; unix$", built_info, ignore.case = TRUE) || grepl("; windows$", built_info, ignore.case = TRUE)) {
-            # This could be a pre-compiled binary (not necessarily bspm if bspm check failed/returned other)
              if (install_type == "bspm/source_or_other") {
-                # If bspm thought it was source but Built field looks binary, prefer binary tag
                 install_type <- "binary/pre-compiled"
              } else if (install_type == "source/unknown") {
                 install_type <- "binary/pre-compiled"
@@ -1016,26 +890,16 @@ get_install_type <- function(pkg_name, installed_pkgs_df) {
     }
     return(install_type)
 }
-
-# Ensure bspm options are set if it's intended to be active for info() calls
 if (requireNamespace("bspm", quietly = TRUE)) {
-  options(bspm.sudo = TRUE, bspm.allow.sysreqs = TRUE) # These might not be strictly needed for info()
-  # bspm::enable() # Might be too aggressive here, rely on Rprofile.site
+  options(bspm.sudo = TRUE, bspm.allow.sysreqs = TRUE) 
 }
-
-
-# Get all installed packages with necessary fields
 ip_fields <- c("Package", "Version", "LibPath", "Priority", "Built")
-installed_pkgs_df <- as.data.frame(installed.packages(fields = ip_fields, noCache=TRUE), stringsAsFactors = FALSE) # noCache=TRUE for freshness
-
+installed_pkgs_df <- as.data.frame(installed.packages(fields = ip_fields, noCache=TRUE), stringsAsFactors = FALSE) 
 if (nrow(installed_pkgs_df) == 0) {
     cat("No R packages appear to be installed.\n")
 } else {
-    # Add an install type column
     installed_pkgs_df$InstallType <- "pending"
-    rownames(installed_pkgs_df) <- installed_pkgs_df$Package # Ensure rownames are package names for easy lookup
-    
-    # Iterate and determine install type for each package
+    rownames(installed_pkgs_df) <- installed_pkgs_df$Package 
     for (i in seq_len(nrow(installed_pkgs_df))) {
         pkg_name <- installed_pkgs_df[i, "Package"]
         installed_pkgs_df[i, "InstallType"] <- tryCatch(
@@ -1043,10 +907,8 @@ if (nrow(installed_pkgs_df) == 0) {
             error = function(e) "error_determining"
         )
     }
-    
-    # Print the formatted table
     cat(sprintf("%-30s %-16s %-20s %s\n", "Package", "Version", "InstallType", "LibPath"))
-    cat(paste(rep("-", 90), collapse=""), "\n") # Adjusted width
+    cat(paste(rep("-", 90), collapse=""), "\n") 
     for (i in seq_len(nrow(installed_pkgs_df))) {
         cat(sprintf("%-30s %-16s %-20s %s\n",
                     installed_pkgs_df[i, "Package"],
@@ -1056,8 +918,6 @@ if (nrow(installed_pkgs_df) == 0) {
     }
 }
 EOF
-    _log "INFO" "Executing R script to list installed packages. Output will be in the log."
-    # Run the R script; its output goes to LOG_FILE via _run_command
     if ! _run_command "List installed R packages with types" Rscript "$r_list_pkgs_cmd_file"; then
         _log "WARN" "R script for listing packages encountered an error. List may be incomplete or missing."
     fi
@@ -1069,7 +929,6 @@ EOF
 fn_install_rstudio_server() {
     _log "INFO" "Installing RStudio Server v${RSTUDIO_VERSION}..."
 
-    # Check if the correct version of RStudio Server is already installed
     if dpkg -s rstudio-server &>/dev/null; then
         current_rstudio_version=$(rstudio-server version 2>/dev/null | awk '{print $1}')
         if [[ "$current_rstudio_version" == "$RSTUDIO_VERSION" ]]; then
@@ -1078,15 +937,14 @@ fn_install_rstudio_server() {
                 _log "INFO" "RStudio Server is installed but not active. Attempting to start..."
                 _run_command "Start RStudio Server" _safe_systemctl start rstudio-server
             fi
-            return 0 # Already installed and checked/started
+            return 0 
         else
             _log "INFO" "A different version of RStudio Server ('${current_rstudio_version:-unknown}') is installed. It will be removed to install v${RSTUDIO_VERSION}."
-            _run_command "Stop existing RStudio Server" _safe_systemctl stop rstudio-server # Allow failure if not running
+            _run_command "Stop existing RStudio Server" _safe_systemctl stop rstudio-server 
             _run_command "Purge existing RStudio Server" apt-get purge -y rstudio-server
         fi
     fi
 
-    # Download RStudio Server .deb if it doesn't exist or if forced
     local rstudio_deb_tmp_path="/tmp/${RSTUDIO_DEB_FILENAME}"
     if [[ ! -f "$rstudio_deb_tmp_path" ]]; then
         _log "INFO" "Downloading RStudio Server .deb from ${RSTUDIO_DEB_URL} to ${rstudio_deb_tmp_path}"
@@ -1095,15 +953,11 @@ fn_install_rstudio_server() {
         _log "INFO" "RStudio Server .deb already found at ${rstudio_deb_tmp_path}. Using existing file."
     fi
 
-    # Install RStudio Server using gdebi
     _log "INFO" "Installing RStudio Server from ${rstudio_deb_tmp_path} using gdebi..."
     if ! _run_command "Install RStudio Server via gdebi" gdebi -n "$rstudio_deb_tmp_path"; then
         _log "ERROR" "Failed to install RStudio Server using gdebi. Check log for details."
-        # Consider removing the downloaded .deb if install fails and we don't want to retry with it.
-        # rm -f "$rstudio_deb_tmp_path"
         return 1
     fi
-    # gdebi usually handles dependencies. If not, apt-get -f install might be needed.
 
     _log "INFO" "Verifying RStudio Server installation and status..."
     if _safe_systemctl is-active --quiet rstudio-server; then
@@ -1114,7 +968,6 @@ fn_install_rstudio_server() {
             _log "ERROR" "Failed to start RStudio Server after installation. Service may be misconfigured or conflicting."
             return 1
         fi
-        # Re-check status after explicit start
         if ! _safe_systemctl is-active --quiet rstudio-server; then
             _log "ERROR" "RStudio Server failed to become active even after an explicit start command."
             return 1
@@ -1143,9 +996,7 @@ fn_uninstall_r_packages() {
         all_pkgs_to_remove_short_names+=("$(basename "${gh_pkg_full_name%.git}")")
     done
 
-    # Get unique package names into a bash array
     local unique_pkgs_to_remove_list=()
-    # Read sorted unique package names into an array
     mapfile -t unique_pkgs_to_remove_list < <(printf "%s\n" "${all_pkgs_to_remove_short_names[@]}" | sort -u)
 
     if [[ ${#unique_pkgs_to_remove_list[@]} -eq 0 ]]; then
@@ -1155,14 +1006,12 @@ fn_uninstall_r_packages() {
 
     _log "INFO" "Will attempt to remove these R packages: ${unique_pkgs_to_remove_list[*]}"
     
-    # Declare r_vector_pkgs_str first (for SC2155)
     local r_vector_pkgs_str
-    # Construct the R vector string like c("pkg1", "pkg2", "pkg3")
     local r_vector_build="c("
     if [[ ${#unique_pkgs_to_remove_list[@]} -gt 0 ]]; then
-        local first_pkg_in_vector=true # Renamed to avoid conflict with outer scope 'first_pkg'
+        local first_pkg_in_vector=true 
         for pkg_name in "${unique_pkgs_to_remove_list[@]}"; do
-            if [[ -z "$pkg_name" ]]; then continue; fi # Skip empty names if any due to processing
+            if [[ -z "$pkg_name" ]]; then continue; fi 
             if [[ "$first_pkg_in_vector" == "true" ]]; then
                 r_vector_build+="\"${pkg_name}\""
                 first_pkg_in_vector=false
@@ -1173,7 +1022,6 @@ fn_uninstall_r_packages() {
     fi
     r_vector_build+=")"
     r_vector_pkgs_str="$r_vector_build"
-    # Now r_vector_pkgs_str contains something like: c("pkg1", "pkg2") or c() if list was empty
 
     if [[ "$r_vector_pkgs_str" == "c()" ]]; then
         _log "INFO" "Package list for R removal script is empty after processing. Skipping."
@@ -1181,28 +1029,21 @@ fn_uninstall_r_packages() {
     fi
 
     local r_pkg_removal_script_file="/tmp/uninstall_r_pkgs.R"
-    # Quoted heredoc 'EOF' prevents Bash variable expansion inside the R script
 cat > "$r_pkg_removal_script_file" <<EOF
 pkgs_to_attempt_removal <- ${r_vector_pkgs_str}
-installed_pkgs_matrix <- installed.packages(noCache=TRUE) # Use noCache for freshness
+installed_pkgs_matrix <- installed.packages(noCache=TRUE) 
 
 if (is.null(installed_pkgs_matrix) || nrow(installed_pkgs_matrix) == 0) {
     cat("No R packages are currently installed according to installed.packages().\n")
 } else {
-    # Get vector of names of currently installed packages
     current_installed_pkgs_vec <- installed_pkgs_matrix[, "Package"]
-    
-    # Find which of our target packages are actually installed
     pkgs_that_exist_and_targeted_for_removal <- intersect(pkgs_to_attempt_removal, current_installed_pkgs_vec)
     
     if (length(pkgs_that_exist_and_targeted_for_removal) > 0) {
         cat("The following R packages will be targeted for removal:\n", paste(pkgs_that_exist_and_targeted_for_removal, collapse = ", "), "\n")
-        # Suppress warnings during removal, as some might be about dependencies
-        # This removes packages from all libraries they are found in.
         suppressWarnings(remove.packages(pkgs_that_exist_and_targeted_for_removal))
         cat("Attempted removal of specified R packages finished.\n")
         
-        # Verify removal
         still_installed_pkgs_matrix <- installed.packages(noCache=TRUE)
         still_installed_pkgs_vec <- if(nrow(still_installed_pkgs_matrix)>0) still_installed_pkgs_matrix[,"Package"] else character(0)
         
@@ -1220,9 +1061,8 @@ EOF
     _log "INFO" "R script for package removal prepared at ${r_pkg_removal_script_file}"
     
     local r_removal_rc=0
-    # Run the R removal script, logging its output
     ( Rscript "$r_pkg_removal_script_file" >>"$LOG_FILE" 2>&1 ) || r_removal_rc=$?
-    rm -f "$r_pkg_removal_script_file" # Clean up
+    rm -f "$r_pkg_removal_script_file" 
 
     if [[ $r_removal_rc -eq 0 ]]; then
         _log "INFO" "R package uninstallation script completed successfully."
@@ -1235,11 +1075,11 @@ EOF
 
 fn_remove_bspm_config() {
     _log "INFO" "Removing bspm configuration from Rprofile.site and R2U apt repository..."
-    _get_r_profile_site_path # Ensure R_PROFILE_SITE_PATH is determined
+    _get_r_profile_site_path 
 
     if [[ -n "$R_PROFILE_SITE_PATH" && (-f "$R_PROFILE_SITE_PATH" || -L "$R_PROFILE_SITE_PATH") ]]; then
         _log "INFO" "Removing bspm configuration lines from '${R_PROFILE_SITE_PATH}'."
-        _backup_file "$R_PROFILE_SITE_PATH" # Backup before modifying
+        _backup_file "$R_PROFILE_SITE_PATH" 
 
         local temp_rprofile_cleaned
         temp_rprofile_cleaned=$(mktemp)
@@ -1408,7 +1248,7 @@ fn_remove_leftover_files() {
     local prompt_for_aggressive_cleanup="${PROMPT_AGGRESSIVE_CLEANUP_ENV:-yes}" 
 
     if [[ "${FORCE_USER_CLEANUP:-no}" == "yes" ]] || \
-       [[ "$is_interactive_shell" == "true" && "$prompt_for_aggressive_cleanup" == "yes" ]]; then # SC2205, SC2284 FIX APPLIED HERE
+       [[ "$is_interactive_shell" == "true" && "$prompt_for_aggressive_cleanup" == "yes" ]]; then
         
         local perform_aggressive_user_cleanup=false
         if [[ "${FORCE_USER_CLEANUP:-no}" == "yes" ]]; then
