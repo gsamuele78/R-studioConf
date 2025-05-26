@@ -539,14 +539,23 @@ if(error_occurred) q("no", status=1, runLast=FALSE)
 
 current_step <- "Printing utils::extSoftVersion()"
 cat("\nExtended Software Version (BLAS/LAPACK versions used by R):\n")
-if (exists("extSoftVersion", where = "package:utils") && is.function(utils::extSoftVersion)) {
+if (!"package:utils" %in% search()) {
+    tryCatch(attachNamespace("utils"), warning=function(w) {
+        cat("Warning attaching 'utils' namespace: ", conditionMessage(w), "\n", file=stderr())
+    })
+}
+if (exists("extSoftVersion") && is.function(get("extSoftVersion"))) { 
     tryCatch({
-        print(utils::extSoftVersion())
+        print(extSoftVersion())
     }, error = function(e) handle_r_error(e, current_step))
 } else {
-    cat("utils::extSoftVersion() not available (requires utils package loaded, typically by default).\n")
+    cat("extSoftVersion() not found or not a function in the search path.\n", file=stderr())
+    cat("R_SCRIPT_WARN: extSoftVersion() function was not available. This might be okay.\n", file=stderr())
 }
-if(error_occurred) q("no", status=1, runLast=FALSE)
+if(error_occurred && current_step == "Printing utils::extSoftVersion()") { 
+    q("no", status=1, runLast=FALSE)
+}
+
 
 current_step <- "Printing LD_LIBRARY_PATH"
 cat("\nChecking R's LD_LIBRARY_PATH:\n"); print(Sys.getenv("LD_LIBRARY_PATH"))
