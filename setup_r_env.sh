@@ -35,11 +35,12 @@ USER_SPECIFIED_R_PROFILE_SITE_PATH=""
 FORCE_USER_CLEANUP="no"
 
 # RStudio - Fallback Version
+# IMPORTANT: Verify this version from posit.co for Ubuntu 22.04 (jammy) / 24.04 (noble)
 RSTUDIO_VERSION_FALLBACK="2025.05.0-496" 
 RSTUDIO_ARCH_FALLBACK="amd64"
 RSTUDIO_ARCH="${RSTUDIO_ARCH_FALLBACK}" 
 
-RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK"
+RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK" # Will be updated by fn_get_latest_rstudio_info
 RSTUDIO_DEB_URL=""
 RSTUDIO_DEB_FILENAME=""
 
@@ -229,19 +230,63 @@ _is_vm_or_ci_env() {
 
 # --- Core Functions ---
 fn_get_latest_rstudio_info() {
-    _log "INFO" "Attempting to detect latest RStudio Server for ${UBUNTU_CODENAME} ${RSTUDIO_ARCH}..."
-    _log "WARN" "RStudio Server auto-detection is fragile and currently disabled. Using fallback version: ${RSTUDIO_VERSION_FALLBACK}"
-    RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK"
+    _log "INFO" "Determining RStudio Server download details..."
     
     if [[ -z "${UBUNTU_CODENAME:-}" || -z "${RSTUDIO_ARCH:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
         _log "DEBUG" "fn_get_latest_rstudio_info: Sourcing state file as UBUNTU_CODENAME or RSTUDIO_ARCH is empty."
         # shellcheck source=/dev/null
         source "$R_ENV_STATE_FILE"
     fi
-    RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${UBUNTU_CODENAME}/${RSTUDIO_ARCH}/rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
+
+    if [[ -z "${UBUNTU_CODENAME:-}" ]]; then
+        _log "ERROR" "UBUNTU_CODENAME is not set in fn_get_latest_rstudio_info. This should have been set by fn_pre_flight_checks."
+        # To prevent infinite loop if fn_pre_flight_checks itself calls this and also fails to set UBUNTU_CODENAME
+        # We will just let it try to proceed with an empty UBUNTU_CODENAME which will likely fail later,
+        # or rely on a global default if one were set (but it's not currently).
+        # A more robust solution would involve passing UBUNTU_CODENAME as an argument if this function were truly standalone.
+        # For now, the script structure implies fn_pre_flight_checks sets it.
+        return 1 # Indicate failure to set RStudio vars
+    fi
+     if [[ -z "${RSTUDIO_ARCH:-}" ]]; then
+        _log "ERROR" "RSTUDIO_ARCH is not set in fn_get_latest_rstudio_info. This should have been set by fn_pre_flight_checks."
+        return 1 # Indicate failure
+    fi
+
+    # Use the fallback version defined at the top of the script.
+    # **USER MUST VERIFY THIS VERSION IS CORRECT AND DOWNLOADABLE for jammy/noble.**
+    RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK" 
+    _log "INFO" "Using RStudio Server fallback version: ${RSTUDIO_VERSION}"
+
+    local rstudio_url_codename="$UBUNTU_CODENAME" 
+
+    if [[ "$UBUNTU_CODENAME" == "noble" ]]; then
+        _log "INFO" "Ubuntu codename is 'noble'. Using 'jammy' for RStudio Server download URL as per Posit's distribution strategy."
+        rstudio_url_codename="jammy"
+    fi
+
+    RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${rstudio_url_codename}/${RSTUDIO_ARCH}/rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
     RSTUDIO_DEB_FILENAME="rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
-    _log "INFO" "Using RStudio Server: ${RSTUDIO_VERSION} from ${RSTUDIO_DEB_URL}"
+    
+    _log "INFO" "RStudio Server URL determined: ${RSTUDIO_DEB_URL}"
+    _log "INFO" "RStudio Server Filename: ${RSTUDIO_DEB_FILENAME}"
+
+    # Update these global variables as well, as they are used elsewhere
+    export RSTUDIO_VERSION RSTUDIO_DEB_URL RSTUDIO_DEB_FILENAME
+
+    # Update the state file with these values if fn_pre_flight_checks has already run
+    # This ensures subsequent individual calls to other functions get the correct RStudio info
+    if [[ -f "$R_ENV_STATE_FILE" ]]; then
+        _log "INFO" "Updating RStudio Server details in state file: ${R_ENV_STATE_FILE}"
+        sed -i '/^export RSTUDIO_VERSION=/d' "$R_ENV_STATE_FILE"
+        sed -i '/^export RSTUDIO_DEB_URL=/d' "$R_ENV_STATE_FILE"
+        sed -i '/^export RSTUDIO_DEB_FILENAME=/d' "$R_ENV_STATE_FILE"
+        echo "export RSTUDIO_VERSION=\"${RSTUDIO_VERSION}\"" >> "$R_ENV_STATE_FILE"
+        echo "export RSTUDIO_DEB_URL=\"${RSTUDIO_DEB_URL}\"" >> "$R_ENV_STATE_FILE"
+        echo "export RSTUDIO_DEB_FILENAME=\"${RSTUDIO_DEB_FILENAME}\"" >> "$R_ENV_STATE_FILE"
+    fi
+    return 0
 }
+
 
 fn_pre_flight_checks() {
     _log "INFO" "Performing pre-flight checks..."
@@ -296,7 +341,12 @@ fn_pre_flight_checks() {
     fi
     export RSTUDIO_ARCH
 
-    fn_get_latest_rstudio_info 
+    # Call fn_get_latest_rstudio_info to set RStudio version, URL, and filename
+    if ! fn_get_latest_rstudio_info; then
+        _log "ERROR" "Failed to determine RStudio Server details. Exiting pre-flight checks."
+        exit 1 # Or handle more gracefully if RStudio is optional
+    fi
+    # fn_get_latest_rstudio_info now exports RSTUDIO_VERSION, RSTUDIO_DEB_URL, RSTUDIO_DEB_FILENAME
 
     CRAN_REPO_LINE="deb ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
     export CRAN_REPO_LINE 
@@ -692,8 +742,18 @@ fn_setup_bspm() {
         _log "INFO" "Not in root or CI/VM environment. Skipping bspm setup for safety."
         return 0
     fi
+    
+    if [[ -z "${UBUNTU_CODENAME:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
+        _log "DEBUG" "fn_setup_bspm: Sourcing state file."
+        # shellcheck source=/dev/null
+        source "$R_ENV_STATE_FILE"
+    fi
+    if [[ -z "$UBUNTU_CODENAME" ]]; then 
+       _log "ERROR" "FATAL: UBUNTU_CODENAME is empty in fn_setup_bspm. Run 'fn_pre_flight_checks' first. Aborting."
+       return 1
+    fi
 
-    # Ensure directory exists
+
     local r_profile_dir; r_profile_dir=$(dirname "$R_PROFILE_SITE_PATH")
     if [[ ! -d "$r_profile_dir" ]]; then _run_command "Create Rprofile.site dir ${r_profile_dir}" mkdir -p "$r_profile_dir"; fi
 
@@ -701,15 +761,16 @@ fn_setup_bspm() {
         _log "INFO" "Rprofile.site does not exist, creating it..."
         _run_command "Create Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"
     fi
+    _backup_file "$R_PROFILE_SITE_PATH"
 
-    # Check if sudo is installed, install if missing
+
     if ! command -v sudo &>/dev/null; then
         _log "WARN" "'sudo' is not installed. Attempting to install..."
         if [[ $EUID -ne 0 ]]; then
             _log "ERROR" "'sudo' is not installed and you are not running as root. Please run this script as root to install sudo."
             return 1
         else
-            _run_command "Install sudo" apt-get update -y
+            _run_command "Install sudo package" apt-get update -y 
             _run_command "Install sudo" apt-get install -y sudo
             if ! command -v sudo &>/dev/null; then
                 _log "ERROR" "Failed to install sudo."
@@ -722,120 +783,173 @@ fn_setup_bspm() {
         _log "INFO" "'sudo' is already installed."
     fi
 
-    # Add R2U repository if not present
     _log "INFO" "Adding R2U repository (if missing)..."
-    if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/; then
+    if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] && grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" "$R2U_APT_SOURCES_LIST_D_FILE" /etc/apt/sources.list /etc/apt/sources.list.d/; then
         _log "INFO" "R2U repository already configured."
     else
         local r2u_add_script_url="${R2U_REPO_URL_BASE}/add_cranapt_${UBUNTU_CODENAME}.sh"
         _log "INFO" "Downloading R2U setup script: ${r2u_add_script_url}"
         _run_command "Download R2U setup script" curl -sSLf "${r2u_add_script_url}" -o /tmp/add_cranapt.sh
         _log "INFO" "Executing R2U repository setup script..."
-        if ! sudo bash /tmp/add_cranapt.sh 2>&1 | sudo tee -a "$LOG_FILE"; then
+        if ! bash /tmp/add_cranapt.sh >> "$LOG_FILE" 2>&1; then 
             _log "ERROR" "Failed to execute R2U repository setup script."
+            rm -f /tmp/add_cranapt.sh
             return 1
         fi
         rm -f /tmp/add_cranapt.sh
+        _log "INFO" "R2U setup script finished."
     fi
 
-    # Ensure dbus is running
-    if systemctl list-units --type=service | grep -q dbus; then
-        _log "INFO" "Restarting dbus service..."
-        sudo systemctl restart dbus
-    elif service --status-all 2>&1 | grep -q dbus; then
-        _log "INFO" "Restarting dbus service..."
-        sudo service dbus restart
+    if command -v systemctl &>/dev/null && systemctl list-units --type=service --all | grep -q 'dbus.service'; then
+        _log "INFO" "dbus.service found. Ensuring it is active/restarted."
+        _run_command "Restart dbus service via systemctl" _safe_systemctl restart dbus.service
+    elif command -v service &>/dev/null && service --status-all 2>&1 | grep -q 'dbus'; then 
+        _log "INFO" "dbus found via 'service'. Attempting restart."
+        _run_command "Restart dbus service via service" service dbus restart
     else
-        _log "WARN" "dbus service not found. If package management fails, ensure dbus is running."
+        _log "WARN" "dbus service manager not detected or dbus not listed. If R package system dependency installation fails later, ensure dbus is running."
     fi
 
-    # Check for required system packages and install if missing
+
     _log "INFO" "Checking for required system packages (r-base-core python3-dbus python3-gi python3-apt)..."
     local missing_pkgs=()
-    for pkg in "r-base-core" "python3-dbus" "python3-gi" "python3-apt"; do
+    for pkg in "python3-dbus" "python3-gi" "python3-apt"; do 
         if ! dpkg -s "$pkg" &>/dev/null; then
             missing_pkgs+=("$pkg")
         fi
     done
 
     if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
-        _log "INFO" "Installing missing system packages: ${missing_pkgs[*]}..."
-        if ! sudo apt-get install -y "${missing_pkgs[@]}"; then
-            _log "ERROR" "Failed to install required system packages."
+        _log "INFO" "Installing missing system packages for bspm: ${missing_pkgs[*]}..."
+        if ! _run_command "Install bspm python dependencies" apt-get install -y "${missing_pkgs[@]}"; then
+            _log "ERROR" "Failed to install required system packages for bspm."
             return 1
-        else
-            _log "INFO" "Successfully installed required system packages."
         fi
-    else
-        _log "INFO" "All required system packages are already installed."
+    fi
+    _log "INFO" "Installing r-cran-bspm package via apt (from R2U)..."
+    if ! _run_command "Install r-cran-bspm" apt-get install -y r-cran-bspm; then
+         _log "ERROR" "Failed to install r-cran-bspm package via apt. R2U repo might not be set up correctly or package is unavailable."
+         return 1
     fi
 
-    # Determine system R library path
+
     local system_r_lib_path
-    system_r_lib_path=$(sudo Rscript -e 'cat(.Library)' 2>/dev/null)
-    _log "INFO" "System R library path: $system_r_lib_path"
+    system_r_lib_path=$(Rscript -e 'cat(.Library)' 2>/dev/null || echo "/usr/lib/R/library") 
+    _log "INFO" "System R library path determined as: $system_r_lib_path"
 
     export BSPM_ALLOW_SYSREQS=TRUE
-    export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
 
-    _log "INFO" "Installing bspm as a system package (via apt)..."
-    if ! sudo apt-get install -y r-cran-bspm; then
-        _log "ERROR" "Failed to install bspm as a system package via apt."
+    _log "INFO" "Configuring bspm options in Rprofile.site: ${R_PROFILE_SITE_PATH}"
+    local bspm_rprofile_config
+    read -r -d '' bspm_rprofile_config << EOF
+# Added by setup_r_env.sh for bspm configuration
+if (nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY"))) {
+} else if (interactive()) {
+} else {
+    if (requireNamespace("bspm", quietly = TRUE)) {
+        options(bspm.sudo = TRUE)
+        options(bspm.allow.sysreqs = TRUE)
+        bspm::enable()
+    }
+}
+# End of bspm configuration
+EOF
+
+    local temp_rprofile
+    temp_rprofile=$(mktemp)
+    if [[ -z "$temp_rprofile" || ! -e "$temp_rprofile" ]]; then 
+        _log "ERROR" "Failed to create temporary file for Rprofile.site update. mktemp output: '${temp_rprofile}'"
+        return 1
+    fi
+    _log "DEBUG" "Temporary file for Rprofile.site update: ${temp_rprofile}"
+
+    if [[ ! -f "$R_PROFILE_SITE_PATH" ]]; then
+        _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not a regular file or does not exist before sed. Cannot update."
+        rm -f "$temp_rprofile"
+        return 1
+    fi
+    if [[ ! -w "$R_PROFILE_SITE_PATH" ]]; then
+        _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not writable. Cannot update."
+        rm -f "$temp_rprofile"
         return 1
     fi
 
-    _log "INFO" "Configuring bspm to use sudo and system requirements..."
-    local rprofile_lines="options(bspm.sudo = TRUE)
-options(bspm.allow.sysreqs = TRUE)
-suppressMessages(bspm::enable())"
-    # Remove previous lines to avoid duplicates
-    sed -i '/options(bspm\.sudo *= *TRUE)/d' "$R_PROFILE_SITE_PATH"
-    sed -i '/options(bspm\.allow\.sysreqs *= *TRUE)/d' "$R_PROFILE_SITE_PATH"
-    sed -i '/suppressMessages(bspm::enable())/d' "$R_PROFILE_SITE_PATH"
-    # Add new config at the end
-    printf "\n%s\n" "$rprofile_lines" | tee -a "$R_PROFILE_SITE_PATH" >/dev/null
+    _log "DEBUG" "Attempting sed command: sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' '${R_PROFILE_SITE_PATH}' > '${temp_rprofile}'"
+    if sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' "$R_PROFILE_SITE_PATH" > "$temp_rprofile"; then
+        _log "DEBUG" "sed command successfully wrote to ${temp_rprofile}"
+    else
+        local sed_rc=$?
+        _log "ERROR" "sed command failed (RC: $sed_rc) to process ${R_PROFILE_SITE_PATH} into ${temp_rprofile}"
+        rm -f "$temp_rprofile"
+        return 1
+    fi
+    
+    _log "DEBUG" "Attempting printf command to append to ${temp_rprofile}"
+    if printf "\n%s\n" "$bspm_rprofile_config" >> "$temp_rprofile"; then
+        _log "DEBUG" "printf successfully appended bspm config to ${temp_rprofile}"
+    else
+        local printf_rc=$?
+        _log "ERROR" "printf command failed (RC: $printf_rc) to append bspm config to ${temp_rprofile}"
+        rm -f "$temp_rprofile"
+        return 1
+    fi
+    
+    _log "DEBUG" "Contents of temporary Rprofile (${temp_rprofile}) before mv:"
+    head -c 1024 "$temp_rprofile" >> "$LOG_FILE" 
+    echo "..." >> "$LOG_FILE" 
 
-    _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
-    tee -a "$LOG_FILE" < "$R_PROFILE_SITE_PATH" || _log "WARN" "Could not display Rprofile.site content."
+
+    if _run_command "Update Rprofile.site with bspm configuration" mv "$temp_rprofile" "$R_PROFILE_SITE_PATH"; then
+        _log "INFO" "Rprofile.site updated with bspm configuration."
+    else
+        _log "ERROR" "Failed to move temporary file ${temp_rprofile} to ${R_PROFILE_SITE_PATH}. Rprofile.site may not be updated."
+        rm -f "$temp_rprofile" 
+        return 1 
+    fi
+
+    _log "INFO" "Content of Rprofile.site (${R_PROFILE_SITE_PATH}) after bspm configuration attempt:"
+    cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 
 
     _log "INFO" "Verifying bspm activation..."
     set +e
     bspm_status_output=$(
-        sudo R --vanilla -e "
+        R --vanilla -e " 
 .libPaths(c('$system_r_lib_path', .libPaths()))
 if (!requireNamespace('bspm', quietly=TRUE)) {
-  cat('BSPM_NOT_INSTALLED\n'); quit(status=1)
+  cat('BSPM_NOT_INSTALLED\n'); quit(save='no',status=1)
 }
-options(bspm.sudo=TRUE, bspm.allow.sysreqs=TRUE)
+options(bspm.sudo=TRUE, bspm.allow.sysreqs=TRUE) 
 suppressMessages(bspm::enable())
-if ('bspm' %in% loadedNamespaces() && 'bspm' %in% rownames(installed.packages())) {
-  cat('BSPM_WORKING\n')
+if (isTRUE(getOption('bspm.MANAGES', FALSE))) { 
+  cat('BSPM_MANAGING\n')
 } else {
   cat('BSPM_NOT_MANAGING\n')
-  quit(status=2)
+  cat('bspm:::.backend value: \n')
+  try(print(bspm:::.backend)) 
+  quit(save='no',status=2)
 }
 " 2>&1
     )
     bspm_status_rc=$?
     set -e
 
-    if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_WORKING* ]]; then
+    echo "$bspm_status_output" >> "$LOG_FILE" 
+
+    if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_MANAGING* ]]; then
         _log "INFO" "bspm is installed and managing packages."
     elif [[ "$bspm_status_output" == *BSPM_NOT_INSTALLED* ]]; then
-        _log "ERROR" "bspm is NOT installed properly."
+        _log "ERROR" "bspm is NOT installed properly (R couldn't find namespace)."
         return 2
     elif [[ "$bspm_status_output" == *BSPM_NOT_MANAGING* ]]; then
-        _log "ERROR" "bspm is installed but NOT managing packages."
-        _log "ERROR" "Debug output: $bspm_status_output"
+        _log "ERROR" "bspm is installed but NOT managing packages. Debug output from R: $bspm_status_output"
         return 3
     else
-        _log "ERROR" "Unknown bspm status: $bspm_status_output"
+        _log "ERROR" "Unknown bspm status (RC: $bspm_status_rc). Debug output from R: $bspm_status_output"
         return 4
     fi
 
     _log "INFO" "bspm setup and verification completed."
 }
-
 
 
 fn_install_r_build_deps() {
@@ -1036,6 +1150,10 @@ fn_install_r_packages() {
 cat > "$r_list_pkgs_cmd_file" <<'EOF'
 get_install_type <- function(pkg_name, installed_pkgs_df) {
     install_type <- "source/unknown"
+    # Check if pkg_name exists as a rowname
+    if (! pkg_name %in% rownames(installed_pkgs_df)) {
+        return("not_found_in_df")
+    }
     if (!is.na(installed_pkgs_df[pkg_name, "Priority"]) &&
         installed_pkgs_df[pkg_name, "Priority"] %in% c("base", "recommended")) {
         return("base/recommended")
@@ -1070,18 +1188,33 @@ if (requireNamespace("bspm", quietly = TRUE)) {
   options(bspm.sudo = TRUE, bspm.allow.sysreqs = TRUE) 
 }
 ip_fields <- c("Package", "Version", "LibPath", "Priority", "Built")
-installed_pkgs_df <- as.data.frame(installed.packages(fields = ip_fields, noCache=TRUE), stringsAsFactors = FALSE) 
-if (nrow(installed_pkgs_df) == 0) {
+installed_pkgs_df_raw <- as.data.frame(installed.packages(fields = ip_fields, noCache=TRUE), stringsAsFactors = FALSE) 
+
+if (nrow(installed_pkgs_df_raw) == 0) {
     cat("No R packages appear to be installed.\n")
 } else {
-    installed_pkgs_df$InstallType <- "pending"
-    rownames(installed_pkgs_df) <- installed_pkgs_df$Package 
+    # Deduplicate: Keep the first occurrence based on Package name
+    installed_pkgs_df <- installed_pkgs_df_raw[!duplicated(installed_pkgs_df_raw$Package), ]
+    
+    installed_pkgs_df$InstallType <- "pending" # Initialize column
+    # Ensure Package column is used for rownames AFTER deduplication
+    if (nrow(installed_pkgs_df) > 0 && "Package" %in% colnames(installed_pkgs_df)) {
+        rownames(installed_pkgs_df) <- installed_pkgs_df$Package 
+    } else if (nrow(installed_pkgs_df) > 0) {
+         cat("Warning: 'Package' column not found for setting rownames after deduplication.\n", file=stderr())
+    }
+    
     for (i in seq_len(nrow(installed_pkgs_df))) {
         pkg_name <- installed_pkgs_df[i, "Package"]
-        installed_pkgs_df[i, "InstallType"] <- tryCatch(
-            get_install_type(pkg_name, installed_pkgs_df),
-            error = function(e) "error_determining"
-        )
+        # Check if pkg_name is a valid rowname before trying to assign
+        if (pkg_name %in% rownames(installed_pkgs_df)) {
+            installed_pkgs_df[i, "InstallType"] <- tryCatch(
+                get_install_type(pkg_name, installed_pkgs_df),
+                error = function(e) "error_determining"
+            )
+        } else {
+             installed_pkgs_df[i, "InstallType"] <- "pkg_name_not_in_rownames"
+        }
     }
     cat(sprintf("%-30s %-16s %-20s %s\n", "Package", "Version", "InstallType", "LibPath"))
     cat(paste(rep("-", 90), collapse=""), "\n") 
@@ -1112,8 +1245,12 @@ fn_install_rstudio_server() {
     
     if [[ -z "$UBUNTU_CODENAME" || -z "$RSTUDIO_ARCH" || -z "$RSTUDIO_VERSION" ]]; then
         _log "INFO" "Key RStudio variables still missing. Re-running fn_get_latest_rstudio_info to define URLs."
-        fn_get_latest_rstudio_info 
+        if ! fn_get_latest_rstudio_info; then # Check return status
+             _log "ERROR" "FATAL: fn_get_latest_rstudio_info failed to set RStudio details. Aborting RStudio Server install."
+             return 1
+        fi
     fi
+    # After fn_get_latest_rstudio_info, RSTUDIO_DEB_URL and RSTUDIO_DEB_FILENAME should be set. Check them.
     if [[ -z "$RSTUDIO_DEB_URL" || -z "$RSTUDIO_DEB_FILENAME" ]]; then
         _log "ERROR" "FATAL: RStudio download details (URL/filename) could not be determined even after attempting to re-run info gathering. Aborting RStudio Server install."
         return 1
@@ -1139,7 +1276,10 @@ fn_install_rstudio_server() {
     local rstudio_deb_tmp_path="/tmp/${RSTUDIO_DEB_FILENAME}"
     if [[ ! -f "$rstudio_deb_tmp_path" ]]; then
         _log "INFO" "Downloading RStudio Server .deb from ${RSTUDIO_DEB_URL} to ${rstudio_deb_tmp_path}"
-        _run_command "Download RStudio Server .deb" wget -O "$rstudio_deb_tmp_path" "$RSTUDIO_DEB_URL"
+        if ! _run_command "Download RStudio Server .deb" wget -O "$rstudio_deb_tmp_path" "$RSTUDIO_DEB_URL"; then
+            _log "ERROR" "Download of RStudio Server .deb failed. URL: ${RSTUDIO_DEB_URL}"
+            return 1
+        fi
     else
         _log "INFO" "RStudio Server .deb already found at ${rstudio_deb_tmp_path}. Using existing file."
     fi
