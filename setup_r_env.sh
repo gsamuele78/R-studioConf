@@ -40,7 +40,7 @@ RSTUDIO_VERSION_FALLBACK="2025.05.0-496"
 RSTUDIO_ARCH_FALLBACK="amd64"
 RSTUDIO_ARCH="${RSTUDIO_ARCH_FALLBACK}" 
 
-RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK" # Will be updated by fn_get_latest_rstudio_info
+RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK" 
 RSTUDIO_DEB_URL=""
 RSTUDIO_DEB_FILENAME=""
 
@@ -51,9 +51,9 @@ CRAN_REPO_PATH_BIN="/bin/linux/ubuntu"
 CRAN_REPO_PATH_SRC="/src/contrib" 
 CRAN_REPO_URL_BIN="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_BIN}"
 CRAN_REPO_URL_SRC="${CRAN_REPO_URL_BASE}${CRAN_REPO_PATH_SRC}" 
-CRAN_REPO_LINE="" # Will be: deb URL codename-cran40/
-CRAN_APT_KEY_URL="https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc" # Direct URL to ASCII key
-CRAN_APT_KEYRING_FILE="/etc/apt/trusted.gpg.d/cran_ubuntu_key.asc" # Path for ASCII key in trusted.gpg.d
+CRAN_REPO_LINE="" 
+CRAN_APT_KEY_URL="https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc" 
+CRAN_APT_KEYRING_FILE="/etc/apt/trusted.gpg.d/cran_ubuntu_key.asc" 
 
 
 # R2U/BSP Repository
@@ -240,20 +240,13 @@ fn_get_latest_rstudio_info() {
 
     if [[ -z "${UBUNTU_CODENAME:-}" ]]; then
         _log "ERROR" "UBUNTU_CODENAME is not set in fn_get_latest_rstudio_info. This should have been set by fn_pre_flight_checks."
-        # To prevent infinite loop if fn_pre_flight_checks itself calls this and also fails to set UBUNTU_CODENAME
-        # We will just let it try to proceed with an empty UBUNTU_CODENAME which will likely fail later,
-        # or rely on a global default if one were set (but it's not currently).
-        # A more robust solution would involve passing UBUNTU_CODENAME as an argument if this function were truly standalone.
-        # For now, the script structure implies fn_pre_flight_checks sets it.
-        return 1 # Indicate failure to set RStudio vars
+        return 1 
     fi
      if [[ -z "${RSTUDIO_ARCH:-}" ]]; then
         _log "ERROR" "RSTUDIO_ARCH is not set in fn_get_latest_rstudio_info. This should have been set by fn_pre_flight_checks."
-        return 1 # Indicate failure
+        return 1 
     fi
 
-    # Use the fallback version defined at the top of the script.
-    # **USER MUST VERIFY THIS VERSION IS CORRECT AND DOWNLOADABLE for jammy/noble.**
     RSTUDIO_VERSION="$RSTUDIO_VERSION_FALLBACK" 
     _log "INFO" "Using RStudio Server fallback version: ${RSTUDIO_VERSION}"
 
@@ -270,19 +263,31 @@ fn_get_latest_rstudio_info() {
     _log "INFO" "RStudio Server URL determined: ${RSTUDIO_DEB_URL}"
     _log "INFO" "RStudio Server Filename: ${RSTUDIO_DEB_FILENAME}"
 
-    # Update these global variables as well, as they are used elsewhere
     export RSTUDIO_VERSION RSTUDIO_DEB_URL RSTUDIO_DEB_FILENAME
 
-    # Update the state file with these values if fn_pre_flight_checks has already run
-    # This ensures subsequent individual calls to other functions get the correct RStudio info
     if [[ -f "$R_ENV_STATE_FILE" ]]; then
         _log "INFO" "Updating RStudio Server details in state file: ${R_ENV_STATE_FILE}"
-        sed -i '/^export RSTUDIO_VERSION=/d' "$R_ENV_STATE_FILE"
-        sed -i '/^export RSTUDIO_DEB_URL=/d' "$R_ENV_STATE_FILE"
-        sed -i '/^export RSTUDIO_DEB_FILENAME=/d' "$R_ENV_STATE_FILE"
-        echo "export RSTUDIO_VERSION=\"${RSTUDIO_VERSION}\"" >> "$R_ENV_STATE_FILE"
-        echo "export RSTUDIO_DEB_URL=\"${RSTUDIO_DEB_URL}\"" >> "$R_ENV_STATE_FILE"
-        echo "export RSTUDIO_DEB_FILENAME=\"${RSTUDIO_DEB_FILENAME}\"" >> "$R_ENV_STATE_FILE"
+        local temp_state_file
+        temp_state_file=$(mktemp)
+
+        grep -v '^export RSTUDIO_VERSION=' "$R_ENV_STATE_FILE" | \
+        grep -v '^export RSTUDIO_DEB_URL=' | \
+        grep -v '^export RSTUDIO_DEB_FILENAME=' > "$temp_state_file" || true 
+
+        {
+            echo "export RSTUDIO_VERSION=\"${RSTUDIO_VERSION}\""
+            echo "export RSTUDIO_DEB_URL=\"${RSTUDIO_DEB_URL}\""
+            echo "export RSTUDIO_DEB_FILENAME=\"${RSTUDIO_DEB_FILENAME}\""
+        } >> "$temp_state_file"
+        
+        mv "$temp_state_file" "$R_ENV_STATE_FILE"
+    else
+        _log "INFO" "State file ${R_ENV_STATE_FILE} not found. Creating it with RStudio Server details."
+        {
+            echo "export RSTUDIO_VERSION=\"${RSTUDIO_VERSION}\""
+            echo "export RSTUDIO_DEB_URL=\"${RSTUDIO_DEB_URL}\""
+            echo "export RSTUDIO_DEB_FILENAME=\"${RSTUDIO_DEB_FILENAME}\""
+        } > "$R_ENV_STATE_FILE"
     fi
     return 0
 }
@@ -341,12 +346,10 @@ fn_pre_flight_checks() {
     fi
     export RSTUDIO_ARCH
 
-    # Call fn_get_latest_rstudio_info to set RStudio version, URL, and filename
     if ! fn_get_latest_rstudio_info; then
         _log "ERROR" "Failed to determine RStudio Server details. Exiting pre-flight checks."
-        exit 1 # Or handle more gracefully if RStudio is optional
+        exit 1
     fi
-    # fn_get_latest_rstudio_info now exports RSTUDIO_VERSION, RSTUDIO_DEB_URL, RSTUDIO_DEB_FILENAME
 
     CRAN_REPO_LINE="deb ${CRAN_REPO_URL_BIN} ${UBUNTU_CODENAME}-cran40/"
     export CRAN_REPO_LINE 
@@ -1150,9 +1153,9 @@ fn_install_r_packages() {
 cat > "$r_list_pkgs_cmd_file" <<'EOF'
 get_install_type <- function(pkg_name, installed_pkgs_df) {
     install_type <- "source/unknown"
-    # Check if pkg_name exists as a rowname
+    # Check if pkg_name exists as a rowname before trying to access it
     if (! pkg_name %in% rownames(installed_pkgs_df)) {
-        return("not_found_in_df")
+        return("not_found_in_df") # Should not happen if df is constructed from installed.packages() directly
     }
     if (!is.na(installed_pkgs_df[pkg_name, "Priority"]) &&
         installed_pkgs_df[pkg_name, "Priority"] %in% c("base", "recommended")) {
@@ -1194,6 +1197,7 @@ if (nrow(installed_pkgs_df_raw) == 0) {
     cat("No R packages appear to be installed.\n")
 } else {
     # Deduplicate: Keep the first occurrence based on Package name
+    # This is crucial if a package (like bspm) is found in multiple libPaths
     installed_pkgs_df <- installed_pkgs_df_raw[!duplicated(installed_pkgs_df_raw$Package), ]
     
     installed_pkgs_df$InstallType <- "pending" # Initialize column
@@ -1236,30 +1240,25 @@ EOF
 
 
 fn_install_rstudio_server() {
-    _log "INFO" "Installing RStudio Server v${RSTUDIO_VERSION}..."
-    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${RSTUDIO_ARCH:-}" || -z "${RSTUDIO_VERSION:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
-        _log "DEBUG" "fn_install_rstudio_server: Sourcing state file."
+    _log "INFO" "Installing RStudio Server v${RSTUDIO_VERSION_FALLBACK}..." # Use FALLBACK here as RSTUDIO_VERSION might not be final yet
+    if [[ -z "${UBUNTU_CODENAME:-}" || -z "${RSTUDIO_ARCH:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
+        _log "DEBUG" "fn_install_rstudio_server: Sourcing state file for UBUNTU_CODENAME/RSTUDIO_ARCH."
         # shellcheck source=/dev/null
         source "$R_ENV_STATE_FILE"
     fi
     
-    if [[ -z "$UBUNTU_CODENAME" || -z "$RSTUDIO_ARCH" || -z "$RSTUDIO_VERSION" ]]; then
-        _log "INFO" "Key RStudio variables still missing. Re-running fn_get_latest_rstudio_info to define URLs."
-        if ! fn_get_latest_rstudio_info; then # Check return status
-             _log "ERROR" "FATAL: fn_get_latest_rstudio_info failed to set RStudio details. Aborting RStudio Server install."
-             return 1
-        fi
-    fi
-    # After fn_get_latest_rstudio_info, RSTUDIO_DEB_URL and RSTUDIO_DEB_FILENAME should be set. Check them.
-    if [[ -z "$RSTUDIO_DEB_URL" || -z "$RSTUDIO_DEB_FILENAME" ]]; then
-        _log "ERROR" "FATAL: RStudio download details (URL/filename) could not be determined even after attempting to re-run info gathering. Aborting RStudio Server install."
+    # Call fn_get_latest_rstudio_info to ensure RSTUDIO_VERSION, DEB_URL, DEB_FILENAME are correctly set
+    # based on the (potentially special-cased for noble) UBUNTU_CODENAME and RSTUDIO_ARCH
+    if ! fn_get_latest_rstudio_info; then
+        _log "ERROR" "FATAL: Could not determine RStudio Server download details in fn_install_rstudio_server. Aborting."
         return 1
     fi
+    # Now RSTUDIO_VERSION, RSTUDIO_DEB_URL, RSTUDIO_DEB_FILENAME are set by fn_get_latest_rstudio_info
 
 
     if dpkg -s rstudio-server &>/dev/null; then
         current_rstudio_version=$(rstudio-server version 2>/dev/null | awk '{print $1}')
-        if [[ "$current_rstudio_version" == "$RSTUDIO_VERSION" ]]; then
+        if [[ "$current_rstudio_version" == "$RSTUDIO_VERSION" ]]; then # Use the RSTUDIO_VERSION set by fn_get_latest_rstudio_info
             _log "INFO" "RStudio Server v${RSTUDIO_VERSION} is already installed."
             if ! _safe_systemctl is-active --quiet rstudio-server; then
                 _log "INFO" "RStudio Server is installed but not active. Attempting to start..."
@@ -1278,6 +1277,8 @@ fn_install_rstudio_server() {
         _log "INFO" "Downloading RStudio Server .deb from ${RSTUDIO_DEB_URL} to ${rstudio_deb_tmp_path}"
         if ! _run_command "Download RStudio Server .deb" wget -O "$rstudio_deb_tmp_path" "$RSTUDIO_DEB_URL"; then
             _log "ERROR" "Download of RStudio Server .deb failed. URL: ${RSTUDIO_DEB_URL}"
+            # Attempt to remove partially downloaded file
+            rm -f "$rstudio_deb_tmp_path"
             return 1
         fi
     else
