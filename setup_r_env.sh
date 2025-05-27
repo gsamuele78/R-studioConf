@@ -63,20 +63,21 @@ R_PACKAGES_CRAN=(
     "doParallel" "future" "caret" "CoordinateCleaner" "tictoc" "devtools"
     "tidyverse" "dplyr" "spatstat" "ggplot2" "iNEXT" "DHARMa" "lme4" "glmmTMB"
     "geodata" "osmdata" "parallel" "doSNOW" "progress" "nngeo" "wdpar" "rgee" "tidyrgee"
-    "data.table" "jsonlite" "httr" 
+    "data.table" "jsonlite" "httr" "prioritizr" "prioritizrdata" "highs"
 )
 R_PACKAGES_GITHUB=(
     #"SantanderMetGroup/visualizeR"          # Added dependency for mopa
     #"SantanderMetGroup/climate4R.datasets"  # Added dependency for mopa
     #"SantanderMetGroup/transformeR"
     #"SantanderMetGroup/mopa"
+    "SantanderMetGroup/climate4R"  
     "SantanderMetGroup/loadeR.java" 
     "SantanderMetGroup/loadeR"             # Core
     "SantanderMetGroup/climate4R.UDG"      # Core
     "SantanderMetGroup/transformeR"        # Core & dependency for climate4R
     "SantanderMetGroup/visualizeR"         # Core & dependency for climate4R
     "SantanderMetGroup/downscaleR"
-    "SantanderMetGroup/climate4R"          # Main package that uses the above
+    #"SantanderMetGroup/climate4R"          # Main package that uses the above
     "SantanderMetGroup/climate4R.datasets" # Separate dataset package
     "SantanderMetGroup/mopa"               # Separate related package
     "HelgeJentsch/ClimDatDownloadR"
