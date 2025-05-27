@@ -681,218 +681,162 @@ EOF
 }
 
 fn_setup_bspm() {
-    _log "INFO" "Setting up bspm (Binary R Package Manager from R2U)..."
-    _get_r_profile_site_path 
+    _log "INFO" "Setting up bspm (Binary R Package Manager)..."
+    _get_r_profile_site_path
 
-    if [[ ! -f "$R_PROFILE_SITE_PATH" ]]; then 
-        _log "WARN" "Rprofile.site '${R_PROFILE_SITE_PATH}' does not exist. Attempting to create."
-        mkdir -p "$(dirname "$R_PROFILE_SITE_PATH")" 
-        if ! touch "$R_PROFILE_SITE_PATH"; then
-            _log "ERROR" "Failed to create Rprofile.site at '${R_PROFILE_SITE_PATH}'. Cannot proceed with bspm config."
-            return 1
-        fi
+    if [[ -z "$R_PROFILE_SITE_PATH" ]]; then
+        _log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot setup bspm."; return 1
     fi
-    _backup_file "$R_PROFILE_SITE_PATH" 
-
 
     if ! _is_vm_or_ci_env; then
-        _log "INFO" "Not detected as root or a CI/VM environment. Skipping bspm setup for safety (bspm modifies system Rprofile)."
+        _log "INFO" "Not in root or CI/VM environment. Skipping bspm setup for safety."
         return 0
     fi
 
-    if [[ -z "${UBUNTU_CODENAME:-}" ]] && [[ -f "$R_ENV_STATE_FILE" ]]; then
-        _log "DEBUG" "fn_setup_bspm: Sourcing state file."
-        # shellcheck source=/dev/null
-        source "$R_ENV_STATE_FILE"
-    fi
-    if [[ -z "$UBUNTU_CODENAME" ]]; then 
-       _log "ERROR" "FATAL: UBUNTU_CODENAME is empty in fn_setup_bspm. Run 'fn_pre_flight_checks' first. Aborting."
-       return 1
-    fi
+    # Ensure directory exists
+    local r_profile_dir; r_profile_dir=$(dirname "$R_PROFILE_SITE_PATH")
+    if [[ ! -d "$r_profile_dir" ]]; then _run_command "Create Rprofile.site dir ${r_profile_dir}" mkdir -p "$r_profile_dir"; fi
 
-
-    local r_profile_dir
-    r_profile_dir=$(dirname "$R_PROFILE_SITE_PATH")
-    if [[ ! -d "$r_profile_dir" ]]; then
-        _run_command "Create directory for Rprofile.site: ${r_profile_dir}" mkdir -p "$r_profile_dir"
+    if [[ ! -f "$R_PROFILE_SITE_PATH" && ! -L "$R_PROFILE_SITE_PATH" ]]; then
+        _log "INFO" "Rprofile.site does not exist, creating it..."
+        _run_command "Create Rprofile.site: ${R_PROFILE_SITE_PATH}" touch "$R_PROFILE_SITE_PATH"
     fi
 
-
+    # Check if sudo is installed, install if missing
     if ! command -v sudo &>/dev/null; then
-        _log "WARN" "'sudo' command is not installed. bspm may require it. Attempting to install sudo..."
-        if [[ $EUID -ne 0 ]]; then 
-            _log "ERROR" "'sudo' is not installed and script is not running as root. Cannot install sudo."
+        _log "WARN" "'sudo' is not installed. Attempting to install..."
+        if [[ $EUID -ne 0 ]]; then
+            _log "ERROR" "'sudo' is not installed and you are not running as root. Please run this script as root to install sudo."
             return 1
+        else
+            _run_command "Install sudo" apt-get update -y
+            _run_command "Install sudo" apt-get install -y sudo
+            if ! command -v sudo &>/dev/null; then
+                _log "ERROR" "Failed to install sudo."
+                return 1
+            else
+                _log "INFO" "'sudo' successfully installed."
+            fi
         fi
-        _run_command "Install sudo package" apt-get install -y sudo
-        if ! command -v sudo &>/dev/null; then
-            _log "ERROR" "Failed to install 'sudo'. bspm setup might fail or be incomplete."
-            return 1
-        fi
-        _log "INFO" "'sudo' package successfully installed."
     else
-        _log "INFO" "'sudo' command is already available."
+        _log "INFO" "'sudo' is already installed."
     fi
 
-    _log "INFO" "Configuring R2U repository (provides bspm and binary R packages)..."
-    if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] && grep -q "r2u.stat.illinois.edu/ubuntu" "$R2U_APT_SOURCES_LIST_D_FILE"; then
-        _log "INFO" "R2U repository file '${R2U_APT_SOURCES_LIST_D_FILE}' seems to be already configured."
+    # Add R2U repository if not present
+    _log "INFO" "Adding R2U repository (if missing)..."
+    if [[ -f "$R2U_APT_SOURCES_LIST_D_FILE" ]] || grep -qrE "r2u\.stat\.illinois\.edu/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/; then
+        _log "INFO" "R2U repository already configured."
     else
-        local r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_jammy.sh" 
-        if [[ "$UBUNTU_CODENAME" == "noble" ]]; then
-             r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_noble.sh" 
-        elif [[ "$UBUNTU_CODENAME" == "focal" ]]; then
-             r2u_setup_script_url="${R2U_REPO_URL_BASE}/add_cranapt_focal.sh"
-        fi
-        _log "INFO" "Downloading R2U setup script from: ${r2u_setup_script_url}"
-        _run_command "Download R2U setup script" curl -fsSL "${r2u_setup_script_url}" -o "/tmp/add_r2u_repo.sh"
-        
-        _log "INFO" "Executing R2U repository setup script (/tmp/add_r2u_repo.sh)..."
-        if ! bash "/tmp/add_r2u_repo.sh" >> "$LOG_FILE" 2>&1; then
-            _log "ERROR" "Failed to execute R2U repository setup script. Check log for details."
-            rm -f "/tmp/add_r2u_repo.sh"
+        local r2u_add_script_url="${R2U_REPO_URL_BASE}/add_cranapt_${UBUNTU_CODENAME}.sh"
+        _log "INFO" "Downloading R2U setup script: ${r2u_add_script_url}"
+        _run_command "Download R2U setup script" curl -sSLf "${r2u_add_script_url}" -o /tmp/add_cranapt.sh
+        _log "INFO" "Executing R2U repository setup script..."
+        if ! sudo bash /tmp/add_cranapt.sh 2>&1 | sudo tee -a "$LOG_FILE"; then
+            _log "ERROR" "Failed to execute R2U repository setup script."
             return 1
         fi
-        _log "INFO" "R2U repository setup script executed. Apt cache likely updated by the script."
-        rm -f "/tmp/add_r2u_repo.sh"
+        rm -f /tmp/add_cranapt.sh
     fi
 
-    if _safe_systemctl list-units --type=service --all | grep -q 'dbus.service'; then
-        _log "INFO" "dbus.service found. Ensuring it is active/restarted."
-        _run_command "Restart dbus service via systemctl" _safe_systemctl restart dbus.service
-    elif command -v service &>/dev/null && service --status-all 2>&1 | grep -q 'dbus'; then
-        _log "INFO" "dbus found via 'service'. Attempting restart."
-        _run_command "Restart dbus service via service" service dbus restart
+    # Ensure dbus is running
+    if systemctl list-units --type=service | grep -q dbus; then
+        _log "INFO" "Restarting dbus service..."
+        sudo systemctl restart dbus
+    elif service --status-all 2>&1 | grep -q dbus; then
+        _log "INFO" "Restarting dbus service..."
+        sudo service dbus restart
     else
-        _log "WARN" "dbus service manager not detected or dbus not listed. If R package system dependency installation fails, ensure dbus is running."
+        _log "WARN" "dbus service not found. If package management fails, ensure dbus is running."
     fi
 
-    _log "INFO" "Installing bspm R package and its system dependencies (python3-dbus, python3-gi, python3-apt) via apt from R2U..."
-    local bspm_system_pkgs=("r-cran-bspm" "python3-dbus" "python3-gi" "python3-apt")
-    _run_command "Install r-cran-bspm and Python deps" apt-get install -y "${bspm_system_pkgs[@]}"
+    # Check for required system packages and install if missing
+    _log "INFO" "Checking for required system packages (r-base-core python3-dbus python3-gi python3-apt)..."
+    local missing_pkgs=()
+    for pkg in "r-base-core" "python3-dbus" "python3-gi" "python3-apt"; do
+        if ! dpkg -s "$pkg" &>/dev/null; then
+            missing_pkgs+=("$pkg")
+        fi
+    done
 
-    _log "INFO" "Configuring bspm options in Rprofile.site: ${R_PROFILE_SITE_PATH}"
-    local bspm_rprofile_config
-    read -r -d '' bspm_rprofile_config << EOF
-# Added by setup_r_env.sh for bspm configuration
-if (nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY"))) {
-    # Consider if bspm should be disabled by default in RStudio Server sessions
-    # options(bspm.enabled = FALSE) 
-} else if (interactive()) {
-    # For interactive non-RStudio, decide if auto-enable is desired
-} else {
-    # Enable bspm for non-interactive sessions (like this script's R calls)
-    if (requireNamespace("bspm", quietly = TRUE)) {
-        options(bspm.sudo = TRUE)
-        options(bspm.allow.sysreqs = TRUE)
-        bspm::enable()
-    }
+    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+        _log "INFO" "Installing missing system packages: ${missing_pkgs[*]}..."
+        if ! sudo apt-get install -y "${missing_pkgs[@]}"; then
+            _log "ERROR" "Failed to install required system packages."
+            return 1
+        else
+            _log "INFO" "Successfully installed required system packages."
+        fi
+    else
+        _log "INFO" "All required system packages are already installed."
+    fi
+
+    # Determine system R library path
+    local system_r_lib_path
+    system_r_lib_path=$(sudo Rscript -e 'cat(.Library)' 2>/dev/null)
+    _log "INFO" "System R library path: $system_r_lib_path"
+
+    export BSPM_ALLOW_SYSREQS=TRUE
+    export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+
+    _log "INFO" "Installing bspm as a system package (via apt)..."
+    if ! sudo apt-get install -y r-cran-bspm; then
+        _log "ERROR" "Failed to install bspm as a system package via apt."
+        return 1
+    fi
+
+    _log "INFO" "Configuring bspm to use sudo and system requirements..."
+    local rprofile_lines="options(bspm.sudo = TRUE)
+options(bspm.allow.sysreqs = TRUE)
+suppressMessages(bspm::enable())"
+    # Remove previous lines to avoid duplicates
+    sed -i '/options(bspm\.sudo *= *TRUE)/d' "$R_PROFILE_SITE_PATH"
+    sed -i '/options(bspm\.allow\.sysreqs *= *TRUE)/d' "$R_PROFILE_SITE_PATH"
+    sed -i '/suppressMessages(bspm::enable())/d' "$R_PROFILE_SITE_PATH"
+    # Add new config at the end
+    printf "\n%s\n" "$rprofile_lines" | tee -a "$R_PROFILE_SITE_PATH" >/dev/null
+
+    _log "INFO" "Debug: Content of Rprofile.site (${R_PROFILE_SITE_PATH}):"
+    tee -a "$LOG_FILE" < "$R_PROFILE_SITE_PATH" || _log "WARN" "Could not display Rprofile.site content."
+
+    _log "INFO" "Verifying bspm activation..."
+    set +e
+    bspm_status_output=$(
+        sudo R --vanilla -e "
+.libPaths(c('$system_r_lib_path', .libPaths()))
+if (!requireNamespace('bspm', quietly=TRUE)) {
+  cat('BSPM_NOT_INSTALLED\n'); quit(status=1)
 }
-# End of bspm configuration
-EOF
+options(bspm.sudo=TRUE, bspm.allow.sysreqs=TRUE)
+suppressMessages(bspm::enable())
+if ('bspm' %in% loadedNamespaces() && 'bspm' %in% rownames(installed.packages())) {
+  cat('BSPM_WORKING\n')
+} else {
+  cat('BSPM_NOT_MANAGING\n')
+  quit(status=2)
+}
+" 2>&1
+    )
+    bspm_status_rc=$?
+    set -e
 
-    local temp_rprofile
-    temp_rprofile=$(mktemp)
-    if [[ -z "$temp_rprofile" || ! -e "$temp_rprofile" ]]; then 
-        _log "ERROR" "Failed to create temporary file for Rprofile.site update. mktemp output: '${temp_rprofile}'"
-        return 1
-    fi
-    _log "DEBUG" "Temporary file for Rprofile.site update: ${temp_rprofile}"
-
-    if [[ ! -f "$R_PROFILE_SITE_PATH" ]]; then
-        _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not a regular file or does not exist before sed. Cannot update."
-        rm -f "$temp_rprofile"
-        return 1
-    fi
-    if [[ ! -w "$R_PROFILE_SITE_PATH" ]]; then 
-        _log "ERROR" "Rprofile.site '${R_PROFILE_SITE_PATH}' is not writable. Cannot update."
-        rm -f "$temp_rprofile"
-        return 1
-    fi
-
-    _log "DEBUG" "Attempting sed command: sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' '${R_PROFILE_SITE_PATH}' > '${temp_rprofile}'"
-    if sed '/# Added by setup_r_env.sh for bspm configuration/,/# End of bspm configuration/d' "$R_PROFILE_SITE_PATH" > "$temp_rprofile"; then
-        _log "DEBUG" "sed command successfully wrote to ${temp_rprofile}"
-    else
-        local sed_rc=$?
-        _log "ERROR" "sed command failed (RC: $sed_rc) to process ${R_PROFILE_SITE_PATH} into ${temp_rprofile}"
-        rm -f "$temp_rprofile"
-        return 1
-    fi
-    
-    _log "DEBUG" "Attempting printf command to append to ${temp_rprofile}"
-    if printf "\n%s\n" "$bspm_rprofile_config" >> "$temp_rprofile"; then
-        _log "DEBUG" "printf successfully appended bspm config to ${temp_rprofile}"
-    else
-        local printf_rc=$?
-        _log "ERROR" "printf command failed (RC: $printf_rc) to append bspm config to ${temp_rprofile}"
-        rm -f "$temp_rprofile"
-        return 1
-    fi
-    
-    _log "DEBUG" "Contents of temporary Rprofile (${temp_rprofile}) before mv:"
-    head -c 1024 "$temp_rprofile" >> "$LOG_FILE" 
-    echo "..." >> "$LOG_FILE" 
-
-    _log "INFO" "Attempting to directly move ${temp_rprofile} to ${R_PROFILE_SITE_PATH}"
-    if mv -f "$temp_rprofile" "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 2>&1; then
-        _log "INFO" "Successfully updated Rprofile.site with bspm configuration using direct mv."
-    else
-        local mv_rc=$?
-        _log "ERROR" "Direct mv command FAILED (RC: ${mv_rc}) to update Rprofile.site from ${temp_rprofile} to ${R_PROFILE_SITE_PATH}."
-        _log "ERROR" "Rprofile.site may not be updated or may be in an inconsistent state. Check permissions and paths. Last few lines of log might show mv error."
-        tail -n 5 "$LOG_FILE" 
-        rm -f "$temp_rprofile" 
-        return 1 
-    fi
-
-    _log "INFO" "Content of Rprofile.site (${R_PROFILE_SITE_PATH}) after bspm configuration attempt:"
-    cat "$R_PROFILE_SITE_PATH" >> "$LOG_FILE" 
-
-    _log "INFO" "Verifying bspm activation status..."
-    local bspm_check_script="
-    if (!requireNamespace('bspm', quietly=TRUE)) {
-      cat('BSPM_NOT_INSTALLED\n'); quit(save='no', status=1)
-    }
-    options(bspm.sudo = TRUE, bspm.allow.sysreqs = TRUE)
-    if (requireNamespace('bspm', quietly=TRUE)) bspm::enable()
-
-    is_managing <- tryCatch(getOption('bspm.MANAGES', FALSE), error = function(e) FALSE)
-    if (is_managing) {
-      cat('BSPM_MANAGING\n')
-      quit(save='no', status=0)
-    } else {
-      cat('BSPM_NOT_MANAGING\n')
-      cat('bspm::can_load():\n')
-      try(print(bspm::can_load()))
-      cat('bspm:::.backend:\n') 
-      try(print(bspm:::.backend))
-      quit(save='no', status=2)
-    }
-    "
-    local bspm_status_output
-    local bspm_status_rc=0
-    bspm_status_output=$(Rscript -e "$bspm_check_script" 2>>"$LOG_FILE") || bspm_status_rc=$?
-
-    if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_MANAGING* ]]; then
-        _log "INFO" "bspm is installed and appears to be managing packages."
+    if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_WORKING* ]]; then
+        _log "INFO" "bspm is installed and managing packages."
     elif [[ "$bspm_status_output" == *BSPM_NOT_INSTALLED* ]]; then
-        _log "ERROR" "bspm R package is NOT installed properly, though apt reported success."
+        _log "ERROR" "bspm is NOT installed properly."
         return 2
     elif [[ "$bspm_status_output" == *BSPM_NOT_MANAGING* ]]; then
-        _log "ERROR" "bspm is installed but reports IT IS NOT MANAGING packages."
-        _log "ERROR" "bspm verification output: $bspm_status_output"
-        _log "ERROR" "This could be due to issues with dbus, python dependencies, or Rprofile.site settings. Check logs."
+        _log "ERROR" "bspm is installed but NOT managing packages."
+        _log "ERROR" "Debug output: $bspm_status_output"
         return 3
     else
-        _log "ERROR" "Unknown bspm status or Rscript error during verification."
-        _log "ERROR" "Rscript exit code: $bspm_status_rc. Output: $bspm_status_output"
+        _log "ERROR" "Unknown bspm status: $bspm_status_output"
         return 4
     fi
 
-    _log "INFO" "bspm setup and basic verification completed."
-    export BSPM_ALLOW_SYSREQS=TRUE 
+    _log "INFO" "bspm setup and verification completed."
 }
+
+
 
 fn_install_r_build_deps() {
     _log "INFO" "Installing common system dependencies for building R packages from source (e.g., for devtools)..."
