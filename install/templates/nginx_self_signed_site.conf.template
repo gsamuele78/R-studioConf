@@ -1,0 +1,28 @@
+# templates/nginx_self_signed_site.conf.template
+# Nginx server block for self-signed SSL RStudio proxy.
+# Placeholders %%PLACEHOLDER%% filled by setup script.
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    # Use specific server_name if not default, e.g., server_name %%NGINX_SERVER_NAME%%;
+    server_name _;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2 default_server;
+    listen [::]:443 ssl http2 default_server;
+    # Use specific server_name if not default, e.g., server_name %%NGINX_SERVER_NAME%%;
+    server_name _;
+
+    # SSL Configuration - paths filled by script
+    include %%NGINX_SSL_SNIPPET_SELF_SIGNED_FULLPATH%%; # e.g., /etc/nginx/snippets/self-signed.conf
+    include %%NGINX_SSL_PARAMS_SNIPPET_FULLPATH%%;    # e.g., /etc/nginx/snippets/ssl-params.conf
+
+    access_log /var/log/nginx/rstudio_access.log;
+    error_log /var/log/nginx/rstudio_error.log warn;
+
+    # Proxy location block will be inserted here by the script
+    %%NGINX_PROXY_LOCATION_BLOCK%%
+}
