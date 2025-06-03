@@ -1,0 +1,31 @@
+# templates/nginx_ssl_params.conf.template
+# Strong SSL/TLS parameters for Nginx.
+# This content will be written to the ssl-params snippet file.
+
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers on;
+# Modern cipher list, adjust based on compatibility needs and OpenSSL version.
+ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256';
+# Prefer modern ECDH curves. X25519 requires OpenSSL 1.1.1+.
+ssl_ecdh_curve X25519:secp521r1:secp384r1;
+
+ssl_session_timeout '10m';
+# Adjust SSL cache size based on expected traffic (e.g., 1MB can hold ~4000 sessions).
+ssl_session_cache shared:SSL:10m; # Name 'SSL' is arbitrary.
+ssl_session_tickets off; # Improves forward secrecy, slight performance hit for session resumption.
+
+# OCSP Stapling (Improves SSL handshake speed and privacy for clients)
+# resolver should point to DNS servers that can resolve OCSP responder hostnames.
+# resolver 8.8.8.8 8.8.4.4 valid=300s; # Example: Google Public DNS
+# resolver_timeout 5s;
+# ssl_stapling on;
+# ssl_stapling_verify on;
+# ssl_trusted_certificate /path/to/your/fullchain_with_intermediate.pem; # For stapling verification
+
+# Security Headers
+add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+add_header X-Content-Type-Options nosniff always;
+add_header X-Frame-Options DENY always; # Or SAMEORIGIN if iframes are needed from same site
+add_header X-XSS-Protection "1; mode=block" always; # Deprecated by some browsers, but adds defense-in-depth
+# Consider adding Content-Security-Policy (CSP) for further hardening:
+# add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';" always;
