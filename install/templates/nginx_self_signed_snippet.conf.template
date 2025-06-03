@@ -1,0 +1,7 @@
+# templates/nginx_self_signed_snippet.conf.template
+# Nginx snippet for self-signed certificate paths.
+# Placeholders %%PLACEHOLDER%% are filled by the setup script.
+
+ssl_certificate %%SELF_SIGNED_CERT_FULLPATH%%;
+ssl_certificate_key %%SELF_SIGNED_KEY_FULLPATH%%;
+ssl_dhparam %%DHPARAM_FULLPATH%%;
