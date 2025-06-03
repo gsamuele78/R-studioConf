@@ -1,0 +1,21 @@
+# templates/nginx_letsencrypt_http_site.conf.template
+# Initial Nginx HTTP server block for Certbot ACME challenge.
+# Placeholders %%PLACEHOLDER%% filled by setup script.
+
+server {
+    listen 80; # For FQDN specific, remove 'default_server' if other sites exist on port 80
+    listen [::]:80;
+    server_name %%FQDN%%;
+
+    root %%WEBROOT_FOR_CERTBOT%%; # Certbot will place challenge files here
+
+    location /.well-known/acme-challenge/ {
+        allow all; # Ensure challenges are accessible
+    }
+
+    # Optional: After cert is obtained, Certbot usually handles redirection.
+    # If not, you might add:
+    # location / {
+    #    return 301 https://$host$request_uri;
+    # }
+}
