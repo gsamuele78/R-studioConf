@@ -1,0 +1,149 @@
+#!/bin/bash
+# shellcheck disable=SC2034,SC2155,SC2086,SC2046 # Unused (template vars), dynamic var assignments, eval quotes
+# This script is generated from a template: templates/rstudio_user_login_script.sh.template
+# It is typically placed at: %%RSTUDIO_PROFILE_SCRIPT_PATH%%
+# Sourced upon user login (including RStudio sessions) to configure user-specific settings.
+
+set -u # Treat unset variables as an error
+
+# --- Configuration (values are placeholders filled by the setup script) ---
+USER_PROJECTS_BASE_DIR="%%R_PROJECTS_ROOT%%"
+USER_LOGIN_LOG_DIR_BASE="%%USER_LOGIN_LOG_ROOT%%"
+PYTHON_VERSION_FOR_PREFS="%%DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT%%"
+PYTHON_PATH_FOR_PREFS="%%DEFAULT_PYTHON_PATH_LOGIN_SCRIPT%%"
+# --- End Configuration ---
+
+CURRENT_USER=$(whoami)
+USER_LOGIN_LOG_FILE="${USER_LOGIN_LOG_DIR_BASE}/${CURRENT_USER}_login_setup.log"
+
+# Function to log messages from this script
+_log_user_setup() {
+    # Ensure log directory exists and is writable by user
+    mkdir -p "${USER_LOGIN_LOG_DIR_BASE}" # User might need to create their own log file
+    # Appending to user's log file. Using printf for robustness.
+    printf "%s - [%s] - %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "${CURRENT_USER}" "$1" >> "${USER_LOGIN_LOG_FILE}"
+}
+
+_ensure_command_exists() {
+    command -v "$1" >/dev/null 2>&1 || { _log_user_setup "Error: Command '$1' not found. Cannot proceed with some operations."; return 1; }
+    return 0
+}
+
+_setup_user_r_environment() {
+    _log_user_setup "Starting R environment setup for ${CURRENT_USER}."
+    local r_path r_version user_specific_projects_dir user_r_config_dir user_r_data_dir user_r_libs_dir
+    local user_actual_home r_environ_file entry key dir
+    declare -A renviron_settings
+
+    r_path=$(which R) || { _log_user_setup "R command not found."; return 1; }
+    r_version=$($r_path --version | head -n1 | awk '{print $3}' | awk -F. '{print $1"."$2}')
+    [[ -z "$r_version" ]] && { _log_user_setup "Could not determine R version."; return 1; }
+
+    user_specific_projects_dir="${USER_PROJECTS_BASE_DIR}/${CURRENT_USER}"
+    user_r_config_dir="${user_specific_projects_dir}/.config" # For XDG_CONFIG_HOME
+    user_r_data_dir="${user_specific_projects_dir}/.local/share" # For XDG_DATA_HOME
+    user_r_libs_dir="${user_specific_projects_dir}/R/x86_64-pc-linux-gnu-library/${r_version}"
+
+    for dir in "$user_specific_projects_dir" "$user_r_config_dir" "$user_r_data_dir" "$user_r_libs_dir"; do
+        mkdir -p "$dir" || { _log_user_setup "Failed to create directory $dir"; return 1; }
+        if [[ "$dir" == "$user_r_config_dir" ]] || [[ "$dir" == "$user_r_data_dir" ]]; then
+             chmod 700 "$dir"
+        else
+             chmod 750 "$dir" # User rwx, group rx (assuming group is set on parent by main script)
+        fi
+    done
+    _log_user_setup "User R directories created/ensured."
+
+    user_actual_home=$(eval echo ~"${CURRENT_USER}") # For tilde expansion to user's actual home
+    r_environ_file="${user_actual_home}/.Renviron"
+    touch "${r_environ_file}" # Ensure it exists
+
+    renviron_settings=(
+        ["R_LIBS_USER"]="\"${user_r_libs_dir}\""
+        ["XDG_CONFIG_HOME"]="\"${user_r_config_dir}\"" # RStudio Desktop like apps
+        ["XDG_DATA_HOME"]="\"${user_r_data_dir}\""   # RStudio Desktop like apps
+    )
+
+    for key in "${!renviron_settings[@]}"; do
+        entry="${key}=${renviron_settings[$key]}"
+        if ! grep -qxF "${entry}" "${r_environ_file}"; then
+             printf "%s\n" "${entry}" >> "${r_environ_file}"
+        fi
+    done
+    _log_user_setup ".Renviron configured at ${r_environ_file}."
+    return 0
+}
+
+_setup_rstudio_user_prefs() {
+    _log_user_setup "Configuring RStudio user preferences for ${CURRENT_USER}."
+    _ensure_command_exists "jq" || return 1
+
+    local user_specific_projects_dir="${USER_PROJECTS_BASE_DIR}/${CURRENT_USER}"
+    # RStudio preferences go to $XDG_CONFIG_HOME/rstudio/rstudio-prefs.json
+    # which, due to .Renviron, becomes ${user_specific_projects_dir}/.config/rstudio/rstudio-prefs.json
+    local rstudio_prefs_dir="${user_specific_projects_dir}/.config/rstudio"
+    local rstudio_prefs_file="${rstudio_prefs_dir}/rstudio-prefs.json"
+    local prefs_json_template prefs_json temp_prefs_file
+
+    mkdir -p "${rstudio_prefs_dir}" && chmod 700 "${rstudio_prefs_dir}"
+    touch "${rstudio_prefs_file}" && chmod 600 "${rstudio_prefs_file}"
+
+    # Define RStudio preferences JSON (ensure paths are valid JSON strings)
+    read -r -d '' prefs_json_template <<PREFS_EOF || true
+{
+  "initial_working_directory": "%s",
+  "default_project_location": "%s",
+  "posix_terminal_shell": "bash",
+  "show_last_dot_value": true, "auto_detect_indentation": true,
+  "highlight_selected_line": true, "highlight_r_function_calls": true,
+  "rainbow_parentheses": true, "check_arguments_to_r_function_calls": true,
+  "check_unexpected_assignment_in_function_call": true,
+  "warn_if_no_such_variable_in_scope": true, "warn_variable_defined_but_not_used": true,
+  "show_diagnostics_other": true, "syntax_color_console": true,
+  "auto_expand_error_tracebacks": true, "show_hidden_files": true,
+  "terminal_initial_directory": "current", "show_invisibles": true,
+  "show_help_tooltip_on_idle": true, "indent_guides": "rainbowfills",
+  "code_formatter": "styler",
+  "python_type": "system", "python_version": "${PYTHON_VERSION_FOR_PREFS}", "python_path": "${PYTHON_PATH_FOR_PREFS}",
+  "reformat_on_save": true
+}
+PREFS_EOF
+    printf -v prefs_json "$prefs_json_template" \
+        "${user_specific_projects_dir}" "${user_specific_projects_dir}"
+
+    temp_prefs_file=$(mktemp) || { _log_user_setup "Failed to create temp file for prefs."; return 1; }
+    if [[ ! -s "$rstudio_prefs_file" ]] || ! jq -e . "$rstudio_prefs_file" >/dev/null 2>&1; then
+        printf "%s\n" "$prefs_json" > "$rstudio_prefs_file"
+        _log_user_setup "Initialized RStudio preferences at ${rstudio_prefs_file}."
+    else
+        # Merge existing with new, new overwrites common keys
+        jq -s '.[0] * .[1]' "$rstudio_prefs_file" <(printf "%s\n" "$prefs_json") > "$temp_prefs_file" && \
+        mv "$temp_prefs_file" "$rstudio_prefs_file"
+        _log_user_setup "Merged RStudio preferences into ${rstudio_prefs_file}."
+    fi
+    rm -f "$temp_prefs_file"
+    chmod 600 "$rstudio_prefs_file" # Ensure permissions
+    return 0
+}
+
+# Main execution for this login script
+_log_user_setup "User login script started (template version)."
+if _ensure_command_exists "R" && \
+   _ensure_command_exists "awk" && \
+   _ensure_command_exists "grep" && \
+   _ensure_command_exists "sed" && \
+   _ensure_command_exists "mkdir" && \
+   _ensure_command_exists "touch" && \
+   _ensure_command_exists "chmod" && \
+   _ensure_command_exists "printf" && \
+   _ensure_command_exists "eval" && \
+   _ensure_command_exists "mktemp"; then
+    if _setup_user_r_environment && _setup_rstudio_user_prefs; then
+        _log_user_setup "User R environment and RStudio preferences setup successfully."
+    else
+        _log_user_setup "Errors occurred during user R environment or RStudio preferences setup."
+    fi
+else
+    _log_user_setup "One or more critical commands missing. Aborting user setup script."
+fi
+_log_user_setup "User login script finished."
