@@ -19,7 +19,7 @@ BACKUP_DIR_BASE="/tmp/config_backups_$(date +%Y%m%d)" # Group backups by day
 # --- END CONFIGURATION VARIABLES ---
 
 # Global variable to hold the unique backup directory path for the current script execution session
-CURRENT_BACKUP_DIR=""
+CURRENT_BACKUP_DIR="" # Populated by setup_backup_dir
 
 # Logging function
 # Usage: log "Your log message here"
@@ -73,7 +73,7 @@ _backup_item() {
     local cp_opts="-aL"
 
     if [[ ! -e "$src_path" ]]; then
-        # log "Info: Source '${src_path}' does not exist, skipping backup of this item." # Can be verbose
+        log "Info: Source '${src_path}' does not exist, skipping backup of this item." # Can be verbose
         return 0 # Source doesn't exist, nothing to backup
     fi
     
@@ -129,6 +129,7 @@ backup_config() {
     _backup_item "/etc/rstudio/env-vars" "$CURRENT_BACKUP_DIR/etc/rstudio"
     _backup_item "/etc/R/Renviron.site" "$CURRENT_BACKUP_DIR/etc/R"
     _backup_item "/etc/R/Rprofile.site" "$CURRENT_BACKUP_DIR/etc/R"
+    # Example self-signed key/cert paths from nginx_setup.vars.conf (adjust if vars change)
     _backup_item "/etc/ssl/private/nginx-selfsigned.key" "$CURRENT_BACKUP_DIR/etc/ssl/private" # Example self-signed key
     _backup_item "/etc/ssl/certs/nginx-selfsigned.crt" "$CURRENT_BACKUP_DIR/etc/ssl/certs"   # Example self-signed cert
     _backup_item "/etc/profile.d/00_rstudio_user_logins.sh" "$CURRENT_BACKUP_DIR/etc/profile.d" # Example only, script uses var
@@ -221,9 +222,8 @@ restore_config() {
     _restore_item "$latest_backup/etc/rstudio/env-vars" "/etc/rstudio/env-vars"
     _restore_item "$latest_backup/etc/R/Renviron.site" "/etc/R/Renviron.site"
     _restore_item "$latest_backup/etc/R/Rprofile.site" "/etc/R/Rprofile.site"
-    # Use actual paths from nginx_setup.vars.conf if they were customized
-    _restore_item "$latest_backup/etc/ssl/private/nginx-rstudio-selfsigned.key" "/etc/ssl/private/nginx-rstudio-selfsigned.key"
-    _restore_item "$latest_backup/etc/ssl/certs/nginx-rstudio-selfsigned.crt" "/etc/ssl/certs/nginx-rstudio-selfsigned.crt"
+    _restore_item "$latest_backup/etc/ssl/private/nginx-rstudio-selfsigned.key" "/etc/ssl/private/nginx-rstudio-selfsigned.key" # Use actual var if different
+    _restore_item "$latest_backup/etc/ssl/certs/nginx-rstudio-selfsigned.crt" "/etc/ssl/certs/nginx-rstudio-selfsigned.crt" # Use actual var if different
     _restore_item "$latest_backup/etc/profile.d/00_rstudio_user_logins.sh" "/etc/profile.d/00_rstudio_user_logins.sh" # Update if var used
     _restore_item "$latest_backup/etc/sssd/sssd.conf" "/etc/sssd/sssd.conf"
     _restore_item "$latest_backup/etc/krb5.conf" "/etc/krb5.conf"
@@ -280,7 +280,7 @@ ensure_dir_exists() {
     if [[ ! -d "$dir_path" ]]; then
         # run_command handles logging of mkdir
         run_command "mkdir -p \"$dir_path\"" || return 1 # Propagate error
-        # log "Ensured directory exists: $dir_path" # Can be verbose, run_command logs execution
+        log "Ensured directory exists: $dir_path" # Can be verbose, run_command logs execution
     fi
     return 0
 }
