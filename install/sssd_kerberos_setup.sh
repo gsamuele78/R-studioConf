@@ -221,7 +221,7 @@ join_ad_domain_realm() {
     read -r -p "Enter customizable part of Computer OU (e.g., ServerFarm_Navile) [default: ${DEFAULT_COMPUTER_OU_CUSTOM_PART}]: " computer_ou_custom_part_input
     local computer_ou_custom_part=${computer_ou_custom_part_input:-$DEFAULT_COMPUTER_OU_CUSTOM_PART}
     # Construct the full OU path, customizable part first
-    FULL_COMPUTER_OU="OU=${computer_ou_custom_part},${DEFAULT_COMPUTER_OU_BASE}" # Set global
+    FULL_COMPUTER_OU="${computer_ou_custom_part},${DEFAULT_COMPUTER_OU_BASE}" # Set global
 
     read -r -p "Enter OS Name for AD object [default: ${DEFAULT_OS_NAME}]: " os_name_input
     OS_NAME=${os_name_input:-$DEFAULT_OS_NAME} # Set global
@@ -240,7 +240,7 @@ join_ad_domain_realm() {
 
     log "Joining domain $AD_DOMAIN_LOWER (this may prompt for password for $AD_ADMIN_USER)..."
     # Construct the realm join command
-    local realm_join_cmd="realm join --verbose -U \"$AD_ADMIN_USER\" --computer-ou=\"$FULL_COMPUTER_OU\" --os-name=\"$OS_NAME\" \"$AD_DOMAIN_LOWER\""
+    local realm_join_cmd="realm join --verbose -U \"$AD_ADMIN_USER@$AD_DOMAIN_UPPER\" --computer-ou=\"$FULL_COMPUTER_OU\" --os-name=\"$OS_NAME\" \"$AD_DOMAIN_LOWER\""
     
     if run_command "$realm_join_cmd"; then
         log "Successfully joined domain $AD_DOMAIN_LOWER using 'realm join'."
@@ -260,6 +260,7 @@ generate_sssd_conf_from_template() {
     log "Gathering information for sssd.conf from template..."
     if [[ ! -f "$SSSD_CONF_TEMPLATE_PATH" ]]; then
         log "ERROR: SSSD template file not found at $SSSD_CONF_TEMPLATE_PATH"
+	GENERATED_SSSD_CONF="" # Ensure it's empty on error
         return 1
     fi
 
@@ -291,42 +292,57 @@ generate_sssd_conf_from_template() {
     log "Kerberos Realm (UPPER): $AD_DOMAIN_UPPER"
     log "Fallback Home Directory Template: $FALLBACK_HOMEDIR_TEMPLATE"
     log "Use Fully Qualified Names: $USE_FQNS"
-    log "Allowed AD Groups (simple_allow_groups): ${SIMPLE_ALLOW_GROUPS:-Not set (no restriction by this parameter)}"
+    log "Allowed AD Groups (simple_allow_groups): ${SIMPLE_ALLOW_GROUPS:-All users (if no other restrictions by this setting)}"
     log "Client Hostname (for ad_hostname): $client_hostname"
     log "GPO Map Service for RStudio: ${AD_GPO_MAP_SERVICE_CONFIG:-Not set}"
     log "---"
-
-    local template_content
-    template_content=$(_get_template_content "sssd.conf.template") || return 1 # _get_template_content uses TEMPLATE_DIR
-                                                                         # which is not set here. SSSD_CONF_TEMPLATE_PATH is full.
-                                                                         # Corrected _get_template_content to take full path or use a global.
-                                                                         # Simpler: cat directly here.
-    template_content=$(<"$SSSD_CONF_TEMPLATE_PATH")
     
-    # Use the apply_replacements helper from common_utils.sh
-    GENERATED_SSSD_CONF=$(apply_replacements "$template_content" \
-        "%%AD_DOMAIN_LOWER%%" "$AD_DOMAIN_LOWER" \
-        "%%AD_DOMAIN_UPPER%%" "$AD_DOMAIN_UPPER" \
-        "%%FALLBACK_HOMEDIR_TEMPLATE%%" "$FALLBACK_HOMEDIR_TEMPLATE" \
-        "%%USE_FQNS%%" "$USE_FQNS" \
-        "%%CLIENT_HOSTNAME%%" "$client_hostname" \
-        "%%SIMPLE_ALLOW_GROUPS_LINE%%" "$( [[ -n "$SIMPLE_ALLOW_GROUPS" ]] && printf "simple_allow_groups = %s" "$SIMPLE_ALLOW_GROUPS" || printf "#simple_allow_groups = " )" \
-        "%%AD_GPO_MAP_SERVICE_LINE%%" "$( [[ -n "$AD_GPO_MAP_SERVICE_CONFIG" ]] && printf "ad_gpo_map_service = %s" "$AD_GPO_MAP_SERVICE_CONFIG" || printf "#ad_gpo_map_service = " )" \
-    )
-    # Store in global var for potential viewing before applying
+    local simple_allow_groups_line_val="#simple_allow_groups = " # Default to commented out
+    if [[ -n "$SIMPLE_ALLOW_GROUPS" ]]; then
+        simple_allow_groups_line_val="simple_allow_groups = $SIMPLE_ALLOW_GROUPS"
+    fi
+
+    local ad_gpo_map_service_line_val="#ad_gpo_map_service = " # Default to commented out
+    if [[ -n "$AD_GPO_MAP_SERVICE_CONFIG" ]]; then
+        ad_gpo_map_service_line_val="ad_gpo_map_service = $AD_GPO_MAP_SERVICE_CONFIG"
+    fi
+
+    # Call the corrected process_template function from common_utils.sh
+    # The output variable is GENERATED_SSSD_CONF (global in this script)
+    if ! process_template "$SSSD_CONF_TEMPLATE_PATH" "GENERATED_SSSD_CONF" \
+        "AD_DOMAIN_LOWER=$AD_DOMAIN_LOWER" \
+        "AD_DOMAIN_UPPER=$AD_DOMAIN_UPPER" \
+        "FALLBACK_HOMEDIR_TEMPLATE=$FALLBACK_HOMEDIR_TEMPLATE" \
+        "USE_FQNS=$USE_FQNS" \
+        "CLIENT_HOSTNAME=$client_hostname" \
+        "SIMPLE_ALLOW_GROUPS_LINE=$simple_allow_groups_line_val" \
+        "AD_GPO_MAP_SERVICE_LINE=$ad_gpo_map_service_line_val"; then
+        log "ERROR: Failed to process SSSD template file '$SSSD_CONF_TEMPLATE_PATH'."
+        GENERATED_SSSD_CONF="" # Ensure it's empty on error
+        return 1
+    fi
+    
+    if [[ -z "$GENERATED_SSSD_CONF" ]]; then
+        log "ERROR: Processed SSSD configuration is empty."
+        return 1
+    fi
+
     return 0
 }
 
+
+
+   
 # Writes the generated SSSD configuration to /etc/sssd/sssd.conf.
 configure_sssd_conf() {
     log "Configuring /etc/sssd/sssd.conf from template..."
-    # Ensure GENERATED_SSSD_CONF is populated, typically by calling generate_sssd_conf_from_template first.
-    if [[ -z "$GENERATED_SSSD_CONF" ]]; then
-        log "No SSSD configuration content generated yet. Please run template generation first (e.g., via Full Setup or View option)."
-        # Optionally call generate_sssd_conf_from_template here if it's meant to be self-contained.
-        generate_sssd_conf_from_template || { log "ERROR: Failed to generate sssd.conf content from template."; return 1; }
+    # generate_sssd_conf_from_template now populates the global GENERATED_SSSD_CONF
+    if ! generate_sssd_conf_from_template; then
+        log "ERROR: Failed to generate sssd.conf content from template. Aborting sssd.conf configuration."
+        return 1
     fi
 
+	
     local sssd_conf_target="/etc/sssd/sssd.conf"
     ensure_dir_exists "$(dirname "$sssd_conf_target")" # Ensure /etc/sssd exists
 
