@@ -832,10 +832,10 @@ fn_setup_bspm() {
     fi
 
     # Ensure dbus is running
-    if systemctl list-units --type=service | grep -q dbus; then
+    if systemctl list-units --type=service | grep -q dbus.service; then
         _log "INFO" "Restarting dbus service..."
-        sudo systemctl restart dbus
-    elif service --status-all 2>&1 | grep -q dbus; then
+        sudo systemctl restart dbus.service
+    elif service --status-all 2>&1 | grep -q dbus.service; then
         _log "INFO" "Restarting dbus service..."
         sudo service dbus restart
     else
