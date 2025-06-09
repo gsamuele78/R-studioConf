@@ -335,5 +335,69 @@ _get_template_content() {
     cat "$template_path" # Output content to be captured by command substitution $()
     return 0 # cat will return 0 on success
 }
+# Helper function to process a template file and replace placeholders.
+# Usage:
+#   local my_processed_content
+#   process_template "template_file_path" "my_processed_content" \
+#       "PLACEHOLDER1=value1" \
+#       "PLACEHOLDER2=value with spaces" \
+#       "PLACEHOLDER_WITH_SLASHES=path/to/something"
+# The function assigns the processed content to the variable named by the second argument.
+process_template() {
+    local template_file="$1"
+    local output_var_name="$2" # Name of the variable to store the processed content
+    shift 2 # Remove template_file and output_var_name from arguments
 
+    if [[ ! -f "$template_file" ]]; then
+        log "ERROR: Template file not found at $template_file"
+        # Set output var to empty to indicate failure to caller
+        printf -v "$output_var_name" ""
+        return 1
+    fi
+
+    local template_content
+    template_content=$(<"$template_file")
+    if [[ -z "$template_content" ]] && [[ -s "$template_file" ]]; then # Check if read failed for non-empty file
+        log "ERROR: Failed to read content from template file $template_file"
+        printf -v "$output_var_name" ""
+        return 1
+    fi
+
+    local placeholder value original_placeholder
+    for arg in "$@"; do
+        # SC2086 is fine here as we are splitting by '='
+        # shellcheck disable=SC2206
+        IFS='=' read -r original_placeholder value <<< "$arg"
+        
+        # Ensure placeholder is not empty to prevent replacing everything
+        if [[ -z "$original_placeholder" ]]; then
+            log "Warning: Empty placeholder encountered in process_template for arg '$arg'. Skipping."
+            continue
+        fi
+        
+        # The placeholder in the template file is %%PLACEHOLDER%%
+        placeholder="%%${original_placeholder}%%"
+
+        # Escape characters in 'value' that are special for sed's 's' command RHS: &, \, /, and newline
+        local escaped_value="${value//&/\\&}"   # Escape &
+        escaped_value="${escaped_value//\\/\\\\}" # Escape \
+        escaped_value="${escaped_value//\//\\/}"   # Escape /
+        # For newlines, sed needs '\n' on RHS. If value has literal newlines, they need to be converted.
+        # This is more complex. For now, assume values are single-line or newlines are handled by context.
+        # If 'value' itself contains newlines and should be inserted as multi-line, this sed approach might need `awk`.
+        # However, for simple key=value config items, values are typically single-line.
+
+        # Using a different delimiter for sed to handle paths in 'value' more easily
+        template_content=$(echo "$template_content" | sed "s|$placeholder|$escaped_value|g")
+    done
+    
+    # Assign to the output variable (using printf -v for safety)
+    if printf -v "$output_var_name" "%s" "$template_content"; then
+        return 0
+    else
+        log "ERROR: Failed to assign processed content to variable '$output_var_name'."
+        printf -v "$output_var_name" "" # Ensure it's empty on error
+        return 1
+    fi
+}
 log "common_utils.sh sourced and initialized."
