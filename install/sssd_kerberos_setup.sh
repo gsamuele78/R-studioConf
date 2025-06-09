@@ -178,7 +178,7 @@ install_sssd_krb_packages() {
     log "Installing SSSD, Kerberos, and related packages..."
     # NTP client installation is handled by ensure_time_sync
     local -a packages_to_install_list=(
-        sssd sssd-tools sssd-ad sssd-krb5 libsss-sudo# Core SSSD for AD
+        sssd sssd-tools sssd-ad sssd-krb5 libsss-sudo # Core SSSD for AD
         krb5-user        # Kerberos client utilities (kinit, klist)
         libpam-sss       # PAM module for SSSD authentication
         libnss-sss       # NSS module for SSSD user/group lookups
