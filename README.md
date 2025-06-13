@@ -155,7 +155,7 @@ sudo bash setup_r_env.sh uninstall_all
 
 ## License
 
-This project is licensed under the GPL-3.0 License. See the `LICENSE` file for details.
+This project is licensed under the GPL-3.0 License. See the [`LICENSE`](https://github.com/gsamuele78/R-studioConf/blob/main/LICENSE) file for details.
 
 ---
 
