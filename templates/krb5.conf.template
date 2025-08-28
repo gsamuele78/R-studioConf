@@ -1,0 +1,17 @@
+# krb5.conf template for Kerberos setup
+# Placeholders: {{default_realm}}, {{dns_lookup_realm}}, {{dns_lookup_kdc}}, {{realm}}, {{kdc}}, {{admin_server}}, {{domain_realm}}
+
+[libdefaults]
+    default_realm = {{default_realm}}
+    dns_lookup_realm = {{dns_lookup_realm}}
+    dns_lookup_kdc = {{dns_lookup_kdc}}
+
+[realms]
+    {{realm}} = {
+        kdc = {{kdc}}
+        admin_server = {{admin_server}}
+    }
+
+[domain_realm]
+    .{{domain_realm}} = {{realm}}
+    {{domain_realm}} = {{realm}}
