@@ -127,6 +127,88 @@ join_ad_domain_realm() { log "Attempting to join Active Directory domain..."; lo
 generate_sssd_conf_from_template() { log "Gathering information for sssd.conf from template..."; if [[ ! -f "$SSSD_CONF_TEMPLATE_PATH" ]]; then log "ERROR: SSSD template file not found at $SSSD_CONF_TEMPLATE_PATH"; GENERATED_SSSD_CONF=""; return 1; fi; if [[ -z "${AD_DOMAIN_LOWER}" ]] || [[ -z "${AD_DOMAIN_UPPER}" ]]; then local ad_domain_lower_conf_input; read -r -p "Enter AD Domain (lowercase) for sssd.conf [default: ${DEFAULT_AD_DOMAIN_LOWER}]: " ad_domain_lower_conf_input; AD_DOMAIN_LOWER=${ad_domain_lower_conf_input:-$DEFAULT_AD_DOMAIN_LOWER}; AD_DOMAIN_UPPER=$(echo "$AD_DOMAIN_LOWER" | tr '[:lower:]' '[:upper:]'); fi; local fallback_homedir_template_input use_fqns_input simple_allow_groups_input ad_gpo_map_service_input; read -r -p "Enter fallback_homedir template [default: ${DEFAULT_FALLBACK_HOMEDIR_TEMPLATE}]: " fallback_homedir_template_input; FALLBACK_HOMEDIR_TEMPLATE="${fallback_homedir_template_input:-$DEFAULT_FALLBACK_HOMEDIR_TEMPLATE}"; read -r -p "Use fully qualified names for login? (true/false) [default: ${DEFAULT_USE_FQNS}]: " use_fqns_input; USE_FQNS="${use_fqns_input:-$DEFAULT_USE_FQNS}"; read -r -p "Enter comma-separated AD groups to allow login (blank for none) [default: '${DEFAULT_SIMPLE_ALLOW_GROUPS}']: " simple_allow_groups_input; SIMPLE_ALLOW_GROUPS="${simple_allow_groups_input:-$DEFAULT_SIMPLE_ALLOW_GROUPS}"; read -r -p "Enter GPO service mapping for RStudio (e.g., +rstudio) [default: '${DEFAULT_AD_GPO_MAP_SERVICE}']: " ad_gpo_map_service_input; AD_GPO_MAP_SERVICE_CONFIG="${ad_gpo_map_service_input:-$DEFAULT_AD_GPO_MAP_SERVICE}"; local client_hostname; client_hostname=$(hostname -f 2>/dev/null || hostname); log "--- SSSD Configuration Summary ---"; log "Template: $SSSD_CONF_TEMPLATE_PATH"; log "Domain: $AD_DOMAIN_LOWER | Realm: $AD_DOMAIN_UPPER | HomeDir: $FALLBACK_HOMEDIR_TEMPLATE"; log "FQNs: $USE_FQNS | Groups: ${SIMPLE_ALLOW_GROUPS:-Any} | GPO RStudio: ${AD_GPO_MAP_SERVICE_CONFIG:-None}"; log "Client Hostname: $client_hostname"; log "---"; local simple_allow_groups_line_val="#simple_allow_groups = "; if [[ -n "$SIMPLE_ALLOW_GROUPS" ]]; then simple_allow_groups_line_val="simple_allow_groups = $SIMPLE_ALLOW_GROUPS"; fi; local ad_gpo_map_service_line_val="#ad_gpo_map_service = "; if [[ -n "$AD_GPO_MAP_SERVICE_CONFIG" ]]; then ad_gpo_map_service_line_val="ad_gpo_map_service = $AD_GPO_MAP_SERVICE_CONFIG"; fi; if ! process_template "$SSSD_CONF_TEMPLATE_PATH" "GENERATED_SSSD_CONF" "AD_DOMAIN_LOWER=$AD_DOMAIN_LOWER" "AD_DOMAIN_UPPER=$AD_DOMAIN_UPPER" "FALLBACK_HOMEDIR_TEMPLATE=$FALLBACK_HOMEDIR_TEMPLATE" "USE_FQNS=$USE_FQNS" "CLIENT_HOSTNAME=$client_hostname" "SIMPLE_ALLOW_GROUPS_LINE=$simple_allow_groups_line_val" "AD_GPO_MAP_SERVICE_LINE=$ad_gpo_map_service_line_val"; then log "ERROR: Failed to process SSSD template file '$SSSD_CONF_TEMPLATE_PATH'."; GENERATED_SSSD_CONF=""; return 1; fi; if [[ -z "$GENERATED_SSSD_CONF" ]]; then log "ERROR: Processed SSSD configuration is empty."; return 1; fi; return 0; }
 configure_sssd_conf() { log "Configuring /etc/sssd/sssd.conf from template..."; if ! generate_sssd_conf_from_template; then log "ERROR: Failed to generate sssd.conf content. Aborting configuration."; return 1; fi; local sssd_conf_target="/etc/sssd/sssd.conf"; ensure_dir_exists "$(dirname "$sssd_conf_target")"; log "Writing generated configuration to $sssd_conf_target"; if [[ -f "$sssd_conf_target" ]]; then run_command "cp \"$sssd_conf_target\" \"${sssd_conf_target}.bak_pre_script_$(date +%Y%m%d_%H%M%S)\""; fi; if ! printf "%s\n" "$GENERATED_SSSD_CONF" > "$sssd_conf_target"; then log "ERROR: Failed to write to $sssd_conf_target"; return 1; fi; run_command "chmod 0600 $sssd_conf_target" || log "Warning: Failed to set permissions on $sssd_conf_target."; log "$sssd_conf_target configured successfully. Content:"; run_command "cat $sssd_conf_target"; return 0; }
 configure_krb5_conf() { log "Ensuring basic Kerberos configuration in /etc/krb5.conf..."; local krb5_conf_target="/etc/krb5.conf"; ensure_file_exists "$krb5_conf_target" || return 1; if [[ -z "$AD_DOMAIN_UPPER" ]]; then local ad_domain_upper_krb_input; read -r -p "Enter AD Kerberos Realm (UPPERCASE) for krb5.conf [default: ${DEFAULT_AD_DOMAIN_UPPER}]: " ad_domain_upper_krb_input; AD_DOMAIN_UPPER=${ad_domain_upper_krb_input:-$DEFAULT_AD_DOMAIN_UPPER}; fi; if ! grep -q "\[libdefaults\]" "$krb5_conf_target"; then printf "\n[libdefaults]\n" >> "$krb5_conf_target"; fi; if ! grep -q "default_realm" "$krb5_conf_target"; then run_command "sed -i '/\\[libdefaults\\]/a \ \ default_realm = ${AD_DOMAIN_UPPER}' '${krb5_conf_target}'"; else run_command "sed -i 's/^[[:space:]]*default_realm[[:space:]]*=.*$/  default_realm = ${AD_DOMAIN_UPPER}/' '${krb5_conf_target}'"; fi; local default_ccache_line="default_ccache_name = FILE:/tmp/krb5cc_%{uid}"; if ! grep -q "default_ccache_name" "$krb5_conf_target"; then run_command "sed -i '/\\[libdefaults\\]/a \ \ ${default_ccache_line}' '${krb5_conf_target}'"; fi; log "${krb5_conf_target} updated. Content:"; run_command "cat ${krb5_conf_target}"; return 0; }
+configure_krb5_conf() {
+    log "Configuring /etc/krb5.conf from template..."
+    local krb5_conf_template_path="${SCRIPT_DIR}/templates/krb5.conf.template"
+    local krb5_conf_target="/etc/krb5.conf"
+    ensure_file_exists "$krb5_conf_template_path" || { log "ERROR: krb5.conf template not found at $krb5_conf_template_path"; return 1; }
+    ensure_file_exists "$krb5_conf_target" || return 1
+
+    # Set values from provided data or defaults
+    local default_realm="PERSONALE.DIR.UNIBO.IT"
+    local dns_lookup_realm="true"
+    local dns_lookup_kdc="true"
+    local realm="PERSONALE.DIR.UNIBO.IT"
+    local kdc="dc1.personale.dir.unibo.it"
+    local admin_server="dc1.personale.dir.unibo.it"
+    local domain_realm="personale.dir.unibo.it"
+
+    # Read template and substitute variables
+    local krb5_conf_content
+    krb5_conf_content=$(<"$krb5_conf_template_path")
+    krb5_conf_content="${krb5_conf_content//\{\{default_realm\}\}/$default_realm}"
+    krb5_conf_content="${krb5_conf_content//\{\{dns_lookup_realm\}\}/$dns_lookup_realm}"
+    krb5_conf_content="${krb5_conf_content//\{\{dns_lookup_kdc\}\}/$dns_lookup_kdc}"
+    krb5_conf_content="${krb5_conf_content//\{\{realm\}\}/$realm}"
+    krb5_conf_content="${krb5_conf_content//\{\{kdc\}\}/$kdc}"
+    krb5_conf_content="${krb5_conf_content//\{\{admin_server\}\}/$admin_server}"
+    krb5_conf_content="${krb5_conf_content//\{\{domain_realm\}\}/$domain_realm}"
+
+    # Write to /etc/krb5.conf
+    log "Writing Kerberos configuration to $krb5_conf_target"
+    if [[ -f "$krb5_conf_target" ]]; then
+        run_command "cp \"$krb5_conf_target\" \"${krb5_conf_target}.bak_pre_script_$(date +%Y%m%d_%H%M%S)\""
+    fi
+    if ! printf "%s\n" "$krb5_conf_content" > "$krb5_conf_target"; then
+        log "ERROR: Failed to write to $krb5_conf_target"
+        return 1
+    fi
+    run_command "chmod 0644 $krb5_conf_target" || log "Warning: Failed to set permissions on $krb5_conf_target."
+    log "$krb5_conf_target configured successfully. Content:"
+    run_command "cat $krb5_conf_target"
+    return 0
+}
+configure_krb5_conf() {
+    log "Configuring /etc/krb5.conf from template..."
+    local krb5_conf_template_path="${SCRIPT_DIR}/templates/krb5.conf.template"
+    local krb5_conf_target="/etc/krb5.conf"
+    ensure_file_exists "$krb5_conf_template_path" || { log "ERROR: krb5.conf template not found at $krb5_conf_template_path"; return 1; }
+    ensure_file_exists "$krb5_conf_target" || return 1
+
+    # Set values from provided data or defaults
+    local default_realm="PERSONALE.DIR.UNIBO.IT"
+    local dns_lookup_realm="true"
+    local dns_lookup_kdc="true"
+    local realm="PERSONALE.DIR.UNIBO.IT"
+    local kdc="dc1.personale.dir.unibo.it"
+    local admin_server="dc1.personale.dir.unibo.it"
+    local domain_realm="personale.dir.unibo.it"
+
+    # Read template and substitute variables
+    local krb5_conf_content
+    krb5_conf_content=$(<"$krb5_conf_template_path")
+    krb5_conf_content="${krb5_conf_content//\{\{default_realm\}\}/$default_realm}"
+    krb5_conf_content="${krb5_conf_content//\{\{dns_lookup_realm\}\}/$dns_lookup_realm}"
+    krb5_conf_content="${krb5_conf_content//\{\{dns_lookup_kdc\}\}/$dns_lookup_kdc}"
+    krb5_conf_content="${krb5_conf_content//\{\{realm\}\}/$realm}"
+    krb5_conf_content="${krb5_conf_content//\{\{kdc\}\}/$kdc}"
+    krb5_conf_content="${krb5_conf_content//\{\{admin_server\}\}/$admin_server}"
+    krb5_conf_content="${krb5_conf_content//\{\{domain_realm\}\}/$domain_realm}"
+
+    # Write to /etc/krb5.conf
+    log "Writing Kerberos configuration to $krb5_conf_target"
+    if [[ -f "$krb5_conf_target" ]]; then
+        run_command "cp \"$krb5_conf_target\" \"${krb5_conf_target}.bak_pre_script_$(date +%Y%m%d_%H%M%S)\""
+    fi
+    if ! printf "%s\n" "$krb5_conf_content" > "$krb5_conf_target"; then
+        log "ERROR: Failed to write to $krb5_conf_target"
+        return 1
+    fi
+    run_command "chmod 0644 $krb5_conf_target" || log "Warning: Failed to set permissions on $krb5_conf_target."
+    log "$krb5_conf_target configured successfully. Content:"
+    run_command "cat $krb5_conf_target"
+    return 0
+}
 configure_nsswitch() { log "Checking and configuring /etc/nsswitch.conf for SSSD..."; local nss_conf_target="/etc/nsswitch.conf"; ensure_file_exists "$nss_conf_target" || return 1; local -a nss_databases=("passwd" "group" "shadow" "sudoers"); local entry_modified_overall=0; for entry in "${nss_databases[@]}"; do local current_line; current_line=$(grep "^${entry}:" "$nss_conf_target"); if [[ -z "$current_line" ]]; then add_line_if_not_present "${entry}: files sss" "$nss_conf_target"; entry_modified_overall=1; elif [[ "$current_line" != *sss* ]]; then log "Adding 'sss' to '$entry' in $nss_conf_target..."; run_command "sed -i -E 's/^((${entry}):.*)(files)(.*)/\1 sss\4/' '${nss_conf_target}'"; if ! grep -q "^${entry}:.* sss\b" "$nss_conf_target"; then run_command "sed -i -E 's/^((${entry}):.*)/\1 sss/' '${nss_conf_target}'"; fi; entry_modified_overall=1; else log "'sss' already configured for '${entry}:'."; fi; done; if [[ "$entry_modified_overall" -eq 1 ]]; then log "$nss_conf_target modified. Content:"; run_command "cat $nss_conf_target"; fi; return 0; }
 configure_pam() { log "Checking and configuring PAM for SSSD..."; if command -v pam-auth-update &>/dev/null; then log "Running pam-auth-update to ensure SSS and mkhomedir modules are enabled..."; if ! run_command "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable sss --enable mkhomedir"; then log "Warning: pam-auth-update failed."; fi; else log "Warning: pam-auth-update not found. Manual PAM configuration required."; fi; local rstudio_pam_file="/etc/pam.d/rstudio"; if [[ -f "$rstudio_pam_file" ]]; then log "RStudio PAM file content:"; run_command "cat $rstudio_pam_file"; else log "$rstudio_pam_file not found. RStudio will likely use system default PAM stack."; fi; return 0; }
 restart_and_verify_sssd() { log "Restarting SSSD service..."; run_command "systemctl daemon-reload"; if ! run_command "systemctl restart sssd"; then log "ERROR: Failed to restart SSSD."; return 1; fi; if ! run_command "systemctl is-active -q sssd"; then log "ERROR: SSSD not active post-restart."; return 1; fi; run_command "systemctl enable sssd"; log "SSSD restarted and is active."; log "Clearing SSSD cache..."; run_command "sss_cache -E"; return 0; }
