@@ -5,7 +5,7 @@
 # generation from a template, and a comprehensive suite of tests.
 
 # Determine the directory where this script resides
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/../scripts"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 # Define paths relative to SCRIPT_DIR
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
@@ -129,7 +129,7 @@ configure_sssd_conf() { log "Configuring /etc/sssd/sssd.conf from template..."; 
 configure_krb5_conf() { log "Ensuring basic Kerberos configuration in /etc/krb5.conf..."; local krb5_conf_target="/etc/krb5.conf"; ensure_file_exists "$krb5_conf_target" || return 1; if [[ -z "$AD_DOMAIN_UPPER" ]]; then local ad_domain_upper_krb_input; read -r -p "Enter AD Kerberos Realm (UPPERCASE) for krb5.conf [default: ${DEFAULT_AD_DOMAIN_UPPER}]: " ad_domain_upper_krb_input; AD_DOMAIN_UPPER=${ad_domain_upper_krb_input:-$DEFAULT_AD_DOMAIN_UPPER}; fi; if ! grep -q "\[libdefaults\]" "$krb5_conf_target"; then printf "\n[libdefaults]\n" >> "$krb5_conf_target"; fi; if ! grep -q "default_realm" "$krb5_conf_target"; then run_command "sed -i '/\\[libdefaults\\]/a \ \ default_realm = ${AD_DOMAIN_UPPER}' '${krb5_conf_target}'"; else run_command "sed -i 's/^[[:space:]]*default_realm[[:space:]]*=.*$/  default_realm = ${AD_DOMAIN_UPPER}/' '${krb5_conf_target}'"; fi; local default_ccache_line="default_ccache_name = FILE:/tmp/krb5cc_%{uid}"; if ! grep -q "default_ccache_name" "$krb5_conf_target"; then run_command "sed -i '/\\[libdefaults\\]/a \ \ ${default_ccache_line}' '${krb5_conf_target}'"; fi; log "${krb5_conf_target} updated. Content:"; run_command "cat ${krb5_conf_target}"; return 0; }
 configure_krb5_conf() {
     log "Configuring /etc/krb5.conf from template..."
-    local krb5_conf_template_path="${SCRIPT_DIR}/templates/krb5.conf.template"
+    local krb5_conf_template_path="${SCRIPT_DIR}/../templates/krb5.conf.template"
     local krb5_conf_target="/etc/krb5.conf"
     ensure_file_exists "$krb5_conf_template_path" || { log "ERROR: krb5.conf template not found at $krb5_conf_template_path"; return 1; }
     ensure_file_exists "$krb5_conf_target" || return 1
@@ -170,7 +170,7 @@ configure_krb5_conf() {
 }
 configure_krb5_conf() {
     log "Configuring /etc/krb5.conf from template..."
-    local krb5_conf_template_path="${SCRIPT_DIR}/templates/krb5.conf.template"
+    local krb5_conf_template_path="${SCRIPT_DIR}/../templates/krb5.conf.template"
     local krb5_conf_target="/etc/krb5.conf"
     ensure_file_exists "$krb5_conf_template_path" || { log "ERROR: krb5.conf template not found at $krb5_conf_template_path"; return 1; }
     ensure_file_exists "$krb5_conf_target" || return 1

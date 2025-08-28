@@ -8,7 +8,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 # Define paths relative to SCRIPT_DIR
-UTILS_SCRIPT_PATH="${SCRIPT_DIR}/common_utils.sh"
+UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 SSSD_KERBEROS_SCRIPT_PATH="${SCRIPT_DIR}/sssd_kerberos_setup.sh" # Path to SSSD script
 CONF_VARS_FILE="${SCRIPT_DIR}/../config/rstudio_setup.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates" # Used by _get_template_content
@@ -99,23 +99,34 @@ configure_rstudio_server_conf() {
 # Sets up shared R project directories and the user login script from a template.
 configure_rstudio_user_dirs_and_login_script() {
     log "Configuring RStudio user directories and login script..."
-    ensure_dir_exists "${R_PROJECTS_ROOT}" || return 1
-    ensure_dir_exists "${USER_LOGIN_LOG_ROOT}" || return 1
+    # Determine which user directory template to use
+    local user_dir_template
+    if [[ -n "$RSTUDIO_USER_HOME_TEMPLATE" ]]; then
+        user_dir_template="$RSTUDIO_USER_HOME_TEMPLATE"
+        log "Using SSSD/Kerberos home template for user directories: $user_dir_template"
+    else
+        user_dir_template="$R_PROJECTS_ROOT"
+        log "Using default RStudio user directory: $user_dir_template"
+    fi
+
+    # Ensure the chosen directory exists
+    ensure_dir_exists "$user_dir_template" || return 1
+    ensure_dir_exists "$USER_LOGIN_LOG_ROOT" || return 1
 
     local domain_group=""
     # Try primary group, then secondary, from config variables
-    if getent group "${TARGET_SHARED_DIR_GROUP_PRIMARY:-nogroup1}" &>/dev/null; then # nogroup1 to ensure it fails if var empty
+    if getent group "${TARGET_SHARED_DIR_GROUP_PRIMARY:-nogroup1}" &>/dev/null; then
         domain_group="${TARGET_SHARED_DIR_GROUP_PRIMARY}"
     elif getent group "${TARGET_SHARED_DIR_GROUP_SECONDARY:-nogroup2}" &>/dev/null; then
         domain_group="${TARGET_SHARED_DIR_GROUP_SECONDARY}"
     fi
 
     if [[ -n "$domain_group" ]]; then
-        run_command "chown -R root:\"$domain_group\" \"${R_PROJECTS_ROOT}\""
-        run_command "chmod -R g+rwx \"${R_PROJECTS_ROOT}\""; run_command "chmod g+s \"${R_PROJECTS_ROOT}\""
+        run_command "chown -R root:\"$domain_group\" \"$user_dir_template\""
+        run_command "chmod -R g+rwx \"$user_dir_template\""; run_command "chmod g+s \"$user_dir_template\""
         run_command "chown -R root:\"$domain_group\" \"${USER_LOGIN_LOG_ROOT}\""
         run_command "chmod -R g+rwx \"${USER_LOGIN_LOG_ROOT}\""; run_command "chmod g+s \"${USER_LOGIN_LOG_ROOT}\""
-        log "Set ownership/permissions for ${R_PROJECTS_ROOT} and ${USER_LOGIN_LOG_ROOT} for group '$domain_group'."
+        log "Set ownership/permissions for $user_dir_template and ${USER_LOGIN_LOG_ROOT} for group '$domain_group'."
     else
         log "Warning: Target shared directory groups ('${TARGET_SHARED_DIR_GROUP_PRIMARY}' or '${TARGET_SHARED_DIR_GROUP_SECONDARY}') not found. Shared directory permissions not fully set."
     fi
@@ -127,19 +138,18 @@ configure_rstudio_user_dirs_and_login_script() {
 
     local login_script_template_content
     login_script_template_content=$(_get_template_content "rstudio_user_login_script.sh.template") || return 1
-    
+
     log "Creating/Updating user login script ${RSTUDIO_PROFILE_SCRIPT_PATH} from template..."
     local final_script_content
     final_script_content=$(apply_replacements "$login_script_template_content" \
         "%%RSTUDIO_PROFILE_SCRIPT_PATH%%" "${RSTUDIO_PROFILE_SCRIPT_PATH}" \
-        "%%R_PROJECTS_ROOT%%" "${R_PROJECTS_ROOT}" \
+        "%%R_PROJECTS_ROOT%%" "$user_dir_template" \
         "%%USER_LOGIN_LOG_ROOT%%" "${USER_LOGIN_LOG_ROOT}" \
         "%%DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT%%" "${DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT}" \
         "%%DEFAULT_PYTHON_PATH_LOGIN_SCRIPT%%" "${DEFAULT_PYTHON_PATH_LOGIN_SCRIPT}" \
     )
-    
+
     # Write the processed content to the target script path
-    # Using printf for potentially complex content is safer than echo.
     if ! printf "%s" "$final_script_content" > "${RSTUDIO_PROFILE_SCRIPT_PATH}"; then
         log "ERROR: Failed to write user login script to ${RSTUDIO_PROFILE_SCRIPT_PATH}"
         return 1
@@ -318,7 +328,9 @@ main_rstudio_menu() {
         printf "\n===== RStudio Configuration Menu =====\n"
         printf "1. Full RStudio Setup (Prerequisites, Server Conf, User Dirs, Temp, Session Env)\n"
         printf "2. Check RStudio Prerequisites & Configure rserver.conf (%s)\n" "${RSERVER_CONF_PATH}"
-        printf "3. Configure User Directories & Login Script (%s)\n" "${RSTUDIO_PROFILE_SCRIPT_PATH}"
+    printf "3. Configure User Directories & Login Script\n"
+    printf "   [A] Use default directory (%s)\n" "${R_PROJECTS_ROOT}"
+    printf "   [B] Use SSSD/Kerberos home template (%s)\n" "${DEFAULT_FALLBACK_HOMEDIR_TEMPLATE:-/home/%d/%u}"
         printf "4. Configure Global RStudio Temporary Directory (%s)\n" "${GLOBAL_RSTUDIO_TMP_DIR}"
         printf "5. Configure RStudio Session/Environment Settings & R Profile\n"
         printf -- "--------------------------------------\n" # Using -- to indicate end of options for printf
@@ -344,7 +356,21 @@ main_rstudio_menu() {
                 log "NOTE: SSSD/Kerberos setup is a separate step (Option S)."
                 ;;
             2) backup_config && check_rstudio_prerequisites && configure_rstudio_server_conf ;;
-            3) backup_config && check_rstudio_prerequisites && configure_rstudio_user_dirs_and_login_script ;;
+            3)
+                printf "\nChoose user directory and login script location:\n"
+                printf "A) Use default directory (%s)\n" "${R_PROJECTS_ROOT}"
+                printf "B) Use SSSD/Kerberos home template (%s)\n" "${DEFAULT_FALLBACK_HOMEDIR_TEMPLATE:-/home/%d/%u}"
+                read -r -p "Select option [A/B]: " user_dir_choice
+                if [[ "$user_dir_choice" =~ ^[Bb]$ ]]; then
+                    # Use SSSD/Kerberos home template
+                    export RSTUDIO_USER_HOME_TEMPLATE="${DEFAULT_FALLBACK_HOMEDIR_TEMPLATE:-/home/%d/%u}"
+                    log "Using SSSD/Kerberos home template for user directories: $RSTUDIO_USER_HOME_TEMPLATE"
+                else
+                    # Use default directory
+                    unset RSTUDIO_USER_HOME_TEMPLATE
+                    log "Using default RStudio user directory: $R_PROJECTS_ROOT"
+                fi
+                backup_config && check_rstudio_prerequisites && configure_rstudio_user_dirs_and_login_script ;;
             4) backup_config && check_rstudio_prerequisites && configure_rstudio_global_tmp ;;
             5) backup_config && check_rstudio_prerequisites && configure_rstudio_session_env_settings ;;
             S|s)
