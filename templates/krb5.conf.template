@@ -1,17 +1,23 @@
-# krb5.conf template for Kerberos setup
-# Placeholders: {{default_realm}}, {{dns_lookup_realm}}, {{dns_lookup_kdc}}, {{realm}}, {{kdc}}, {{admin_server}}, {{domain_realm}}
+
+# krb5.conf template for Kerberos setup (updated for UNIBO and other realms)
+# Placeholders: {{default_realm}}, {{realms_block}}, {{domain_realm_block}}, {{libdefaults_extra}}
 
 [libdefaults]
     default_realm = {{default_realm}}
-    dns_lookup_realm = {{dns_lookup_realm}}
-    dns_lookup_kdc = {{dns_lookup_kdc}}
+    dns_lookup_realm = false
+    dns_lookup_kdc = false
+    kdc_timesync = 1
+    ccache_type = 4
+    forwardable = true
+    proxiable = true
+    rdns = false
+    fcc-mit-ticketflags = true
+    udp_preference_limit = 0
+    default_ccache_name = KEYRING:persistent:%{uid}
+    {{libdefaults_extra}}
 
 [realms]
-    {{realm}} = {
-        kdc = {{kdc}}
-        admin_server = {{admin_server}}
-    }
+{{realms_block}}
 
 [domain_realm]
-    .{{domain_realm}} = {{realm}}
-    {{domain_realm}} = {{realm}}
+{{domain_realm_block}}
