@@ -31,6 +31,7 @@ access_provider = ad
 # Kerberos realm should be uppercase
 krb5_realm = %%AD_DOMAIN_UPPER%%
 realmd_tags = manages-system joined-with-adcli # This tag is typically added by realmd
+krb5_ccname_template = KEYRING:persistent:%U
 
 # SSSD will discover AD servers using DNS SRV records.
 # Explicitly listing ad_server and ad_backup_server is generally not needed and less flexible.
