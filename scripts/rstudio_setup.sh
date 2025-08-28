@@ -10,8 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 # Define paths relative to SCRIPT_DIR
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/common_utils.sh"
 SSSD_KERBEROS_SCRIPT_PATH="${SCRIPT_DIR}/sssd_kerberos_setup.sh" # Path to SSSD script
-CONF_VARS_FILE="${SCRIPT_DIR}/conf/rstudio_setup.vars.conf"
-TEMPLATE_DIR="${SCRIPT_DIR}/templates" # Used by _get_template_content
+CONF_VARS_FILE="${SCRIPT_DIR}/../config/rstudio_setup.vars.conf"
+TEMPLATE_DIR="${SCRIPT_DIR}/../templates" # Used by _get_template_content
 
 # Source common utilities
 if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then

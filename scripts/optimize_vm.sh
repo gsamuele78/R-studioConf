@@ -97,7 +97,8 @@ qm set "${VMID}" --net0 "${NET_MODEL},bridge=${NETWORK_BRIDGE},queues=${CORES}"
 
 # --- Guest Agent Communication ---
 echo "INFO: Preparing guest-side optimization script..."
-if [[ -f "$GUEST_SCRIPT_TEMPLATE" ]]; then
+#!/bin/bash
+# This script is now located in scripts/ and uses new paths for config, lib, and templates.
     GUEST_SCRIPT_DEST="/tmp/guest_optimizer.sh"
     echo "INFO: A template for a guest-side script was found at '$GUEST_SCRIPT_TEMPLATE'."
     echo "INFO: This script should be copied to and executed inside the VM to apply OS-level tunings."

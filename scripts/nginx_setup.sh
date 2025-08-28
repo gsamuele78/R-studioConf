@@ -24,8 +24,8 @@ source "$UTILS_SCRIPT_PATH"
 if [[ -f "$CONF_VARS_FILE" ]]; then
     log "Sourcing Nginx configuration variables from $CONF_VARS_FILE"
     # shellcheck source=conf/nginx_setup.vars.conf
-    source "$CONF_VARS_FILE"
-else
+CONF_VARS_FILE="${SCRIPT_DIR}/../config/nginx_setup.vars.conf"
+TEMPLATE_DIR="${SCRIPT_DIR}/../templates" # Used by _get_template_content
     log "Warning: Nginx configuration file $CONF_VARS_FILE not found. Using script internal defaults."
     # Define crucial defaults here from nginx_setup.vars.conf
     NGINX_CONF_PATH="/etc/nginx/nginx.conf"

@@ -5,12 +5,12 @@
 # generation from a template, and a comprehensive suite of tests.
 
 # Determine the directory where this script resides
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/../scripts"
 
 # Define paths relative to SCRIPT_DIR
-UTILS_SCRIPT_PATH="${SCRIPT_DIR}/common_utils.sh"
-CONF_VARS_FILE="${SCRIPT_DIR}/conf/sssd_kerberos_setup.vars.conf"
-SSSD_CONF_TEMPLATE_PATH="${SCRIPT_DIR}/templates/sssd.conf.template"
+UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
+CONF_VARS_FILE="${SCRIPT_DIR}/../config/sssd_kerberos_setup.vars.conf"
+SSSD_CONF_TEMPLATE_PATH="${SCRIPT_DIR}/../templates/sssd.conf.template"
 
 # Source common utilities
 if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
