@@ -1,3 +1,46 @@
+# --- RStudio Server Verification and Script Chaining ---
+check_rstudio_server() {
+    log "INFO" "Checking RStudio Server installation and status..."
+    if command -v rstudio-server &>/dev/null; then
+        local rstudio_status
+        rstudio_status=$(rstudio-server status 2>&1)
+        log "INFO" "rstudio-server command found. Status: $rstudio_status"
+        if [[ "$rstudio_status" == *"active (running)"* ]]; then
+            log "INFO" "RStudio Server is running."
+        else
+            log "WARN" "RStudio Server is installed but not running."
+        fi
+        log "INFO" "RStudio Server version: $(rstudio-server version 2>/dev/null || echo 'Unknown')"
+    else
+        log "ERROR" "RStudio Server is not installed or not in PATH."
+        return 1
+    fi
+    log "INFO" "Checking if RStudio Server is accessible on port 8787..."
+    if ss -tuln | grep -q ':8787'; then
+        log "INFO" "RStudio Server is listening on port 8787."
+    else
+        log "WARN" "RStudio Server is not listening on port 8787. Check firewall or service status."
+    fi
+    log "INFO" "You can access RStudio Server at http://<YOUR_SERVER_IP>:8787 if not firewalled."
+
+    # Optionally chain other scripts in scripts/ directory
+    local scripts_dir="$(dirname "$0")/scripts"
+    if [[ -d "$scripts_dir" ]]; then
+        echo "Available scripts for subsequent steps:"
+        ls "$scripts_dir"/*.sh 2>/dev/null | while read -r script; do
+            echo "  - $(basename "$script")"
+        done
+        read -r -p "Do you want to run any script from scripts/? Enter script name or leave blank to skip: " script_choice
+        if [[ -n "$script_choice" && -f "$scripts_dir/$script_choice" ]]; then
+            log "INFO" "Running $script_choice from scripts directory..."
+            bash "$scripts_dir/$script_choice"
+        else
+            log "INFO" "No script selected or script not found. Skipping."
+        fi
+    else
+        log "WARN" "scripts directory not found."
+    fi
+}
 #!/usr/bin/env bash
 
 ##############################################################################
@@ -1059,23 +1102,24 @@ interactive_menu() {
         echo "System Architecture: ${RSTUDIO_ARCH:-Not yet detected (Run Pre-flight)}"
         echo "Rprofile.site for bspm: ${R_PROFILE_SITE_PATH:-Not yet determined/set}"
         echo "RStudio Server version (target): ${display_rstudio_version}"
-        echo "------------------------------------------------------------"
-        echo " Installation Steps:"
-        echo "  1. Full Installation (all steps below)"
-        echo "  2. Pre-flight Checks (detect OS, arch, install script deps, write state file)"
-        echo "  3. Add CRAN Repo & Install R"
-        echo "  4. Install OpenBLAS & OpenMP"
-        echo "  5. Verify OpenBLAS/OpenMP with R"
-        echo "  6. Setup BSPM (R2U Binary Package Manager)"
-        echo "  7. Install R Packages (CRAN & GitHub)"
-        echo "  8. Install RStudio Server"
-        echo "------------------------------------------------------------"
-        echo " Uninstallation:"
-        echo "  9. Uninstall All Components"
-        echo "  F. Toggle Aggressive User Data Cleanup for Uninstall (Current: ${FORCE_USER_CLEANUP})"
-        echo "------------------------------------------------------------"
-        echo "  0. Exit Menu"
-        echo "============================================================"
+    echo "------------------------------------------------------------"
+    echo " Installation Steps:"
+    echo "  1. Full Installation (all steps below)"
+    echo "  2. Pre-flight Checks (detect OS, arch, install script deps, write state file)"
+    echo "  3. Add CRAN Repo & Install R"
+    echo "  4. Install OpenBLAS & OpenMP"
+    echo "  5. Verify OpenBLAS/OpenMP with R"
+    echo "  6. Setup BSPM (R2U Binary Package Manager)"
+    echo "  7. Install R Packages (CRAN & GitHub)"
+    echo "  8. Install RStudio Server"
+    echo " 10. Check RStudio Server installation and run scripts in scripts/ directory"
+    echo "------------------------------------------------------------"
+    echo " Uninstallation:"
+    echo "  9. Uninstall All Components"
+    echo "  F. Toggle Aggressive User Data Cleanup for Uninstall (Current: ${FORCE_USER_CLEANUP})"
+    echo "------------------------------------------------------------"
+    echo "  0. Exit Menu"
+    echo "============================================================"
         read -r -p "Choose an option: " option
         case "$option" in
             1) install_all ;;
@@ -1087,6 +1131,7 @@ interactive_menu() {
             7) pre_flight_checks; install_r; setup_bspm; install_r_packages ;;
             8) pre_flight_checks; install_r; install_rstudio_server ;;
             9) uninstall_all ;;
+            10) check_rstudio_server ;;
             F|f)
                 if [[ "$FORCE_USER_CLEANUP" == "yes" ]]; then
                     FORCE_USER_CLEANUP="no"

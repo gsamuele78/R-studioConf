@@ -236,6 +236,7 @@ main_sssd_kerberos_menu() {
         printf "6. Configure nsswitch.conf for SSSD\n"
         printf "7. Configure PAM for SSSD (using pam-auth-update)\n"
         printf "8. Restart and Verify SSSD Service (includes cache clear)\n"
+        printf "9. Generate krb5.conf from template\n"
         printf -- "--------------------- Verification & Tests --------------------\n"
         printf "V1. Check SSSD Service Detailed Status\n"
         printf "V2. Check Machine's Kerberos Keytab (klist -kte)\n"
@@ -249,6 +250,48 @@ main_sssd_kerberos_menu() {
         printf "R. Restore All Configurations from Last Backup\n"
         printf "E. Exit SSSD/Kerberos Setup\n"
         printf "=======================================================\n"
+# --- Kerberos krb5.conf Generation ---
+generate_krb5_conf_from_template() {
+    local template_path="${SCRIPT_DIR}/../templates/krb5.conf.template"
+    local output_path="/etc/krb5.conf"
+    if [[ ! -f "$template_path" ]]; then
+        log "ERROR: krb5.conf template not found at $template_path"
+        return 1
+    fi
+
+    # Build realms block
+    local realms_block=""
+    realms_block+="    ${DEFAULT_DIR_UNIBO_REALM} = {\n"
+    realms_block+="        kdc = ${DEFAULT_DIR_UNIBO_KDC}\n"
+    realms_block+="        admin_server = ${DEFAULT_DIR_UNIBO_ADMIN_SERVER}\n    }\n"
+    realms_block+="    ${DEFAULT_PERSONALE_UNIBO_REALM} = {\n"
+    realms_block+="        kdc = ${DEFAULT_PERSONALE_UNIBO_KDC}\n"
+    realms_block+="        admin_server = ${DEFAULT_PERSONALE_UNIBO_ADMIN_SERVER}\n    }\n"
+    realms_block+="    ${DEFAULT_STUDENTI_UNIBO_REALM} = {\n"
+    realms_block+="        kdc = ${DEFAULT_STUDENTI_UNIBO_KDC}\n"
+    realms_block+="        admin_server = ${DEFAULT_STUDENTI_UNIBO_ADMIN_SERVER}\n    }\n"
+
+    # Build domain_realm block
+    local domain_realm_block=""
+    for mapping in "${DEFAULT_DOMAIN_REALM_MAPPINGS[@]}"; do
+        local domain=${mapping%%=*}
+        local realm=${mapping##*=}
+        domain_realm_block+="    ${domain} = ${realm}\n"
+    done
+
+    # Fill template
+    local default_realm="${DEFAULT_AD_DOMAIN_UPPER}"
+    local libdefaults_extra=""
+    sed \
+        -e "s|{{default_realm}}|${default_realm}|g" \
+        -e "s|{{realms_block}}|${realms_block}|g" \
+        -e "s|{{domain_realm_block}}|${domain_realm_block}|g" \
+        -e "s|{{libdefaults_extra}}|${libdefaults_extra}|g" "$template_path" > "$output_path"
+
+    log "INFO" "Generated krb5.conf at $output_path. Content:"
+    run_command "cat $output_path"
+    return 0
+}
         read -r -p "Enter choice: " choice
         case $choice in
             1) full_sssd_kerberos_setup ;;
@@ -260,6 +303,7 @@ main_sssd_kerberos_menu() {
             6) backup_config && configure_nsswitch && restart_and_verify_sssd ;;
             7) backup_config && configure_pam && restart_and_verify_sssd ;;
             8) restart_and_verify_sssd ;;
+            9) generate_krb5_conf_from_template ;;
             V1|v1) test_sssd_service_status ;; V2|v2) test_machine_keytab ;;
             V3|v3) test_kerberos_ticket ;; V4|v4) test_user_lookup ;;
             V5|v5) test_sssd_access_control ;; V6|v6) test_rstudio_pam_integration ;;
