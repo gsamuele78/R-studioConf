@@ -1,6 +1,8 @@
 
 # krb5.conf template for Kerberos setup (updated for UNIBO and other realms)
-# Placeholders: {{default_realm}}, {{realms_block}}, {{domain_realm_block}}, {{libdefaults_extra}}
+# Placeholders: {{default_realm}}, {{realms_block}}, {{domain_realm_block}}, {{libdefaults_extra}} End Placeholders
+###################################### 
+# Start Configuration
 
 [libdefaults]
     default_realm = {{default_realm}}
