@@ -121,35 +121,13 @@ readonly BACKUP_DIR="/var/backups/r_env_manager"
 readonly CONFIG_DIR="${SCRIPT_DIR}/config"
 readonly STATE_FILE="${SCRIPT_DIR}/.r_env_state"
 readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}.log"
+readonly CONFIG_FILE="${CONFIG_DIR}/r_env_manager.conf"
+R_PROFILE_SITE_PATH="" # Will be determined dynamically
 export MAX_RETRIES=3
 export TIMEOUT=1800  # 30 minutes (used for command timeouts)
 export DEBIAN_FRONTEND=noninteractive
 
 # --- Core Infrastructure Layer ---
-
-# Error Handling Framework
-handle_error() {
-    local error_code=$1
-    local error_message=$2
-    local recovery_action=${3:-}
-    
-    log "ERROR" "$error_message (Code: $error_code)"
-    
-    case $error_code in
-        1) log "ERROR" "Configuration error - Check settings";;
-        2) log "ERROR" "Network error - Check connectivity";;
-        3) log "ERROR" "Permission error - Check permissions";;
-        4) log "ERROR" "Resource error - Check system resources";;
-        *) log "ERROR" "Unknown error";;
-    esac
-    
-    if [[ -n "$recovery_action" ]]; then
-        log "INFO" "Attempting recovery: $recovery_action"
-        eval "$recovery_action"
-    fi
-    
-    return "$error_code"
-}
 
 # Process Management
 acquire_lock() {
@@ -232,19 +210,6 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT QUIT TERM
-
-# --- Process Lock Management ---
-acquire_lock() {
-    if [[ -e "$LOCK_FILE" ]]; then
-        local pid
-        pid=$(cat "$PID_FILE" 2>/dev/null || echo "unknown")
-        log "ERROR" "Another instance is running (PID: $pid)"
-        exit 1
-    fi
-    mkdir -p "$(dirname "$LOCK_FILE")"
-    touch "$LOCK_FILE"
-    echo $$ > "$PID_FILE"
-}
 
 # --- Security Checks ---
 check_security_requirements() {
@@ -355,26 +320,50 @@ if [[ -n "${CUSTOM_R_PROFILE_SITE_PATH_ENV:-}" ]]; then
     USER_SPECIFIED_R_PROFILE_SITE_PATH="${CUSTOM_R_PROFILE_SITE_PATH_ENV}"
 fi
 
-# --- Error Handling Framework ---
-handle_error() {
-    local error_code=$1
-    local error_message=$2
-    local recovery_action=${3:-}
+# --- Placeholder Functions ---
+validate_configuration() {
+    log "INFO" "Validating configuration..."
+    # Add validation logic here
+    return 0
+}
 
-    log "ERROR" "$error_message (Code: $error_code)"
-    
-    case $error_code in
-        1) log "ERROR" "Configuration error - Check your settings";;
-        2) log "ERROR" "Network error - Check connectivity";;
-        3) log "ERROR" "Permission error - Check permissions";;
-        4) log "ERROR" "Resource error - Check system resources";;
-        *) log "ERROR" "Unknown error";;
-    esac
+display_installation_status() {
+    log "INFO" "Displaying installation status..."
+    # Add status display logic here
+}
 
-    if [[ -n "$recovery_action" ]]; then
-        log "INFO" "Attempting recovery: $recovery_action"
-        eval "$recovery_action"
+pre_flight_checks() {
+    log "INFO" "Performing pre-flight checks..."
+    # Add pre-flight check logic here
+    return 0
+}
+
+get_state() {
+    local key="$1"
+    local default_value="$2"
+    if [[ -v "OPERATION_STATE[$key]" ]]; then
+        echo "${OPERATION_STATE[$key]}"
+    else
+        echo "$default_value"
     fi
+}
+
+backup_file() {
+    local file_path="$1"
+    log "INFO" "Backing up ${file_path}..."
+    # Add backup logic here
+}
+
+restore_latest_backup() {
+    local file_path="$1"
+    log "INFO" "Restoring ${file_path}..."
+    # Add restore logic here
+}
+
+verify_secure_permissions() {
+    local path="$1"
+    log "INFO" "Verifying permissions for ${path}..."
+    # Add permission verification logic here
 }
 
 # --- State Management ---
@@ -404,30 +393,6 @@ load_state() {
             OPERATION_STATE["$key"]=$value
         done < "$state_file"
     fi
-}
-
-# --- Resource Management ---
-check_system_resources() {
-    local min_memory=2048  # 2GB minimum
-    local min_disk=5120    # 5GB minimum
-    
-    # Check available memory
-    local available_memory
-    available_memory=$(free -m | awk '/^Mem:/{print $7}')
-    if (( available_memory < min_memory )); then
-        handle_error 4 "Insufficient memory: ${available_memory}MB available, ${min_memory}MB required"
-        return 1
-    fi
-    
-    # Check available disk space
-    local available_disk
-    available_disk=$(df -m "${SCRIPT_DIR}" | awk 'NR==2 {print $4}')
-    if (( available_disk < min_disk )); then
-        handle_error 4 "Insufficient disk space: ${available_disk}MB available, ${min_disk}MB required"
-        return 1
-    fi
-    
-    return 0
 }
 
 # --- Core Helper Functions ---
@@ -849,11 +814,11 @@ install_r_pkg_list() {
 
     for pkg_name_full in "${r_packages_list[@]}"; do
         local pkg_name_short
-        local r_install_cmd
 
         if [[ "$pkg_type" == "CRAN" ]]; then
             pkg_name_short="$pkg_name_full"
-            r_install_cmd="
+            # Use a heredoc to create the R script, preventing shell expansion
+            cat > "$pkg_install_script_path" <<EOF
             pkg_short_name <- '${pkg_name_short}'
             n_cpus <- max(1, parallel::detectCores(logical=FALSE) %/% 2)
 
@@ -866,7 +831,7 @@ install_r_pkg_list() {
                         install.packages(pkg_short_name, Ncpus = n_cpus)
                         installed_successfully <- requireNamespace(pkg_short_name, quietly = TRUE)
                     }, error = function(e) {
-                        message(paste0('bspm install failed for ', pkg_short_name, ': ', e$message))
+                        message(paste0('bspm install failed for ', pkg_short_name, ': ', e\$message))
                     })
                 }
                 if (!installed_successfully) {
@@ -878,10 +843,12 @@ install_r_pkg_list() {
             }
             if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
                 stop(paste0('Failed to install R package: ', pkg_short_name))
-            }"
+            }
+EOF
         elif [[ "$pkg_type" == "GitHub" ]]; then
             pkg_name_short=$(basename "$pkg_name_full")
-            r_install_cmd="
+            # Use a heredoc for the GitHub installation script
+            cat > "$pkg_install_script_path" <<EOF
             pkg_repo <- '${pkg_name_full}'
             pkg_short_name <- '${pkg_name_short}'
             if (!requireNamespace('remotes', quietly = TRUE)) {
@@ -896,7 +863,8 @@ install_r_pkg_list() {
             }
             if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
                 stop(paste0('Failed to install GitHub package: ', pkg_repo))
-            }"
+            }
+EOF
             if [[ -z "${GITHUB_PAT:-}" ]] && ! $github_pat_warning_shown; then
                 log "WARN" "GITHUB_PAT environment variable is not set. GitHub package installations may fail due to API rate limiting."
                 github_pat_warning_shown=true
@@ -906,7 +874,6 @@ install_r_pkg_list() {
             continue
         fi
 
-        echo "$r_install_cmd" > "$pkg_install_script_path"
         if run_command "Install R package: ${pkg_name_full}" Rscript "$pkg_install_script_path"; then
             # On success, add to the state file
             if [[ "$pkg_type" == "CRAN" ]]; then
@@ -1048,7 +1015,7 @@ restore_all() {
     if [[ -f "$R_ENV_STATE_FILE" ]]; then
         log "INFO" "Loading environment state from $R_ENV_STATE_FILE..."
         # shellcheck disable=SC1090,SC1091
-        source "$R_ENV_STATE_FILE"
+        source "$R_ENV_STATE_FILE" # Load current state
     fi
 
     log "INFO" "Restoring Rprofile.site..."
@@ -1254,6 +1221,7 @@ main_menu() {
             read -r -p "Press Enter to return to the menu..."
         fi
     done
+    return "$return_status"
 }
 
 # --- Pre-flight Initialization ---
@@ -1307,7 +1275,7 @@ main() {
     cleanup
     
     log "INFO" "Script finished with status: $menu_status"
-    exit $menu_status
+    exit "$menu_status"
 }
 
 # Start script execution

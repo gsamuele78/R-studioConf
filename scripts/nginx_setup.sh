@@ -255,7 +255,8 @@ configure_nginx_letsencrypt_proxy() {
     printf "%s" "$final_http_site_conf" > "$target_le_conf_path" || { log "Failed to write HTTP site config for Certbot to $target_le_conf_path"; return 1; }
     
     # Ensure site is enabled
-    local enabled_link="${NGINX_SITES_ENABLED_DIR}/$(basename "$target_le_conf_path")"
+    local enabled_link
+    enabled_link="${NGINX_SITES_ENABLED_DIR}/$(basename "$target_le_conf_path")"
     if [[ ! -L "$enabled_link" ]] || [[ "$(readlink "$enabled_link")" != "$target_le_conf_path" ]]; then
          run_command "ln -sf \"$target_le_conf_path\" \"$enabled_link\""
     fi

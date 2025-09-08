@@ -256,7 +256,7 @@ configure_rstudio_session_env_settings() {
         ["OMP_NUM_THREADS"]="${OMP_NUM_THREADS_RSTUDIO}"
     )
     # Overwrite env-vars file with new settings for a clean state
-    >"${RSTUDIO_ENV_VARS_PATH}" # Clear the file first
+    true >"${RSTUDIO_ENV_VARS_PATH}" # Clear the file first
     for key in "${!env_vars_settings[@]}"; do
         add_line_if_not_present "${key}=${env_vars_settings[$key]}" "${RSTUDIO_ENV_VARS_PATH}"
     done
