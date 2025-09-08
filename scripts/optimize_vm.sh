@@ -18,11 +18,20 @@
 
 set -euo pipefail
 
-# --- Interactive VM Selection ---
-CONFIG_FILE="../config/optimize_vm.conf"
-TEMPLATE_DIR="../templates"
-GUEST_SCRIPT_TEMPLATE="$TEMPLATE_DIR/guest_optimizer.sh.tpl"
+# --- Configuration ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/../config/optimize_vm.conf"
+TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
+GUEST_SCRIPT_TEMPLATE="${TEMPLATE_DIR}/guest_optimizer.sh.tpl"
 
+# Source configuration variables if file exists
+if [[ -f "$CONFIG_FILE" ]]; then
+    echo "INFO: Sourcing configuration from $CONFIG_FILE"
+    # shellcheck disable=SC1090,SC1091
+    source "$CONFIG_FILE"
+fi
+
+# --- Interactive VM Selection ---
 if ! command -v qm &>/dev/null; then
     echo "Error: 'qm' command not found. Please run this script on a Proxmox host." >&2
     exit 1
@@ -36,14 +45,21 @@ if ! qm config "$VMID" &>/dev/null; then
     exit 1
 fi
 
-# --- Auto-detect VM Hardware ---
-CORES=$(qm config "$VMID" | grep -E '^cores:' | awk '{print $2}')
-RAM=$(qm config "$VMID" | grep -E '^memory:' | awk '{print $2}')
+# --- Auto-detect VM Hardware (and apply config defaults) ---
+DETECTED_CORES=$(qm config "$VMID" | grep -E '^cores:' | awk '{print $2}')
+DETECTED_RAM=$(qm config "$VMID" | grep -E '^memory:' | awk '{print $2}')
 DISK_LINE=$(qm config "$VMID" | grep -E '^(scsi|virtio|ide|sata)[0-9]:')
-TARGET_DISK=$(echo "$DISK_LINE" | cut -d':' -f1)
-STORAGE_DETAILS=$(echo "$DISK_LINE" | cut -d'=' -f2)
+DETECTED_TARGET_DISK=$(echo "$DISK_LINE" | cut -d':' -f1)
+DETECTED_STORAGE_DETAILS=$(echo "$DISK_LINE" | cut -d'=' -f2)
 NETWORK_LINE=$(qm config "$VMID" | grep -E '^net[0-9]:')
-NETWORK_BRIDGE=$(echo "$NETWORK_LINE" | grep -o 'bridge=[^,]*' | cut -d'=' -f2)
+DETECTED_NETWORK_BRIDGE=$(echo "$NETWORK_LINE" | grep -o 'bridge=[^,]*' | cut -d'=' -f2)
+
+# Set effective values: Detected > Config File
+CORES=${DETECTED_CORES:-${DEFAULT_CORES:-}}
+RAM=${DETECTED_RAM:-${DEFAULT_RAM:-}}
+TARGET_DISK=${DETECTED_TARGET_DISK:-${DEFAULT_TARGET_DISK:-}}
+STORAGE_DETAILS=${DETECTED_STORAGE_DETAILS:-${DEFAULT_STORAGE_DETAILS:-}}
+NETWORK_BRIDGE=${DETECTED_NETWORK_BRIDGE:-${DEFAULT_NETWORK_BRIDGE:-}}
 
 # --- Sysadmin Override ---
 echo "Detected VM Hardware:"
@@ -61,7 +77,7 @@ if [[ "$override" =~ ^[Yy]$ ]]; then
     read -r -p "Network bridge [$NETWORK_BRIDGE]: " input_bridge; NETWORK_BRIDGE=${input_bridge:-$NETWORK_BRIDGE}
 fi
 
-echo "\nReady to apply the following optimizations to VM $VMID:"
+printf "\nReady to apply the following optimizations to VM %s:\n" "$VMID"
 echo "  CPU: host, NUMA (if multi-socket)"
 echo "  Memory: balloon=0"
 echo "  Disk: $TARGET_DISK, aio=native, cache=writethrough, iothreads=1"

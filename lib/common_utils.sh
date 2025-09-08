@@ -34,18 +34,25 @@ log() {
 # Returns 0 on success, command's exit code on failure.
 run_command() {
     local cmd="$1" # Capture command for logging and execution
-    log "Executing: ${cmd}"
-    # Execute command in a subshell to avoid variable conflicts and ensure clean state.
-    # Redirects stdout and stderr of the command to the LOG_FILE.
-    # Output is also sent to the script's stdout/stderr for real-time feedback via tee in log().
-    if (bash -c "${cmd}") >>"$LOG_FILE" 2>&1; then
-        log "SUCCESS: ${cmd}"
-        return 0
-    else
-        local exit_code=$?
-        log "ERROR (Exit Code: ${exit_code}): CMD FAILED: '${cmd}'. Details in ${LOG_FILE}"
-        return "${exit_code}" # Return the actual exit code of the failed command
-    fi
+    local retry_count=0
+
+    while [ $retry_count -lt $MAX_RETRIES ]; do
+        log "Executing: ${cmd} (Attempt $((retry_count + 1))/${MAX_RETRIES})"
+        if timeout "${TIMEOUT}s" bash -c "${cmd}" >>"$LOG_FILE" 2>&1; then
+            log "SUCCESS: ${cmd}"
+            return 0
+        else
+            local exit_code=$?
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $MAX_RETRIES ]; then
+                log "WARNING: Command failed (Exit Code: ${exit_code}). Retrying in 5 seconds..."
+                sleep 5
+            else
+                log "ERROR: Command failed after ${MAX_RETRIES} attempts (Exit Code: ${exit_code}): '${cmd}'. Details in ${LOG_FILE}"
+                return "${exit_code}"
+            fi
+        fi
+    done
 }
 
 # Sets up a unique backup directory for the current session

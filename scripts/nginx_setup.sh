@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 # Define paths relative to SCRIPT_DIR
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 CONF_VARS_FILE="${SCRIPT_DIR}/../config/nginx_setup.vars.conf"
+# shellcheck disable=SC2034
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates" # Used by _get_template_content
 
 # Source common utilities
@@ -24,8 +25,8 @@ source "$UTILS_SCRIPT_PATH"
 if [[ -f "$CONF_VARS_FILE" ]]; then
     log "Sourcing Nginx configuration variables from $CONF_VARS_FILE"
     # shellcheck source=conf/nginx_setup.vars.conf
-CONF_VARS_FILE="${SCRIPT_DIR}/../config/nginx_setup.vars.conf"
-TEMPLATE_DIR="${SCRIPT_DIR}/../templates" # Used by _get_template_content
+    source "$CONF_VARS_FILE"
+else
     log "Warning: Nginx configuration file $CONF_VARS_FILE not found. Using script internal defaults."
     # Define crucial defaults here from nginx_setup.vars.conf
     NGINX_CONF_PATH="/etc/nginx/nginx.conf"
@@ -111,7 +112,7 @@ configure_nginx_websocket_map() {
         print "        \"\"      close;" # Double quotes need to be escaped for awk string
         print "    }"
         print ""
-        added = 1 # Set flag to ensure it's added only once
+        added = 1 # Set flag to ensure it is added only once
         next      # Move to next line of input
     }
     { print $0 } # Print all other lines
@@ -143,10 +144,10 @@ configure_nginx_self_signed_proxy() {
 
     # Generate self-signed certificate if it doesn't exist
     if [[ ! -f "$SELF_SIGNED_CERT_FULLPATH" ]] || [[ ! -f "$SELF_SIGNED_KEY_FULLPATH" ]]; then
-        local cn_hostname; cn_hostname=$(hostname -f 2>/dev/null || hostname) # Get FQDN or hostname
+        cn_hostname=$(hostname -f 2>/dev/null || hostname) # Get FQDN or hostname
         log "Generating self-signed certificate for CN=$cn_hostname..."
         # Construct subject line from config variables
-        local subj_line="/C=${SSL_CERT_COUNTRY}/ST=${SSL_CERT_STATE}/L=${SSL_CERT_LOCALITY}/O=${SSL_CERT_ORG}/OU=${SSL_CERT_OU}/CN=${cn_hostname}"
+        subj_line="/C=${SSL_CERT_COUNTRY}/ST=${SSL_CERT_STATE}/L=${SSL_CERT_LOCALITY}/O=${SSL_CERT_ORG}/OU=${SSL_CERT_OU}/CN=${cn_hostname}"
         run_command "openssl req -x509 -nodes -days 3650 -newkey rsa:${DHPARAM_BITS} \
             -keyout \"${SELF_SIGNED_KEY_FULLPATH}\" -out \"${SELF_SIGNED_CERT_FULLPATH}\" \
             -subj \"${subj_line}\"" || return 1
