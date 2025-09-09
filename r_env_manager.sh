@@ -110,10 +110,9 @@
 set -euo pipefail
 
 # --- Global Constants and Configuration ---
-readonly SCRIPT_NAME
-SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
-readonly SCRIPT_DIR
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+
 readonly LOCK_FILE="/var/run/${SCRIPT_NAME}.lock"
 readonly PID_FILE="/var/run/${SCRIPT_NAME}.pid"
 readonly LOG_DIR="/var/log/r_env_manager"
