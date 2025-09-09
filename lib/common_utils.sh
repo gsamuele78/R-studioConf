@@ -36,7 +36,7 @@ run_command() {
     local cmd="$1" # Capture command for logging and execution
     local retry_count=0
 
-    while [ $retry_count -lt $MAX_RETRIES ]; do
+    while [ $retry_count -lt "$MAX_RETRIES" ]; do
         log "Executing: ${cmd} (Attempt $((retry_count + 1))/${MAX_RETRIES})"
         if timeout "${TIMEOUT}s" bash -c "${cmd}" >>"$LOG_FILE" 2>&1; then
             log "SUCCESS: ${cmd}"
@@ -44,7 +44,7 @@ run_command() {
         else
             local exit_code=$?
             retry_count=$((retry_count + 1))
-            if [ $retry_count -lt $MAX_RETRIES ]; then
+            if [ $retry_count -lt "$MAX_RETRIES" ]; then
                 log "WARNING: Command failed (Exit Code: ${exit_code}). Retrying in 5 seconds..."
                 sleep 5
             else
