@@ -113,15 +113,15 @@ set -euo pipefail
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
-readonly LOCK_FILE="/var/run/${SCRIPT_NAME}.lock"
-readonly PID_FILE="/var/run/${SCRIPT_NAME}.pid"
-readonly LOG_DIR="/var/log/r_env_manager"
-readonly BACKUP_DIR="/var/backups/r_env_manager"
-readonly CONFIG_DIR="${SCRIPT_DIR}/config"
-readonly STATE_FILE="${SCRIPT_DIR}/.r_env_state"
+LOCK_FILE="/var/run/${SCRIPT_NAME}.lock"
+PID_FILE="/var/run/${SCRIPT_NAME}.pid"
+LOG_DIR="/var/log/r_env_manager"
+BACKUP_DIR="/var/backups/r_env_manager"
+CONFIG_DIR="${SCRIPT_DIR}/config"
+STATE_FILE="${SCRIPT_DIR}/.r_env_state"
 LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}.log"
 #readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}.log"
-readonly CONFIG_FILE="${CONFIG_DIR}/r_env_manager.conf"
+CONFIG_FILE="${CONFIG_DIR}/r_env_manager.conf"
 R_PROFILE_SITE_PATH="" # Will be determined dynamically
 export MAX_RETRIES=3
 export TIMEOUT=1800  # 30 minutes (used for command timeouts)
