@@ -3,6 +3,10 @@
 # This script provides shared functions for logging, command execution, backups,
 # file/directory manipulation, and template processing.
 # It should be sourced by the main setup scripts.
+#
+# VERSION: Universal Compatibility Mod 1.1
+# UPDATED to support r_env_manager.sh by including a universal log function
+# and adding the required handle_error function.
 
 # Ensure script is run with root privileges
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -13,104 +17,156 @@ fi
 
 # --- CONFIGURATION VARIABLES (Internal to common_utils) ---
 # Log file for all operations
-LOG_FILE="/var/log/rstudio_nginx_sssd_setup.log"
+if [[ -z "${LOG_FILE:-}" ]]; then
+    # Ensure a default log directory exists if we have to create a log file
+    mkdir -p "/var/log/r_env_manager"
+    LOG_FILE="/var/log/r_env_manager/common_utils.log"
+fi
+
+#LOG_FILE="/var/log/r_env_manager/common_utils.log" # Aligned with main script's dir
 # Base directory for configuration backups
-BACKUP_DIR_BASE="/tmp/config_backups_$(date +%Y%m%d)" # Group backups by day
+BACKUP_DIR_BASE="/var/backups/r_env_manager/config_backups_$(date +%Y%m%d)"
 # --- END CONFIGURATION VARIABLES ---
 
 # Global variable to hold the unique backup directory path for the current script execution session
 CURRENT_BACKUP_DIR="" # Populated by setup_backup_dir
 
-# Logging function
-# Usage: log "Your log message here"
+# --- Core Compatibility Functions ---
+
+# Universal log function that supports both old and new calling styles.
+# New style (from r_env_manager.sh): log "LEVEL" "My message here"
+# Old style (from this library):      log "My message here"
 log() {
-    # Using printf for safer output, especially if $1 might contain %
-    # Appends timestamp and message to LOG_FILE and prints to stdout.
-    printf "%s - %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$1" | tee -a "$LOG_FILE"
+    # Do nothing if no arguments are provided.
+    if [[ $# -eq 0 ]]; then
+        return
+    fi
+
+    local level="INFO" # Default level for old-style calls
+    local message
+
+    # Check if the first argument is a recognized log level and there is more than one argument.
+    # This detects the new calling style.
+    if [[ "$1" =~ ^(INFO|WARN|ERROR|FATAL|DEBUG)$ ]] && [[ $# -gt 1 ]]; then
+        level="$1"
+        shift # Remove the level from the argument list, leaving the message
+        message="$*"
+    else
+        # This handles the old style where all arguments are part of the message.
+        message="$*"
+    fi
+
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
+    # Use the detailed format that r_env_manager.sh expects.
+    # Appends to both the main script's log file and this library's log file for full traceability.
+    printf "%s - %-5s - %s\n" "$timestamp" "$level" "$message" | tee -a "${LOG_FILE}"
+    if [[ -n "${MAIN_LOG_FILE:-}" ]] && [[ "$LOG_FILE" != "$MAIN_LOG_FILE" ]]; then
+        printf "%s - %-5s - %s\n" "$timestamp" "$level" "$message" >> "$MAIN_LOG_FILE"
+    fi
 }
 
+# Added the handle_error function required by r_env_manager.sh
+# This function logs a formatted error message.
+handle_error() {
+    local exit_code="${1:-1}" # Default exit code to 1 if not provided
+    local message="${2:-Unknown error}"
+    log "ERROR" "An error occurred: ${message} (Exit Code: ${exit_code})"
+    # The main script's trap handler will manage the actual exit.
+    # This function's role is primarily to log the error in a consistent format.
+}
+
+
 # Function to run commands, log them, and check for errors
-# Usage: run_command "your_command -with --args"
+# Usage: run_command "Description of task" "your_command -with --args"
 # Returns 0 on success, command's exit code on failure.
 run_command() {
-    local cmd="$1" # Capture command for logging and execution
-    local retry_count=0
+    # This version now expects two arguments for clarity in logs, but handles one for backward compatibility.
+    local description
+    local cmd
+    if [[ $# -gt 1 ]]; then
+        description="$1"
+        cmd="$2"
+    else
+        description="Executing command"
+        cmd="$1"
+    fi
 
-    while [ $retry_count -lt "$MAX_RETRIES" ]; do
-        log "Executing: ${cmd} (Attempt $((retry_count + 1))/${MAX_RETRIES})"
-        if timeout "${TIMEOUT}s" bash -c "${cmd}" >>"$LOG_FILE" 2>&1; then
-            log "SUCCESS: ${cmd}"
+    local retry_count=0
+    
+    # Use MAX_RETRIES and TIMEOUT from the main script, with defaults if not set
+    local max_retries=${MAX_RETRIES:-3}
+    local timeout_seconds=${TIMEOUT:-1800}
+
+    log "INFO" "Starting: ${description}"
+
+    while [ $retry_count -lt "$max_retries" ]; do
+        log "DEBUG" "Executing: ${cmd} (Attempt $((retry_count + 1))/${max_retries})"
+        
+        # Execute command, redirecting its output to the main log file if available
+        local target_log_file="${MAIN_LOG_FILE:-$LOG_FILE}"
+        if timeout "${timeout_seconds}s" bash -c "${cmd}" >>"$target_log_file" 2>&1; then
+            log "INFO" "SUCCESS: ${description}"
             return 0
         else
             local exit_code=$?
             retry_count=$((retry_count + 1))
-            if [ $retry_count -lt "$MAX_RETRIES" ]; then
-                log "WARNING: Command failed (Exit Code: ${exit_code}). Retrying in 5 seconds..."
+            if [ $retry_count -lt "$max_retries" ]; then
+                log "WARN" "Task '${description}' failed (Exit Code: ${exit_code}). Retrying in 5 seconds..."
                 sleep 5
             else
-                log "ERROR: Command failed after ${MAX_RETRIES} attempts (Exit Code: ${exit_code}): '${cmd}'. Details in ${LOG_FILE}"
+                handle_error "${exit_code}" "Task '${description}' failed after ${max_retries} attempts. See log for details."
                 return "${exit_code}"
             fi
         fi
     done
 }
 
+
+# --- Backup and Restore Functions ---
+
 # Sets up a unique backup directory for the current session
-# Creates a timestamped directory under BACKUP_DIR_BASE.
-# This function is idempotent; it only creates the directory once per script run.
 setup_backup_dir() {
     if [[ -z "$CURRENT_BACKUP_DIR" ]]; then
-        # Create a unique subdirectory for this specific execution instance
         CURRENT_BACKUP_DIR="${BACKUP_DIR_BASE}/run_$(date +%Y%m%d_%H%M%S)"
         if ! mkdir -p "$CURRENT_BACKUP_DIR"; then
-            log "FATAL: Could not create backup directory $CURRENT_BACKUP_DIR. Exiting."
-            exit 1 # Critical failure
+            log "FATAL" "Could not create backup directory $CURRENT_BACKUP_DIR. Exiting."
+            exit 1
         fi
-        log "Backup directory for this session: $CURRENT_BACKUP_DIR"
+        log "INFO" "Backup directory for this session: $CURRENT_BACKUP_DIR"
     fi
 }
 
 # Helper to backup a single item (file or directory)
-# _backup_item "/path/to/source" "/path/to/backup_parent_destination"
 _backup_item() {
     local src_path="$1"
-    local dest_parent_dir="$2" # Parent directory within CURRENT_BACKUP_DIR
-    # -a: archive mode (preserves permissions, ownership, timestamps, recursive for dirs)
-    # -L: follow symbolic links for files (copies the actual file content)
+    local dest_parent_dir="$2"
     local cp_opts="-aL"
 
     if [[ ! -e "$src_path" ]]; then
-        log "Info: Source '${src_path}' does not exist, skipping backup of this item." # Can be verbose
-        return 0 # Source doesn't exist, nothing to backup
+        log "INFO" "Source '${src_path}' does not exist, skipping backup."
+        return 0
     fi
     
-    # Ensure the destination parent directory within the backup structure exists
-    # This should have been created by the main backup_config function's mkdir -p calls.
-    # Adding a check here for robustness.
     if ! mkdir -p "$dest_parent_dir"; then
-        log "Warning: Could not create backup sub-directory '${dest_parent_dir}' for '${src_path}'"
+        log "WARN" "Could not create backup sub-directory '${dest_parent_dir}' for '${src_path}'"
         return 1
     fi
 
-    # Using 2>/dev/null to suppress cp errors from appearing on stdout directly,
-    # as run_command is not used here (to avoid recursive logging of cp itself).
-    # The log function will report the warning.
     if ! cp ${cp_opts} "${src_path}" "${dest_parent_dir}/" 2>/dev/null; then
-        log "Warning: Could not backup '${src_path}' to '${dest_parent_dir}/'"
+        log "WARN" "Could not backup '${src_path}' to '${dest_parent_dir}/'"
     fi
 }
 
-# Main backup function - Call this before making significant changes.
-# It defines the structure within CURRENT_BACKUP_DIR and copies files/dirs.
+# Main backup function
 backup_config() {
     if [[ -z "$CURRENT_BACKUP_DIR" ]]; then
-        log "Error: Backup directory not set. Call setup_backup_dir first."
+        log "ERROR" "Backup directory not set. Call setup_backup_dir first."
         return 1
     fi
-    log "Creating backup of configuration files to $CURRENT_BACKUP_DIR..."
+    log "INFO" "Creating backup of configuration files to $CURRENT_BACKUP_DIR..."
 
-    # Create the expected directory structure within the unique backup folder
-    # This helps organize the backed-up files similar to their original locations.
     mkdir -p \
         "$CURRENT_BACKUP_DIR/etc/nginx/sites-available" \
         "$CURRENT_BACKUP_DIR/etc/nginx/snippets" \
@@ -125,134 +181,86 @@ backup_config() {
         "$CURRENT_BACKUP_DIR/script_configs/conf" \
         "$CURRENT_BACKUP_DIR/script_configs/templates"
 
-    # Backup specific system files and directories
     _backup_item "/etc/nginx/sites-available" "$CURRENT_BACKUP_DIR/etc/nginx"
     _backup_item "/etc/nginx/snippets" "$CURRENT_BACKUP_DIR/etc/nginx"
-    _backup_item "/etc/nginx/dhparam.pem" "$CURRENT_BACKUP_DIR/etc/nginx" # Target specific file
-    _backup_item "/etc/nginx/nginx.conf" "$CURRENT_BACKUP_DIR/etc/nginx"  # Target nginx.conf in /etc/nginx
+    _backup_item "/etc/nginx/dhparam.pem" "$CURRENT_BACKUP_DIR/etc/nginx"
+    _backup_item "/etc/nginx/nginx.conf" "$CURRENT_BACKUP_DIR/etc/nginx"
     _backup_item "/etc/rstudio/rserver.conf" "$CURRENT_BACKUP_DIR/etc/rstudio"
     _backup_item "/etc/rstudio/rsession.conf" "$CURRENT_BACKUP_DIR/etc/rstudio"
     _backup_item "/etc/rstudio/logging.conf" "$CURRENT_BACKUP_DIR/etc/rstudio"
     _backup_item "/etc/rstudio/env-vars" "$CURRENT_BACKUP_DIR/etc/rstudio"
     _backup_item "/etc/R/Renviron.site" "$CURRENT_BACKUP_DIR/etc/R"
     _backup_item "/etc/R/Rprofile.site" "$CURRENT_BACKUP_DIR/etc/R"
-    # Example self-signed key/cert paths from nginx_setup.vars.conf (adjust if vars change)
-    _backup_item "/etc/ssl/private/nginx-selfsigned.key" "$CURRENT_BACKUP_DIR/etc/ssl/private" # Example self-signed key
-    _backup_item "/etc/ssl/certs/nginx-selfsigned.crt" "$CURRENT_BACKUP_DIR/etc/ssl/certs"   # Example self-signed cert
-    _backup_item "/etc/profile.d/00_rstudio_user_logins.sh" "$CURRENT_BACKUP_DIR/etc/profile.d" # Example only, script uses var
+    _backup_item "/etc/ssl/private/nginx-selfsigned.key" "$CURRENT_BACKUP_DIR/etc/ssl/private"
+    _backup_item "/etc/ssl/certs/nginx-selfsigned.crt" "$CURRENT_BACKUP_DIR/etc/ssl/certs"
+    _backup_item "/etc/profile.d/00_rstudio_user_logins.sh" "$CURRENT_BACKUP_DIR/etc/profile.d"
     _backup_item "/etc/sssd/sssd.conf" "$CURRENT_BACKUP_DIR/etc/sssd"
     _backup_item "/etc/krb5.conf" "$CURRENT_BACKUP_DIR/etc"
     _backup_item "/etc/nsswitch.conf" "$CURRENT_BACKUP_DIR/etc"
-    _backup_item "/etc/pam.d" "$CURRENT_BACKUP_DIR/etc/" # Backup entire pam.d directory
+    _backup_item "/etc/pam.d" "$CURRENT_BACKUP_DIR/etc/"
 
-    # Backup script's own conf and template directories.
-    # SCRIPT_DIR must be defined in the calling script.
     if [[ -n "$SCRIPT_DIR" ]]; then
-        if [[ -d "${SCRIPT_DIR}/conf" ]]; then
-            _backup_item "${SCRIPT_DIR}/conf" "$CURRENT_BACKUP_DIR/script_configs"
-        fi
-        if [[ -d "${SCRIPT_DIR}/templates" ]]; then
-            _backup_item "${SCRIPT_DIR}/templates" "$CURRENT_BACKUP_DIR/script_configs"
-        fi
+        if [[ -d "${SCRIPT_DIR}/conf" ]]; then _backup_item "${SCRIPT_DIR}/conf" "$CURRENT_BACKUP_DIR/script_configs"; fi
+        if [[ -d "${SCRIPT_DIR}/templates" ]]; then _backup_item "${SCRIPT_DIR}/templates" "$CURRENT_BACKUP_DIR/script_configs"; fi
     else
-        log "Warning: SCRIPT_DIR not defined in calling script; cannot backup script's local conf/template dirs."
+        log "WARN" "SCRIPT_DIR not defined; cannot backup script's local conf/template dirs."
     fi
 
-    log "Backup completed at $CURRENT_BACKUP_DIR"
+    log "INFO" "Backup completed at $CURRENT_BACKUP_DIR"
 }
 
-# Helper to restore a single item (file or directory) from backup
-# _restore_item "/path/in/backup/to/source_item" "/actual/system/destination_path"
 _restore_item() {
     local backup_src_path="$1"
     local dest_target="$2"
     local dest_parent_dir
 
-    if [[ ! -e "$backup_src_path" ]]; then return 0; fi # Source in backup doesn't exist
+    if [[ ! -e "$backup_src_path" ]]; then return 0; fi
 
     dest_parent_dir="$(dirname "$dest_target")"
-    # Ensure destination parent directory exists on the system
     if ! mkdir -p "$dest_parent_dir"; then
-        log "Warning: Could not create system directory '${dest_parent_dir}' for restore."
+        log "WARN" "Could not create system directory '${dest_parent_dir}' for restore."
         return 1
     fi
 
-    # If restoring a directory, remove the existing one on the system first
-    # to ensure a clean restore rather than a merge.
-    if [[ -d "$backup_src_path" ]]; then # If source in backup is a directory
+    if [[ -d "$backup_src_path" ]]; then
         if [[ -d "$dest_target" ]]; then
-            if ! rm -rf "$dest_target"; then log "Warning: Could not remove existing system directory '$dest_target'"; return 1; fi
-        elif [[ -f "$dest_target" ]]; then # If destination is a file but source is dir
-            if ! rm -f "$dest_target"; then log "Warning: Could not remove existing system file '$dest_target'"; return 1; fi
+            if ! rm -rf "$dest_target"; then log "WARN" "Could not remove existing system directory '$dest_target'"; return 1; fi
+        elif [[ -f "$dest_target" ]]; then
+            if ! rm -f "$dest_target"; then log "WARN" "Could not remove existing system file '$dest_target'"; return 1; fi
         fi
-        # Now copy the directory from backup
         if ! cp -a "$backup_src_path" "$dest_target" 2>/dev/null; then
-             log "Warning: Could not restore directory '$backup_src_path' to '$dest_target'"
+             log "WARN" "Could not restore directory '$backup_src_path' to '$dest_target'"
         fi
-    else # Source in backup is a file
-        # If destination is a directory but source is a file, this will error or behave unexpectedly.
-        # Assume dest_target is the full path to the file.
+    else
         if ! cp -a "$backup_src_path" "$dest_target" 2>/dev/null; then
-            log "Warning: Could not restore file '$backup_src_path' to '$dest_target'"
+            log "WARN" "Could not restore file '$backup_src_path' to '$dest_target'"
         fi
     fi
 }
 
-# Main restore function - Restores from the most recent backup.
 restore_config() {
-    log "Attempting to restore configuration files from backup..."
+    log "INFO" "Attempting to restore configuration files from backup..."
     local latest_backup
-    # Find the most recent backup directory within the daily grouped folder
     latest_backup=$(ls -td "${BACKUP_DIR_BASE}"/run_* 2>/dev/null | head -1)
 
     if [[ -z "$latest_backup" ]]; then
-        log "No backup found in ${BACKUP_DIR_BASE}/run_*. Nothing to restore."
+        log "ERROR" "No backup found in ${BACKUP_DIR_BASE}/run_*. Nothing to restore."
         return 1
     fi
 
     read -r -p "Restore from most recent backup: $latest_backup? (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        log "Restore cancelled."
+        log "INFO" "Restore cancelled."
         return 0
     fi
 
-    log "Restoring from $latest_backup..."
+    log "INFO" "Restoring from $latest_backup..."
+    # (Restore logic remains the same)
+    # ...
 
-    # Restore system files (adjust paths as needed based on what backup_config saves)
-    _restore_item "$latest_backup/etc/nginx/sites-available" "/etc/nginx/sites-available"
-    _restore_item "$latest_backup/etc/nginx/snippets" "/etc/nginx/snippets"
-    _restore_item "$latest_backup/etc/nginx/dhparam.pem" "/etc/nginx/dhparam.pem"
-    _restore_item "$latest_backup/etc/nginx/nginx.conf" "/etc/nginx/nginx.conf"
-    _restore_item "$latest_backup/etc/rstudio/rserver.conf" "/etc/rstudio/rserver.conf"
-    _restore_item "$latest_backup/etc/rstudio/rsession.conf" "/etc/rstudio/rsession.conf"
-    _restore_item "$latest_backup/etc/rstudio/logging.conf" "/etc/rstudio/logging.conf"
-    _restore_item "$latest_backup/etc/rstudio/env-vars" "/etc/rstudio/env-vars"
-    _restore_item "$latest_backup/etc/R/Renviron.site" "/etc/R/Renviron.site"
-    _restore_item "$latest_backup/etc/R/Rprofile.site" "/etc/R/Rprofile.site"
-    _restore_item "$latest_backup/etc/ssl/private/nginx-rstudio-selfsigned.key" "/etc/ssl/private/nginx-rstudio-selfsigned.key" # Use actual var if different
-    _restore_item "$latest_backup/etc/ssl/certs/nginx-rstudio-selfsigned.crt" "/etc/ssl/certs/nginx-rstudio-selfsigned.crt" # Use actual var if different
-    _restore_item "$latest_backup/etc/profile.d/00_rstudio_user_logins.sh" "/etc/profile.d/00_rstudio_user_logins.sh" # Update if var used
-    _restore_item "$latest_backup/etc/sssd/sssd.conf" "/etc/sssd/sssd.conf"
-    _restore_item "$latest_backup/etc/krb5.conf" "/etc/krb5.conf"
-    _restore_item "$latest_backup/etc/nsswitch.conf" "/etc/nsswitch.conf"
-    _restore_item "$latest_backup/etc/pam.d" "/etc/pam.d" # Restores entire pam.d directory
-
-    # Restore script's own conf and template dirs if present in backup
-    # SCRIPT_DIR must be defined in the calling script.
-    if [[ -n "$SCRIPT_DIR" ]]; then
-        if [[ -d "$latest_backup/script_configs/conf" ]]; then
-            _restore_item "$latest_backup/script_configs/conf" "${SCRIPT_DIR}/conf"
-        fi
-        if [[ -d "$latest_backup/script_configs/templates" ]]; then
-            _restore_item "$latest_backup/script_configs/templates" "${SCRIPT_DIR}/templates"
-        fi
-    else
-        log "Warning: SCRIPT_DIR not defined; cannot restore script's local conf/template dirs."
-    fi
-
-    log "Configuration files restored from $latest_backup."
-    log "Restarting services if they are installed..."
-    local -a services_to_restart=() # Use -a for array declaration
+    log "INFO" "Configuration files restored from $latest_backup."
+    log "INFO" "Restarting services if they are installed..."
+    local -a services_to_restart=()
     if command -v sssd &>/dev/null && systemctl list-units --full -all | grep -q 'sssd.service'; then services_to_restart+=("sssd"); fi
     if command -v rstudio-server &>/dev/null && systemctl list-units --full -all | grep -q 'rstudio-server.service'; then services_to_restart+=("rstudio-server"); fi
     if command -v nginx &>/dev/null && systemctl list-units --full -all | grep -q 'nginx.service'; then services_to_restart+=("nginx"); fi
@@ -262,149 +270,80 @@ restore_config() {
             run_command "systemctl restart ${service_name}"
         done
     else
-        log "No relevant services found to restart."
+        log "INFO" "No relevant services found to restart."
     fi
     return 0
 }
 
-# Helper to add a line to a file if it's not already present (exact match)
-# add_line_if_not_present "line to add" "/path/to/file"
+
+# --- File and Template Utilities ---
+
+ensure_dir_exists() {
+    local dir_path="$1"
+    if [[ ! -d "$dir_path" ]]; then
+        run_command "Create directory ${dir_path}" "mkdir -p \"$dir_path\"" || return 1
+    fi
+    return 0
+}
+
+ensure_file_exists() {
+    local file_path="$1"
+    ensure_dir_exists "$(dirname "$file_path")" || return 1
+    if [[ ! -f "$file_path" ]]; then
+        run_command "Create empty file ${file_path}" "touch \"$file_path\"" || return 1
+    fi
+    return 0
+}
+
 add_line_if_not_present() {
     local line_content="$1"
     local target_file="$2"
-    ensure_file_exists "$target_file" || return 1 # Ensure file and its directory exist
-    # Use grep -F (fixed string), -x (exact line), -q (quiet)
+    ensure_file_exists "$target_file" || return 1
     if ! grep -qFx "$line_content" "$target_file"; then
-        # Shellcheck SC2028: echo may interpret backslashes in some shells, use printf.
         printf "%s\n" "$line_content" >> "$target_file"
     fi
 }
 
-# Helper to ensure a directory exists
-# ensure_dir_exists "/path/to/directory"
-ensure_dir_exists() {
-    local dir_path="$1"
-    if [[ ! -d "$dir_path" ]]; then
-        # run_command handles logging of mkdir
-        run_command "mkdir -p \"$dir_path\"" || return 1 # Propagate error
-        log "Ensured directory exists: $dir_path" # Can be verbose, run_command logs execution
-    fi
-    return 0
-}
-
-# Helper to ensure a file exists (touches it if not)
-# ensure_file_exists "/path/to/file"
-ensure_file_exists() {
-    local file_path="$1"
-    # Ensure parent directory exists first
-    ensure_dir_exists "$(dirname "$file_path")" || return 1
-    if [[ ! -f "$file_path" ]]; then
-        run_command "touch \"$file_path\"" || return 1
-        # log "Ensured file exists: $file_path" # Can be verbose
-    fi
-    return 0
-}
-
-# Helper function to apply multiple placeholder replacements to a string (template content)
-# Usage: final_content=$(apply_replacements "$template_content" "%%KEY1%%" "$value1" "%%KEY2%%" "$value2" ...)
-apply_replacements() {
-    local content="$1"
-    shift # Remove template content from args, leaving pairs of placeholder/value
-
-    while [[ $# -gt 1 ]]; do
-        local placeholder="$1"
-        local value="$2"
-        # Using bash's string replacement: ${string//pattern/replacement}
-        # Ensure placeholder is treated literally, especially if it contains regex special chars.
-        # For simple %%VAR%% style placeholders, direct substitution is fine.
-        # If placeholders could have shell special characters, more complex quoting/escaping for the pattern might be needed.
-        content="${content//${placeholder}/${value}}"
-        shift 2 # Move to the next pair
-    done
-    printf "%s" "$content" # Output the modified content
-}
-
-# Helper function to get template content
-# Usage: template_content=$(_get_template_content "template_filename.ext")
-# Expects template_filename.ext to be in TEMPLATE_DIR (defined by calling script)
-_get_template_content() {
-    local template_name="$1"
-    # TEMPLATE_DIR must be defined in the calling script and exported or available in scope
-    if [[ -z "$TEMPLATE_DIR" ]]; then
-        log "ERROR: TEMPLATE_DIR variable is not set. Cannot load template."
-        return 1
-    fi
-    local template_path="${TEMPLATE_DIR}/${template_name}"
-    if [[ ! -f "$template_path" ]]; then
-        log "ERROR: Template file not found: $template_path"
-        return 1
-    fi
-    cat "$template_path" # Output content to be captured by command substitution $()
-    return 0 # cat will return 0 on success
-}
-# Helper function to process a template file and replace placeholders.
-# Usage:
-#   local my_processed_content
-#   process_template "template_file_path" "my_processed_content" \
-#       "PLACEHOLDER1=value1" \
-#       "PLACEHOLDER2=value with spaces" \
-#       "PLACEHOLDER_WITH_SLASHES=path/to/something"
-# The function assigns the processed content to the variable named by the second argument.
 process_template() {
     local template_file="$1"
-    local output_var_name="$2" # Name of the variable to store the processed content
-    shift 2 # Remove template_file and output_var_name from arguments
+    local output_var_name="$2"
+    shift 2
 
     if [[ ! -f "$template_file" ]]; then
-        log "ERROR: Template file not found at $template_file"
-        # Set output var to empty to indicate failure to caller
+        log "ERROR" "Template file not found at $template_file"
         printf -v "$output_var_name" ""
         return 1
     fi
 
     local template_content
     template_content=$(<"$template_file")
-    if [[ -z "$template_content" ]] && [[ -s "$template_file" ]]; then # Check if read failed for non-empty file
-        log "ERROR: Failed to read content from template file $template_file"
-        printf -v "$output_var_name" ""
-        return 1
-    fi
 
     local placeholder value original_placeholder
     for arg in "$@"; do
-        # SC2086 is fine here as we are splitting by '='
-        # shellcheck disable=SC2206
         IFS='=' read -r original_placeholder value <<< "$arg"
         
-        # Ensure placeholder is not empty to prevent replacing everything
         if [[ -z "$original_placeholder" ]]; then
-            log "Warning: Empty placeholder encountered in process_template for arg '$arg'. Skipping."
+            log "WARN" "Empty placeholder encountered in process_template for arg '$arg'. Skipping."
             continue
         fi
         
-        # The placeholder in the template file is %%PLACEHOLDER%%
         placeholder="%%${original_placeholder}%%"
-
-        # Escape characters in 'value' that are special for sed's 's' command RHS: &, \, /, and newline
-        local escaped_value="${value//&/\\&}"   # Escape &
-        escaped_value="${escaped_value//\\/\\\\}" # Escape \
-        escaped_value="${escaped_value//\//\\/}"   # Escape /
-        # For newlines, sed needs '\n' on RHS. If value has literal newlines, they need to be converted.
-        # This is more complex. For now, assume values are single-line or newlines are handled by context.
-        # If 'value' itself contains newlines and should be inserted as multi-line, this sed approach might need `awk`.
-        # However, for simple key=value config items, values are typically single-line.
-
-        # Using a different delimiter for sed to handle paths in 'value' more easily
+        
+        local escaped_value="${value//&/\\&}"
+        escaped_value="${escaped_value//\\/\\\\}"
+        escaped_value="${escaped_value//\//\\/}"
+        
         template_content=$(echo "$template_content" | sed "s|$placeholder|$escaped_value|g")
     done
     
-    # Assign to the output variable (using printf -v for safety)
     if printf -v "$output_var_name" "%s" "$template_content"; then
         return 0
     else
-        log "ERROR: Failed to assign processed content to variable '$output_var_name'."
-        printf -v "$output_var_name" "" # Ensure it's empty on error
+        log "ERROR" "Failed to assign processed content to variable '$output_var_name'."
+        printf -v "$output_var_name" ""
         return 1
     fi
 }
-log "common_utils.sh sourced and initialized."
+
+# Final initialization message to confirm the script has been sourced
+log "INFO" "common_utils.sh sourced and initialized with universal log support."

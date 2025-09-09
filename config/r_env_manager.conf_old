@@ -2,28 +2,46 @@
 # Configuration file for r_env_manager.sh
 # Edit these variables to customize your R environment setup
 
-# CRAN repository - These are required by the validation check
+
+#LOG_DIR="/var/log/r_setup"
+#BACKUP_DIR="/opt/r_setup_backups"
+#R_ENV_STATE_FILE="/tmp/r_env_setup_state.sh"
+FORCE_USER_CLEANUP="no"
+PROMPT_AGGRESSIVE_CLEANUP_ENV="yes"
+GITHUB_PAT=""
+CUSTOM_R_PROFILE_SITE_PATH_ENV=""
+
+# RStudio Server
+RSTUDIO_VERSION_FALLBACK="2025.05.0-496"
+RSTUDIO_ARCH_FALLBACK="amd64"
+RSTUDIO_ARCH="amd64"
+RSTUDIO_VERSION="2025.05.0-496"
+RSTUDIO_DEB_URL=""
+RSTUDIO_DEB_FILENAME=""
+
+# CRAN repository
+CRAN_REPO_URL_BASE="https://cloud.r-project.org"
+CRAN_REPO_PATH_BIN="/bin/linux/ubuntu"
+CRAN_REPO_PATH_SRC="/src/contrib"
 CRAN_REPO_URL_BIN="https://cloud.r-project.org/bin/linux/ubuntu"
+CRAN_REPO_URL_SRC="https://cloud.r-project.org/src/contrib"
+CRAN_REPO_LINE=""
 CRAN_APT_KEY_URL="https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc"
-CRAN_APT_KEYRING_FILE="/etc/apt/trusted.gpg.d/cran.gpg"
+CRAN_APT_KEYRING_FILE="/etc/apt/trusted.gpg.d/cran_ubuntu_key.asc"
 
 # R2U repository
-R2U_REPO_URL_BASE="https://r2u.stat.illinois.edu"
+R2U_REPO_URL_BASE="https://raw.githubusercontent.com/eddelbuettel/r2u/master/inst/scripts"
 R2U_APT_SOURCES_LIST_D_FILE="/etc/apt/sources.list.d/r2u.list"
 
-# RStudio Server Settings
-RSTUDIO_VERSION_FALLBACK="2023.06.0"
-RSTUDIO_ARCH_FALLBACK="amd64"
-
-# R Package Lists (Corrected variable names)
-R_USER_PACKAGES_CRAN=(
+# R packages (full lists)
+R_PACKAGES_CRAN=(
 	"terra" "raster" "sf" "enmSdmX" "dismo" "spThin" "rnaturalearth" "furrr"
 	"doParallel" "future" "caret" "CoordinateCleaner" "tictoc" "devtools"
 	"tidyverse" "dplyr" "spatstat" "ggplot2" "iNEXT" "DHARMa" "lme4" "glmmTMB"
 	"geodata" "osmdata" "parallel" "doSNOW" "progress" "nngeo" "wdpar" "rgee" "tidyrgee"
 	"data.table" "jsonlite" "httr" "prioritizr" "prioritizrdata" "highs"
 )
-R_USER_PACKAGES_GITHUB=(
+R_PACKAGES_GITHUB=(
 	"SantanderMetGroup/climate4R"
 	"SantanderMetGroup/loadeR.java"
 	"SantanderMetGroup/loadeR"
@@ -35,10 +53,3 @@ R_USER_PACKAGES_GITHUB=(
 	"SantanderMetGroup/mopa"
 	"HelgeJentsch/ClimDatDownloadR"
 )
-
-# Optional GitHub Personal Access Token (for higher rate limits)
-GITHUB_PAT=""
-
-# System Requirements
-MIN_MEMORY_MB=2048
-MIN_DISK_MB=5120

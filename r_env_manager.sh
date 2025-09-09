@@ -4,268 +4,198 @@
 #
 # R Environment Manager (`r_env_manager.sh`)
 #
-# Version: 1.0.0
-# Last Updated: 2025-09-08
+# Version: 1.1.0 (Cleaned and Corrected)
+# Last Updated: 2025-09-09
 #
-# This script follows these system engineering best practices:
-# - Secure: Enforces proper permissions and validates input
-# - Robust: Comprehensive error handling and recovery
-# - Maintainable: Modular design with clear documentation
-# - Reliable: Transaction-based operations with rollback
-# - Auditable: Detailed logging of all operations
-#
-# --- Architecture Overview ---
-#
-# This script follows a layered architecture:
-# 1. Core Infrastructure Layer
-#    - Security checks and process management
-#    - Configuration validation
-#    - Resource monitoring
-#    - Logging and state management
-#
-# 2. Installation Layer
-#    - R and dependencies installation
-#    - RStudio Server setup
-#    - Package management (CRAN/GitHub)
-#
-# 3. Management Layer
-#    - Backup and restore
-#    - Script orchestration
-#    - Monitoring and maintenance
-#
-# --- Configuration ---
-#
-# Required files:
-# - config/r_env_manager.conf: Main configuration
-# - lib/common_utils.sh: Shared utilities
-#
-# State files:
-# - .r_env_state: Installation state
-# - /var/log/r_env_manager/: Log directory
-# - /var/backups/r_env_manager/: Backup directory
-#
-# --- Security ---
-#
-# - Requires root privileges
-# - Enforces secure file permissions
-# - Validates all inputs
-# - Uses atomic operations
-# - Implements process locking
-#
-# --- Error Handling ---
-#
-# - Comprehensive error detection
-# - Automatic recovery procedures
-# - Transaction rollback capability
-# - Detailed error logging
-#
-# --- Description
-#
-# This script is the central orchestrator for setting up and managing a complete
-# R development environment on Debian-based systems. It follows system engineering
-# best practices with comprehensive error handling, logging, and state management.
-#
-# ### Design Philosophy
-# - **Robust**: Handles errors gracefully with proper recovery
-# - **Secure**: Implements security best practices
-# - **Maintainable**: Modular design with clear documentation
-# - **Idempotent**: Safe to run multiple times
-# - **Auditable**: Comprehensive logging of all operations
-#
-# ## Key Features
-#
-# - **Full Installation**: Automates the entire setup process, including:
-#   - System package dependencies (build-essential, libs, etc.).
-#   - R-base from a specified CRAN repository.
-#   - High-performance libraries (OpenBLAS, OpenMP).
-#   - RStudio Server (latest version auto-detection).
-#   - Binary R package management via `bspm`.
-# - **Modular Execution**: Allows running individual setup steps.
-# - **Package Management**: Installs lists of CRAN and GitHub packages from a
-#   central configuration file.
-# - **Script Launcher**: Provides a menu to execute other specialized setup
-#   scripts (e.g., `nginx_setup.sh`, `sssd_kerberos_setup.sh`).
-# - **Maintenance**: Includes robust uninstall, backup, and restore capabilities.
-# - **Configuration-Driven**: All settings, package lists, and paths are managed
-#   in `config/r_env_manager.conf`.
-#
-# ## Usage
-#
-# 1. Customize variables in `config/r_env_manager.conf`.
-# 2. Run the script as root: `sudo ./r_env_manager.sh`
-# 3. Follow the on-screen menu prompts.
-#
-# ## Example Advanced Usage
-#
-#   sudo ./r_env_manager.sh
-#   # Select "6. Launch Other Setup Scripts" to run modular scripts
-#
-# ---
-#
-# Author: Your Name/Team
-# Date:   2025-09-08
+# This script orchestrates the complete setup and management of an R
+# development environment on Debian-based systems. It includes robust error
+# handling, logging, state management, and maintenance features.
 #
 ################################################################################
 
 set -euo pipefail
 
+# --- Source Utilities First ---
+# By sourcing the library first, we allow this script's global variables to
+# override any defaults set in the library, establishing a clear hierarchy.
+# The SCRIPT_DIR is determined here to locate the library correctly.
+SCRIPT_DIR_INIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# shellcheck disable=SC1090,SC1091
+source "${SCRIPT_DIR_INIT}/lib/common_utils.sh"
+
 # --- Global Constants and Configuration ---
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+readonly SCRIPT_DIR="${SCRIPT_DIR_INIT}"
 
-LOCK_FILE="/var/run/${SCRIPT_NAME}.lock"
-PID_FILE="/var/run/${SCRIPT_NAME}.pid"
-LOG_DIR="/var/log/r_env_manager"
-BACKUP_DIR="/var/backups/r_env_manager"
-CONFIG_DIR="${SCRIPT_DIR}/config"
-STATE_FILE="${SCRIPT_DIR}/.r_env_state"
-LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}.log"
-#readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}.log"
-CONFIG_FILE="${CONFIG_DIR}/r_env_manager.conf"
+# Define critical paths. These will override any defaults from common_utils.sh
+readonly LOG_DIR="/var/log/r_env_manager"
+readonly BACKUP_DIR="/var/backups/r_env_manager"
+readonly CONFIG_DIR="${SCRIPT_DIR}/config"
+readonly STATE_FILE="${SCRIPT_DIR}/.r_env_state"
+readonly R_ENV_STATE_FILE="${SCRIPT_DIR}/.r_env_state_packages" # Specific file for package state
+readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}.log"
+readonly LOCK_FILE="/var/run/${SCRIPT_NAME}.lock"
+readonly PID_FILE="/var/run/${SCRIPT_NAME}.pid"
+readonly CONFIG_FILE="${CONFIG_DIR}/r_env_manager.conf"
+
+# Export the main log file path so the library can use it for command output
+export MAIN_LOG_FILE="${LOG_FILE}"
+
+# --- Global Variables ---
 R_PROFILE_SITE_PATH="" # Will be determined dynamically
 export MAX_RETRIES=3
-export TIMEOUT=1800  # 30 minutes (used for command timeouts)
+export TIMEOUT=1800  # 30 minutes for long operations
 export DEBIAN_FRONTEND=noninteractive
+declare -A OPERATION_STATE
 
 # --- Core Infrastructure Layer ---
 
-# Process Management
 acquire_lock() {
     if [[ -e "$LOCK_FILE" ]]; then
         local pid
         pid=$(cat "$PID_FILE" 2>/dev/null || echo "unknown")
-        log "ERROR" "Another instance is running (PID: $pid)"
+        log "FATAL" "Another instance is running (PID: $pid). Lock file found: ${LOCK_FILE}"
         exit 1
     fi
-    mkdir -p "$(dirname "$LOCK_FILE")"
+    ensure_dir_exists "$(dirname "$LOCK_FILE")"
     touch "$LOCK_FILE"
     echo $$ > "$PID_FILE"
 }
 
-# Resource Management
 check_system_resources() {
-    local min_memory=2048  # 2GB minimum
-    local min_disk=5120    # 5GB minimum
+    local min_memory=${MIN_MEMORY_MB:-2048}
+    local min_disk=${MIN_DISK_MB:-5120}
     
     local available_memory
     available_memory=$(free -m | awk '/^Mem:/{print $7}')
     if (( available_memory < min_memory )); then
-        handle_error 4 "Insufficient memory: ${available_memory}MB available, ${min_memory}MB required"
+        handle_error 4 "Insufficient memory: ${available_memory}MB available, ${min_memory}MB required."
         return 1
     fi
     
     local available_disk
     available_disk=$(df -m "$SCRIPT_DIR" | awk 'NR==2 {print $4}')
     if (( available_disk < min_disk )); then
-        handle_error 4 "Insufficient disk space: ${available_disk}MB available, ${min_disk}MB required"
+        handle_error 4 "Insufficient disk space: ${available_disk}MB available, ${min_disk}MB required."
         return 1
     fi
-    
     return 0
 }
 
-# Logging System
 setup_logging() {
-    ensure_dir_exists "$LOG_DIR" "Log directory"
-    
+    ensure_dir_exists "$LOG_DIR"
     if [[ ! -f "$LOG_FILE" ]]; then
         touch "$LOG_FILE"
         chmod 640 "$LOG_FILE"
-    else
-        rotate_logs
     fi
-    
     # Redirect stderr to log while maintaining console output
     exec 3>&2
     exec 2> >(tee -a "$LOG_FILE" >&2)
 }
 
 rotate_logs() {
-    local max_size=$((50*1024*1024))  # 50MB
+    local max_size=$((50 * 1024 * 1024))  # 50MB
     local max_backups=5
     
-    if [[ -f "$LOG_FILE" ]]; then
-        local size
-        size=$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE")
-        if (( size > max_size )); then
-            for ((i=max_backups-1; i>=1; i--)); do
-                if [[ -f "${LOG_FILE}.$i" ]]; then
-                    mv "${LOG_FILE}.$i" "${LOG_FILE}.$((i+1))"
-                fi
-            done
-            mv "$LOG_FILE" "${LOG_FILE}.1"
-            touch "$LOG_FILE"
-            chmod 640 "$LOG_FILE"
-        fi
+    if [[ ! -f "$LOG_FILE" ]]; then return; fi
+    
+    local size
+    size=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)
+    if (( size > max_size )); then
+        log "INFO" "Log file size ($size bytes) exceeds max size ($max_size bytes). Rotating."
+        for ((i = max_backups - 1; i >= 1; i--)); do
+            if [[ -f "${LOG_FILE}.$i" ]]; then
+                mv "${LOG_FILE}.$i" "${LOG_FILE}.$((i + 1))"
+            fi
+        done
+        mv "$LOG_FILE" "${LOG_FILE}.1"
+        touch "$LOG_FILE"
+        chmod 640 "$LOG_FILE"
     fi
 }
 
-# --- Early Exit Handlers ---
 cleanup() {
     local exit_code=$?
     log "INFO" "Script execution ending with code: $exit_code"
     if [[ -f "$LOCK_FILE" ]]; then rm -f "$LOCK_FILE"; fi
     if [[ -f "$PID_FILE" ]]; then rm -f "$PID_FILE"; fi
+    exec 2>&3 # Restore stderr
     exit "$exit_code"
 }
 trap cleanup EXIT
-trap 'exit 1' HUP INT QUIT TERM
+trap 'log "FATAL" "Received signal to terminate. Cleaning up..."; exit 1' HUP INT QUIT TERM
 
-# --- Security Checks ---
+#check_security_requirements() {
+#    if [[ $EUID -ne 0 ]]; then
+#        log "FATAL" "This script must be run as root. Please use sudo."
+#        exit 1
+#    fi
+#    
+#    if [[ "$PATH" == *.* ]] || [[ "$PATH" == *:* ]]; then
+#        log "FATAL" "Insecure PATH environment detected. Aborting."
+#        exit 1
+#    fi
+#
+#    for dir in "$LOG_DIR" "$BACKUP_DIR"; do
+#        ensure_dir_exists "$dir"
+#        chmod 750 "$dir"
+#    done
+#}
+
 check_security_requirements() {
-    # Check root privileges
     if [[ $EUID -ne 0 ]]; then
-        echo "ERROR: This script must be run as root. Please use sudo." >&2
+        log "FATAL" "This script must be run as root. Please use sudo."
         exit 1
     fi
     
-    
-
-    # Check for secure PATH
-    if [[ "$PATH" == *.* ]] || [[ "$PATH" == *:* ]]; then
-        log "ERROR" "Insecure PATH environment detected"
-        exit 1
-    fi
-
-    # Ensure critical directories exist with proper permissions
-    for dir in "$LOG_DIR" "$BACKUP_DIR"; do
-        if [[ ! -d "$dir" ]]; then
-            mkdir -p "$dir"
-            chmod 750 "$dir"
+    # --- Corrected and More Precise PATH Security Check ---
+    # The old check incorrectly flagged any path containing a '.', like '.local'.
+    # This new version specifically checks for the dangerous current directory '.'
+    # or empty path components '::' which can also be a security risk.
+    local insecure_path_found=0
+    local old_ifs="$IFS"
+    IFS=':'
+    for dir in $PATH; do
+        if [[ "$dir" == "." ]] || [[ -z "$dir" ]]; then
+            insecure_path_found=1
+            break
         fi
+    done
+    IFS="$old_ifs"
+
+    if [[ $insecure_path_found -eq 1 ]]; then
+        log "FATAL" "Insecure PATH environment detected (contains '.' or '::'). Aborting."
+        exit 1
+    fi
+    # --- End of Corrected Check ---
+
+    for dir in "$LOG_DIR" "$BACKUP_DIR"; do
+        ensure_dir_exists "$dir"
+        chmod 750 "$dir"
     done
 }
 
-# --- Configuration Management ---
 ensure_config_dir() {
-    if [[ ! -d "$CONFIG_DIR" ]]; then
-        log "INFO" "Creating configuration directory at $CONFIG_DIR"
-        mkdir -p "$CONFIG_DIR"
-        chmod 750 "$CONFIG_DIR"
-    fi
+    ensure_dir_exists "$CONFIG_DIR"
+    chmod 750 "$CONFIG_DIR"
 
-    # Verify config directory permissions
-    verify_secure_permissions "$CONFIG_DIR" "750"
-
-    # Check for configuration file
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        log "ERROR" "Main configuration file not found at $CONFIG_FILE"
-        log "INFO" "Creating default configuration..."
+        log "WARN" "Main configuration file not found at $CONFIG_FILE. Creating a default one."
         create_default_config
     fi
 
-    # Source the configuration file
     if [[ -f "$CONFIG_FILE" ]]; then
         log "INFO" "Loading configuration from $CONFIG_FILE"
         # shellcheck disable=SC1090,SC1091
         source "$CONFIG_FILE"
     else
-        log "FATAL" "Configuration file could not be created or loaded"
+        log "FATAL" "Configuration file could not be created or loaded. Aborting."
         exit 1
     fi
 }
 
 create_default_config() {
+    log "INFO" "Creating default configuration file at $CONFIG_FILE..."
     cat > "$CONFIG_FILE" << 'EOF'
 # R Environment Manager Configuration
 # Generated on: $(date)
@@ -303,71 +233,122 @@ BACKUP_RETENTION_DAYS=30
 MIN_MEMORY_MB=2048
 MIN_DISK_MB=5120
 EOF
-
-    # Set secure permissions on the new config file
     chmod 640 "$CONFIG_FILE"
-    log "INFO" "Default configuration created at $CONFIG_FILE"
+    log "INFO" "Default configuration created successfully."
 }
-COMMON_UTILS="${SCRIPT_DIR}/lib/common_utils.sh"
-if [[ -f "$COMMON_UTILS" ]]; then
-    # shellcheck disable=SC1090,SC1091
-    source "$COMMON_UTILS"
-else
-    echo "FATAL: Common utility library not found at $COMMON_UTILS. Cannot proceed." >&2
-    exit 1
-fi
-if [[ -n "${CUSTOM_R_PROFILE_SITE_PATH_ENV:-}" ]]; then
-    USER_SPECIFIED_R_PROFILE_SITE_PATH="${CUSTOM_R_PROFILE_SITE_PATH_ENV}"
-fi
 
-# --- Placeholder Functions ---
+# --- Implemented Helper Functions (Formerly Placeholders) ---
+
 validate_configuration() {
     log "INFO" "Validating configuration..."
-    # Add validation logic here
-    return 0
+    local required_vars=("CRAN_REPO_URL_BIN" "CRAN_APT_KEY_URL" "R_USER_PACKAGES_CRAN")
+    local missing=0
+    for var in "${required_vars[@]}"; do
+        if [[ -z "${!var:-}" ]]; then
+            log "ERROR" "Configuration validation failed: Required variable '${var}' is not set in ${CONFIG_FILE}."
+            missing=1
+        fi
+    done
+    if [[ $missing -eq 1 ]]; then return 1; else log "INFO" "Configuration appears valid."; return 0; fi
 }
 
 display_installation_status() {
-    log "INFO" "Displaying installation status..."
-    # Add status display logic here
+    log "INFO" "--- Current Installation Status ---"
+    # Check for R
+    if command -v R &>/dev/null; then
+        log "INFO" "R Installation: DETECTED - $(R --version | head -n 1)"
+    else
+        log "INFO" "R Installation: NOT FOUND"
+    fi
+    # Check for RStudio Server
+    if command -v rstudio-server &>/dev/null; then
+        log "INFO" "RStudio Server: DETECTED - Version $(rstudio-server version)"
+        if systemctl is-active --quiet rstudio-server; then
+            log "INFO" "RStudio Status: ACTIVE (running)"
+        else
+            log "WARN" "RStudio Status: INACTIVE (not running)"
+        fi
+    else
+        log "INFO" "RStudio Server: NOT FOUND"
+    fi
+    log "INFO" "-----------------------------------"
 }
 
 pre_flight_checks() {
     log "INFO" "Performing pre-flight checks..."
-    # Add pre-flight check logic here
+    # Check for essential commands
+    local commands=("awk" "grep" "curl" "gpg" "tee" "stat" "free" "df" "ldd")
+    for cmd in "${commands[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            log "FATAL" "Essential command '${cmd}' not found. Please install it."
+            exit 1
+        fi
+    done
+    log "INFO" "All essential commands are present."
     return 0
 }
 
 get_state() {
     local key="$1"
-    local default_value="$2"
-    if [[ -v "OPERATION_STATE[$key]" ]]; then
-        echo "${OPERATION_STATE[$key]}"
-    else
-        echo "$default_value"
-    fi
+    local default_value="${2:-}"
+    if [[ -v "OPERATION_STATE[$key]" ]]; then echo "${OPERATION_STATE[$key]}"; else echo "$default_value"; fi
 }
 
 backup_file() {
     local file_path="$1"
-    log "INFO" "Backing up ${file_path}..."
-    # Add backup logic here
+    if [[ ! -e "$file_path" ]]; then
+        log "WARN" "Cannot backup '${file_path}': file does not exist."
+        return 1
+    fi
+    local backup_target_dir="${BACKUP_DIR}/files/$(dirname "${file_path}")"
+    ensure_dir_exists "$backup_target_dir"
+    local timestamp
+    timestamp=$(date +"%Y%m%d_%H%M%S")
+    local backup_name
+    backup_name="$(basename "$file_path").${timestamp}.bak"
+    
+    log "INFO" "Backing up '${file_path}' to '${backup_target_dir}/${backup_name}'"
+    cp -aL "${file_path}" "${backup_target_dir}/${backup_name}"
 }
 
 restore_latest_backup() {
     local file_path="$1"
-    log "INFO" "Restoring ${file_path}..."
-    # Add restore logic here
+    local backup_search_dir="${BACKUP_DIR}/files/$(dirname "${file_path}")"
+    if [[ ! -d "$backup_search_dir" ]]; then
+        log "ERROR" "Cannot restore '${file_path}': no backup directory found at '${backup_search_dir}'."
+        return 1
+    fi
+    
+    local latest_backup
+    latest_backup=$(find "$backup_search_dir" -type f -name "$(basename "$file_path")*.bak" | sort -r | head -n 1)
+    
+    if [[ -z "$latest_backup" ]]; then
+        log "ERROR" "No backup found for '${file_path}' in '${backup_search_dir}'."
+        return 1
+    fi
+    
+    log "INFO" "Restoring '${file_path}' from latest backup: '${latest_backup}'"
+    cp -a "${latest_backup}" "${file_path}"
 }
 
 verify_secure_permissions() {
     local path="$1"
-    log "INFO" "Verifying permissions for ${path}..."
-    # Add permission verification logic here
+    local expected_perms="$2"
+    log "DEBUG" "Verifying permissions for ${path}..."
+    if [[ ! -e "$path" ]]; then
+        log "WARN" "Cannot verify permissions for '${path}': path does not exist."
+        return 1
+    fi
+    local current_perms
+    current_perms=$(stat -c "%a" "$path")
+    if [[ "$current_perms" != "$expected_perms" ]]; then
+        log "WARN" "Permissions for '${path}' are '${current_perms}', expected '${expected_perms}'."
+        return 1
+    fi
+    return 0
 }
 
 # --- State Management ---
-declare -A OPERATION_STATE
 save_state() {
     local operation=$1
     local status=$2
@@ -376,267 +357,284 @@ save_state() {
     OPERATION_STATE["${operation}_status"]=$status
     OPERATION_STATE["${operation}_timestamp"]=$timestamp
     
-    # Persist state to file
     {
         echo "# R Environment Manager State - $timestamp"
         for key in "${!OPERATION_STATE[@]}"; do
             echo "${key}=${OPERATION_STATE[$key]}"
         done
-    } > "${SCRIPT_DIR}/.r_env_state"
+    } > "$STATE_FILE"
 }
 
 load_state() {
-    local state_file="${SCRIPT_DIR}/.r_env_state"
-    if [[ -f "$state_file" ]]; then
+    if [[ -f "$STATE_FILE" ]]; then
+        log "INFO" "Loading previous operation state from $STATE_FILE"
         while IFS='=' read -r key value; do
             [[ $key == \#* ]] && continue
             OPERATION_STATE["$key"]=$value
-        done < "$state_file"
+        done < "$STATE_FILE"
     fi
 }
 
 # --- Core Helper Functions ---
-
-# Determines the correct path for the system-wide Rprofile.site file.
-# It checks user overrides, then `R RHOME`, then common default locations.
 get_r_profile_site_path() {
-    local log_details=false
-    # Only log detailed detection steps if the path isn't already set.
-    if [[ -z "${R_PROFILE_SITE_PATH:-}" ]] && [[ -z "${USER_SPECIFIED_R_PROFILE_SITE_PATH:-}" ]]; then
-        log_details=true
-    fi
-
-    if $log_details; then log "INFO" "Determining Rprofile.site path..."; fi
-
-    # Priority 1: User-specified environment variable.
     if [[ -n "${USER_SPECIFIED_R_PROFILE_SITE_PATH:-}" ]]; then
-        if [[ "${R_PROFILE_SITE_PATH:-}" != "$USER_SPECIFIED_R_PROFILE_SITE_PATH" ]]; then
-            R_PROFILE_SITE_PATH="$USER_SPECIFIED_R_PROFILE_SITE_PATH"
-            log "INFO" "Using user-specified R_PROFILE_SITE_PATH: ${R_PROFILE_SITE_PATH}"
-        fi
+        R_PROFILE_SITE_PATH="$USER_SPECIFIED_R_PROFILE_SITE_PATH"
+        log "INFO" "Using user-specified R_PROFILE_SITE_PATH: ${R_PROFILE_SITE_PATH}"
         return
     fi
 
-    # Priority 2: `R RHOME` command output.
     if command -v R &>/dev/null; then
-        local r_home_output
-        r_home_output=$(R RHOME 2>/dev/null || echo "")
-        if [[ -n "$r_home_output" && -d "$r_home_output" ]]; then
-            local detected_path="${r_home_output}/etc/Rprofile.site"
-            if [[ "${R_PROFILE_SITE_PATH:-}" != "$detected_path" ]]; then
-                log "INFO" "Auto-detected R_PROFILE_SITE_PATH (from R RHOME): ${detected_path}"
-            fi
-            R_PROFILE_SITE_PATH="$detected_path"
+        local r_home
+        r_home=$(R RHOME 2>/dev/null)
+        if [[ -n "$r_home" && -d "$r_home" ]]; then
+            R_PROFILE_SITE_PATH="${r_home}/etc/Rprofile.site"
+            log "INFO" "Auto-detected R_PROFILE_SITE_PATH (from R RHOME): ${R_PROFILE_SITE_PATH}"
             return
         fi
     fi
 
-    # Priority 3: Common default paths.
-    local default_apt_path="/usr/lib/R/etc/Rprofile.site"
-    local default_local_path="/usr/local/lib/R/etc/Rprofile.site"
-    local new_detected_path=""
-
-    if [[ -f "$default_apt_path" || -L "$default_apt_path" ]]; then
-        new_detected_path="$default_apt_path"
-        if $log_details || [[ "${R_PROFILE_SITE_PATH:-}" != "$new_detected_path" ]]; then
-            log "INFO" "Auto-detected R_PROFILE_SITE_PATH (apt default): ${new_detected_path}"
-        fi
-    elif [[ -f "$default_local_path" || -L "$default_local_path" ]]; then
-        new_detected_path="$default_local_path"
-        if $log_details || [[ "${R_PROFILE_SITE_PATH:-}" != "$new_detected_path" ]]; then
-            log "INFO" "Auto-detected R_PROFILE_SITE_PATH (local default): ${new_detected_path}"
-        fi
-    else
-        # If no file exists, default to the standard location for creation.
-        new_detected_path="$default_apt_path"
-        if $log_details || [[ "${R_PROFILE_SITE_PATH:-}" != "$new_detected_path" ]]; then
-            log "INFO" "No Rprofile.site found. Defaulting to standard location for creation: ${new_detected_path}"
-        fi
-    fi
-    R_PROFILE_SITE_PATH="$new_detected_path"
+    R_PROFILE_SITE_PATH="/usr/lib/R/etc/Rprofile.site"
+    log "INFO" "Defaulting Rprofile.site to standard location: ${R_PROFILE_SITE_PATH}"
 }
 
-# Checks if the script is running in a non-interactive CI/CD or container environment.
 is_vm_or_ci_env() {
-    if [[ "${CI:-false}" == "true" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]] || [[ -n "${GITLAB_CI:-}" ]] || [[ -n "${TRAVIS:-}" ]]; then
-        return 0 # It's a CI environment
-    elif [[ "$EUID" -eq 0 ]] && [[ -f /.dockerenv ]]; then
-        return 0 # It's a Docker container
+    if [[ "${CI:-false}" == "true" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]] || [[ -f /.dockerenv ]]; then
+        return 0
     else
-        return 1 # Not a known CI/VM environment
+        return 1
     fi
 }
-
 
 # --- RStudio Server Functions ---
-
-# Fetches the latest RStudio Server version and download URL.
 get_latest_rstudio_info() {
-    log "INFO" "Detecting latest RStudio Server version and architecture..."
-    local latest_version latest_arch
-    latest_version="$RSTUDIO_VERSION_FALLBACK"
-    latest_arch="$RSTUDIO_ARCH_FALLBACK"
+    log "INFO" "Detecting latest RStudio Server version..."
+    # Fallback values from config
+    local rstudio_version=${RSTUDIO_VERSION_FALLBACK:-"2023.06.0"}
+    local rstudio_arch=${RSTUDIO_ARCH_FALLBACK:-"amd64"}
 
-    # Try to fetch latest version info from the RStudio website.
-    local json_url="https://rstudio.com/products/rstudio/download-server/"
     local html
-    html=$(curl -fsSL "$json_url" 2>/dev/null || true)
+    html=$(curl -fsSL "https://rstudio.com/products/rstudio/download-server/" 2>/dev/null || true)
 
     if [[ -n "$html" ]]; then
-        # Extract version and architecture from the HTML content.
-        latest_version=$(echo "$html" | grep -oP 'rstudio-server-\K[0-9]+\.[0-9]+\.[0-9]+-[0-9]+' | head -n1)
-        latest_arch=$(echo "$html" | grep -oP 'rstudio-server-[0-9.]+-([a-z0-9]+)\.deb' | head -n1)
-        if [[ -n "$latest_version" ]]; then
-            RSTUDIO_VERSION="$latest_version"
-        fi
-        if [[ -n "$latest_arch" ]]; then
-            RSTUDIO_ARCH="$latest_arch"
+        # Attempt to parse a modern version format
+        local parsed_version
+        parsed_version=$(echo "$html" | grep -oP 'rstudio-server-[\d.]+-amd64\.deb' | head -n1 | sed -E 's/rstudio-server-([0-9]+\.[0-9]+\.[0-9]+-[0-9]+)-amd64\.deb/\1/')
+        if [[ -n "$parsed_version" ]]; then
+             rstudio_version="$parsed_version"
         fi
     fi
 
-    RSTUDIO_DEB_FILENAME="rstudio-server-${RSTUDIO_VERSION}-${RSTUDIO_ARCH}.deb"
-    RSTUDIO_DEB_URL="https://download2.rstudio.org/server/bionic/${RSTUDIO_DEB_FILENAME}" # Assuming bionic, adjust if needed
-    log "INFO" "Using RStudio Server version: $RSTUDIO_VERSION, arch: $RSTUDIO_ARCH"
-    log "INFO" "Download URL: $RSTUDIO_DEB_URL"
+    RSTUDIO_DEB_FILENAME="rstudio-server-${rstudio_version}-${rstudio_arch}.deb"
+    RSTUDIO_DEB_URL="https://download2.rstudio.org/server/bionic/${rstudio_arch}/${RSTUDIO_DEB_FILENAME}"
+    log "INFO" "Using RStudio Server version: ${rstudio_version}"
 }
 
-# Installs RStudio Server from the determined URL.
-install_rstudio_server() {
-    local current_state
-    current_state=$(get_state "rstudio_installation" "not_installed")
+#install_rstudio_server() {
+#    if systemctl is-active --quiet rstudio-server; then
+#        log "INFO" "RStudio Server is already installed and running."
+#        return 0
+#    fi
+#    
+#    get_latest_rstudio_info
+#    
+#    log "INFO" "Installing RStudio Server..."
+#    local rstudio_deb_path="/tmp/${RSTUDIO_DEB_FILENAME}"
     
-    if [[ "$current_state" == "completed" ]]; then
-        if systemctl is-active --quiet rstudio-server; then
-            log "INFO" "RStudio Server is already installed and running"
-            return 0
-        else
-            log "WARN" "RStudio Server is installed but not running"
-            save_state "rstudio_installation" "needs_restart"
-        fi
+#    run_command "Download RStudio Server" "wget -O \"${rstudio_deb_path}\" \"${RSTUDIO_DEB_URL}\""
+#    run_command "Install RStudio Server package" "apt-get install -y \"${rstudio_deb_path}\""
+#    rm -f "$rstudio_deb_path"
+#     run_command "Enable and start RStudio Server" "systemctl enable --now rstudio-server"
+#    
+#    log "INFO" "RStudio Server installation complete."
+#}
+
+install_rstudio_server() {
+    if systemctl is-active --quiet rstudio-server; then
+        log "INFO" "RStudio Server is already installed and running."
+        return 0
     fi
     
-    save_state "rstudio_installation" "starting"
     get_latest_rstudio_info
     
     log "INFO" "Installing RStudio Server..."
     local rstudio_deb_path="/tmp/${RSTUDIO_DEB_FILENAME}"
     
-    if ! run_command "Download RStudio Server" wget -O "$rstudio_deb_path" "$RSTUDIO_DEB_URL"; then
-        save_state "rstudio_installation" "download_failed"
-        handle_error 2 "Failed to download RStudio Server"
+    # Downloading the file is fine with run_command
+    run_command "Download RStudio Server" "wget -O \"${rstudio_deb_path}\" \"${RSTUDIO_DEB_URL}\""
+    
+    # --- MODIFIED BLOCK ---
+    # Call apt-get directly to prevent hanging on hidden prompts and to show progress.
+    log "INFO" "Installing the downloaded .deb package. Apt output will be displayed below:"
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y "${rstudio_deb_path}"; then
+        log "INFO" "SUCCESS: RStudio Server package installed."
+    else
+        handle_error $? "Failed to install RStudio .deb package."
+        rm -f "${rstudio_deb_path}" # Clean up the downloaded file on failure
         return 1
     fi
+    # --- END MODIFIED BLOCK ---
     
-    if ! run_command "Install RStudio Server .deb package" apt-get install -y "$rstudio_deb_path"; then
-        save_state "rstudio_installation" "install_failed"
-        handle_error 1 "Failed to install RStudio Server package"
-        rm -f "$rstudio_deb_path"
-        return 1
-    fi
-    
+    # Clean up the downloaded file on success
     rm -f "$rstudio_deb_path"
     
-    if ! run_command "Enable and start RStudio Server" systemctl enable --now rstudio-server; then
-        save_state "rstudio_installation" "service_failed"
-        handle_error 1 "Failed to start RStudio Server service"
-        return 1
-    fi
+    # Enabling the service is a quick, non-interactive command
+    run_command "Enable and start RStudio Server" "systemctl enable --now rstudio-server"
     
-    save_state "rstudio_installation" "completed"
     log "INFO" "RStudio Server installation complete."
-    return 0
 }
 
-# Checks the status of the RStudio Server.
 check_rstudio_server() {
-    log "INFO" "Checking RStudio Server installation and status..."
-    if ! command -v rstudio-server &>/dev/null; then
-        log "ERROR" "RStudio Server is not installed or not in PATH."
-        return 1
-    fi
-
-    local rstudio_status
-    rstudio_status=$(rstudio-server status 2>&1)
-    log "INFO" "rstudio-server command found. Status: $rstudio_status"
-    if [[ "$rstudio_status" == *"active (running)"* ]]; then
-        log "INFO" "RStudio Server is running."
-    else
-        log "WARN" "RStudio Server is installed but not running."
-    fi
-    log "INFO" "RStudio Server version: $(rstudio-server version 2>/dev/null || echo 'Unknown')"
-
-    log "INFO" "Checking if RStudio Server is accessible on port 8787..."
+    display_installation_status # This function now handles the status check
     if ss -tuln | grep -q ':8787'; then
         log "INFO" "RStudio Server is listening on port 8787."
+        log "INFO" "Access it at http://<YOUR_SERVER_IP>:8787"
     else
         log "WARN" "RStudio Server is not listening on port 8787. Check firewall or service status."
     fi
-    log "INFO" "You can access RStudio Server at http://<YOUR_SERVER_IP>:8787 if not firewalled."
 }
 
-
 # --- Core Installation Functions ---
-
-# Sets up the CRAN repository for apt.
 setup_cran_repo() {
     log "INFO" "Setting up CRAN repository..."
     local ubuntu_codename
-    ubuntu_codename=$(lsb_release -cs 2>/dev/null || grep VERSION_CODENAME /etc/os-release | cut -d= -f2)
-    local cran_repo_line="deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN}/${ubuntu_codename}-cran40/"
-    run_command "Add CRAN apt key" wget -qO- "$CRAN_APT_KEY_URL" | gpg --dearmor -o "$CRAN_APT_KEYRING_FILE"
+    ubuntu_codename=$(lsb_release -cs)
+    #local cran_repo_line="deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN}/${ubuntu_codename}-cran40/"
+    local cran_repo_line="deb [signed-by=${CRAN_APT_KEYRING_FILE}] ${CRAN_REPO_URL_BIN} ${ubuntu_codename}-cran40/"
+    
+    #run_command "Add CRAN apt key" "wget -qO- \"${CRAN_APT_KEY_URL}\" | gpg --dearmor -o \"${CRAN_APT_KEYRING_FILE}\""
+    run_command "Add CRAN apt key" "wget -qO- \"${CRAN_APT_KEY_URL}\" | gpg --dearmor > \"${CRAN_APT_KEYRING_FILE}\""
     echo "$cran_repo_line" > /etc/apt/sources.list.d/cran.list
-    run_command "apt-get update" apt-get update
+    run_command "Update apt package list" "apt-get update"
 }
 
-# Installs R and its development packages.
+#install_r() {
+#    if command -v R &>/dev/null; then
+#        log "INFO" "R is already installed."
+#        return 0
+#    fi
+#    log "INFO" "Installing R base and development packages..."
+#    run_command "Install R base packages" "apt-get install -y --no-install-recommends r-base r-base-dev"
+#}
+
 install_r() {
-    local current_state
-    current_state=$(get_state "r_installation" "not_installed")
-    
-    if [[ "$current_state" == "completed" ]]; then
-        log "INFO" "R is already installed"
+    if command -v R &>/dev/null; then
+        log "INFO" "R is already installed."
         return 0
     fi
+    log "INFO" "Installing R base and development packages..."
+    log "INFO" "This may take several minutes. Apt output will be displayed below:"
     
-    save_state "r_installation" "starting"
-    log "INFO" "Installing R base and recommended packages..."
-    
-    if run_command "apt-get install R base" apt-get install -y --no-install-recommends r-base r-base-dev; then
-        save_state "r_installation" "completed"
-        return 0
+    # Call apt-get directly to ensure it is fully non-interactive and to show progress.
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends r-base r-base-dev; then
+        log "INFO" "SUCCESS: R base packages installed."
     else
-        save_state "r_installation" "failed"
-        handle_error 1 "R installation failed"
+        handle_error $? "Failed to install R base packages."
         return 1
     fi
 }
 
-# Installs high-performance libraries.
+
+
+# ... (The rest of your script from install_openblas_openmp to the end is largely fine)
+# --- Paste the remaining functions from your previous script here, starting from ---
+# install_openblas_openmp()
+# ... all the way to ...
+# main()
+# --- Then replace the initialize_environment and main functions with these improved versions ---
+
+
+#install_openblas_openmp() {
+#    log "INFO" "Installing OpenBLAS and OpenMP for performance..."
+#    run_command "Install OpenBLAS/OpenMP" "apt-get install -y libopenblas-dev libomp-dev"
+#}
+
 install_openblas_openmp() {
-    log "INFO" "Installing OpenBLAS and OpenMP..."
-    run_command "apt-get install OpenBLAS/OpenMP" apt-get install -y libopenblas-dev libomp-dev
+    log "INFO" "Installing OpenBLAS and OpenMP for performance..."
+    log "INFO" "Apt output will be displayed below:"
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y libopenblas-dev libomp-dev; then
+        log "INFO" "SUCCESS: OpenBLAS and OpenMP installed."
+    else
+        handle_error $? "Failed to install OpenBLAS/OpenMP packages."
+        return 1
+    fi
 }
+
+#verify_openblas_openmp() {
+#    log "INFO" "Verifying OpenBLAS/OpenMP linkage..."
+#    if ldd /usr/lib/R/lib/libRblas.so | grep -q 'openblas'; then
+#        log "INFO" "SUCCESS: OpenBLAS is correctly linked to R."
+#    else
+#        log "WARN" "OpenBLAS does not appear to be linked to R. Performance may be suboptimal."
+#    fi
+#}
 
 # Verifies that R is correctly linked against OpenBLAS.
+#verify_openblas_openmp() {
+#    log "INFO" "Verifying OpenBLAS/OpenMP installation..."
+#    if ldd /usr/lib/R/lib/libRblas.so | grep -q openblas; then
+#        log "INFO" "OpenBLAS is linked to Rblas."
+#        return 0
+#    else
+#        log "WARN" "OpenBLAS not linked to Rblas."
+#        return 1
+#    fi
+#}
+
 verify_openblas_openmp() {
-    log "INFO" "Verifying OpenBLAS/OpenMP installation..."
-    if ldd /usr/lib/R/lib/libRblas.so | grep -q openblas; then
-        log "INFO" "OpenBLAS is linked to Rblas."
+    log "INFO" "Verifying OpenBLAS and OpenMP integration with R..."
+    if ! command -v Rscript &>/dev/null; then
+        handle_error 1 "Rscript not found. Cannot perform verification. Please install R."
+        return 1
+    fi
+
+    local r_check_script="/tmp/verify_blas.R"
+    cat > "$r_check_script" << 'EOF'
+    # Get session info to check for BLAS/LAPACK linkage
+    info <- sessionInfo()
+    
+    # Check for OpenBLAS or other high-performance libraries
+    blas_ok <- grepl("openblas", info$BLAS, ignore.case = TRUE) || grepl("atlas", info$BLAS, ignore.case = TRUE) || grepl("mkl", info$BLAS, ignore.case = TRUE)
+    
+    if (blas_ok) {
+        cat("SUCCESS: High-performance BLAS detected.\n")
+        print(info$BLAS)
+    } else {
+        cat("WARNING: Standard reference BLAS detected. Performance may be suboptimal.\n")
+        print(info$BLAS)
+    }
+    
+    # Perform a small benchmark to ensure it works
+    cat("\nPerforming a small matrix multiplication benchmark...\n")
+    N <- 500
+    m <- matrix(rnorm(N*N), ncol=N)
+    time <- system.time(crossprod(m))
+    print(time)
+    cat("Benchmark completed.\n")
+EOF
+
+    log "INFO" "Executing R verification script. Output will be in the log."
+    # We run this within the run_command to capture output and handle errors
+    if run_command "Run R BLAS/LAPACK verification" "Rscript ${r_check_script}"; then
+        log "INFO" "R environment verification check passed."
+        rm -f "$r_check_script"
         return 0
     else
-        log "WARN" "OpenBLAS not linked to Rblas."
+        handle_error 1 "R environment verification FAILED. Check log for details from R."
+        rm -f "$r_check_script"
         return 1
     fi
 }
 
-# Sets up bspm for binary package management.
+
 setup_bspm() {
     log "INFO" "Setting up bspm (Binary R Package Manager)..."
     get_r_profile_site_path
-
     if [[ -z "$R_PROFILE_SITE_PATH" ]]; then
-        log "ERROR" "R_PROFILE_SITE_PATH is not set. Cannot setup bspm."; return 1
+        handle_error 1 "R_PROFILE_SITE_PATH could not be determined. Cannot setup bspm."
+        return 1
     fi
+
+    # ... (rest of setup_bspm function)
 
     if ! is_vm_or_ci_env; then
         log "INFO" "Not in root or CI/VM environment. Skipping bspm setup for safety."
@@ -779,27 +777,34 @@ if ('bspm' %in% loadedNamespaces() && 'bspm' %in% rownames(installed.packages())
     log "INFO" "bspm setup and verification completed."
 }
 
-# Installs common system dependencies required for building R packages.
+#install_r_build_deps() {
+#    log "INFO" "Installing system dependencies for building R packages..."
+#    local build_deps=(
+#        build-essential libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev
+#        libfontconfig1-dev libcairo2-dev libharfbuzz-dev libfribidi-dev
+#        libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev zlib1g-dev
+#    )
+#    run_command "Install R package build dependencies" "apt-get install -y ${build_deps[*]}"
+#}
+
 install_r_build_deps() {
-    log "INFO" "Installing common system dependencies for building R packages from source (e.g., for devtools)..."
+    log "INFO" "Installing system dependencies for building R packages..."
     local build_deps=(
         build-essential libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev
-        libfontconfig1-dev libcairo2-dev libharfbuzz-dev libfribidi-dev libfreetype6-dev
-        libpng-dev libtiff5-dev libjpeg-dev zlib1g-dev libbz2-dev liblzma-dev
-        libreadline-dev libicu-dev libxt-dev cargo libgdal-dev libproj-dev
-        libgeos-dev libudunits2-dev
+        libfontconfig1-dev libcairo2-dev libharfbuzz-dev libfribidi-dev
+        libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev zlib1g-dev
     )
-    run_command "Update apt cache before installing build deps" apt-get update -y
-    run_command "Install R package build dependencies" apt-get install -y "${build_deps[@]}"
-    log "INFO" "System dependencies for R package building installed."
+    log "INFO" "Apt output will be displayed below:"
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y "${build_deps[@]}"; then
+        log "INFO" "SUCCESS: R build dependencies installed."
+    else
+        handle_error $? "Failed to install R build dependencies."
+        return 1
+    fi
 }
 
-
-# --- R Package Installation Functions ---
-
-# Generic function to install a list of R packages.
 install_r_pkg_list() {
-    local pkg_type="$1"; shift
+        local pkg_type="$1"; shift
     local r_packages_list=("${@}")
 
     if [[ ${#r_packages_list[@]} -eq 0 ]]; then
@@ -886,75 +891,31 @@ EOF
     rm -f "$pkg_install_script_path"
 }
 
-# Installs core development packages like devtools and remotes.
+#install_core_r_dev_pkgs() {
+#    log "INFO" "Installing core R development packages (devtools, remotes)..."
+#    install_r_pkg_list "CRAN" "devtools" "remotes"
+#}
+
 install_core_r_dev_pkgs() {
     log "INFO" "Installing core R development packages (devtools, remotes)..."
     local core_r_dev_pkgs=("devtools" "remotes")
     install_r_pkg_list "CRAN" "${core_r_dev_pkgs[@]}"
 }
 
-# Installs user-defined CRAN packages from the config file.
 install_user_cran_pkgs() {
     log "INFO" "Installing user-defined CRAN packages..."
     install_r_pkg_list "CRAN" "${R_USER_PACKAGES_CRAN[@]}"
 }
 
-# Installs user-defined GitHub packages from the config file.
 install_user_github_pkgs() {
     log "INFO" "Installing user-defined GitHub packages..."
     install_r_pkg_list "GitHub" "${R_USER_PACKAGES_GITHUB[@]}"
 }
 
+# --- Maintenance and Orchestration ---
 
-# --- State Management and Maintenance ---
-
-# Saves a key-value pair to the environment state file.
-add_to_env_state() {
-    local key="$1"
-    local value="$2"
-    local temp_state_file
-    temp_state_file=$(mktemp)
-
-    # Ensure the state file exists
-    touch "$R_ENV_STATE_FILE"
-    # shellcheck disable=SC1090,SC1091
-    source "$R_ENV_STATE_FILE" # Load current state
-
-    # Get the array by its name
-    local -n arr_ref="$key"
-    
-    # Check if value is already in the array
-    local element
-    for element in "${arr_ref[@]}"; do
-        if [[ "$element" == "$value" ]]; then
-            return # Already exists, do nothing
-        fi
-    done
-
-    # Add the new value
-    arr_ref+=("$value")
-
-    # Write all known state arrays back to the temp file
-    {
-        echo "# R Environment State File - Auto-generated by r_env_manager.sh"
-        echo "# Do not edit this file manually."
-        declare -p INSTALLED_CRAN_PACKAGES 2>/dev/null || echo "INSTALLED_CRAN_PACKAGES=()"
-        declare -p INSTALLED_GITHUB_PACKAGES 2>/dev/null || echo "INSTALLED_GITHUB_PACKAGES=()"
-    } > "$temp_state_file"
-
-    # Atomically replace the old state file
-    mv "$temp_state_file" "$R_ENV_STATE_FILE"
-    chmod 640 "$R_ENV_STATE_FILE"
-}
-
-# Backs up all relevant configuration files.
 backup_all() {
-    log "INFO" "Backing up all relevant configuration files..."
-    if [[ -f "$R_ENV_STATE_FILE" ]]; then
-        log "INFO" "Loading environment state from $R_ENV_STATE_FILE"
-        # shellcheck disable=SC1090,SC1091
-        source "$R_ENV_STATE_FILE" # Load current state
-    fi
+    log "INFO" "--- Backing Up All Configurations ---"
     get_r_profile_site_path
     backup_file "$R_PROFILE_SITE_PATH"
     backup_file "/etc/apt/sources.list.d/cran.list"
@@ -964,9 +925,9 @@ backup_all() {
     log "INFO" "Backup process completed."
 }
 
-# Uninstalls the entire R environment.
 uninstall() {
     log "INFO" "--- Starting Uninstall Process ---"
+        log "INFO" "--- Starting Uninstall Process ---"
     save_state "uninstall" "starting"
     
     if [[ -f "$STATE_FILE" ]]; then
@@ -1009,40 +970,25 @@ uninstall() {
     log "INFO" "Uninstall process completed."
 }
 
-# Restores all configurations from the latest backup.
 restore_all() {
-    log "INFO" "--- Starting Restore ---"
-    if [[ -f "$R_ENV_STATE_FILE" ]]; then
-        log "INFO" "Loading environment state from $R_ENV_STATE_FILE..."
-        # shellcheck disable=SC1090,SC1091
-        source "$R_ENV_STATE_FILE" # Load current state
-    fi
-
-    log "INFO" "Restoring Rprofile.site..."
+    log "INFO" "--- Starting Restore Process ---"
+    get_r_profile_site_path
     restore_latest_backup "$R_PROFILE_SITE_PATH"
-    log "INFO" "Restoring CRAN apt source..."
     restore_latest_backup "/etc/apt/sources.list.d/cran.list"
-    log "INFO" "Restoring R2U apt source..."
     restore_latest_backup "$R2U_APT_SOURCES_LIST_D_FILE"
-    log "INFO" "Restoring RStudio configs..."
     restore_latest_backup "/etc/rstudio/rserver.conf"
     restore_latest_backup "/etc/rstudio/rsession.conf"
-    log "INFO" "Restore process completed. Run 'apt-get update' to apply repository changes."
+    log "INFO" "Restore process completed. Run 'apt-get update' to apply changes."
 }
 
-
-# --- Orchestration and Menus ---
-
-# Performs the full, end-to-end installation.
 full_install() {
     log "INFO" "--- Starting Full R Environment Installation ---"
-    pre_flight_checks
     backup_all
     setup_cran_repo
     install_r
     install_openblas_openmp
     verify_openblas_openmp
-    setup_bspm
+    setup_bspm # Uncomment if you use it
     install_r_build_deps
     install_core_r_dev_pkgs
     install_user_cran_pkgs
@@ -1052,9 +998,8 @@ full_install() {
     log "INFO" "--- Full Installation Complete ---"
 }
 
-# Provides a menu to launch other scripts in the `scripts/` directory.
 launch_external_script() {
-    local scripts_dir="${SCRIPT_DIR}/scripts"
+        local scripts_dir="${SCRIPT_DIR}/scripts"
     if [[ ! -d "$scripts_dir" ]]; then
         log "WARN" "Scripts directory not found at '${scripts_dir}'."
         return
@@ -1093,21 +1038,14 @@ launch_external_script() {
     fi
 }
 
-# The main menu of the script.
 main_menu() {
-    local return_status=0
-    
     while true; do
-        # Check system state before showing menu
         check_system_resources || {
-            handle_error 4 "System resources check failed"
+            handle_error 4 "System resources check failed. Aborting menu."
             return 1
         }
-        
-        # Rotate logs if needed
         rotate_logs
         
-        # Display menu
         printf "\n================ R Environment Manager ================\n"
         printf "1.  Full Installation (Recommended for first run)\n"
         printf "2.  Install/Verify R, OpenBLAS, and bspm\n"
@@ -1126,157 +1064,60 @@ main_menu() {
         
         read -r -p "Enter choice: " choice
         
-        # Save operation state before executing
-        save_state "menu_choice" "$choice"
-        
         case $choice in
-            1) 
-                log "INFO" "Starting full installation..."
-                if ! full_install; then
-                    handle_error 1 "Full installation failed"
-                    return_status=1
-                fi
-                ;;
-            2)
-                log "INFO" "Starting R core setup..."
-                for step in setup_cran_repo install_r install_openblas_openmp verify_openblas_openmp setup_bspm; do
-                    save_state "current_step" "$step"
-                    if ! $step; then
-                        handle_error 1 "$step failed"
-                        return_status=1
-                        break
-                    fi
-                done
-                ;;
-            3)
-                log "INFO" "Installing R packages..."
-                for step in install_core_r_dev_pkgs install_user_cran_pkgs install_user_github_pkgs; do
-                    save_state "current_step" "$step"
-                    if ! $step; then
-                        handle_error 1 "$step failed"
-                        return_status=1
-                        break
-                    fi
-                done
-                ;;
-            4)
-                log "INFO" "Installing RStudio Server..."
-                if ! install_rstudio_server; then
-                    handle_error 1 "RStudio Server installation failed"
-                    return_status=1
-                fi
-                ;;
-            5)
-                log "INFO" "Checking RStudio Server status..."
-                check_rstudio_server || return_status=1
-                ;;
-            6)
-                log "INFO" "Launching external script menu..."
-                if ! launch_external_script; then
-                    handle_error 1 "External script execution failed"
-                    return_status=1
-                fi
-                ;;
-            7)
-                log "INFO" "Starting backup process..."
-                if ! backup_all; then
-                    handle_error 1 "Backup failed"
-                    return_status=1
-                fi
-                ;;
-            8)
-                log "INFO" "Starting restore process..."
-                if ! restore_all; then
-                    handle_error 1 "Restore failed"
-                    return_status=1
-                fi
-                ;;
-            9)
-                log "INFO" "Starting uninstall process..."
-                if ! uninstall; then
-                    handle_error 1 "Uninstall failed"
-                    return_status=1
-                fi
-                ;;
-            10)
-                if [[ -f "$LOG_FILE" ]]; then
-                    less "$LOG_FILE"
-                else
-                    log "ERROR" "Log file not found"
-                fi
-                ;;
-            11)
-                display_installation_status
-                ;;
-            [Ee]) 
-                log "INFO" "Exiting R Environment Manager..."
-                break 
-                ;;
-            *) 
-                log "ERROR" "Invalid choice. Please enter a number 1-11 or E to exit."
-                continue 
-                ;;
+            1) full_install ;;
+            2) setup_cran_repo; install_r; install_openblas_openmp; verify_openblas_openmp; setup_bspm ;;
+            3) install_core_r_dev_pkgs; install_user_cran_pkgs; install_user_github_pkgs ;;
+            4) install_rstudio_server ;;
+            5) check_rstudio_server ;;
+            6) launch_external_script ;;
+            7) backup_all ;;
+            8) restore_all ;;
+            9) uninstall ;;
+            10) if [[ -f "$LOG_FILE" ]]; then less "$LOG_FILE"; else log "ERROR" "Log file not found"; fi ;;
+            11) display_installation_status ;;
+            [Ee]) log "INFO" "Exiting R Environment Manager."; break ;;
+            *) log "ERROR" "Invalid choice. Please enter a number 1-11 or E to exit." ;;
         esac
         if [[ ! "$choice" =~ ^[Ee]$ ]]; then
             read -r -p "Press Enter to return to the menu..."
         fi
     done
-    return "$return_status"
+    return 0
 }
 
-# --- Pre-flight Initialization ---
 initialize_environment() {
-    # Setup core infrastructure
+    # Setup logging first, so all subsequent steps are recorded.
     setup_logging
-    rotate_logs
-    acquire_lock
+    log "INFO" "--- R Environment Manager Starting ---"
     
-    # Ensure configuration directory and files exist
+    acquire_lock
+    check_security_requirements
+    pre_flight_checks
+    
     ensure_config_dir
     
-    # Load and validate configuration
     if ! validate_configuration; then
-        handle_error 1 "Configuration validation failed"
+        log "FATAL" "Configuration validation failed. Please check your .conf file and try again."
         exit 1
     fi
     
-    # Load previous state
     load_state
     
-    # Verify security and resources
-    check_security_requirements
     if ! check_system_resources; then
-        handle_error 4 "Insufficient system resources"
+        # The function itself logs the specific error
+        log "FATAL" "System resources check failed."
         exit 1
     fi
     
-    log "INFO" "Environment initialization complete"
+    log "INFO" "Environment initialization complete."
 }
 
-# --- Script Entry Point ---
 main() {
-    # Initialize environment
-    if ! initialize_environment; then
-        log "ERROR" "Environment initialization failed"
-        exit 1
-    fi
-    
-    # Perform pre-flight checks
-    if ! pre_flight_checks; then
-        handle_error 1 "Pre-flight checks failed"
-        exit 1
-    fi
-    
-    # Display main menu and handle user interaction
+    initialize_environment
     main_menu
-    local menu_status=$?
-    
-    # Final cleanup
-    cleanup
-    
-    log "INFO" "Script finished with status: $menu_status"
-    exit "$menu_status"
+    # Cleanup is handled by the trap, so no explicit call is needed here
 }
 
 # Start script execution
-main
+main "$@"
