@@ -148,6 +148,21 @@ validate_configuration() {
     if [[ $missing -eq 1 ]]; then return 1; else log "INFO" "Configuration appears valid."; return 0; fi
 }
 
+# --- NEW --- System Time Synchronization
+sync_system_time() {
+    log "INFO" "Attempting to synchronize system time..."
+    if command -v timedatectl &>/dev/null; then
+        run_command "Enable and check NTP time synchronization" "timedatectl set-ntp true"
+        log "INFO" "System time synchronization enabled via timedatectl."
+    elif command -v ntpdate &>/dev/null; then
+        run_command "Synchronize time using ntpdate" "ntpdate pool.ntp.org"
+        log "INFO" "System time synchronized via ntpdate."
+    else
+        log "WARN" "Neither timedatectl nor ntpdate found. Skipping time synchronization."
+        log "WARN" "If apt commands fail, please manually sync your system's clock."
+    fi
+}
+
 display_installation_status() {
     log "INFO" "--- Current Installation Status ---"
     # Check for R
@@ -788,6 +803,10 @@ main_menu() {
     while true; do
         check_system_resources || {
             handle_error 4 "System resources check failed. Aborting menu."
+            return 1
+        }
+        sync_system_time || {
+            handle_error 4 "System Ntp out of Sync. Aborting menu."
             return 1
         }
         rotate_logs
