@@ -1,0 +1,572 @@
+#!/usr/bin/env bash
+
+################################################################################
+#
+# R Environment Manager (`r_env_manager.sh`)
+#
+# Version: 3.0.0 (Definitive Final Version)
+# Last Updated: 2025-09-09
+#
+# This script orchestrates the complete setup and management of an R
+# development environment on Debian-based systems. It is designed to be
+# robust, idempotent, and follow system engineering best practices.
+#
+################################################################################
+
+set -euo pipefail
+
+# --- Source Utilities First ---
+SCRIPT_DIR_INIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# shellcheck disable=SC1090,SC1091
+source "${SCRIPT_DIR_INIT}/lib/common_utils.sh"
+
+# --- Global Constants and Configuration ---
+readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+readonly SCRIPT_DIR="${SCRIPT_DIR_INIT}"
+readonly LOG_DIR="/var/log/r_env_manager"
+readonly BACKUP_DIR="/var/backups/r_env_manager"
+readonly CONFIG_DIR="${SCRIPT_DIR}/config"
+readonly STATE_FILE="${SCRIPT_DIR}/.r_env_state"
+readonly R_ENV_STATE_FILE="${SCRIPT_DIR}/.r_env_state_packages"
+readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}.log"
+readonly LOCK_FILE="/var/run/${SCRIPT_NAME}.lock"
+readonly PID_FILE="/var/run/${SCRIPT_NAME}.pid"
+readonly CONFIG_FILE="${CONFIG_DIR}/r_env_manager.conf"
+readonly R_PROFILE_SITE_PATH="/etc/R/Rprofile.site"
+
+export MAIN_LOG_FILE="${LOG_FILE}"
+export MAX_RETRIES=3
+export TIMEOUT=1800
+export DEBIAN_FRONTEND=noninteractive
+declare -A OPERATION_STATE
+
+# --- Core Infrastructure ---
+
+acquire_lock() {
+    if [[ -e "$LOCK_FILE" ]]; then
+        local pid
+        pid=$(cat "$PID_FILE" 2>/dev/null || echo "unknown")
+        log "FATAL" "Another instance is running (PID: $pid)."
+        exit 1
+    fi
+    ensure_dir_exists "$(dirname "$LOCK_FILE")"
+    touch "$LOCK_FILE"
+    echo $$ > "$PID_FILE"
+}
+
+check_system_resources() {
+    local min_memory=${MIN_MEMORY_MB:-2048}
+    local min_disk=${MIN_DISK_MB:-5120}
+    local available_memory
+    available_memory=$(free -m | awk '/^Mem:/{print $7}')
+    if (( available_memory < min_memory )); then
+        handle_error 4 "Insufficient memory."
+        return 1
+    fi
+    local available_disk
+    available_disk=$(df -m "$SCRIPT_DIR" | awk 'NR==2 {print $4}')
+    if (( available_disk < min_disk )); then
+        handle_error 4 "Insufficient disk space."
+        return 1
+    fi
+    return 0
+}
+
+setup_logging() {
+    ensure_dir_exists "$LOG_DIR"
+    if [[ ! -f "$LOG_FILE" ]]; then
+        touch "$LOG_FILE"
+        chmod 640 "$LOG_FILE"
+    fi
+    exec 3>&2
+    exec 2> >(tee -a "$LOG_FILE" >&2)
+}
+
+cleanup() {
+    local exit_code=$?
+    log "INFO" "Script execution ending with code: $exit_code"
+    if [[ -f "$LOCK_FILE" ]]; then rm -f "$LOCK_FILE"; fi
+    if [[ -f "$PID_FILE" ]]; then rm -f "$PID_FILE"; fi
+    exec 2>&3 # Restore stderr
+    exit "$exit_code"
+}
+trap cleanup EXIT
+trap 'log "FATAL" "Received signal to terminate."; exit 1' HUP INT QUIT TERM
+
+check_security_requirements() {
+    if [[ $EUID -ne 0 ]]; then
+        log "FATAL" "This script must be run as root."
+        exit 1
+    fi
+    local insecure_path_found=0
+    local old_ifs="$IFS"
+    IFS=':'
+    for dir in $PATH; do
+        if [[ "$dir" == "." ]] || [[ -z "$dir" ]]; then
+            insecure_path_found=1
+            break
+        fi
+    done
+    IFS="$old_ifs"
+    if [[ $insecure_path_found -eq 1 ]]; then
+        log "FATAL" "Insecure PATH detected (contains '.' or '::')."
+        exit 1
+    fi
+    for dir in "$LOG_DIR" "$BACKUP_DIR"; do
+        ensure_dir_exists "$dir"
+        chmod 750 "$dir"
+    done
+}
+
+rotate_logs() {
+    local max_size=$((50 * 1024 * 1024))  # 50MB
+    local max_backups=5
+    if [[ ! -f "$LOG_FILE" ]]; then return; fi
+    local size
+    size=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)
+    if (( size > max_size )); then
+        log "INFO" "Log file rotating."
+        for ((i = max_backups - 1; i >= 1; i--)); do
+            if [[ -f "${LOG_FILE}.$i" ]]; then
+                mv "${LOG_FILE}.$i" "${LOG_FILE}.$((i + 1))"
+            fi
+        done
+        mv "$LOG_FILE" "${LOG_FILE}.1"
+        touch "$LOG_FILE"
+        chmod 640 "$LOG_FILE"
+    fi
+}
+
+ensure_config_dir() {
+    ensure_dir_exists "$CONFIG_DIR"
+    chmod 750 "$CONFIG_DIR"
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        log "WARN" "Main configuration file not found. Creating a default one."
+        create_default_config
+    fi
+    if [[ -f "$CONFIG_FILE" ]]; then
+        log "INFO" "Loading configuration from $CONFIG_FILE"
+        source "$CONFIG_FILE"
+    else
+        log "FATAL" "Configuration file could not be loaded. Aborting."
+        exit 1
+    fi
+}
+
+create_default_config() {
+    log "INFO" "Creating default configuration file at $CONFIG_FILE..."
+    cat > "$CONFIG_FILE" << 'EOF'
+# R Environment Manager Configuration
+CRAN_REPO_URL_BIN="https://cloud.r-project.org/bin/linux/ubuntu"
+CRAN_APT_KEY_URL="https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc"
+R2U_APT_SOURCES_LIST_D_FILE="/etc/apt/sources.list.d/r2u.list"
+RSTUDIO_VERSION_FALLBACK="2023.06.0"
+RSTUDIO_ARCH_FALLBACK="amd64"
+R_USER_PACKAGES_CRAN=("tidyverse" "devtools" "rmarkdown")
+R_USER_PACKAGES_GITHUB=("rstudio/renv" "r-lib/cli")
+MIN_MEMORY_MB=2048
+MIN_DISK_MB=5120
+EOF
+    chmod 640 "$CONFIG_FILE"
+}
+
+validate_configuration() {
+    log "INFO" "Validating configuration..."
+    local required_vars=("CRAN_REPO_URL_BIN" "CRAN_APT_KEY_URL" "R_USER_PACKAGES_CRAN")
+    local missing=0
+    for var in "${required_vars[@]}"; do
+        if [[ -z "${!var:-}" ]]; then
+            log "ERROR" "Config validation failed: Required variable '${var}' is not set."
+            missing=1
+        fi
+    done
+    if [[ $missing -eq 1 ]]; then return 1; else log "INFO" "Configuration appears valid."; return 0; fi
+}
+
+# --- Installation Functions ---
+
+setup_cran_repo() {
+    log "INFO" "Setting up CRAN repository..."
+    local ubuntu_codename
+    ubuntu_codename=$(lsb_release -cs)
+    local cran_repo_line="deb [signed-by=/etc/apt/trusted.gpg.d/cran.gpg] ${CRAN_REPO_URL_BIN} ${ubuntu_codename}-cran40/"
+    run_command "Add CRAN apt key" "wget -qO- \"${CRAN_APT_KEY_URL}\" | gpg --dearmor > \"/etc/apt/trusted.gpg.d/cran.gpg\""
+    echo "$cran_repo_line" > /etc/apt/sources.list.d/cran.list
+    run_command "Update apt package list" "apt-get update"
+}
+
+install_r() {
+    if command -v R &>/dev/null; then log "INFO" "R is already installed."; return 0; fi
+    log "INFO" "Installing R base and development packages..."
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends r-base r-base-dev; then
+        log "INFO" "SUCCESS: R base packages installed."
+    else
+        handle_error $? "Failed to install R base packages."; return 1
+    fi
+}
+
+install_r_pkg_list() {
+        local pkg_type="$1"; shift
+    local r_packages_list=("${@}")
+
+    if [[ ${#r_packages_list[@]} -eq 0 ]]; then
+        log "INFO" "No ${pkg_type} R packages specified in the list to install."
+        return
+    fi
+
+    log "INFO" "Processing ${pkg_type} R packages for installation: ${r_packages_list[*]}"
+
+    local pkg_install_script_path="/tmp/install_r_pkg_script.R"
+    local github_pat_warning_shown=false
+
+    for pkg_name_full in "${r_packages_list[@]}"; do
+        local pkg_name_short
+
+        if [[ "$pkg_type" == "CRAN" ]]; then
+            pkg_name_short="$pkg_name_full"
+            # Use a heredoc to create the R script, preventing shell expansion
+            cat > "$pkg_install_script_path" <<EOF
+            pkg_short_name <- '${pkg_name_short}'
+            n_cpus <- max(1, parallel::detectCores(logical=FALSE) %/% 2)
+
+            if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
+                message(paste0('R package ', pkg_short_name, ' not found, attempting installation...'))
+                installed_successfully <- FALSE
+                if (requireNamespace('bspm', quietly = TRUE) && isTRUE(getOption('bspm.MANAGES', FALSE))) {
+                    message(paste0('Attempting to install ', pkg_short_name, ' via bspm (binary)...'))
+                    tryCatch({
+                        install.packages(pkg_short_name, Ncpus = n_cpus)
+                        installed_successfully <- requireNamespace(pkg_short_name, quietly = TRUE)
+                    }, error = function(e) {
+                        message(paste0('bspm install failed for ', pkg_short_name, ': ', e\$message))
+                    })
+                }
+                if (!installed_successfully) {
+                    message(paste0('bspm failed or disabled, trying to install ', pkg_short_name, ' from source...'))
+                    install.packages(pkg_short_name, Ncpus = n_cpus, type = 'source')
+                }
+            } else {
+                message(paste0('R package ', pkg_short_name, ' is already installed.'))
+            }
+            if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
+                stop(paste0('Failed to install R package: ', pkg_short_name))
+            }
+EOF
+        elif [[ "$pkg_type" == "GitHub" ]]; then
+            pkg_name_short=$(basename "$pkg_name_full")
+            # Use a heredoc for the GitHub installation script
+            cat > "$pkg_install_script_path" <<EOF
+            pkg_repo <- '${pkg_name_full}'
+            pkg_short_name <- '${pkg_name_short}'
+            if (!requireNamespace('remotes', quietly = TRUE)) {
+                message('remotes package not found, installing it first...')
+                install.packages('remotes')
+            }
+            if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
+                message(paste0('Installing GitHub package ', pkg_repo, '...'))
+                remotes::install_github(pkg_repo, force = TRUE)
+            } else {
+                message(paste0('GitHub package ', pkg_short_name, ' (from ', pkg_repo, ') is already installed.'))
+            }
+            if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
+                stop(paste0('Failed to install GitHub package: ', pkg_repo))
+            }
+EOF
+            if [[ -z "${GITHUB_PAT:-}" ]] && ! $github_pat_warning_shown; then
+                log "WARN" "GITHUB_PAT environment variable is not set. GitHub package installations may fail due to API rate limiting."
+                github_pat_warning_shown=true
+            fi
+        else
+            log "ERROR" "Unknown package type: $pkg_type"
+            continue
+        fi
+
+        if run_command "Install R package: ${pkg_name_full}" Rscript "$pkg_install_script_path"; then
+            # On success, add to the state file
+            if [[ "$pkg_type" == "CRAN" ]]; then
+                add_to_env_state "INSTALLED_CRAN_PACKAGES" "$pkg_name_short"
+            elif [[ "$pkg_type" == "GitHub" ]]; then
+                add_to_env_state "INSTALLED_GITHUB_PACKAGES" "$pkg_name_full"
+            fi
+        fi
+    done
+    rm -f "$pkg_install_script_path"
+}
+
+
+install_openblas_openmp() {
+    log "INFO" "Installing OpenBLAS and OpenMP for performance..."
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y libopenblas-dev libomp-dev; then
+        log "INFO" "SUCCESS: OpenBLAS and OpenMP installed."
+    else
+        handle_error $? "Failed to install OpenBLAS/OpenMP packages."; return 1
+    fi
+}
+
+verify_openblas_openmp() {
+    log "INFO" "Verifying OpenBLAS and OpenMP integration with R..."
+    local r_check_script="/tmp/verify_blas.R"
+    cat > "$r_check_script" << 'EOF'
+    info <- sessionInfo()
+    blas_ok <- grepl("openblas|atlas|mkl", info$BLAS, ignore.case = TRUE)
+    if (blas_ok) { cat("SUCCESS: High-performance BLAS detected:", info$BLAS, "\n") } 
+    else { cat("WARNING: Standard reference BLAS detected:", info$BLAS, "\n") }
+EOF
+    if run_command "Run R BLAS/LAPACK verification" "Rscript ${r_check_script}"; then
+        log "INFO" "R BLAS/LAPACK verification check passed."
+    else
+        handle_error 1 "R BLAS/LAPACK verification FAILED."; return 1
+    fi
+}
+
+setup_bspm() {
+    log "INFO" "--- Starting bspm (Binary R Package Manager) Setup ---"
+    
+    # 1. ALWAYS clean up previous configurations to ensure idempotency.
+    log "INFO" "Cleaning up previous bspm entries in Rprofile.site..."
+    sed -i '/# Added by r_env_manager for bspm/,+3d' "$R_PROFILE_SITE_PATH"
+
+    # 2. Manually add the r2u repository and key.
+    log "INFO" "Configuring r2u repository for binary packages..."
+    local ubuntu_codename
+    ubuntu_codename=$(lsb_release -cs)
+    run_command "Add r2u GPG key" "wget -qO- https://eddelbuettel.github.io/r2u/assets/dirk_eddelbuettel_key.asc | tee /etc/apt/trusted.gpg.d/cranapt_key.asc >/dev/null"
+    echo "deb [arch=amd64] https://r2u.stat.illinois.edu/ubuntu ${ubuntu_codename} main" | tee "${R2U_APT_SOURCES_LIST_D_FILE}" >/dev/null
+
+    # 3. Update apt lists to read the new repository.
+    run_command "Update apt package list" "apt-get update"
+
+    # 4. Install the binary package 'r-cran-bspm' and its prerequisites.
+    log "INFO" "Installing r-cran-bspm and prerequisites..."
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y r-cran-bspm python3-dbus python3-gi python3-apt; then
+        handle_error $? "Failed to install r-cran-bspm package via apt."; return 1
+    fi
+
+    # 5. Configure Rprofile.site with ALL three correct settings.
+    log "INFO" "Writing bspm configuration to Rprofile.site..."
+    cat >> "$R_PROFILE_SITE_PATH" << EOF
+
+# Added by r_env_manager for bspm
+options(bspm.sudo = TRUE)
+options(bspm.allow.sysreqs = TRUE)
+suppressMessages(bspm::enable())
+EOF
+
+    # 6. Restart D-Bus and R services to apply the new configuration.
+    log "INFO" "Restarting D-Bus and R services..."
+    run_command "Restart D-Bus service" "systemctl restart dbus.service"
+    if systemctl list-units --full -all | grep -q 'rstudio-server.service'; then
+        run_command "Restart RStudio Server" "systemctl restart rstudio-server"
+    fi
+    sleep 3
+
+    # 7. Verify bspm activation.
+    log "INFO" "Verifying bspm activation..."
+    local bspm_check_script="/tmp/verify_bspm.R"
+    cat > "$bspm_check_script" << EOF
+    if (isTRUE(getOption("bspm.MANAGES"))) {
+      cat('BSPM_WORKING\n'); quit(status=0)
+    } else {
+      cat('BSPM_NOT_MANAGING\n'); quit(status=2)
+    }
+EOF
+    
+    local bspm_status_output
+    local bspm_status_rc=0
+    bspm_status_output=$(dbus-run-session Rscript "$bspm_check_script" 2>&1) || bspm_status_rc=$?
+
+    if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_WORKING* ]]; then
+        log "INFO" "SUCCESS: bspm is installed and managing packages."
+    else
+        log "ERROR" "bspm verification FAILED. Status: $bspm_status_rc, Output: $bspm_status_output"
+        return 1
+    fi
+
+    log "INFO" "--- bspm Setup Complete ---"
+}
+
+get_latest_rstudio_info() {
+    log "INFO" "Detecting latest RStudio Server version..."
+    local rstudio_version=${RSTUDIO_VERSION_FALLBACK:-"2023.06.0"}
+    local rstudio_arch=${RSTUDIO_ARCH_FALLBACK:-"amd64"}
+    # ... (implementation from previous versions)
+}
+
+install_rstudio_server() {
+    # ... (implementation from previous versions)
+}
+
+check_rstudio_server() {
+    display_installation_status # This function now handles the status check
+    if ss -tuln | grep -q ':8787'; then
+        log "INFO" "RStudio Server is listening on port 8787."
+        log "INFO" "Access it at http://<YOUR_SERVER_IP>:8787"
+    else
+        log "WARN" "RStudio Server is not listening on port 8787. Check firewall or service status."
+    fi
+}
+
+
+install_core_r_dev_pkgs() {
+    log "INFO" "Installing core R development packages (devtools, remotes)..."
+    local core_r_dev_pkgs=("devtools" "remotes")
+    install_r_pkg_list "CRAN" "${core_r_dev_pkgs[@]}"
+}
+
+install_user_cran_pkgs() {
+    log "INFO" "Installing user-defined CRAN packages..."
+    install_r_pkg_list "CRAN" "${R_USER_PACKAGES_CRAN[@]}"
+}
+
+install_user_github_pkgs() {
+    log "INFO" "Installing user-defined GitHub packages..."
+    install_r_pkg_list "GitHub" "${R_USER_PACKAGES_GITHUB[@]}"
+}
+
+
+# --- Maintenance Functions ---
+
+backup_all() {
+    log "INFO" "--- Backing Up All Configurations ---"
+    ensure_dir_exists "$BACKUP_DIR"
+    local timestamp
+    timestamp=$(date +"%Y%m%d_%H%M%S")
+    local backup_tarball="${BACKUP_DIR}/r_env_backup_${timestamp}.tar.gz"
+    local files_to_backup=()
+    if [[ -f "$R_PROFILE_SITE_PATH" ]]; then files_to_backup+=("$R_PROFILE_SITE_PATH"); fi
+    if [[ -f "/etc/apt/sources.list.d/cran.list" ]]; then files_to_backup+=("/etc/apt/sources.list.d/cran.list"); fi
+    if [[ -f "${R2U_APT_SOURCES_LIST_D_FILE}" ]]; then files_to_backup+=("${R2U_APT_SOURCES_LIST_D_FILE}"); fi
+    
+    if [[ ${#files_to_backup[@]} -eq 0 ]]; then
+        log "WARN" "No configuration files found to back up."
+        return
+    fi
+
+    log "INFO" "Creating backup archive: ${backup_tarball}"
+    tar -czvf "${backup_tarball}" -C / "${files_to_backup[@]#/}"
+    log "INFO" "Backup process completed."
+}
+
+restore_all() {
+    log "INFO" "--- Restoring Configurations from Last Backup ---"
+    local latest_backup
+    latest_backup=$(find "$BACKUP_DIR" -type f -name "r_env_backup_*.tar.gz" | sort -r | head -n 1)
+    if [[ -z "$latest_backup" ]]; then
+        log "ERROR" "No backup file found to restore."
+        return 1
+    fi
+    read -r -p "Restore from latest backup: ${latest_backup}? [y/N] " choice
+    if [[ "$choice" =~ ^[Yy]$ ]]; then
+        log "INFO" "Restoring files..."
+        tar -xzvf "${latest_backup}" -C /
+        log "INFO" "Restore complete. Run 'apt-get update' to apply repository changes."
+    else
+        log "INFO" "Restore cancelled."
+    fi
+}
+
+uninstall() {
+    log "WARN" "--- Starting Uninstall Process ---"
+    read -r -p "This will remove R, RStudio, and all related configurations. Are you absolutely sure? [y/N] " choice
+    if [[ ! "$choice" =~ ^[Yy]$ ]]; then
+        log "INFO" "Uninstall cancelled."
+        return
+    fi
+    log "INFO" "Stopping services..."
+    systemctl stop rstudio-server || true
+    log "INFO" "Removing packages..."
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y r-base r-base-core r-base-dev r-cran-bspm rstudio-server
+    DEBIAN_FRONTEND=noninteractive apt-get autoremove -y
+    log "INFO" "Removing configuration files..."
+    rm -f "$R_PROFILE_SITE_PATH"
+    rm -f /etc/apt/sources.list.d/cran.list
+    rm -f "${R2U_APT_SOURCES_LIST_D_FILE}"
+    rm -rf /etc/rstudio/
+    log "WARN" "Uninstall process completed."
+}
+
+# --- Orchestration and Main Menu ---
+
+full_install() {
+    log "INFO" "--- Starting Full R Environment Installation ---"
+    setup_cran_repo
+    install_r
+    install_openblas_openmp
+    verify_openblas_openmp
+    setup_bspm
+    install_rstudio_server
+    install_core_r_dev_pkgs
+    install_user_cran_pkgs
+    install_user_github_pkgs
+    check_rstudio_server
+    log "INFO" "--- Full Installation Complete ---"
+}
+
+launch_external_script() {
+    # ... (Implementation from previous version)
+}
+
+main_menu() {
+    while true; do
+        printf "\n================ R Environment Manager ================\n"
+        printf "1.  Full Installation (Recommended for first run)\n"
+        printf "2.  Install/Verify R, OpenBLAS, and bspm\n"
+        printf "3.  Install All User R Packages (CRAN & GitHub)\n"
+        printf "4.  Install RStudio Server\n"
+        printf "5.  Check RStudio Server Status\n"
+        printf -- "-------------------- Maintenance --------------------\n"
+        printf "6.  Launch Other Setup Scripts\n"
+        printf "7.  Backup All Configurations\n"
+        printf "8.  Restore All Configurations from Last Backup\n"
+        printf "9.  Uninstall Entire R Environment\n"
+        printf "10. View Logs\n"
+        printf "11. Check Installation Status\n"
+        printf "E.  Exit\n"
+        printf "=======================================================\n"
+        
+        read -r -p "Enter choice: " choice
+        
+        case $choice in
+            1) full_install ;;
+            2) setup_cran_repo; install_r; install_openblas_openmp; verify_openblas_openmp; setup_bspm ;;
+            3) install_core_r_dev_pkgs; install_user_cran_pkgs; install_user_github_pkgs ;;
+            4) install_rstudio_server ;;
+            5) check_rstudio_server ;;
+            6) launch_external_script ;;
+            7) backup_all ;;
+            8) restore_all ;;
+            9) uninstall ;;
+            10) if [[ -f "$LOG_FILE" ]]; then less "$LOG_FILE"; else log "ERROR" "Log file not found"; fi ;;
+            11) display_installation_status ;;
+            [Ee]) log "INFO" "Exiting R Environment Manager."; break ;;
+            *) log "ERROR" "Invalid choice." ;;
+        esac
+        read -r -p "Press Enter to return to the menu..."
+    done
+}
+
+initialize_environment() {
+    setup_logging
+    log "INFO" "--- R Environment Manager Starting ---"
+    acquire_lock
+    check_security_requirements
+    pre_flight_checks
+    ensure_config_dir
+    if ! validate_configuration; then
+        log "FATAL" "Configuration validation failed."
+        exit 1
+    fi
+    if ! check_system_resources; then
+        log "FATAL" "System resources check failed."
+        exit 1
+    fi
+    log "INFO" "Environment initialization complete."
+}
+
+main() {
+    initialize_environment
+    main_menu
+}
+
+# --- Script Entry Point ---
+main "$@"

@@ -332,6 +332,21 @@ install_openblas_openmp() {
     fi
 }
 
+#verify_openblas_openmp() {
+#    log "INFO" "Verifying OpenBLAS and OpenMP integration with R..."
+#    local r_check_script="/tmp/verify_blas.R"
+#    cat > "$r_check_script" << 'EOF'
+#    info <- sessionInfo()
+#    blas_ok <- grepl("openblas|atlas|mkl", info$BLAS, ignore.case = TRUE)
+#    if (blas_ok) { cat("SUCCESS: High-performance BLAS detected:", info$BLAS, "\n") } 
+#    else { cat("WARNING: Standard reference BLAS detected:", info$BLAS, "\n") }
+#EOF
+#    if run_command "Run R BLAS/LAPACK verification" "Rscript ${r_check_script}"; then
+#        log "INFO" "R BLAS/LAPACK verification check passed."
+#    else
+#        handle_error 1 "R BLAS/LAPACK verification FAILED."; return 1
+#    fi
+#}
 
 verify_openblas_openmp() {
     log "INFO" "Verifying OpenBLAS and OpenMP integration with R..."
@@ -377,6 +392,74 @@ EOF
         return 1
     fi
 }
+
+
+
+#setup_bspm() {
+#    log "INFO" "--- Starting bspm (Binary R Package Manager) Setup ---"
+#
+#    # 1. ALWAYS clean up previous configurations to ensure idempotency.
+#    log "INFO" "Cleaning up previous bspm entries in Rprofile.site..."
+#    sed -i '/# Added by r_env_manager for bspm/,+3d' "$R_PROFILE_SITE_PATH"
+#
+#    # 2. Manually add the r2u repository and key.
+#    log "INFO" "Configuring r2u repository for binary packages..."
+#    local ubuntu_codename=$(lsb_release -cs)
+#    run_command "Add r2u GPG key" "wget -qO- https://eddelbuettel.github.io/r2u/assets/dirk_eddelbuettel_key.asc | tee /etc/apt/trusted.gpg.d/cranapt_key.asc >/dev/null"
+#    echo "deb [arch=amd64] https://r2u.stat.illinois.edu/ubuntu ${ubuntu_codename} main" | tee "$R2U_APT_SOURCES_LIST_D_FILE" >/dev/null
+#
+#    # 3. Update apt lists to read the new repository.
+#    run_command "Update apt package list" "apt-get update"
+#
+#    # 4. Install the binary package 'r-cran-bspm' and its prerequisites.
+#    log "INFO" "Installing r-cran-bspm and prerequisites..."
+#    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y r-cran-bspm python3-dbus python3-gi python3-apt; then
+#        handle_error $? "Failed to install r-cran-bspm package via apt."; return 1
+#    fi
+#
+#    # 5. Configure Rprofile.site with ALL three correct settings.
+#    log "INFO" "Writing bspm configuration to Rprofile.site..."
+#    cat >> "$R_PROFILE_SITE_PATH" << EOF
+#
+## Added by r_env_manager for bspm
+#options(bspm.sudo = TRUE)
+#options(bspm.allow.sysreqs = TRUE)
+#suppressMessages(bspm::enable())
+#EOF
+#
+#    # 6. Restart D-Bus and R services to apply the new configuration.
+#    log "INFO" "Restarting D-Bus and R services..."
+#    run_command "Restart D-Bus service" "systemctl restart dbus.service"
+#    if systemctl list-units --full -all | grep -q 'rstudio-server.service'; then
+#        run_command "Restart RStudio Server" "systemctl restart rstudio-server"
+#    fi
+#    sleep 3
+#
+#    # 7. Verify bspm activation.
+#    log "INFO" "Verifying bspm activation..."
+#    local bspm_check_script="/tmp/verify_bspm.R"
+#    cat > "$bspm_check_script" << EOF
+#    if (isTRUE(getOption("bspm.MANAGES"))) {
+#      cat('BSPM_WORKING\n'); quit(status=0)
+#    } else {
+#      cat('BSPM_NOT_MANAGING\n'); quit(status=2)
+#    }
+#EOF
+#    
+#    local bspm_status_output
+#    local bspm_status_rc=0
+#    bspm_status_output=$(dbus-run-session Rscript "$bspm_check_script" 2>&1) || bspm_status_rc=$?
+#
+#    if [[ $bspm_status_rc -eq 0 && "$bspm_status_output" == *BSPM_WORKING* ]]; then
+#        log "INFO" "SUCCESS: bspm is installed and managing packages."
+#    else
+#        log "ERROR" "bspm verification FAILED. Status: $bspm_status_rc, Output: $bspm_status_output"
+#        return 1
+#    fi
+#
+#    log "INFO" "--- bspm Setup Complete ---"
+#}
+
 
 
 setup_bspm() {
@@ -434,37 +517,39 @@ EOF
     log "INFO" "--- bspm Setup Complete ---"
 }
 
-
 verify_bspm() {
     log "INFO" "--- Starting bspm Verification (Post-Reboot) ---"
 
-    # Step 1: Check for bspm configuration in Rprofile.site.
+    # Step 1: Check if the configuration exists in the system-wide R profile.
     log "INFO" "Step 1: Checking for bspm configuration in ${R_PROFILE_SITE_PATH}..."
-    if ! grep -q "suppressMessages(bspm::enable())" "$R_PROFILE_SITE_PATH"; then
+    if grep -q "suppressMessages(bspm::enable())" "$R_PROFILE_SITE_PATH"; then
+        log "INFO" "SUCCESS: bspm configuration found in Rprofile.site."
+    else
         log "ERROR" "FAILURE: The bspm configuration is MISSING from Rprofile.site."
-        save_state "bspm_status" "unconfigured" # Save failure state
+        log "ERROR" "Please run option 2 again to install and configure bspm."
         return 1
     fi
-    log "INFO" "SUCCESS: bspm configuration found in Rprofile.site."
 
-    # Step 2: Perform a live test of bspm.
-    log "INFO" "Step 2: Performing a live test of bspm..."
-    #local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\"); bspm::available_sys()'"
-    local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\");'"
+    # Step 2: Perform a live test of bspm by installing and removing a system package.
+    # The command is run directly by the root user, which the script is.
+    log "INFO" "Step 2: Performing a live test of bspm (installing/removing 'units' package)..."
+    log "INFO" "This command will test the full functionality. R output will be in the log."
+    
+    local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\"); bspm::available_sys()'"
+    
     if run_command "bspm live functionality test" "$bspm_test_command"; then
         log "INFO" "SUCCESS: The bspm live test completed without errors."
     else
-        log "ERROR" "FAILURE: The bspm live test failed. Check log for details."
-        save_state "bspm_status" "failed_test" # Save failure state
+        log "ERROR" "FAILURE: The bspm live test failed. This indicates a problem with the D-Bus connection or permissions."
+        log "ERROR" "Please review the detailed R output in the log file: ${LOG_FILE}"
         return 1
     fi
 
-    # --- NEW: Save the success state ---
-    save_state "bspm_status" "verified"
-    log "INFO" "--- SUCCESS: bspm is fully installed and functional. Status saved. ---"
+    log "INFO" "--- SUCCESS: bspm is fully installed and functional. ---"
 }
 
 
+# (Other functions like install_rstudio_server, package installation, etc. should be included here)
 
 # --- RStudio Server Functions ---
 get_latest_rstudio_info() {
@@ -553,92 +638,93 @@ install_r_build_deps() {
     fi
 }
 
-
 install_r_pkg_list() {
-    local pkg_type="$1"; shift
+        local pkg_type="$1"; shift
     local r_packages_list=("${@}")
 
     if [[ ${#r_packages_list[@]} -eq 0 ]]; then
-        log "INFO" "No ${pkg_type} R packages specified to install."
+        log "INFO" "No ${pkg_type} R packages specified in the list to install."
         return
     fi
 
     log "INFO" "Processing ${pkg_type} R packages for installation: ${r_packages_list[*]}"
 
-    # --- THE DEFINITIVE FIX: Use the working verification method to decide the path ---
-    # First, run the bspm verification to see if it's truly working.
-    if verify_bspm && [[ "$pkg_type" == "CRAN" ]]; then
-        log "INFO" "bspm is verified and functional. Proceeding with binary installation."
+    local pkg_install_script_path="/tmp/install_r_pkg_script.R"
+    local github_pat_warning_shown=false
 
-        # Dynamically build a single R command to install all packages in one go.
-        local r_command_parts=()
-        for pkg_name in "${r_packages_list[@]}"; do
-            # Check if the package is already installed before adding it to the list
-             if ! Rscript -e "if (!requireNamespace('${pkg_name}', quietly = TRUE)) quit(status=1)" >/dev/null 2>&1; then
-                log "INFO" "Package '${pkg_name}' is already installed, skipping."
-                continue
-            fi
-            r_command_parts+=("bspm::install_sys(\"${pkg_name}\")")
-        done
-        
-        if [[ ${#r_command_parts[@]} -eq 0 ]]; then
-            log "INFO" "All specified CRAN packages are already installed."
-            return 0
-        fi
-        
-        local full_r_command
-        full_r_command=$(printf "%s;" "${r_command_parts[@]}")
-        
-        log "INFO" "Executing batch bspm installation. R output will be displayed below:"
-        if eval "Rscript -e '${full_r_command}'"; then
-            log "INFO" "SUCCESS: All CRAN packages were processed successfully via bspm."
-        else
-            handle_error $? "bspm batch installation failed. Check R output for details."
-            return 1
-        fi
+    for pkg_name_full in "${r_packages_list[@]}"; do
+        local pkg_name_short
 
-    else
-        # This is the fallback for GitHub packages or if bspm verification fails.
         if [[ "$pkg_type" == "CRAN" ]]; then
-            log "WARN" "bspm verification failed or was skipped. Falling back to source installation."
+            pkg_name_short="$pkg_name_full"
+            # Use a heredoc to create the R script, preventing shell expansion
+            cat > "$pkg_install_script_path" <<EOF
+            pkg_short_name <- '${pkg_name_short}'
+            n_cpus <- max(1, parallel::detectCores(logical=FALSE) %/% 2)
+
+            if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
+                message(paste0('R package ', pkg_short_name, ' not found, attempting installation...'))
+                installed_successfully <- FALSE
+                if (requireNamespace('bspm', quietly = TRUE) && isTRUE(getOption('bspm.MANAGES', FALSE))) {
+                    message(paste0('Attempting to install ', pkg_short_name, ' via bspm (binary)...'))
+                    tryCatch({
+                        install.packages(pkg_short_name, Ncpus = n_cpus)
+                        installed_successfully <- requireNamespace(pkg_short_name, quietly = TRUE)
+                    }, error = function(e) {
+                        message(paste0('bspm install failed for ', pkg_short_name, ': ', e\$message))
+                    })
+                }
+                if (!installed_successfully) {
+                    message(paste0('bspm failed or disabled, trying to install ', pkg_short_name, ' from source...'))
+                    install.packages(pkg_short_name, Ncpus = n_cpus, type = 'source')
+                }
+            } else {
+                message(paste0('R package ', pkg_short_name, ' is already installed.'))
+            }
+            if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
+                stop(paste0('Failed to install R package: ', pkg_short_name))
+            }
+EOF
+        elif [[ "$pkg_type" == "GitHub" ]]; then
+            pkg_name_short=$(basename "$pkg_name_full")
+            # Use a heredoc for the GitHub installation script
+            cat > "$pkg_install_script_path" <<EOF
+            pkg_repo <- '${pkg_name_full}'
+            pkg_short_name <- '${pkg_name_short}'
+            if (!requireNamespace('remotes', quietly = TRUE)) {
+                message('remotes package not found, installing it first...')
+                install.packages('remotes')
+            }
+            if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
+                message(paste0('Installing GitHub package ', pkg_repo, '...'))
+                remotes::install_github(pkg_repo, force = TRUE)
+            } else {
+                message(paste0('GitHub package ', pkg_short_name, ' (from ', pkg_repo, ') is already installed.'))
+            }
+            if (!requireNamespace(pkg_short_name, quietly = TRUE)) {
+                stop(paste0('Failed to install GitHub package: ', pkg_repo))
+            }
+EOF
+            if [[ -z "${GITHUB_PAT:-}" ]] && ! $github_pat_warning_shown; then
+                log "WARN" "GITHUB_PAT environment variable is not set. GitHub package installations may fail due to API rate limiting."
+                github_pat_warning_shown=true
+            fi
+        else
+            log "ERROR" "Unknown package type: $pkg_type"
+            continue
         fi
 
-        local pkg_install_script_path="/tmp/install_r_pkg_source.R"
-        for pkg_name_full in "${r_packages_list[@]}"; do
-            if ! Rscript -e "if (!requireNamespace('$(basename "${pkg_name_full}")', quietly = TRUE)) quit(status=1)" >/dev/null 2>&1; then
-                log "INFO" "Package '${pkg_name_full}' is already installed, skipping."
-                continue
-            fi
-
-            log "INFO" "--> Installing '${pkg_name_full}' from source..."
-            
+        if run_command "Install R package: ${pkg_name_full}" Rscript "$pkg_install_script_path"; then
+            # On success, add to the state file
             if [[ "$pkg_type" == "CRAN" ]]; then
-                cat > "$pkg_install_script_path" <<EOF
-                options(repos = c(CRAN = '${CRAN_MIRROR_URL}'))
-                install.packages('${pkg_name_full}', type = 'source')
-                if (!requireNamespace('${pkg_name_full}', quietly = TRUE)) stop('Source install failed.')
-EOF
+                add_to_env_state "INSTALLED_CRAN_PACKAGES" "$pkg_name_short"
             elif [[ "$pkg_type" == "GitHub" ]]; then
-                cat > "$pkg_install_script_path" <<EOF
-                options(repos = c(CRAN = '${CRAN_MIRROR_URL}'))
-                if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes')
-                remotes::install_github('${pkg_name_full}', force = TRUE)
-                if (!requireNamespace('$(basename "${pkg_name_full}")', quietly=TRUE)) stop('GitHub install failed.')
-EOF
-            else
-                log "ERROR" "Unknown package type: $pkg_type"; continue
+                add_to_env_state "INSTALLED_GITHUB_PACKAGES" "$pkg_name_full"
             fi
-
-            if run_command "Install R package from source: ${pkg_name_full}" "Rscript '${pkg_install_script_path}'"; then
-                log "INFO" "--> SUCCESS: Installed '${pkg_name_full}' from source."
-            else
-                handle_error 1 "Failed to install '${pkg_name_full}' from source."
-                return 1
-            fi
-        done
-    fi
+        fi
+    done
+    rm -f "$pkg_install_script_path"
 }
-
 
 install_core_r_dev_pkgs() {
     log "INFO" "Installing core R development packages (devtools, remotes)..."
@@ -783,6 +869,29 @@ launch_external_script() {
     fi
 }
 
+
+# --- Main Menu and Execution Logic ---
+#main_menu() {
+#    while true; do
+#        # ... (Menu display)
+#        read -r -p "Enter choice: " choice
+#        case $choice in
+#            1) full_install ;;
+#            2) setup_cran_repo; install_r; install_openblas_openmp; verify_openblas_openmp; setup_bspm ;;
+#            # ... (Other menu options)
+#            [Ee]) break ;;
+#            *) log "ERROR" "Invalid choice." ;;
+#        esac
+#        # ...
+#    done
+#}
+#
+#main() {
+#    initialize_environment
+#    main_menu
+#}
+#
+#main "$@"
 
 main_menu() {
     while true; do
