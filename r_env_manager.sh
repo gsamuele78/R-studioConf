@@ -464,7 +464,7 @@ EOF
 #
 #    # Step 2: Perform a live test of bspm.
 #    log "INFO" "Step 2: Performing a live test of bspm..."
-#    #local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\"); bspm::available_sys()'"
+#    #local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\");   '"
 #    local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\");'"
 #    if run_command "bspm live functionality test" "$bspm_test_command"; then
 #        log "INFO" "SUCCESS: The bspm live test completed without errors."
@@ -605,6 +605,91 @@ install_r_build_deps() {
     fi
 }
 
+#
+#install_r_pkg_list() {
+#    local pkg_type="$1"; shift
+#    local r_packages_list=("${@}")
+#
+#    if [[ ${#r_packages_list[@]} -eq 0 ]]; then
+#        log "INFO" "No ${pkg_type} R packages specified to install."
+#        return
+#    fi
+#
+#    log "INFO" "Processing ${pkg_type} R packages for installation: ${r_packages_list[*]}"
+#
+#    # --- THE DEFINITIVE FIX: Use the working verification method to decide the path ---
+#    # First, run the bspm verification to see if it's truly working.
+#    if verify_bspm && [[ "$pkg_type" == "CRAN" ]]; then
+#        log "INFO" "bspm is verified and functional. Proceeding with binary installation."
+#
+#        # Dynamically build a single R command to install all packages in one go.
+#        local r_command_parts=()
+#        for pkg_name in "${r_packages_list[@]}"; do
+#            # Check if the package is already installed before adding it to the list
+#             if ! Rscript -e "if (!requireNamespace('${pkg_name}', quietly = TRUE)) quit(status=1)" >/dev/null 2>&1; then
+#                log "INFO" "Package '${pkg_name}' is already installed, skipping."
+#                continue
+#            fi
+#            r_command_parts+=("bspm::install_sys(\"${pkg_name}\")")
+#        done
+#        
+#        if [[ ${#r_command_parts[@]} -eq 0 ]]; then
+#            log "INFO" "All specified CRAN packages are already installed."
+#            return 0
+#        fi
+#        
+#        local full_r_command
+#        full_r_command=$(printf "%s;" "${r_command_parts[@]}")
+#        
+#        log "INFO" "Executing batch bspm installation. R output will be displayed below:"
+#        if eval "Rscript -e '${full_r_command}'"; then
+#            log "INFO" "SUCCESS: All CRAN packages were processed successfully via bspm."
+#        else
+#            handle_error $? "bspm batch installation failed. Check R output for details."
+#            return 1
+#        fi
+#
+#    else
+#        # This is the fallback for GitHub packages or if bspm verification fails.
+#        if [[ "$pkg_type" == "CRAN" ]]; then
+#            log "WARN" "bspm verification failed or was skipped. Falling back to source installation."
+#        fi
+#
+#        local pkg_install_script_path="/tmp/install_r_pkg_source.R"
+#        for pkg_name_full in "${r_packages_list[@]}"; do
+#            if ! Rscript -e "if (!requireNamespace('$(basename "${pkg_name_full}")', quietly = TRUE)) quit(status=1)" >/dev/null 2>&1; then
+#                log "INFO" "Package '${pkg_name_full}' is already installed, skipping."
+#                continue
+#            fi
+#
+#            log "INFO" "--> Installing '${pkg_name_full}' from source..."
+#            
+#            if [[ "$pkg_type" == "CRAN" ]]; then
+#                cat > "$pkg_install_script_path" <<EOF
+#                options(repos = c(CRAN = '${CRAN_MIRROR_URL}'))
+#                install.packages('${pkg_name_full}', type = 'source')
+#                if (!requireNamespace('${pkg_name_full}', quietly = TRUE)) stop('Source install failed.')
+#EOF
+#            elif [[ "$pkg_type" == "GitHub" ]]; then
+#                cat > "$pkg_install_script_path" <<EOF
+#                options(repos = c(CRAN = '${CRAN_MIRROR_URL}'))
+#                if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes')
+#                remotes::install_github('${pkg_name_full}', force = TRUE)
+#                if (!requireNamespace('$(basename "${pkg_name_full}")', quietly=TRUE)) stop('GitHub install failed.')
+#EOF
+#            else
+#                log "ERROR" "Unknown package type: $pkg_type"; continue
+#            fi
+#
+#            if run_command "Install R package from source: ${pkg_name_full}" "Rscript '${pkg_install_script_path}'"; then
+#                log "INFO" "--> SUCCESS: Installed '${pkg_name_full}' from source."
+#            else
+#                handle_error 1 "Failed to install '${pkg_name_full}' from source."
+#                return 1
+#            fi
+#        done
+#    fi
+#}
 
 install_r_pkg_list() {
     local pkg_type="$1"; shift
@@ -615,82 +700,91 @@ install_r_pkg_list() {
         return
     fi
 
-    log "INFO" "Processing ${pkg_type} R packages for installation: ${r_packages_list[*]}"
+    log "INFO" "Processing ${pkg_type} packages: ${r_packages_list[*]}"
 
-    # --- THE DEFINITIVE FIX: Use the working verification method to decide the path ---
-    # First, run the bspm verification to see if it's truly working.
-    if verify_bspm && [[ "$pkg_type" == "CRAN" ]]; then
-        log "INFO" "bspm is verified and functional. Proceeding with binary installation."
+    # --- Step 1: Efficiently find which packages are actually missing ---
+    # Convert the shell array into a comma-separated string for R
+    local r_pkg_vector
+    r_pkg_vector=$(printf "'%s'," "${r_packages_list[@]}")
+    r_pkg_vector="c(${r_pkg_vector%,})" # Creates c('pkg1','pkg2')
 
-        # Dynamically build a single R command to install all packages in one go.
-        local r_command_parts=()
-        for pkg_name in "${r_packages_list[@]}"; do
-            # Check if the package is already installed before adding it to the list
-             if ! Rscript -e "if (!requireNamespace('${pkg_name}', quietly = TRUE)) quit(status=1)" >/dev/null 2>&1; then
-                log "INFO" "Package '${pkg_name}' is already installed, skipping."
-                continue
-            fi
-            r_command_parts+=("bspm::install_sys(\"${pkg_name}\")")
-        done
-        
-        if [[ ${#r_command_parts[@]} -eq 0 ]]; then
-            log "INFO" "All specified CRAN packages are already installed."
-            return 0
-        fi
-        
-        local full_r_command
-        full_r_command=$(printf "%s;" "${r_command_parts[@]}")
-        
-        log "INFO" "Executing batch bspm installation. R output will be displayed below:"
-        if eval "Rscript -e '${full_r_command}'"; then
-            log "INFO" "SUCCESS: All CRAN packages were processed successfully via bspm."
-        else
-            handle_error $? "bspm batch installation failed. Check R output for details."
-            return 1
-        fi
-
-    else
-        # This is the fallback for GitHub packages or if bspm verification fails.
-        if [[ "$pkg_type" == "CRAN" ]]; then
-            log "WARN" "bspm verification failed or was skipped. Falling back to source installation."
-        fi
-
-        local pkg_install_script_path="/tmp/install_r_pkg_source.R"
-        for pkg_name_full in "${r_packages_list[@]}"; do
-            if ! Rscript -e "if (!requireNamespace('$(basename "${pkg_name_full}")', quietly = TRUE)) quit(status=1)" >/dev/null 2>&1; then
-                log "INFO" "Package '${pkg_name_full}' is already installed, skipping."
-                continue
-            fi
-
-            log "INFO" "--> Installing '${pkg_name_full}' from source..."
-            
-            if [[ "$pkg_type" == "CRAN" ]]; then
-                cat > "$pkg_install_script_path" <<EOF
-                options(repos = c(CRAN = '${CRAN_MIRROR_URL}'))
-                install.packages('${pkg_name_full}', type = 'source')
-                if (!requireNamespace('${pkg_name_full}', quietly = TRUE)) stop('Source install failed.')
+    local check_script_path="/tmp/check_missing_pkgs.R"
+    cat > "$check_script_path" <<EOF
+    all_pkgs <- ${r_pkg_vector}
+    installed_pkgs <- installed.packages()[, "Package"]
+    missing_pkgs <- all_pkgs[!all_pkgs %in% installed_pkgs]
+    if (length(missing_pkgs) > 0) {
+        cat(paste(missing_pkgs, collapse = "\n"))
+    }
 EOF
-            elif [[ "$pkg_type" == "GitHub" ]]; then
-                cat > "$pkg_install_script_path" <<EOF
-                options(repos = c(CRAN = '${CRAN_MIRROR_URL}'))
-                if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes')
-                remotes::install_github('${pkg_name_full}', force = TRUE)
-                if (!requireNamespace('$(basename "${pkg_name_full}")', quietly=TRUE)) stop('GitHub install failed.')
-EOF
-            else
-                log "ERROR" "Unknown package type: $pkg_type"; continue
-            fi
+    
+    # Run the check and capture the list of missing packages
+    local missing_packages
+    missing_packages=$(Rscript "$check_script_path")
+    rm -f "$check_script_path"
 
-            if run_command "Install R package from source: ${pkg_name_full}" "Rscript '${pkg_install_script_path}'"; then
-                log "INFO" "--> SUCCESS: Installed '${pkg_name_full}' from source."
-            else
-                handle_error 1 "Failed to install '${pkg_name_full}' from source."
-                return 1
-            fi
-        done
+    if [[ -z "$missing_packages" ]]; then
+        log "INFO" "All specified packages are already installed."
+        return 0
     fi
-}
+    
+    log "INFO" "Packages to install: ${missing_packages//$'\n'/ }"
 
+    # --- Step 2: Build and execute the single, intelligent installation script ---
+    # Convert the newline-separated list back into an R vector string
+    r_pkg_vector=$(echo "$missing_packages" | awk '{printf "\"%s\",", $1}' | sed 's/,$//')
+    r_pkg_vector="c(${r_pkg_vector})"
+
+    local pkg_install_script_path="/tmp/install_packages.R"
+    
+    cat > "$pkg_install_script_path" <<EOF
+    # --- Configuration ---
+    pkgs_to_install <- ${r_pkg_vector}
+    pkg_type <- "${pkg_type}"
+    cran_mirror <- "${CRAN_MIRROR_URL}"
+    options(repos = c(CRAN = cran_mirror))
+
+    # --- This is the definitive logic that mimics a successful interactive session ---
+    # 1. Try to enable bspm if the package exists.
+    if (pkg_type == "CRAN" && requireNamespace('bspm', quietly = TRUE)) {
+        message("--> bspm package found. Attempting to enable...")
+        # This sets up the hook that intercepts install.packages()
+        suppressMessages(bspm::enable()) 
+        message("--> bspm enabled. Proceeding with standard install.packages() call.")
+    } else {
+        message("--> bspm not available or not a CRAN installation. Using source install.")
+    }
+
+    # 2. Call the standard install.packages().
+    #    - If bspm's hook is active, it performs a binary install via apt.
+    #    - If not, it performs a source install from the CRAN mirror.
+    if (pkg_type == "CRAN") {
+        install.packages(pkgs_to_install)
+    } else if (pkg_type == "GitHub") {
+        if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes')
+        remotes::install_github(pkgs_to_install, force = TRUE)
+    }
+
+    # --- Final verification ---
+    installed_pkgs_after <- installed.packages()[, "Package"]
+    failed_pkgs <- pkgs_to_install[!pkgs_to_install %in% installed_pkgs_after]
+    if (length(failed_pkgs) > 0) {
+        stop(paste("FATAL: Failed to install:", paste(failed_pkgs, collapse = ", ")))
+    }
+    message("All packages processed successfully.")
+EOF
+
+    # --- Execute the single R script ---
+    log "INFO" "Running R package installation script. Output will be displayed below:"
+    if eval "dbus-run-session Rscript '${pkg_install_script_path}'"; then
+        log "INFO" "SUCCESS: R package installation script completed."
+    else
+        handle_error $? "R package installation script failed. Check R output for details."
+        return 1
+    fi
+
+    rm -f "$pkg_install_script_path"
+}
 
 install_core_r_dev_pkgs() {
     log "INFO" "Installing core R development packages (devtools, remotes)..."
