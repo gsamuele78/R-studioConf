@@ -450,35 +450,72 @@ EOF
 }
 
 
+#verify_bspm() {
+#    log "INFO" "--- Starting bspm Verification (Post-Reboot) ---"
+#
+#    # Step 1: Check for bspm configuration in Rprofile.site.
+#    log "INFO" "Step 1: Checking for bspm configuration in ${R_PROFILE_SITE_PATH}..."
+#    if ! grep -q "suppressMessages(bspm::enable())" "$R_PROFILE_SITE_PATH"; then
+#        log "ERROR" "FAILURE: The bspm configuration is MISSING from Rprofile.site."
+#        save_state "bspm_status" "unconfigured" # Save failure state
+#        return 1
+#    fi
+#    log "INFO" "SUCCESS: bspm configuration found in Rprofile.site."
+#
+#    # Step 2: Perform a live test of bspm.
+#    log "INFO" "Step 2: Performing a live test of bspm..."
+#    #local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\"); bspm::available_sys()'"
+#    local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\");'"
+#    if run_command "bspm live functionality test" "$bspm_test_command"; then
+#        log "INFO" "SUCCESS: The bspm live test completed without errors."
+#    else
+#        log "ERROR" "FAILURE: The bspm live test failed. Check log for details."
+#        save_state "bspm_status" "failed_test" # Save failure state
+#        return 1
+#    fi
+#
+#    # --- NEW: Save the success state ---
+#    save_state "bspm_status" "verified"
+#    log "INFO" "--- SUCCESS: bspm is fully installed and functional. Status saved. ---"
+#}
+
+
+
 verify_bspm() {
     log "INFO" "--- Starting bspm Verification (Post-Reboot) ---"
 
-    # Step 1: Check for bspm configuration in Rprofile.site.
+    # Step 1: Check if the configuration exists in the system-wide R profile.
     log "INFO" "Step 1: Checking for bspm configuration in ${R_PROFILE_SITE_PATH}..."
     if ! grep -q "suppressMessages(bspm::enable())" "$R_PROFILE_SITE_PATH"; then
         log "ERROR" "FAILURE: The bspm configuration is MISSING from Rprofile.site."
-        save_state "bspm_status" "unconfigured" # Save failure state
+        save_state "bspm_status" "unconfigured"
         return 1
     fi
     log "INFO" "SUCCESS: bspm configuration found in Rprofile.site."
 
-    # Step 2: Perform a live test of bspm.
-    log "INFO" "Step 2: Performing a live test of bspm..."
-    #local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\"); bspm::available_sys()'"
-    local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\");'"
-    if run_command "bspm live functionality test" "$bspm_test_command"; then
+    # Step 2: Perform a live test of bspm by installing and removing a system package.
+    log "INFO" "Step 2: Performing a live test of bspm (installing/removing 'units' package)..."
+    log "INFO" "This command will test the full functionality. R output will be displayed below:"
+    
+    local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\")'"
+    
+    # --- THIS IS THE CORRECTED BLOCK ---
+    # We call the Rscript command directly to prevent hanging on hidden prompts.
+    # The 'eval' is used to correctly handle the quotes within the command.
+    if eval "$bspm_test_command"; then
         log "INFO" "SUCCESS: The bspm live test completed without errors."
     else
-        log "ERROR" "FAILURE: The bspm live test failed. Check log for details."
-        save_state "bspm_status" "failed_test" # Save failure state
+        local exit_code=$?
+        log "ERROR" "FAILURE: The bspm live test failed with exit code ${exit_code}."
+        log "ERROR" "Please review the detailed R output above and in the log file: ${LOG_FILE}"
+        save_state "bspm_status" "failed_test"
         return 1
     fi
+    # --- END OF CORRECTION ---
 
-    # --- NEW: Save the success state ---
     save_state "bspm_status" "verified"
-    log "INFO" "--- SUCCESS: bspm is fully installed and functional. Status saved. ---"
+    log "INFO" "--- SUCCESS: bspm is fully installed and functional. ---"
 }
-
 
 
 # --- RStudio Server Functions ---
