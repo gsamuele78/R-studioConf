@@ -8,12 +8,39 @@
 # UPDATED to support r_env_manager.sh by including a universal log function
 # and adding the required handle_error function.
 
+# ----------------------------------------------------------------
+# COMMON UTILITIES SCRIPT
+# This script contains shared functions and variables.
+# ----------------------------------------------------------------
+
+# --- Shell Colour Definitions ---
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+
+# --- Function: Check for Root Privileges ---
+# Scripts should call this function explicitly after sourcing this library.
+check_root() {
+    if [[ "$EUID" -ne 0 ]]; then
+        # Use the log function if it exists, otherwise printf
+        if command -v log &> /dev/null; then
+            log "ERROR" "This script must be run as root."
+        else
+            printf "ERROR: This script must be run as root.\n" >&2
+        fi
+        exit 1
+    fi
+}
+
 # Ensure script is run with root privileges
-if [[ "$(id -u)" -ne 0 ]]; then
-  # Using printf for stderr is good practice
-  printf "Error: This script must be run as root. Please use sudo.\n" >&2
-  exit 1
-fi
+#if [[ "$(id -u)" -ne 0 ]]; then
+#  # Using printf for stderr is good practice
+#  printf "Error: This script must be run as root. Please use sudo.\n" >&2
+#  exit 1
+#fi
 
 # --- CONFIGURATION VARIABLES (Internal to common_utils) ---
 # Log file for all operations
@@ -256,7 +283,7 @@ restore_config() {
 
     log "INFO" "Restoring from $latest_backup..."
     # (Restore logic remains the same)
-    # ...
+    
 
     log "INFO" "Configuration files restored from $latest_backup."
     log "INFO" "Restarting services if they are installed..."
