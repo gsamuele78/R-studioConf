@@ -1,0 +1,23 @@
+# templates/nginx_proxy_location.conf.template
+# Common Nginx location block for proxying RStudio.
+# %%PLACEHOLDERS%% are for script variables.
+# $nginx_variables are Nginx's own variables.
+
+location / {
+    proxy_pass http://%%RSTUDIO_PROXY_TARGET_HOST%%:%%RSTUDIO_PROXY_TARGET_PORT%%;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade; # Nginx var
+    proxy_set_header Connection $connection_upgrade; # Nginx var - fixed typo from original
+    proxy_set_header Host $host; # Nginx var
+    proxy_cache_bypass $http_upgrade; # Nginx var
+
+    proxy_set_header X-Real-IP $remote_addr; # Nginx var
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; # Nginx var
+    proxy_set_header X-Forwarded-Proto $scheme; # Nginx var
+
+    # Ensure the redirect matches the protocol and host the client used.
+    proxy_redirect http://%%RSTUDIO_PROXY_TARGET_HOST%%:%%RSTUDIO_PROXY_TARGET_PORT%%/ $scheme://$host/;
+
+    proxy_read_timeout 20d; # Long timeout for R sessions
+    proxy_buffering off;    # Important for RStudio responsiveness & websockets
+}

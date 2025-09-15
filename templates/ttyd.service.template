@@ -1,0 +1,13 @@
+[Unit]
+Description=ttyd - Share your terminal over the web
+After=network.target
+
+[Service]
+User={{WEB_TERMINAL_USER}}
+Group={{WEB_TERMINAL_USER}}
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} {{WEB_TERMINAL_CREDENTIALS}} {{WEB_TERMINAL_SHELL}}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

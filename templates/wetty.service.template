@@ -1,0 +1,14 @@
+[Unit]
+Description=Wetty - Web SSH client
+After=network.target
+
+[Service]
+User={{WEB_SSH_USER}}
+Group={{WEB_SSH_USER}}
+# Using a full path to node and the wetty script is more reliable than relying on the system's PATH.
+ExecStart=/usr/bin/node /usr/local/lib/node_modules/wetty/bin/wetty.js --port {{WEB_SSH_PORT}} --host {{WEB_SSH_BIND_HOST}} --ssh-user {{WEB_SSH_CONNECT_USER}}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

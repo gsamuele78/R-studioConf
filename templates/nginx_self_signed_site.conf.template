@@ -1,28 +1,35 @@
-# templates/nginx_self_signed_site.conf.template
-# Nginx server block for self-signed SSL RStudio proxy.
-# Placeholders %%PLACEHOLDER%% filled by setup script.
+# ----------------------------------------------------------------
+# NGINX SELF-SIGNED SITE CONFIGURATION
+#
+# This is the main server block for the site using a self-signed cert.
+# ----------------------------------------------------------------
 
+# --- HTTP to HTTPS Redirect ---
+# Redirects all port 80 traffic to the secure site.
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    # Use specific server_name if not default, e.g., server_name %%NGINX_SERVER_NAME%%;
-    server_name _;
+    listen 80;
+    listen [::]:80;
+    server_name {{DOMAIN_OR_IP}};
     return 301 https://$host$request_uri;
 }
 
+# --- Main HTTPS Server Block ---
 server {
-    listen 443 ssl http2 default_server;
-    listen [::]:443 ssl http2 default_server;
-    # Use specific server_name if not default, e.g., server_name %%NGINX_SERVER_NAME%%;
-    server_name _;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {{DOMAIN_OR_IP}};
 
-    # SSL Configuration - paths filled by script
-    include %%NGINX_SSL_SNIPPET_SELF_SIGNED_FULLPATH%%; # e.g., /etc/nginx/snippets/self-signed.conf
-    include %%NGINX_SSL_PARAMS_SNIPPET_FULLPATH%%;    # e.g., /etc/nginx/snippets/ssl-params.conf
+    # --- Logging ---
+    access_log {{LOG_DIR}}/rstudio-access.log;
+    error_log {{LOG_DIR}}/rstudio-error.log;
 
-    access_log /var/log/nginx/rstudio_access.log;
-    error_log /var/log/nginx/rstudio_error.log warn;
+    # --- SSL Configuration Snippets ---
+    # Includes the self-signed certificate paths.
+    include {{NGINX_TEMPLATE_DIR}}/nginx_self_signed_snippet.conf;
+    # Includes the hardened SSL/TLS parameters.
+    include {{NGINX_TEMPLATE_DIR}}/nginx_ssl_params.conf;
 
-    # Proxy location block will be inserted here by the script
-    %%NGINX_PROXY_LOCATION_BLOCK%%
+    # --- Proxy Location Configuration ---
+    # Includes the reverse proxy definitions for all services.
+    include {{NGINX_TEMPLATE_DIR}}/nginx_proxy_location.conf;
 }
