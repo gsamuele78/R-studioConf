@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # A manager script for installing, uninstalling, and checking web terminal services (ttyd and wetty).
-# It uses a modular structure with external configuration and systemd template files.
+# It uses a modular structure and is designed to be run standalone or from an orchestrator.
 
 set -e
 
 # --- Robust Path Detection ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
-# --- Define Paths ---
+# --- Define Global Paths ---
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/web-terminals.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
@@ -16,6 +16,7 @@ TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 # --- Function Definitions ---
 
 usage() {
+    # Use direct echo as utils may not be sourced when this is called.
     echo -e "\033[1;33mUsage: $0 [action]\033[0m"
     echo "Actions:"
     echo -e "  \033[0;36minstall\033[0m    - Installs and enables ttyd and wetty services."
@@ -40,13 +41,14 @@ process_systemd_template() {
     if [[ -n "$WEB_TERMINAL_CREDENTIALS" ]]; then
         ttyd_creds_arg="--credential $WEB_TERMINAL_CREDENTIALS"
     fi
-
+    
     # Replace all variables using sed for robustness.
     local sed_script=""
+    # Dynamically read all {{VARS}} from the template
     for var in $(grep -o '{{[A-Z_]*}}' "$template_path" | sort -u | tr -d '{}'); do
         sed_script+="s|{{\s*$var\s*}}|${!var}|g;"
     done
-    # Manually substitute the special credential argument
+    # Manually substitute the special credential argument which is not in the config file
     sed_script+="s|{{WEB_TERMINAL_CREDENTIALS}}|${ttyd_creds_arg}|g;"
 
     sed "$sed_script" "$template_path" > "$temp_file"
@@ -56,7 +58,7 @@ process_systemd_template() {
     sudo chmod 644 "$output_path"
 }
 
-# --- Action Functions ---
+# --- Action Functions (install, uninstall, status) ---
 
 install_services() {
     log_info "--- Starting Web Terminals Installation ---"
@@ -101,25 +103,30 @@ uninstall_services() {
 
 check_status() {
     log_info "--- Checking Service Status ---"
-    # Use '|| true' to prevent the script from exiting if a service is not found (e.g., after uninstall)
     systemctl status --no-pager ttyd.service wetty.service || true
 }
 
 # --- Main Execution ---
 main() {
-    # --- Step 0: Load Dependencies and Validate ---
+    # --- Step 0: Load Dependencies and Validate Environment ---
+    # This block MUST run first.
+
+    # A. Source Common Utilities
     if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
         printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2
         exit 1
     fi
     source "$UTILS_SCRIPT_PATH"
 
+    # B. Check for required action argument
     if [ -z "$1" ]; then
         usage
     fi
 
+    # C. NOW it is safe to call functions like check_root and log_error.
     check_root
     
+    # D. Load configuration file
     if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then
         log_error "Configuration file not found at '$DEFAULT_CONFIG_FILE'."
         exit 1
@@ -127,6 +134,7 @@ main() {
     source "$DEFAULT_CONFIG_FILE"
 
     # --- Action Routing ---
+    # Route to the appropriate function based on the first command-line argument.
     case "$1" in
         install)
             install_services
@@ -143,4 +151,5 @@ main() {
     esac
 }
 
+# Pass all command-line arguments to the main function.
 main "$@"
