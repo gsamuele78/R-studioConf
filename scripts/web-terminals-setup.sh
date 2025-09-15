@@ -5,71 +5,52 @@
 
 set -e
 
-# --- Shell Colour Definitions ---
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# --- Robust Path Detection ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
-# --- Global Variables ---
-CONFIG_FILE="../config/web-terminals.conf"
-SCRIPT_DIR=$(dirname "$(realpath "$0")")
-BASE_DIR=$(dirname "$SCRIPT_DIR")
+# --- Define Paths ---
+UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
+DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/web-terminals.conf"
+TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 
 # --- Function Definitions ---
 
 usage() {
-    echo -e "${YELLOW}Usage: $0 [action]${NC}"
+    echo -e "\033[1;33mUsage: $0 [action]\033[0m"
     echo "Actions:"
-    echo -e "  ${CYAN}install${NC}    - Installs and enables ttyd and wetty services."
-    echo -e "  ${CYAN}uninstall${NC}  - Stops, disables, and removes the services and packages."
-    echo -e "  ${CYAN}status${NC}     - Checks the status of the ttyd and wetty services."
+    echo -e "  \033[0;36minstall\033[0m    - Installs and enables ttyd and wetty services."
+    echo -e "  \033[0;36muninstall\033[0m  - Stops, disables, and removes the services and packages."
+    echo -e "  \033[0;36mstatus\033[0m     - Checks the status of the ttyd and wetty services."
     exit 1
 }
 
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}Error: This script must be run as root.${NC}" >&2
-        exit 1
-    fi
-}
-
-# Source config and check for required variables
-load_config() {
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${RED}Error: Configuration file not found at '$CONFIG_FILE'.${NC}" >&2
-        exit 1
-    fi
-    source "$CONFIG_FILE"
-    # Basic check for a critical variable
-    if [ -z "$WEB_TERMINAL_PORT" ]; then
-        echo -e "${RED}Error: Configuration file seems invalid or empty.${NC}" >&2
-        exit 1
-    fi
-}
-
-process_template() {
+# Process a systemd template file.
+process_systemd_template() {
     local template_name=$1
     local service_name=$2
-    local template_path="$BASE_DIR/templates/$template_name"
-    local output_path="/etc/systemd/system/$service_name"
+    local template_path="${TEMPLATE_DIR}/${template_name}"
+    local output_path="/etc/systemd/system/${service_name}"
     
-    echo "Processing template for $service_name..."
+    log_info "Processing template for ${service_name}..."
     local temp_file
     temp_file=$(mktemp)
     
-    # Handle optional ttyd credentials
-    if [[ "$service_name" == "ttyd.service" ]] && [ -n "$WEB_TERMINAL_CREDENTIALS" ]; then
-        export WEB_TERMINAL_CREDENTIALS="--credential $WEB_TERMINAL_CREDENTIALS"
-    else
-        export WEB_TERMINAL_CREDENTIALS=""
+    # Handle optional ttyd credentials to avoid an empty '--credential' flag
+    local ttyd_creds_arg=""
+    if [[ -n "$WEB_TERMINAL_CREDENTIALS" ]]; then
+        ttyd_creds_arg="--credential $WEB_TERMINAL_CREDENTIALS"
     fi
 
-    # Replace all variables and write to temp file
-    eval "echo \"$(cat "$template_path")\"" > "$temp_file"
+    # Replace all variables using sed for robustness.
+    local sed_script=""
+    for var in $(grep -o '{{[A-Z_]*}}' "$template_path" | sort -u | tr -d '{}'); do
+        sed_script+="s|{{\s*$var\s*}}|${!var}|g;"
+    done
+    # Manually substitute the special credential argument
+    sed_script+="s|{{WEB_TERMINAL_CREDENTIALS}}|${ttyd_creds_arg}|g;"
+
+    sed "$sed_script" "$template_path" > "$temp_file"
     
-    # Move temp file to final destination
     sudo mv "$temp_file" "$output_path"
     sudo chown root:root "$output_path"
     sudo chmod 644 "$output_path"
@@ -78,60 +59,74 @@ process_template() {
 # --- Action Functions ---
 
 install_services() {
-    echo -e "${GREEN}--- Starting Web Terminals Installation ---${NC}"
+    log_info "--- Starting Web Terminals Installation ---"
     
-    echo "Step 1: Installing prerequisite packages..."
+    log_info "Step 1: Installing prerequisite packages..."
     sudo apt-get update
     sudo apt-get install -y ttyd nodejs npm
 
-    echo "Step 2: Installing wetty globally via npm..."
+    log_info "Step 2: Installing wetty globally via npm..."
     sudo npm install -g wetty
 
-    echo "Step 3: Creating and enabling systemd services..."
-    process_template "ttyd.service.template" "ttyd.service"
-    process_template "wetty.service.template" "wetty.service"
+    log_info "Step 3: Creating and enabling systemd services..."
+    process_systemd_template "ttyd.service.template" "ttyd.service"
+    process_systemd_template "wetty.service.template" "wetty.service"
     
-    echo "Step 4: Reloading systemd and starting services..."
+    log_info "Step 4: Reloading systemd and starting services..."
     sudo systemctl daemon-reload
     sudo systemctl enable --now ttyd.service wetty.service
 
-    echo -e "${GREEN}--- Installation Complete! ---${NC}"
+    log_info "--- Installation Complete! ---"
     check_status
 }
 
 uninstall_services() {
-    echo -e "${YELLOW}--- Starting Web Terminals Uninstallation ---${NC}"
+    log_info "--- Starting Web Terminals Uninstallation ---"
 
-    echo "Step 1: Stopping and disabling systemd services..."
-    sudo systemctl disable --now ttyd.service wetty.service || echo "Services were not running."
+    log_info "Step 1: Stopping and disabling systemd services..."
+    sudo systemctl stop ttyd.service wetty.service || log_warn "Services were not running."
+    sudo systemctl disable ttyd.service wetty.service || log_warn "Services were not enabled."
 
-    echo "Step 2: Removing systemd service files..."
-    sudo rm -f /etc/systemd/system/ttyd.service
-    sudo rm -f /etc/systemd/system/wetty.service
+    log_info "Step 2: Removing systemd service files..."
+    sudo rm -f /etc/systemd/system/ttyd.service /etc/systemd/system/wetty.service
     sudo systemctl daemon-reload
 
-    echo "Step 3: Uninstalling packages..."
+    log_info "Step 3: Uninstalling packages..."
     sudo npm uninstall -g wetty
     sudo apt-get remove --purge -y ttyd
-    echo -e "${YELLOW}Note: nodejs and npm were not removed as they may be used by other applications.${NC}"
+    log_warn "Note: nodejs and npm were not removed as they may be used by other applications."
 
-    echo -e "${YELLOW}--- Uninstallation Complete! ---${NC}"
+    log_info "--- Uninstallation Complete! ---"
 }
 
 check_status() {
-    echo -e "${CYAN}--- Checking Service Status ---${NC}"
+    log_info "--- Checking Service Status ---"
+    # Use '|| true' to prevent the script from exiting if a service is not found (e.g., after uninstall)
     systemctl status --no-pager ttyd.service wetty.service || true
 }
 
 # --- Main Execution ---
 main() {
+    # --- Step 0: Load Dependencies and Validate ---
+    if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
+        printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2
+        exit 1
+    fi
+    source "$UTILS_SCRIPT_PATH"
+
     if [ -z "$1" ]; then
         usage
     fi
 
     check_root
-    load_config
+    
+    if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then
+        log_error "Configuration file not found at '$DEFAULT_CONFIG_FILE'."
+        exit 1
+    fi
+    source "$DEFAULT_CONFIG_FILE"
 
+    # --- Action Routing ---
     case "$1" in
         install)
             install_services

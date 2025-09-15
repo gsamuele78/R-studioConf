@@ -450,37 +450,6 @@ EOF
 }
 
 
-#verify_bspm() {
-#    log "INFO" "--- Starting bspm Verification (Post-Reboot) ---"
-#
-#    # Step 1: Check for bspm configuration in Rprofile.site.
-#    log "INFO" "Step 1: Checking for bspm configuration in ${R_PROFILE_SITE_PATH}..."
-#    if ! grep -q "suppressMessages(bspm::enable())" "$R_PROFILE_SITE_PATH"; then
-#        log "ERROR" "FAILURE: The bspm configuration is MISSING from Rprofile.site."
-#        save_state "bspm_status" "unconfigured" # Save failure state
-#        return 1
-#    fi
-#    log "INFO" "SUCCESS: bspm configuration found in Rprofile.site."
-#
-#    # Step 2: Perform a live test of bspm.
-#    log "INFO" "Step 2: Performing a live test of bspm..."
-#    #local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\");   '"
-#    local bspm_test_command="Rscript -e 'bspm::install_sys(\"units\"); bspm::remove_sys(\"units\");'"
-#    if run_command "bspm live functionality test" "$bspm_test_command"; then
-#        log "INFO" "SUCCESS: The bspm live test completed without errors."
-#    else
-#        log "ERROR" "FAILURE: The bspm live test failed. Check log for details."
-#        save_state "bspm_status" "failed_test" # Save failure state
-#        return 1
-#    fi
-#
-#    # --- NEW: Save the success state ---
-#    save_state "bspm_status" "verified"
-#    log "INFO" "--- SUCCESS: bspm is fully installed and functional. Status saved. ---"
-#}
-
-
-
 verify_bspm() {
     log "INFO" "--- Starting bspm Verification (Post-Reboot) ---"
 
@@ -605,186 +574,6 @@ install_r_build_deps() {
     fi
 }
 
-#
-#install_r_pkg_list() {
-#    local pkg_type="$1"; shift
-#    local r_packages_list=("${@}")
-#
-#    if [[ ${#r_packages_list[@]} -eq 0 ]]; then
-#        log "INFO" "No ${pkg_type} R packages specified to install."
-#        return
-#    fi
-#
-#    log "INFO" "Processing ${pkg_type} R packages for installation: ${r_packages_list[*]}"
-#
-#    # --- THE DEFINITIVE FIX: Use the working verification method to decide the path ---
-#    # First, run the bspm verification to see if it's truly working.
-#    if verify_bspm && [[ "$pkg_type" == "CRAN" ]]; then
-#        log "INFO" "bspm is verified and functional. Proceeding with binary installation."
-#
-#        # Dynamically build a single R command to install all packages in one go.
-#        local r_command_parts=()
-#        for pkg_name in "${r_packages_list[@]}"; do
-#            # Check if the package is already installed before adding it to the list
-#             if ! Rscript -e "if (!requireNamespace('${pkg_name}', quietly = TRUE)) quit(status=1)" >/dev/null 2>&1; then
-#                log "INFO" "Package '${pkg_name}' is already installed, skipping."
-#                continue
-#            fi
-#            r_command_parts+=("bspm::install_sys(\"${pkg_name}\")")
-#        done
-#        
-#        if [[ ${#r_command_parts[@]} -eq 0 ]]; then
-#            log "INFO" "All specified CRAN packages are already installed."
-#            return 0
-#        fi
-#        
-#        local full_r_command
-#        full_r_command=$(printf "%s;" "${r_command_parts[@]}")
-#        
-#        log "INFO" "Executing batch bspm installation. R output will be displayed below:"
-#        if eval "Rscript -e '${full_r_command}'"; then
-#            log "INFO" "SUCCESS: All CRAN packages were processed successfully via bspm."
-#        else
-#            handle_error $? "bspm batch installation failed. Check R output for details."
-#            return 1
-#        fi
-#
-#    else
-#        # This is the fallback for GitHub packages or if bspm verification fails.
-#        if [[ "$pkg_type" == "CRAN" ]]; then
-#            log "WARN" "bspm verification failed or was skipped. Falling back to source installation."
-#        fi
-#
-#        local pkg_install_script_path="/tmp/install_r_pkg_source.R"
-#        for pkg_name_full in "${r_packages_list[@]}"; do
-#            if ! Rscript -e "if (!requireNamespace('$(basename "${pkg_name_full}")', quietly = TRUE)) quit(status=1)" >/dev/null 2>&1; then
-#                log "INFO" "Package '${pkg_name_full}' is already installed, skipping."
-#                continue
-#            fi
-#
-#            log "INFO" "--> Installing '${pkg_name_full}' from source..."
-#            
-#            if [[ "$pkg_type" == "CRAN" ]]; then
-#                cat > "$pkg_install_script_path" <<EOF
-#                options(repos = c(CRAN = '${CRAN_MIRROR_URL}'))
-#                install.packages('${pkg_name_full}', type = 'source')
-#                if (!requireNamespace('${pkg_name_full}', quietly = TRUE)) stop('Source install failed.')
-#EOF
-#            elif [[ "$pkg_type" == "GitHub" ]]; then
-#                cat > "$pkg_install_script_path" <<EOF
-#                options(repos = c(CRAN = '${CRAN_MIRROR_URL}'))
-#                if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes')
-#                remotes::install_github('${pkg_name_full}', force = TRUE)
-#                if (!requireNamespace('$(basename "${pkg_name_full}")', quietly=TRUE)) stop('GitHub install failed.')
-#EOF
-#            else
-#                log "ERROR" "Unknown package type: $pkg_type"; continue
-#            fi
-#
-#            if run_command "Install R package from source: ${pkg_name_full}" "Rscript '${pkg_install_script_path}'"; then
-#                log "INFO" "--> SUCCESS: Installed '${pkg_name_full}' from source."
-#            else
-#                handle_error 1 "Failed to install '${pkg_name_full}' from source."
-#                return 1
-#            fi
-#        done
-#    fi
-#}
-
-#install_r_pkg_list() {
-#    local pkg_type="$1"; shift
-#    local r_packages_list=("${@}")
-#
-#    if [[ ${#r_packages_list[@]} -eq 0 ]]; then
-#        log "INFO" "No ${pkg_type} R packages specified to install."
-#        return
-#    fi
-#
-#    log "INFO" "Processing ${pkg_type} packages: ${r_packages_list[*]}"
-#
-#    # --- Step 1: Efficiently find which packages are actually missing ---
-#    # Convert the shell array into a comma-separated string for R
-#    local r_pkg_vector
-#    r_pkg_vector=$(printf "'%s'," "${r_packages_list[@]}")
-#    r_pkg_vector="c(${r_pkg_vector%,})" # Creates c('pkg1','pkg2')
-#
-#    local check_script_path="/tmp/check_missing_pkgs.R"
-#    cat > "$check_script_path" <<EOF
-#    all_pkgs <- ${r_pkg_vector}
-#    installed_pkgs <- installed.packages()[, "Package"]
-#    missing_pkgs <- all_pkgs[!all_pkgs %in% installed_pkgs]
-#    if (length(missing_pkgs) > 0) {
-#        cat(paste(missing_pkgs, collapse = "\n"))
-#    }
-#EOF
-#    
-#    # Run the check and capture the list of missing packages
-#    local missing_packages
-#    missing_packages=$(Rscript "$check_script_path")
-#    rm -f "$check_script_path"
-#
-#    if [[ -z "$missing_packages" ]]; then
-#        log "INFO" "All specified packages are already installed."
-#        return 0
-#    fi
-#    
-#    log "INFO" "Packages to install: ${missing_packages//$'\n'/ }"
-#
-#    # --- Step 2: Build and execute the single, intelligent installation script ---
-#    # Convert the newline-separated list back into an R vector string
-#    r_pkg_vector=$(echo "$missing_packages" | awk '{printf "\"%s\",", $1}' | sed 's/,$//')
-#    r_pkg_vector="c(${r_pkg_vector})"
-#
-#    local pkg_install_script_path="/tmp/install_packages.R"
-#    
-#    cat > "$pkg_install_script_path" <<EOF
-#    # --- Configuration ---
-#    pkgs_to_install <- ${r_pkg_vector}
-#    pkg_type <- "${pkg_type}"
-#    cran_mirror <- "${CRAN_MIRROR_URL}"
-#    options(repos = c(CRAN = cran_mirror))
-#
-#    # --- This is the definitive logic that mimics a successful interactive session ---
-#    # 1. Try to enable bspm if the package exists.
-#    if (pkg_type == "CRAN" && requireNamespace('bspm', quietly = TRUE)) {
-#        message("--> bspm package found. Attempting to enable...")
-#        # This sets up the hook that intercepts install.packages()
-#        suppressMessages(bspm::enable()) 
-#        message("--> bspm enabled. Proceeding with standard install.packages() call.")
-#    } else {
-#        message("--> bspm not available or not a CRAN installation. Using source install.")
-#    }
-#
-#    # 2. Call the standard install.packages().
-#    #    - If bspm's hook is active, it performs a binary install via apt.
-#    #    - If not, it performs a source install from the CRAN mirror.
-#    if (pkg_type == "CRAN") {
-#        install.packages(pkgs_to_install)
-#    } else if (pkg_type == "GitHub") {
-#        if (!requireNamespace('remotes', quietly=TRUE)) install.packages('remotes')
-#        remotes::install_github(pkgs_to_install, force = TRUE)
-#    }
-#
-#    # --- Final verification ---
-#    installed_pkgs_after <- installed.packages()[, "Package"]
-#    failed_pkgs <- pkgs_to_install[!pkgs_to_install %in% installed_pkgs_after]
-#    if (length(failed_pkgs) > 0) {
-#        stop(paste("FATAL: Failed to install:", paste(failed_pkgs, collapse = ", ")))
-#    }
-#    message("All packages processed successfully.")
-#EOF
-#
-#    # --- Execute the single R script ---
-#    log "INFO" "Running R package installation script. Output will be displayed below:"
-#    if eval "dbus-run-session Rscript '${pkg_install_script_path}'"; then
-#        log "INFO" "SUCCESS: R package installation script completed."
-#    else
-#        handle_error $? "R package installation script failed. Check R output for details."
-#        return 1
-#    fi
-#
-#    rm -f "$pkg_install_script_path"
-#}
 
 
 install_r_pkg_list() {
@@ -989,17 +778,118 @@ full_install() {
     log "INFO" "--- Full Installation Complete ---"
 }
 
+#launch_external_script() {
+#        local scripts_dir="${SCRIPT_DIR}/scripts"
+#    if [[ ! -d "$scripts_dir" ]]; then
+#        log "WARN" "Scripts directory not found at '${scripts_dir}'."
+#        return
+#    fi
+#
+#    local scripts_found=()
+#    while IFS= read -r -d $'\0'; do
+#        scripts_found+=("$REPLY")
+#    done < <(find "$scripts_dir" -maxdepth 1 -type f -name "*.sh" -print0)
+#
+#    if [[ ${#scripts_found[@]} -eq 0 ]]; then
+#        log "WARN" "No executable scripts found in '${scripts_dir}'."
+#        return
+#    fi
+#
+#    printf "\n--- External Script Launcher ---\n"
+#    printf "Select a script to run:\n"
+#    local i=1
+#    for script_path in "${scripts_found[@]}"; do
+#        printf "%d. %s\n" "$i" "$(basename "$script_path")"
+#        ((i++))
+#    done
+#    printf "B. Back to Main Menu\n"
+#
+#    local choice
+#    read -r -p "Enter choice: " choice
+#
+#    if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 && "$choice" -le ${#scripts_found[@]} ]]; then
+#        local selected_script="${scripts_found[$((choice-1))]}"
+#        log "INFO" "Executing selected script: ${selected_script}"
+#        bash "$selected_script"
+#    elif [[ "$choice" =~ ^[Bb]$ ]]; then
+#        return
+#    else
+#        log "ERROR" "Invalid choice."
+#    fi
+#}
+
+
+# =================================================================
+# HELPER FUNCTIONS FOR EXTERNAL SCRIPT LAUNCHER
+# =================================================================
+
+# --- Handler for web-terminals-setup.sh ---
+# This function provides the interactive sub-menu for the web terminals script.
+_handle_web_terminals() {
+    local script_path="$1"
+    local action=""
+    
+    while true; do
+        printf "\n--- Web Terminals Manager ---\n"
+        printf "Select an action for %s:\n" "$(basename "$script_path")"
+        printf "1. Install Services\n"
+        printf "2. Uninstall Services\n"
+        printf "3. Check Status\n"
+        printf "B. Back to Script Launcher\n"
+        
+        local choice
+        read -r -p "Enter action choice: " choice
+
+        case "$choice" in
+            1) action="install"; break ;;
+            2) action="uninstall"; break ;;
+            3) action="status"; break ;;
+            [Bb]*) return ;;
+            *) log "ERROR" "Invalid option. Please try again." ;;
+        esac
+    done
+
+    # If an action was selected, execute the script with that action
+    if [[ -n "$action" ]]; then
+        log "INFO" "Executing: ${script_path} ${action}"
+        # Execute the script, passing the chosen action as the first argument
+        bash "$script_path" "$action"
+    fi
+}
+
+# --- Handler for nginx_setup.sh ---
+# This function automatically provides the required config file argument.
+_handle_nginx_setup() {
+    local script_path="$1"
+    # SCRIPT_DIR is from the parent r_env_manager.sh script
+    local config_file="${SCRIPT_DIR}/config/nginx_setup.vars.conf"
+
+    if [[ ! -f "$config_file" ]]; then
+        log "ERROR" "Nginx config file not found at ${config_file}. Cannot run script."
+        return
+    fi
+    
+    log "INFO" "Executing: ${script_path} with config ${config_file}"
+    # Execute the script, passing the '-c' flag and the config path
+    bash "$script_path" -c "$config_file"
+}
+
+# =================================================================
+# MAIN EXTERNAL SCRIPT LAUNCHER
+# =================================================================
+
 launch_external_script() {
-        local scripts_dir="${SCRIPT_DIR}/scripts"
+    local scripts_dir="${SCRIPT_DIR}/scripts"
     if [[ ! -d "$scripts_dir" ]]; then
         log "WARN" "Scripts directory not found at '${scripts_dir}'."
         return
     fi
 
+    # Find all executable .sh files
     local scripts_found=()
     while IFS= read -r -d $'\0'; do
         scripts_found+=("$REPLY")
-    done < <(find "$scripts_dir" -maxdepth 1 -type f -name "*.sh" -print0)
+    done < <(find "$scripts_dir" -maxdepth 1 -type f -name "*.sh" -executable -print0 | sort -z)
 
     if [[ ${#scripts_found[@]} -eq 0 ]]; then
         log "WARN" "No executable scripts found in '${scripts_dir}'."
@@ -1020,8 +910,29 @@ launch_external_script() {
 
     if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 && "$choice" -le ${#scripts_found[@]} ]]; then
         local selected_script="${scripts_found[$((choice-1))]}"
-        log "INFO" "Executing selected script: ${selected_script}"
-        bash "$selected_script"
+        local script_name
+        script_name=$(basename "$selected_script")
+
+        # --- INTELLIGENT DISPATCHER ---
+        # This case statement checks for scripts that need special handling.
+        case "$script_name" in
+            "web-terminals-setup.sh")
+                _handle_web_terminals "$selected_script"
+                ;;
+            "nginx_setup.sh")
+                _handle_nginx_setup "$selected_script"
+                ;;
+            *)
+                # Default case for any other script that takes no arguments.
+                log "INFO" "Executing default script: ${selected_script}"
+                bash "$selected_script"
+                ;;
+        esac
+
+        # Pause to allow the user to see the output of the executed script
+        echo
+        read -r -p "Script finished. Press Enter to return to the launcher..."
+
     elif [[ "$choice" =~ ^[Bb]$ ]]; then
         return
     else
