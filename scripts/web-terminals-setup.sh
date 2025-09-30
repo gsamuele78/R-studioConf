@@ -30,7 +30,7 @@ process_systemd_template() {
     local template_path="${TEMPLATE_DIR}/${template_name}"
     local output_path="/etc/systemd/system/${service_name}"
     
-    log_info "Processing template for ${service_name}..."
+    log "INFO" "Processing template for ${service_name}..."
     local temp_file
     temp_file=$(mktemp)
     
@@ -53,47 +53,47 @@ process_systemd_template() {
 }
 
 install_services() {
-    log_info "--- Starting Web Terminals Installation ---"
+    log "INFO" "--- Starting Web Terminals Installation ---"
     
     run_command "Update package lists" "apt-get update"
     run_command "Install prerequisite packages" "apt-get install -y ttyd nodejs npm"
     run_command "Install wetty globally via npm" "npm install -g wetty"
 
-    log_info "Step 3: Creating and enabling systemd services..."
+    log "INFO" "Step 3: Creating and enabling systemd services..."
     process_systemd_template "ttyd.service.template" "ttyd.service"
     process_systemd_template "wetty.service.template" "wetty.service"
     
     run_command "Reload systemd daemon" "systemctl daemon-reload"
     run_command "Enable and start ttyd and wetty services" "systemctl enable --now ttyd.service wetty.service"
 
-    log_info "--- Installation Complete! ---"
+    log "INFO" "--- Installation Complete! ---"
     check_status
 }
 
 uninstall_services() {
-    log_info "--- Starting Web Terminals Uninstallation ---"
+    log "INFO" "--- Starting Web Terminals Uninstallation ---"
 
-    run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service wetty.service" || log_warn "Services may not have been running."
+    run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service wetty.service" || log "WARN" "Services may not have been running."
     
-    log_info "Step 2: Removing systemd service files..."
+    log "INFO" "Step 2: Removing systemd service files..."
     sudo rm -f /etc/systemd/system/ttyd.service /etc/systemd/system/wetty.service
     run_command "Reload systemd daemon after removing services" "systemctl daemon-reload"
 
     run_command "Uninstall wetty package" "npm uninstall -g wetty"
     run_command "Remove ttyd package" "apt-get remove --purge -y ttyd"
-    log_warn "Note: nodejs and npm were not removed as they may be used by other applications."
+    log "WARN" "Note: nodejs and npm were not removed as they may be used by other applications."
 
-    log_info "--- Uninstallation Complete! ---"
+    log "INFO" "--- Uninstallation Complete! ---"
 }
 
 check_status() {
-    log_info "--- Checking Service Status ---"
+    log "INFO" "--- Checking Service Status ---"
     systemctl status --no-pager ttyd.service wetty.service || true
 }
 
 # --- Main Execution ---
 main() {
-    # --- Step 0: Load Dependencies and Validate Environment ---
+    # Step 0: Load Dependencies and Validate Environment
     if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
         printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2
         exit 1
@@ -104,7 +104,6 @@ main() {
         usage
     fi
     
-    # NOW it is safe to call check_root
     check_root
     
     if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then
@@ -113,7 +112,7 @@ main() {
     fi
     source "$DEFAULT_CONFIG_FILE"
 
-    # --- Action Routing ---
+    # Action Routing
     case "$1" in
         install) install_services ;;
         uninstall) uninstall_services ;;
