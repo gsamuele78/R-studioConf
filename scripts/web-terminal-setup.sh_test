@@ -1,0 +1,123 @@
+#!/bin/bash
+
+# A manager script for installing, uninstalling, and checking web terminal services (ttyd and wetty).
+# This script is fully refactored to use the generic functions from common_utils.sh.
+
+set -e
+
+# --- Robust Path Detection ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+
+# --- Define Global Paths ---
+UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
+DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/web-terminals.conf"
+TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
+
+# --- Function Definitions ---
+
+usage() {
+    echo -e "\033[1;33mUsage: $0 [action]\033[0m"
+    echo "Actions:"
+    echo -e "  \033[0;36minstall\033[0m    - Installs and enables ttyd and wetty services."
+    echo -e "  \033[0;36muninstall\033[0m  - Stops, disables, and removes the services and packages."
+    echo -e "  \033[0;36mstatus\033[0m     - Checks the status of the ttyd and wetty services."
+    exit 1
+}
+
+install_services() {
+    log "INFO" "--- Starting Web Terminals Installation ---"
+    
+    run_command "Update package lists" "apt-get update"
+    run_command "Install prerequisite packages" "apt-get install -y ttyd nodejs npm"
+    run_command "Install wetty globally via npm" "npm install -g wetty"
+
+    log "INFO" "Step 3: Creating and enabling systemd services..."
+    
+    # Handle the optional ttyd credentials argument for the template
+    local ttyd_creds_arg=""
+    if [[ -n "$WEB_TERMINAL_CREDENTIALS" ]]; then
+        ttyd_creds_arg="--credential $WEB_TERMINAL_CREDENTIALS"
+    fi
+
+    # Prepare arguments for the universal process_template function
+    local ttyd_template_args=(
+        "WEB_TERMINAL_USER=${WEB_TERMINAL_USER}"
+        "WEB_TERMINAL_PORT=${WEB_TERMINAL_PORT}"
+        "TTYD_CREDENTIALS_ARG=${ttyd_creds_arg}"
+        "WEB_TERMINAL_SHELL=${WEB_TERMINAL_SHELL}"
+    )
+    local wetty_template_args=(
+        "WEB_SSH_USER=${WEB_SSH_USER}"
+        "WEB_SSH_PORT=${WEB_SSH_PORT}"
+        "WEB_SSH_BIND_HOST=${WEB_SSH_BIND_HOST}"
+        "WEB_SSH_CONNECT_USER=${WEB_SSH_CONNECT_USER}"
+    )
+
+    # Process templates and deploy service files
+    local processed_content
+    process_template "${TEMPLATE_DIR}/ttyd.service.template" "processed_content" "${ttyd_template_args[@]}"
+    run_command "Deploy ttyd systemd service file" "echo \"$processed_content\" > /etc/systemd/system/ttyd.service"
+
+    process_template "${TEMPLATE_DIR}/wetty.service.template" "processed_content" "${wetty_template_args[@]}"
+    run_command "Deploy wetty systemd service file" "echo \"$processed_content\" > /etc/systemd/system/wetty.service"
+
+    run_command "Reload systemd daemon" "systemctl daemon-reload"
+    run_command "Enable and start ttyd and wetty services" "systemctl enable --now ttyd.service wetty.service"
+
+    log "INFO" "--- Installation Complete! ---"
+    check_status
+}
+
+uninstall_services() {
+    log "INFO" "--- Starting Web Terminals Uninstallation ---"
+
+    run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service wetty.service" || log "WARN" "Services may not have been running or enabled."
+    
+    log "INFO" "Step 2: Removing systemd service files..."
+    run_command "Remove ttyd and wetty service files" "rm -f /etc/systemd/system/ttyd.service /etc/systemd/system/wetty.service"
+    run_command "Reload systemd daemon after removing services" "systemctl daemon-reload"
+
+    run_command "Uninstall wetty package" "npm uninstall -g wetty"
+    run_command "Remove ttyd package" "apt-get remove --purge -y ttyd"
+    log "WARN" "Note: nodejs and npm were not removed as they may be used by other applications."
+
+    log "INFO" "--- Uninstallation Complete! ---"
+}
+
+check_status() {
+    log "INFO" "--- Checking Service Status ---"
+    # This command is allowed to fail, so we don't use run_command
+    systemctl status --no-pager ttyd.service wetty.service || true
+}
+
+# --- Main Execution ---
+main() {
+    # Step 0: Load Dependencies and Validate Environment
+    if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
+        printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2
+        exit 1
+    fi
+    source "$UTILS_SCRIPT_PATH"
+
+    if [ -z "$1" ]; then
+        usage
+    fi
+    
+    check_root
+    
+    if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then
+        log "ERROR" "Configuration file not found at '$DEFAULT_CONFIG_FILE'."
+        exit 1
+    fi
+    source "$DEFAULT_CONFIG_FILE"
+
+    # Action Routing
+    case "$1" in
+        install) install_services ;;
+        uninstall) uninstall_services ;;
+        status) check_status ;;
+        *) usage ;;
+    esac
+}
+
+main "$@"

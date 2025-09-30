@@ -63,7 +63,17 @@ main() {
     fi
     source "$config_file"
 
-    # Step 1: Install Nginx with Automated Fix
+    # --- Step 1: Interactive Configuration ---
+    log "INFO" "--- Interactive Nginx Setup ---"
+    echo "Please confirm the settings below. Press Enter to accept the default."
+    prompt_for_value "Domain or IP Address" "DOMAIN_OR_IP"
+    prompt_for_value "R-Studio Port" "RSTUDIO_PORT"
+    prompt_for_value "Web Terminal Port" "WEB_TERMINAL_PORT"
+    prompt_for_value "Web SSH Port" "WEB_SSH_PORT"
+    echo "-------------------------------------"
+    log "INFO" "Configuration confirmed. Proceeding with setup..."
+
+    # Step 2: Install Nginx with Automated Fix
     # We will no longer use run_command here to handle the specific failure case.
     log "INFO" "Starting: Install Nginx package"
     if ! sudo apt-get update && sudo apt-get install -y nginx; then
@@ -78,11 +88,11 @@ main() {
     fi
     log "INFO" "SUCCESS: Install Nginx package"
 
-    # Step 2: Create Directories using the utility function
+    # Step 3: Create Directories using the utility function
     ensure_dir_exists "$NGINX_TEMPLATE_DIR"
     ensure_dir_exists "$SSL_CERT_DIR"
 
-    # Step 3: Create Self-Signed Certificate
+    # Step 4: Create Self-Signed Certificate
     log "INFO" "Checking for self-signed SSL certificate..."
     local cert_path="$SSL_CERT_DIR/$DOMAIN_OR_IP.crt"
     local key_path="$SSL_CERT_DIR/$DOMAIN_OR_IP.key"
@@ -95,7 +105,7 @@ main() {
         log "WARN" "Certificate for $DOMAIN_OR_IP already exists. Skipping creation."
     fi
 
-    # Step 4: Copy and Process Templates using utility functions
+    # Step 5: Copy and Process Templates using utility functions
     log "INFO" "Processing and deploying Nginx templates..."
     run_command "Deploy static SSL params template" "cp '${TEMPLATE_DIR}/nginx_ssl_params.conf.template' '${NGINX_TEMPLATE_DIR}/nginx_ssl_params.conf'"
 
@@ -119,7 +129,7 @@ main() {
     process_template "${TEMPLATE_DIR}/nginx_self_signed_site.conf.template" "processed_content" "${template_args[@]}"
     run_command "Deploy main Nginx site configuration" "echo \"$processed_content\" > '${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf'"
 
-    # Step 5: Enable Site and Restart Nginx using utility functions
+    # Step 6: Enable Site and Restart Nginx using utility functions
     log "INFO" "Enabling site and restarting Nginx..."
     run_command "Enable Nginx site for ${DOMAIN_OR_IP}" "ln -sf '${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf' '${NGINX_DIR}/sites-enabled/'"
     run_command "Disable default Nginx site" "rm -f '${NGINX_DIR}/sites-enabled/default'"

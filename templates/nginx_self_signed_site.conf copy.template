@@ -8,28 +8,28 @@
 # Redirects all port 80 traffic to the secure site.
 server {
     listen 80;
-    #listen [::]:80;
-    server_name %%DOMAIN_OR_IP%%;
+    listen [::]:80;
+    server_name {{DOMAIN_OR_IP}};
     return 301 https://$host$request_uri;
 }
 
 # --- Main HTTPS Server Block ---
 server {
     listen 443 ssl http2;
-    #listen [::]:443 ssl http2;
-    server_name %%DOMAIN_OR_IP%%;
+    listen [::]:443 ssl http2;
+    server_name {{DOMAIN_OR_IP}};
 
     # --- Logging ---
-    access_log %%LOG_DIR%%/rstudio-access.log;
-    error_log %%LOG_DIR%%/rstudio-error.log;
+    access_log {{LOG_DIR}}/rstudio-access.log;
+    error_log {{LOG_DIR}}/rstudio-error.log;
 
     # --- SSL Configuration Snippets ---
     # Includes the self-signed certificate paths.
-    include %%NGINX_TEMPLATE_DIR%%/nginx_self_signed_snippet.conf;
+    include {{NGINX_TEMPLATE_DIR}}/nginx_self_signed_snippet.conf;
     # Includes the hardened SSL/TLS parameters.
-    include %%NGINX_TEMPLATE_DIR%%/nginx_ssl_params.conf;
+    include {{NGINX_TEMPLATE_DIR}}/nginx_ssl_params.conf;
 
     # --- Proxy Location Configuration ---
     # Includes the reverse proxy definitions for all services.
-    include %%NGINX_TEMPLATE_DIR%%/nginx_proxy_location.conf;
+    include {{NGINX_TEMPLATE_DIR}}/nginx_proxy_location.conf;
 }

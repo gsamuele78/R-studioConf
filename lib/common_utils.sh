@@ -372,5 +372,24 @@ process_template() {
     fi
 }
 
+# --- NEW INTERACTIVE FUNCTION ---
+# Prompts the user for input, using a default value if they just press Enter.
+# Usage: prompt_for_value "Prompt text" "VARIABLE_NAME_TO_UPDATE"
+prompt_for_value() {
+    local prompt_text="$1"
+    local var_name="$2"
+    local current_value="${!var_name}" # Indirectly get the value of the variable
+    local new_value
+
+    read -rp "$(printf "%-40s [${CYAN}%s${NC}]: " "$prompt_text" "$current_value")" new_value
+
+    # If the user entered a value, update the variable. Otherwise, keep the default.
+    if [[ -n "$new_value" ]]; then
+        # Safely update the variable in the calling script's scope
+        printf -v "$var_name" "%s" "$new_value"
+    fi
+}
+
+
 # Final initialization message to confirm the script has been sourced
 log "INFO" "common_utils.sh sourced and initialized with universal log support."
