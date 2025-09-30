@@ -1,21 +1,17 @@
 # ----------------------------------------------------------------
-# NGINX PROXY LOCATION CONFIGURATION
+# NGINX PROXY LOCATION CONFIGURATION (v1.2)
 #
 # This template configures the reverse proxy for all web services.
+# CORRECTED: Ensured clean newlines between location blocks to prevent parsing errors.
 # ----------------------------------------------------------------
 
 # --- Reverse Proxy for R-Studio Server ---
-# Proxies the root URL to the R-Studio service.
 location / {
     proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%;
     proxy_redirect off;
     proxy_http_version 1.1;
-
-    # Headers required for WebSocket support
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
-    
-    # Headers required for RStudio to correctly identify the client
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -23,23 +19,21 @@ location / {
 }
 
 # --- Reverse Proxy for Web Terminal ---
-# Proxies the /terminal/ URL to the web terminal service.
 location /terminal/ {
     proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
-    proxy_read_timeout 86400; # Prevent timeouts
+    proxy_read_timeout 86400;
 }
 
 # --- Reverse Proxy for Web SSH ---
-# Proxies the /ssh/ URL to the web SSH service.
 location /ssh/ {
     proxy_pass http://127.0.0.1:%%WEB_SSH_PORT%%/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
-    proxy_read_timeout 86400; # Prevent timeouts
+    proxy_read_timeout 86400;
 }
