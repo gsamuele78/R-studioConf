@@ -19,6 +19,7 @@ fallback_homedir = %%FALLBACK_HOMEDIR_TEMPLATE%%
 # Disable FIDO2 passkey authentication through SSSD PAM module if not used or causing issues
 pam_passkey_auth = False
 
+
 [domain/%%AD_DOMAIN_LOWER%%]
 # To enable verbose AD provider logging, uncomment the following line and adjust level
 # debug_level = 0x1FF0 # Logs AD provider specific operations, including LDAP queries and Kerberos.
