@@ -4,7 +4,8 @@ After=network.target
 
 [Service]
 User={{FILEBROWSER_USER}}
-Group={{FILEBROW"USER"}}
+# The 'Group=' line has been removed to prevent the 216/GROUP error.
+# systemd will automatically use the primary group of the specified user.
 
 # DEFINITIVE FIX: The 'server' command requires BOTH the --config flag to read
 # settings like auth method, AND the --database flag to know where to store

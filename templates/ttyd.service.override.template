@@ -1,0 +1,6 @@
+# /etc/systemd/system/ttyd.service.d/override.conf
+[Service]
+# Clear out the original ExecStart
+ExecStart=
+# Define our own ExecStart with the correct, secure parameters
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --once --interface 127.0.0.1 login
