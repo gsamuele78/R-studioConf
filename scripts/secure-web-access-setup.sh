@@ -4,7 +4,7 @@
 # A manager script for installing, uninstalling, and checking secure web access services.
 # It uses Nginx with PAM for authentication and proxies to ttyd (web terminal)
 # and File Browser (web file manager).
-# VERSION 4.1: DEFINITIVE FIX. Separates File Browser init and import to prevent CLI panic.
+# VERSION 5.0: DEFINITIVE. Bypasses buggy CLI by creating a static config file for File Browser.
 
 set -e
 
@@ -16,6 +16,8 @@ UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/secure-web-access.conf"
 PAM_CONFIG_PATH="/etc/pam.d/nginx"
 TTYD_DEFAULT_CONFIG="/etc/default/ttyd"
+FILEBROWSER_CONFIG_DIR="/etc/filebrowser"
+FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_DIR}/.filebrowser.json"
 
 # --- Function Definitions ---
 # (usage function remains the same)
@@ -47,15 +49,16 @@ install_services() {
     fi; log "INFO" "SUCCESS: File Browser installer finished."
 
     # ### DEFINITIVE FIX for File Browser ###
-    log "INFO" "Initializing and configuring File Browser database..."
-    local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}")
-    local fb_temp_config="/tmp/filebrowser_config.json"
-    ensure_dir_exists "$fb_db_dir"
-    run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}"
+    log "INFO" "Creating static config file for File Browser..."
+    ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
     
-    # 1. Create a temporary JSON config file with the correct settings.
-    cat << EOF > "${fb_temp_config}"
+    # 1. Create the JSON config file that sets all required server options.
+    cat << EOF > "${FILEBROWSER_CONFIG_FILE}"
 {
+  "address": "127.0.0.1",
+  "port": ${FILEBROWSER_PORT},
+  "root": "/",
+  "database": "${FILEBROWSER_DB_PATH}",
   "auth": {
     "method": "proxy",
     "proxy": {
@@ -64,17 +67,14 @@ install_services() {
   }
 }
 EOF
-    # 2. SEPARATE the init and import commands to work around the CLI bug.
-    #    First, initialize the database cleanly.
-    run_command "Initialize File Browser database" \
-      "sudo -u ${FILEBROWSER_USER} filebrowser config init --database ${FILEBROWSER_DB_PATH}"
-    #    Second, import the configuration into the now-existing database.
-    run_command "Import File Browser config" \
-      "sudo -u ${FILEBROWSER_USER} filebrowser config import ${fb_temp_config} --database ${FILEBROWSER_DB_PATH}"
-    
-    # 3. Clean up the temporary file.
-    run_command "Remove temporary File Browser config" "rm -f ${fb_temp_config}"
-    
+    run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
+
+    # 2. The server still needs a database for state, so we initialize it.
+    local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}")
+    ensure_dir_exists "$fb_db_dir"
+    run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}"
+    run_command "Initialize File Browser database" "sudo -u ${FILEBROWSER_USER} filebrowser config init --database ${FILEBROWSER_DB_PATH}"
+
     log "INFO" "Creating and enabling File Browser service..."
     process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
     
@@ -94,21 +94,17 @@ EOF
     check_status
 }
 
-# (Other functions like uninstall, check_status, and main remain unchanged)
+# (Other functions remain unchanged)
 process_systemd_template() {
     local template_name=$1; local service_name=$2; local template_path="$template_name"; local output_path="/etc/systemd/system/${service_name}"; log "INFO" "Processing template for ${service_name}..."; local temp_file; temp_file=$(mktemp); local sed_script=""; for var in $(grep -o '{{[A-Z_]*}}' "$template_path" | sort -u | tr -d '{}'); do sed_script+="s|{{\s*$var\s*}}|${!var}|g;"; done; sed "$sed_script" "$template_path" > "$temp_file"; sudo mv "$temp_file" "$output_path"; sudo chown root:root "$output_path"; sudo chmod 644 "$output_path"
 }
-
 uninstall_services() {
-    log "INFO" "--- Starting Secure Web Access Uninstallation ---"; run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service filebrowser.service" || log "WARN" "Services may not have been running."; log "INFO" "Removing systemd service files and config..."; sudo rm -f /etc/systemd/system/filebrowser.service "${PAM_CONFIG_PATH}" "${TTYD_DEFAULT_CONFIG}"; run_command "Reload systemd daemon" "systemctl daemon-reload"; log "INFO" "Removing packages, binaries, and data..."; run_command "Remove filebrowser binary" "rm -f /usr/local/bin/filebrowser"; local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); run_command "Remove filebrowser data directory" "rm -rf ${fb_db_dir}"; log "INFO" "Removing ttyd and Nginx PAM module..."; if ! DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y ttyd libnginx-mod-http-auth-pam; then handle_error $? "Failed to remove packages."; fi; log "INFO" "SUCCESS: Packages removed."; log "INFO" "--- Uninstallation Complete! ---"
+    log "INFO" "--- Starting Secure Web Access Uninstallation ---"; run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service filebrowser.service" || log "WARN" "Services may not have been running."; log "INFO" "Removing systemd service files and config..."; sudo rm -f /etc/systemd/system/filebrowser.service "${PAM_CONFIG_PATH}" "${TTYD_DEFAULT_CONFIG}"; run_command "Reload systemd daemon" "systemctl daemon-reload"; log "INFO" "Removing packages, binaries, and data..."; run_command "Remove filebrowser binary" "rm -f /usr/local/bin/filebrowser"; local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); run_command "Remove filebrowser data directory" "rm -rf ${fb_db_dir}"; run_command "Remove File Browser config dir" "rm -rf ${FILEBROWSER_CONFIG_DIR}"; log "INFO" "Removing ttyd and Nginx PAM module..."; if ! DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y ttyd libnginx-mod-http-auth-pam; then handle_error $? "Failed to remove packages."; fi; log "INFO" "SUCCESS: Packages removed."; log "INFO" "--- Uninstallation Complete! ---"
 }
-
 check_status() {
     log "INFO" "--- Checking Service Status ---"; systemctl status --no-pager ttyd.service filebrowser.service || true
 }
-
 main() {
     if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2; exit 1; fi; source "$UTILS_SCRIPT_PATH"; if [ -z "$1" ]; then usage; fi; check_root; if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then log "ERROR" "Configuration file not found at '$DEFAULT_CONFIG_FILE'."; exit 1; fi; source "$DEFAULT_CONFIG_FILE"; case "$1" in install) install_services ;; uninstall) uninstall_services ;; status) check_status ;; *) usage ;; esac
 }
-
 main "$@"

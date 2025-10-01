@@ -6,9 +6,9 @@ After=network.target
 User={{FILEBROWSER_USER}}
 Group={{FILEBROWSER_USER}}
 
-# The server command simply needs to be pointed to the pre-configured database.
-# All settings (auth method, etc.) are now loaded from this file.
-ExecStart=/usr/local/bin/filebrowser server --address 127.0.0.1 --port {{FILEBROWSER_PORT}} --database {{FILEBROWSER_DB_PATH}}
+# The server command needs no flags. It will automatically load the config from
+# /etc/filebrowser/.filebrowser.json and the database path from that config.
+ExecStart=/usr/local/bin/filebrowser server
 
 Restart=always
 RestartSec=5
