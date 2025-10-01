@@ -830,7 +830,7 @@ _handle_web_terminals() {
     local action=""
     
     while true; do
-        printf "\n--- Web Terminals Manager ---\n"
+        printf "\n--- Secure Web Access Manager ---\n"
         printf "Select an action for %s:\n" "$(basename "$script_path")"
         printf "1. Install Services\n"
         printf "2. Uninstall Services\n"
@@ -916,7 +916,7 @@ launch_external_script() {
         # --- INTELLIGENT DISPATCHER ---
         # This case statement checks for scripts that need special handling.
         case "$script_name" in
-            "web-terminals-setup.sh")
+            "secure-web-access-setup.sh")
                 _handle_web_terminals "$selected_script"
                 ;;
             "nginx_setup.sh")

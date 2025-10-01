@@ -18,8 +18,32 @@ location / {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-# --- Reverse Proxy for Web Terminal ---
+## --- Reverse Proxy for Web Terminal ---
+#location /terminal/ {
+#    proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/;
+#    proxy_http_version 1.1;
+#    proxy_set_header Upgrade $http_upgrade;
+#    proxy_set_header Connection "upgrade";
+#    proxy_set_header Host $host;
+#    proxy_read_timeout 86400;
+#}
+
+## --- Reverse Proxy for Web SSH ---
+#location /ssh/ {
+#    proxy_pass http://127.0.0.1:%%WEB_SSH_PORT%%/;
+#    proxy_http_version 1.1;
+#    proxy_set_header Upgrade $http_upgrade;
+#    proxy_set_header Connection "upgrade";
+#    proxy_set_header Host $host;
+#    proxy_read_timeout 86400;
+#}
+
+# --- Reverse Proxy for Web Terminal (ttyd) ---
 location /terminal/ {
+    # ### SECURE ### Enable PAM authentication
+    auth_pam "Secure Terminal - AD Credentials Required";
+    auth_pam_service_name "nginx";
+
     proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -28,12 +52,20 @@ location /terminal/ {
     proxy_read_timeout 86400;
 }
 
-# --- Reverse Proxy for Web SSH ---
-location /ssh/ {
-    proxy_pass http://127.0.0.1:%%WEB_SSH_PORT%%/;
+
+# --- Reverse Proxy for Web File Manager (File Browser) ---
+location /files/ {
+    # ### SECURE ### Enable PAM authentication
+    auth_pam "Secure Files - AD Credentials Required";
+    auth_pam_service_name "nginx";
+
+    proxy_pass http://127.0.0.1:%%FILEBROWSER_PORT%%/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_read_timeout 86400;
+
+    # ### SECURE ### Pass the authenticated username to the File Browser backend
+    proxy_set_header X-Forwarded-User $remote_user;
 }

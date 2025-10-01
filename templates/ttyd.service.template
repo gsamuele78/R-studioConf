@@ -1,13 +1,23 @@
 [Unit]
-Description=ttyd - Share your terminal over the web
+Description=ttyd - Web Terminal Service
 After=network.target
 
 [Service]
-User={{WEB_TERMINAL_USER}}
-Group={{WEB_TERMINAL_USER}}
-ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} {{WEB_TERMINAL_CREDENTIALS}} {{WEB_TERMINAL_SHELL}}
+# Must run as root to have permission to spawn a login shell for any user
+User=root
+Group=root
+
+# ExecStart:
+# --port: The local port to listen on.
+# --once: Accept only one client and exit on disconnection (for security and resource management).
+# -W: Allow clients to write to the TTY (make it interactive).
+# /bin/login: The crucial part. This starts a login process, which authenticates the user
+#             via PAM and gives them their correct shell and home directory.
+#             Since Nginx is handling authentication, ttyd's own auth mechanisms aren't needed.
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --once -W /bin/login
+
 Restart=always
-RestartSec=5
+RestartSec=1
 
 [Install]
 WantedBy=multi-user.target
