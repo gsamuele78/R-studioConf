@@ -33,6 +33,27 @@ install_services() {
     
     log "INFO" "Updating package lists..."; if ! DEBIAN_FRONTEND=noninteractive apt-get update; then handle_error $? "Failed to update package lists."; return 1; fi; log "INFO" "SUCCESS: Package lists updated."
     log "INFO" "Installing prerequisite packages..."; if ! DEBIAN_FRONTEND=noninteractive apt-get install -y ttyd libnginx-mod-http-auth-pam; then handle_error $? "Failed to install prerequisite packages."; return 1; fi; log "INFO" "SUCCESS: Prerequisite packages installed."
+    
+    ## --- CRITICAL PAM INTEGRATION STEP ---
+    #log "INFO" "Ensuring Nginx PAM module is loaded..."
+    #local module_line="load_module modules/ngx_http_auth_pam_module.so;"
+    ## Check if the line is already present in the main nginx.conf
+    #if ! grep -qF -- "$module_line" "$NGINX_CONF_PATH"; then
+    #    # If not, add it near the top of the file. '1i' is a sed command to insert at line 1.
+    #    run_command "Add PAM module to nginx.conf" "sudo sed -i '1i ${module_line}' ${NGINX_CONF_PATH}"
+    #    log "INFO" "SUCCESS: Nginx PAM module loading has been configured."
+    #else
+    #    log "WARN" "Nginx PAM module is already configured to load."
+    #fi
+    
+    # --- THE DEFINITIVE PERMISSIONS FIX ---
+    log "INFO" "Granting Nginx permission to communicate with SSSD..."
+    # The 'sasl' group is commonly used to grant services access to authentication daemons.
+    # Adding www-data to this group allows Nginx to correctly use PAM with SSSD.
+    run_command "Add www-data user to the sasl group" "usermod -a -G sasl www-data"
+    log "INFO" "SUCCESS: Nginx permissions have been configured."
+
+
     log "INFO" "Downloading and installing File Browser..."; if ! curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash; then handle_error $? "Failed to install File Browser."; return 1; fi; log "INFO" "SUCCESS: File Browser installer finished."
 
     log "INFO" "Creating static config file for File Browser..."

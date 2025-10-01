@@ -29,7 +29,7 @@ location / {
 #}
 
 ## --- Reverse Proxy for Web SSH ---
-#location /ssh/ {
+#location /ssh/ { 
 #    proxy_pass http://127.0.0.1:%%WEB_SSH_PORT%%/;
 #    proxy_http_version 1.1;
 #    proxy_set_header Upgrade $http_upgrade;

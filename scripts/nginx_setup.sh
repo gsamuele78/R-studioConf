@@ -163,7 +163,7 @@ main() {
     echo "Services are configured for: https://${DOMAIN_OR_IP}"
     echo "- R-Studio:       https://${DOMAIN_OR_IP}/"
     echo "- Web Terminal:   https://${DOMAIN_OR_IP}/terminal/"
-    echo "- Web SSH:        https://${DOMAIN_OR_IP}/ssh/"
+    echo "- FileBrowser:    https://${DOMAIN_OR_IP}/files/"
     echo -e "----------------------------------------"
 }
 
