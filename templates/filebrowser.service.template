@@ -6,21 +6,18 @@ After=network.target
 User={{FILEBROWSER_USER}}
 Group={{FILEBROWSER_USER}}
 
-# ExecStart:
-# -a: Address to bind to (localhost only).
-# -p: Port to listen on.
-# -r: Root directory to serve. '/' allows users to navigate anywhere their permissions allow.
-# --no-auth: Disables File Browser's built-in login page.
-# --auth.method=proxy: Tells File Browser to expect authentication from a reverse proxy.
-# --auth.header=X-Forwarded-User: The HTTP header containing the authenticated username.
+# ### FIX ###
+# The --no-auth flag is deprecated. The modern way to configure proxy authentication
+# is to set the auth method to 'proxy' and specify the header. This single line
+# replaces the previous three separate --no-auth, --auth.method, and --auth.header flags.
+#
 ExecStart=/usr/local/bin/filebrowser \
-    -a 127.0.0.1 \
-    -p {{FILEBROWSER_PORT}} \
-    -r / \
-    -d {{FILEBROWSER_DB_PATH}} \
-    --no-auth \
+    --address 127.0.0.1 \
+    --port {{FILEBROWSER_PORT}} \
+    --root / \
+    --database {{FILEBROWSER_DB_PATH}} \
     --auth.method=proxy \
-    --auth.header=X-Forwarded-User
+    --auth.proxy.header="X-Forwarded-User"
 
 Restart=always
 RestartSec=5

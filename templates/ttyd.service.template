@@ -7,14 +7,15 @@ After=network.target
 User=root
 Group=root
 
+# ### FIX ###
+# Re-added the '-W' flag to ensure the web terminal is writable and not read-only.
+#
 # ExecStart:
 # --port: The local port to listen on.
 # --once: Accept only one client and exit on disconnection (for security and resource management).
 # -W: Allow clients to write to the TTY (make it interactive).
-# /bin/login: The crucial part. This starts a login process, which authenticates the user
-#             via PAM and gives them their correct shell and home directory.
-#             Since Nginx is handling authentication, ttyd's own auth mechanisms aren't needed.
-ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --once -W /bin/login
+# login: Starts a login process, which authenticates via PAM and gives the user their correct shell.
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --once -W login
 
 Restart=always
 RestartSec=1
