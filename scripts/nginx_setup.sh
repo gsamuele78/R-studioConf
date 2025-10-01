@@ -2,7 +2,7 @@
 
 # A script to set up Nginx as a reverse proxy for R-Studio Server and other web services.
 # It uses a modular structure and leverages the functions in common_utils.sh.
-# VERSION 2.1: FINAL. Fixes shell variable expansion issue during template deployment.
+# VERSION 2.2: DEFINITIVE FIX for writing processed templates to root-owned files.
 
 set -e
 
@@ -60,9 +60,9 @@ main() {
     
     # Step 2: Install Nginx with Automated Fix
     log "INFO" "Starting: Install Nginx package"
-    if ! sudo apt-get update && sudo apt-get install -y nginx; then
+    if ! sudo apt-get -y update && sudo apt-get -y install nginx; then
         if _fix_ipv6_binding_issue; then
-            run_command "Retry Nginx installation after applying fix" "apt-get install -y nginx"
+            run_command "Retry Nginx installation after applying fix" "apt-get -y install nginx"
         else
             log "ERROR" "Nginx installation failed and could not be fixed."
             exit 1
@@ -75,7 +75,6 @@ main() {
     ensure_dir_exists "$SSL_CERT_DIR"
 
     # Step 4: Create Self-Signed Certificate
-    # (This section is unchanged and correct)
     log "INFO" "Checking for self-signed SSL certificate..."
     local cert_path="$SSL_CERT_DIR/$DOMAIN_OR_IP.crt"
     local key_path="$SSL_CERT_DIR/$DOMAIN_OR_IP.key"
@@ -96,27 +95,21 @@ main() {
     )
 
     local processed_content
-
-    # --- THE FIX IS HERE ---
-    # We now use a temporary file and a 'here document' to deploy the templates.
-    # This prevents the shell from expanding variables like $host and $http_upgrade.
+    
+    # --- THE DEFINITIVE FIX IS HERE ---
+    # We now use the standard and safe `sudo tee` method to write the files.
+    # This correctly handles permissions and prevents all variable expansion issues.
 
     process_template "${TEMPLATE_DIR}/nginx_self_signed_snippet.conf.template" "processed_content" "${template_args[@]}"
-    sudo bash -c "cat > '${NGINX_TEMPLATE_DIR}/nginx_self_signed_snippet.conf' <<'EOF'
-${processed_content}
-EOF"
+    echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_self_signed_snippet.conf" > /dev/null
     log "INFO" "SUCCESS: Deploy self-signed snippet"
 
     process_template "${TEMPLATE_DIR}/nginx_proxy_location.conf.template" "processed_content" "${template_args[@]}"
-    sudo bash -c "cat > '${NGINX_TEMPLATE_DIR}/nginx_proxy_location.conf' <<'EOF'
-${processed_content}
-EOF"
+    echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_proxy_location.conf" > /dev/null
     log "INFO" "SUCCESS: Deploy proxy location snippet"
 
     process_template "${TEMPLATE_DIR}/nginx_self_signed_site.conf.template" "processed_content" "${template_args[@]}"
-    sudo bash -c "cat > '${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf' <<'EOF'
-${processed_content}
-EOF"
+    echo "$processed_content" | sudo tee "${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf" > /dev/null
     log "INFO" "SUCCESS: Deploy main Nginx site configuration"
 
     # Step 6: Enable Site and Restart Nginx
