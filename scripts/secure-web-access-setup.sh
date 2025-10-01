@@ -4,7 +4,7 @@
 # A manager script for installing, uninstalling, and checking secure web access services.
 # It uses Nginx with PAM for authentication and proxies to ttyd (web terminal)
 # and File Browser (web file manager).
-# VERSION 4.0: DEFINITIVE. Uses filebrowser config import and manages /etc/default/ttyd.
+# VERSION 4.1: DEFINITIVE FIX. Separates File Browser init and import to prevent CLI panic.
 
 set -e
 
@@ -64,20 +64,22 @@ install_services() {
   }
 }
 EOF
-    # 2. Initialize and import the configuration in one atomic operation.
-    run_command "Initialize and import File Browser config" \
+    # 2. SEPARATE the init and import commands to work around the CLI bug.
+    #    First, initialize the database cleanly.
+    run_command "Initialize File Browser database" \
+      "sudo -u ${FILEBROWSER_USER} filebrowser config init --database ${FILEBROWSER_DB_PATH}"
+    #    Second, import the configuration into the now-existing database.
+    run_command "Import File Browser config" \
       "sudo -u ${FILEBROWSER_USER} filebrowser config import ${fb_temp_config} --database ${FILEBROWSER_DB_PATH}"
     
     # 3. Clean up the temporary file.
     run_command "Remove temporary File Browser config" "rm -f ${fb_temp_config}"
     
     log "INFO" "Creating and enabling File Browser service..."
-    # The systemd template is now very simple as config is in the DB
     process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
     
     # ### DEFINITIVE FIX for ttyd ###
     log "INFO" "Configuring ttyd via ${TTYD_DEFAULT_CONFIG}..."
-    # This overwrites the default config file with our specific settings. This is the correct way.
     echo "TTYD_OPTIONS='--port ${WEB_TERMINAL_PORT} --writable --once login'" | sudo tee "${TTYD_DEFAULT_CONFIG}" > /dev/null
     
     log "INFO" "Creating PAM service configuration for Nginx at ${PAM_CONFIG_PATH}"
@@ -92,7 +94,7 @@ EOF
     check_status
 }
 
-# (Other functions like uninstall, check_status, and main remain unchanged but are included for completeness)
+# (Other functions like uninstall, check_status, and main remain unchanged)
 process_systemd_template() {
     local template_name=$1; local service_name=$2; local template_path="$template_name"; local output_path="/etc/systemd/system/${service_name}"; log "INFO" "Processing template for ${service_name}..."; local temp_file; temp_file=$(mktemp); local sed_script=""; for var in $(grep -o '{{[A-Z_]*}}' "$template_path" | sort -u | tr -d '{}'); do sed_script+="s|{{\s*$var\s*}}|${!var}|g;"; done; sed "$sed_script" "$template_path" > "$temp_file"; sudo mv "$temp_file" "$output_path"; sudo chown root:root "$output_path"; sudo chmod 644 "$output_path"
 }
