@@ -80,7 +80,7 @@ install_services() {
         handle_error $? "Failed to install File Browser. Please check network or run the command manually."
         return 1
     fi
-    run_command "Move filebrowser to /usr/local/bin" "mv ./filebrowser /usr/local/bin/"
+    #run_command "Move filebrowser to /usr/local/bin" "mv ./filebrowser /usr/local/bin/"
     log "INFO" "SUCCESS: File Browser installed."
 
     # Step 3: Create PAM configuration for Nginx
