@@ -15,7 +15,7 @@ Group=root
 # --once: Accept only one client and exit on disconnection (for security and resource management).
 # -W: Allow clients to write to the TTY (make it interactive).
 # login: Starts a login process, which authenticates via PAM and gives the user their correct shell.
-ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --once -W login
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --once login
 
 Restart=always
 RestartSec=1

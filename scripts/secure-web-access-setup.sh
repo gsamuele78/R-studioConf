@@ -83,6 +83,16 @@ install_services() {
     #run_command "Move filebrowser to /usr/local/bin" "mv ./filebrowser /usr/local/bin/"
     log "INFO" "SUCCESS: File Browser installed."
 
+    # ### FINAL FIX ###
+    # Create the data directory for File Browser and set the correct ownership
+    # This must be done BEFORE the service is started.
+    local fb_db_dir
+    fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}")
+    log "INFO" "Creating File Browser data directory at ${fb_db_dir}"
+    ensure_dir_exists "$fb_db_dir"
+    run_command "Set ownership for File Browser data directory" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}"
+    # ### END FIX ###
+
     # Step 3: Create PAM configuration for Nginx
     log "INFO" "Creating PAM service configuration for Nginx at ${PAM_CONFIG_PATH}"
     echo "# Instructs PAM to use the default system authentication stack (which includes SSSD)
