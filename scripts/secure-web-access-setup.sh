@@ -4,6 +4,7 @@
 # A manager script for installing, uninstalling, and checking secure web access services.
 # It uses Nginx with PAM for authentication and proxies to ttyd (web terminal)
 # and File Browser (web file manager).
+# VERSION 2.0: Fixes hanging issue during package installation.
 
 set -e
 
@@ -53,19 +54,34 @@ process_systemd_template() {
 install_services() {
     log "INFO" "--- Starting Secure Web Access Installation ---"
     
-    run_command "Update package lists" "apt-get update"
-    
-    # Step 1: Install Nginx PAM module and ttyd
-    run_command "Install prerequisite packages" "apt-get install -y ttyd libnginx-mod-http-auth-pam"
+    # ### MODIFIED BLOCK ###
+    # Call apt-get update directly to prevent hanging.
+    log "INFO" "Updating package lists. Apt output will follow:"
+    if ! DEBIAN_FRONTEND=noninteractive apt-get update; then
+        handle_error $? "Failed to update package lists."
+        return 1
+    fi
+    log "INFO" "SUCCESS: Package lists updated."
 
-    # Step 2: Download and install File Browser binary
-    log "INFO" "Downloading and installing File Browser..."
+    # ### MODIFIED BLOCK ###
+    # Step 1: Install Nginx PAM module and ttyd directly.
+    log "INFO" "Installing prerequisite packages (ttyd, nginx-auth-pam). Apt output will follow:"
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y ttyd libnginx-mod-http-auth-pam; then
+        handle_error $? "Failed to install prerequisite packages."
+        return 1
+    fi
+    log "INFO" "SUCCESS: Prerequisite packages installed."
+
+    # ### MODIFIED BLOCK ###
+    # Step 2: Download and install File Browser binary directly.
+    log "INFO" "Downloading and installing File Browser. Installer output will follow:"
     local filebrowser_install_cmd="curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash"
-    if ! run_command "Install File Browser" "$filebrowser_install_cmd"; then
-        log "ERROR" "Failed to install File Browser. Please check network or run the command manually."
+    if ! eval "$filebrowser_install_cmd"; then
+        handle_error $? "Failed to install File Browser. Please check network or run the command manually."
         return 1
     fi
     run_command "Move filebrowser to /usr/local/bin" "mv ./filebrowser /usr/local/bin/"
+    log "INFO" "SUCCESS: File Browser installed."
 
     # Step 3: Create PAM configuration for Nginx
     log "INFO" "Creating PAM service configuration for Nginx at ${PAM_CONFIG_PATH}"
@@ -96,8 +112,16 @@ uninstall_services() {
 
     log "INFO" "Removing packages and binaries..."
     run_command "Remove filebrowser binary" "rm -f /usr/local/bin/filebrowser"
-    run_command "Remove ttyd and Nginx PAM module" "apt-get remove --purge -y ttyd libnginx-mod-http-auth-pam"
     
+    # ### MODIFIED BLOCK ###
+    # Call apt-get remove directly to prevent hanging.
+    log "INFO" "Removing ttyd and Nginx PAM module. Apt output will follow:"
+    if ! DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y ttyd libnginx-mod-http-auth-pam; then
+        handle_error $? "Failed to remove packages."
+        # Don't exit, just warn and continue cleanup
+    fi
+    log "INFO" "SUCCESS: Packages removed."
+
     log "INFO" "--- Uninstallation Complete! ---"
 }
 
