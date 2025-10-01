@@ -4,11 +4,12 @@ After=network.target
 
 [Service]
 User={{FILEBROWSER_USER}}
-Group={{FILEBROWSER_USER}}
+Group={{FILEBROW"USER"}}
 
-# The server command needs to be explicitly told where the config file is.
-# This ensures it loads our proxy settings.
-ExecStart=/usr/local/bin/filebrowser server --config /etc/filebrowser/.filebrowser.json
+# DEFINITIVE FIX: The 'server' command requires BOTH the --config flag to read
+# settings like auth method, AND the --database flag to know where to store
+# state. This resolves the startup failure.
+ExecStart=/usr/local/bin/filebrowser server --config /etc/filebrowser/.filebrowser.json --database {{FILEBROWSER_DB_PATH}}
 
 Restart=always
 RestartSec=5

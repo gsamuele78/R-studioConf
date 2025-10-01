@@ -4,7 +4,7 @@
 # A manager script for installing, uninstalling, and checking secure web access services.
 # It uses Nginx with PAM for authentication and proxies to ttyd (web terminal)
 # and File Browser (web file manager).
-# VERSION 5.0: DEFINITIVE. Bypasses buggy CLI by creating a static config file for File Browser.
+# VERSION 5.1: DEFINITIVE. Adds --database flag to filebrowser and re-enables ttyd service.
 
 set -e
 
@@ -48,28 +48,13 @@ install_services() {
         handle_error $? "Failed to install File Browser."; return 1;
     fi; log "INFO" "SUCCESS: File Browser installer finished."
 
-    # ### DEFINITIVE FIX for File Browser ###
     log "INFO" "Creating static config file for File Browser..."
     ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
-    
-    # 1. Create the JSON config file that sets all required server options.
     cat << EOF > "${FILEBROWSER_CONFIG_FILE}"
-{
-  "address": "127.0.0.1",
-  "port": ${FILEBROWSER_PORT},
-  "root": "/",
-  "database": "${FILEBROWSER_DB_PATH}",
-  "auth": {
-    "method": "proxy",
-    "proxy": {
-      "header": "X-Forwarded-User"
-    }
-  }
-}
+{ "address": "127.0.0.1", "port": ${FILEBROWSER_PORT}, "root": "/", "database": "${FILEBROWSER_DB_PATH}", "auth": { "method": "proxy", "proxy": { "header": "X-Forwarded-User" } } }
 EOF
     run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
 
-    # 2. The server still needs a database for state, so we initialize it.
     local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}")
     ensure_dir_exists "$fb_db_dir"
     run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}"
@@ -78,16 +63,18 @@ EOF
     log "INFO" "Creating and enabling File Browser service..."
     process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
     
-    # ### DEFINITIVE FIX for ttyd ###
+    # DEFINITIVE FIX for ttyd
+    log "INFO" "Disabling default ttyd service to ensure our config is loaded..."
+    run_command "Disable default ttyd service" "systemctl disable ttyd.service" || log "WARN" "ttyd service may not have been enabled."
     log "INFO" "Configuring ttyd via ${TTYD_DEFAULT_CONFIG}..."
-    echo "TTYD_OPTIONS='--port ${WEB_TERMINAL_PORT} --writable --once login'" | sudo tee "${TTYD_DEFAULT_CONFIG}" > /dev/null
+    echo "TTYD_OPTIONS='--port ${WEB_TERMINAL_PORT} --writable --once --interface 127.0.0.1 login'" | sudo tee "${TTYD_DEFAULT_CONFIG}" > /dev/null
     
     log "INFO" "Creating PAM service configuration for Nginx at ${PAM_CONFIG_PATH}"
     echo "@include common-auth" | sudo tee "${PAM_CONFIG_PATH}" > /dev/null
     
-    log "INFO" "Enabling and restarting services..."
+    log "INFO" "Enabling and starting services..."
     run_command "Reload systemd daemon" "systemctl daemon-reload"
-    run_command "Enable File Browser and restart ttyd" "systemctl enable --now filebrowser.service && systemctl restart ttyd.service"
+    run_command "Enable and start services" "systemctl enable --now filebrowser.service ttyd.service"
 
     log "INFO" "--- Installation Complete! ---"
     log "WARN" "You must now re-run the Nginx setup script to apply the new proxy configuration."
@@ -107,4 +94,5 @@ check_status() {
 main() {
     if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2; exit 1; fi; source "$UTILS_SCRIPT_PATH"; if [ -z "$1" ]; then usage; fi; check_root; if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then log "ERROR" "Configuration file not found at '$DEFAULT_CONFIG_FILE'."; exit 1; fi; source "$DEFAULT_CONFIG_FILE"; case "$1" in install) install_services ;; uninstall) uninstall_services ;; status) check_status ;; *) usage ;; esac
 }
+
 main "$@"
