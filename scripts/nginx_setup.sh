@@ -2,7 +2,8 @@
 
 # A script to set up Nginx as a reverse proxy for R-Studio Server and other web services.
 # It uses a modular structure and leverages the functions in common_utils.sh.
-# VERSION 2.2: DEFINITIVE FIX for writing processed templates to root-owned files.
+# VERSION 2.3: DEFINITIVE FIX. Ensures a clean Nginx configuration state by removing all
+# existing enabled sites before creating the new one. This prevents conflicts from previous failed runs.
 
 set -e
 
@@ -96,10 +97,6 @@ main() {
 
     local processed_content
     
-    # --- THE DEFINITIVE FIX IS HERE ---
-    # We now use the standard and safe `sudo tee` method to write the files.
-    # This correctly handles permissions and prevents all variable expansion issues.
-
     process_template "${TEMPLATE_DIR}/nginx_self_signed_snippet.conf.template" "processed_content" "${template_args[@]}"
     echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_self_signed_snippet.conf" > /dev/null
     log "INFO" "SUCCESS: Deploy self-signed snippet"
@@ -114,8 +111,16 @@ main() {
 
     # Step 6: Enable Site and Restart Nginx
     log "INFO" "Enabling site and restarting Nginx..."
+
+    # --- THE DEFINITIVE FIX IS HERE ---
+    # Remove ALL existing enabled sites to ensure a clean slate.
+    # This prevents conflicts from old, broken symlinks from previous runs.
+    run_command "Clean Nginx 'sites-enabled' directory" "rm -f '${NGINX_DIR}/sites-enabled/'*"
+    
+    # Now, enable the new site.
     run_command "Enable Nginx site for ${DOMAIN_OR_IP}" "ln -sf '${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf' '${NGINX_DIR}/sites-enabled/'"
-    run_command "Disable default Nginx site" "rm -f '${NGINX_DIR}/sites-enabled/default'"
+    
+    # Finally, test the configuration and restart.
     run_command "Test Nginx configuration and restart service" "nginx -t && systemctl restart nginx"
 
     # Final Output
