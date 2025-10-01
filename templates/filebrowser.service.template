@@ -6,18 +6,9 @@ After=network.target
 User={{FILEBROWSER_USER}}
 Group={{FILEBROWSER_USER}}
 
-# ### FIX ###
-# The --no-auth flag is deprecated. The modern way to configure proxy authentication
-# is to set the auth method to 'proxy' and specify the header. This single line
-# replaces the previous three separate --no-auth, --auth.method, and --auth.header flags.
-#
-ExecStart=/usr/local/bin/filebrowser \
-    --address 127.0.0.1 \
-    --port {{FILEBROWSER_PORT}} \
-    --root / \
-    --database {{FILEBROWSER_DB_PATH}} \
-    --auth.method=proxy \
-    --auth.proxy.header="X-Forwarded-User"
+# This is now correct. The service will read its configuration (auth method, etc.)
+# directly from the initialized database file specified here.
+ExecStart=/usr/local/bin/filebrowser server --address 127.0.0.1 --port {{FILEBROWSER_PORT}} --database {{FILEBROWSER_DB_PATH}}
 
 Restart=always
 RestartSec=5
