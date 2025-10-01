@@ -48,7 +48,7 @@ EOF
     # 1. Initialize the database.
     run_command "Initialize File Browser database" "sudo -u ${FILEBROWSER_USER} filebrowser config init --database ${FILEBROWSER_DB_PATH}"
     # 2. Add a dummy user to satisfy the startup requirement. The user/pass don't matter.
-    run_command "Add dummy user to File Browser DB" "sudo -u ${FILEBROWSER_USER} filebrowser users add dummyuser dummypass --database ${FILEBROWSER_DB_PATH}"
+    run_command "Add dummy user to File Browser DB" "sudo -u ${FILEBROWSER_USER} filebrowser users add dummyuser dummypass!@2025 --database ${FILEBROWSER_DB_PATH}"
 
     log "INFO" "Creating and enabling File Browser service..."
     process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
