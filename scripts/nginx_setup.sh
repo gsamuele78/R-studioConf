@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # A script to set up Nginx as a reverse proxy for R-Studio Server and other web services.
-# It uses a modular structure and leverages the functions in common_utils.sh.
-# VERSION 2.4: DEFINITIVE FIX. Correctly sources and passes all required path variables to templates.
-# existing enabled sites before creating the new one. This prevents conflicts from previous failed runs.
+# VERSION 4.0: Comprehensive & Interactive. This version fixes all known bugs related to
+# template processing and state management, and correctly implements both Self-Signed
+# and Let's Encrypt certificate flows.
 
 set -e
 
@@ -33,109 +33,6 @@ _fix_ipv6_binding_issue() {
     return 1
 }
 
-## --- Main Execution ---
-#main() {
-#    # Step 0: Load Dependencies and Validate
-#    source "$UTILS_SCRIPT_PATH"
-#    check_root
-#
-#    local config_file="$DEFAULT_CONFIG_FILE"
-#    while getopts "c:h" opt; do
-#        case ${opt} in
-#            c) config_file="${OPTARG}" ;;
-#            h|*) usage ;;
-#        esac
-#    done
-#    
-#    source "$config_file"
-#
-#    # Step 1: Interactive Configuration
-#    log "INFO" "--- Interactive Nginx Setup ---"
-#    echo "Please confirm the settings below. Press Enter to accept the default."
-#    prompt_for_value "Domain or IP Address" "DOMAIN_OR_IP"
-#    prompt_for_value "R-Studio Port" "RSTUDIO_PORT"
-#    prompt_for_value "Web Terminal Port" "WEB_TERMINAL_PORT"
-#    prompt_for_value "Web SSH Port" "WEB_SSH_PORT"
-#    echo "-------------------------------------"
-#    log "INFO" "Configuration confirmed. Proceeding with setup..."
-#    
-#    # Step 2: Install Nginx with Automated Fix
-#    log "INFO" "Starting: Install Nginx package"
-#    if ! sudo apt-get -y update && sudo apt-get -y install nginx; then
-#        if _fix_ipv6_binding_issue; then
-#            run_command "Retry Nginx installation after applying fix" "apt-get -y install nginx"
-#        else
-#            log "ERROR" "Nginx installation failed and could not be fixed."
-#            exit 1
-#        fi
-#    fi
-#    log "INFO" "SUCCESS: Install Nginx package"
-#
-#    # Step 3: Create Directories
-#    ensure_dir_exists "$NGINX_TEMPLATE_DIR"
-#    ensure_dir_exists "$SSL_CERT_DIR"
-#
-#    # Step 4: Create Self-Signed Certificate
-#    log "INFO" "Checking for self-signed SSL certificate..."
-#    local cert_path="$SSL_CERT_DIR/$DOMAIN_OR_IP.crt"
-#    local key_path="$SSL_CERT_DIR/$DOMAIN_OR_IP.key"
-#    if [ ! -f "$cert_path" ]; then
-#        local openssl_cmd="openssl req -x509 -nodes -days \"$SSL_DAYS\" -newkey rsa:2048 -keyout \"$key_path\" -out \"$cert_path\" -subj \"/C=$SSL_COUNTRY/ST=$SSL_STATE/L=$SSL_LOCALITY/O=$SSL_ORGANIZATION/OU=$SSL_ORG_UNIT/CN=$DOMAIN_OR_IP\""
-#        run_command "Generate self-signed certificate" "$openssl_cmd"
-#    else
-#        log "WARN" "Certificate for $DOMAIN_OR_IP already exists. Skipping creation."
-#    fi
-#
-#    # Step 5: Process and Deploy Templates
-#    log "INFO" "Processing and deploying Nginx templates..."
-#    run_command "Deploy static SSL params template" "cp '${TEMPLATE_DIR}/nginx_ssl_params.conf.template' '${NGINX_TEMPLATE_DIR}/nginx_ssl_params.conf'"
-#    
-#    local template_args=(
-#        "DOMAIN_OR_IP=${DOMAIN_OR_IP}" "RSTUDIO_PORT=${RSTUDIO_PORT}" "WEB_TERMINAL_PORT=${WEB_TERMINAL_PORT}"
-#        "WEB_SSH_PORT=${WEB_SSH_PORT}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}" "SSL_CERT_DIR=${SSL_CERT_DIR}"
-#    )
-#
-#    local processed_content
-#    
-#    process_template "${TEMPLATE_DIR}/nginx_self_signed_snippet.conf.template" "processed_content" "${template_args[@]}"
-#    echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_self_signed_snippet.conf" > /dev/null
-#    log "INFO" "SUCCESS: Deploy self-signed snippet"
-#
-#    process_template "${TEMPLATE_DIR}/nginx_proxy_location.conf.template" "processed_content" "${template_args[@]}"
-#    echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_proxy_location.conf" > /dev/null
-#    log "INFO" "SUCCESS: Deploy proxy location snippet"
-#
-#    process_template "${TEMPLATE_DIR}/nginx_self_signed_site.conf.template" "processed_content" "${template_args[@]}"
-#    echo "$processed_content" | sudo tee "${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf" > /dev/null
-#    log "INFO" "SUCCESS: Deploy main Nginx site configuration"
-#
-#    # Step 6: Enable Site and Restart Nginx
-#    log "INFO" "Enabling site and restarting Nginx..."
-#
-#    # --- THE DEFINITIVE FIX IS HERE ---
-#    # Remove ALL existing enabled sites to ensure a clean slate.
-#    # This prevents conflicts from old, broken symlinks from previous runs.
-#    run_command "Clean Nginx 'sites-enabled' directory" "rm -f '${NGINX_DIR}/sites-enabled/'*"
-#    
-#    # Now, enable the new site.
-#    run_command "Enable Nginx site for ${DOMAIN_OR_IP}" "ln -sf '${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf' '${NGINX_DIR}/sites-enabled/'"
-#    
-#    # Finally, test the configuration and restart.
-#    run_command "Test Nginx configuration and restart service" "nginx -t && systemctl restart nginx"
-#
-#    # Final Output
-#    echo -e "----------------------------------------"
-#    log "INFO" "Nginx setup complete!"
-#    echo "Services are configured for: https://${DOMAIN_OR_IP}"
-#    echo "- R-Studio:       https://${DOMAIN_OR_IP}/"
-#    echo "- Web Terminal:   https://${DOMAIN_OR_IP}/terminal/"
-#    echo "- Web SSH:        https://${DOMAIN_OR_IP}/ssh/"
-#    echo -e "----------------------------------------"
-#}
-#
-#main "$@"
-
-
 # --- Main Execution ---
 main() {
     # Step 0: Load Dependencies and Validate
@@ -143,91 +40,125 @@ main() {
     check_root
 
     local config_file="$DEFAULT_CONFIG_FILE"
-    while getopts "c:h" opt; do
-        case ${opt} in
-            c) config_file="${OPTARG}" ;;
-            h|*) usage ;;
-        esac
-    done
-    
-    # Source the configuration file
+    while getopts "c:h" opt; do case ${opt} in c) config_file="${OPTARG}" ;; h|*) usage ;; esac; done
     source "$config_file"
 
     # Step 1: Interactive Configuration
     log "INFO" "--- Interactive Nginx Setup ---"
-    echo "Please confirm the settings below. Press Enter to accept the default."
+    echo "Please confirm or edit the settings. Press Enter to accept the default."
+    prompt_for_value "Certificate Mode (SELF_SIGNED/LETS_ENCRYPT)" "CERT_MODE"
     prompt_for_value "Domain or IP Address" "DOMAIN_OR_IP"
+    
+    if [[ "$CERT_MODE" == "LETS_ENCRYPT" ]]; then
+        prompt_for_value "Let's Encrypt Email" "LE_EMAIL"
+    else # SELF_SIGNED
+        prompt_for_value "Self-Signed: Country (2-letter code)" "SSL_COUNTRY"
+        prompt_for_value "Self-Signed: State or Province" "SSL_STATE"
+        prompt_for_value "Self-Signed: Locality (eg, city)" "SSL_LOCALITY"
+        prompt_for_value "Self-Signed: Organization Name" "SSL_ORGANIZATION"
+        prompt_for_value "Self-Signed: Organizational Unit" "SSL_ORG_UNIT"
+    fi
+    
     prompt_for_value "R-Studio Port" "RSTUDIO_PORT"
     prompt_for_value "Web Terminal Port" "WEB_TERMINAL_PORT"
     prompt_for_value "Web SSH Port" "WEB_SSH_PORT"
     echo "-------------------------------------"
     log "INFO" "Configuration confirmed. Proceeding with setup..."
     
-    # --- DEFINITIVE FIX: Re-evaluate the full path variables AFTER interactive input ---
-    SELF_SIGNED_CERT_FULLPATH="${SSL_CERT_DIR}/${DOMAIN_OR_IP}.crt"
-    SELF_SIGNED_KEY_FULLPATH="${SSL_CERT_DIR}/${DOMAIN_OR_IP}.key"
+    # Step 2: Install Packages with Automated Fix
+    log "INFO" "Starting: Install required packages"
+    local packages_to_install="nginx"
+    if [[ "$CERT_MODE" == "LETS_ENCRYPT" ]]; then
+        packages_to_install+=" certbot python3-certbot-nginx"
+    fi
 
-    # Step 2: Install Nginx with Automated Fix
-    # (This section is unchanged and correct)
-    log "INFO" "Starting: Install Nginx package"
-    if ! sudo apt-get -y update && sudo apt-get -y install nginx; then
+    if ! sudo apt-get -y update && sudo apt-get -y install $packages_to_install; then
         if _fix_ipv6_binding_issue; then
-            run_command "Retry Nginx installation after applying fix" "apt-get -y install nginx"
+            run_command "Retry package installation after applying fix" "apt-get -y install $packages_to_install"
         else
-            log "ERROR" "Nginx installation failed and could not be fixed."
+            log "ERROR" "Package installation failed and could not be fixed."
             exit 1
         fi
     fi
-    log "INFO" "SUCCESS: Install Nginx package"
+    log "INFO" "SUCCESS: Required packages are installed."
 
     # Step 3: Create Directories
     ensure_dir_exists "$NGINX_TEMPLATE_DIR"
     ensure_dir_exists "$SSL_CERT_DIR"
+    ensure_dir_exists "/var/www/html"
 
-    # Step 4: Create Self-Signed Certificate
-    log "INFO" "Checking for self-signed SSL certificate..."
-    if [ ! -f "$SELF_SIGNED_CERT_FULLPATH" ]; then
-        local openssl_cmd="openssl req -x509 -nodes -days \"$SSL_DAYS\" -newkey rsa:2048 -keyout \"$SELF_SIGNED_KEY_FULLPATH\" -out \"$SELF_SIGNED_CERT_FULLPATH\" -subj \"/C=$SSL_COUNTRY/ST=$SSL_STATE/L=$SSL_LOCALITY/O=$SSL_ORGANIZATION/OU=$SSL_ORG_UNIT/CN=$DOMAIN_OR_IP\""
-        run_command "Generate self-signed certificate" "$openssl_cmd"
+    # Step 4: Generate Diffie-Hellman Parameters
+    log "INFO" "Checking for Diffie-Hellman parameter file..."
+    if [ ! -f "$DHPARAM_PATH" ]; then
+        run_command "Generate Diffie-Hellman parameters (2048 bit)" "openssl dhparam -out \"$DHPARAM_PATH\" 2048"
     else
-        log "WARN" "Certificate for $DOMAIN_OR_IP already exists. Skipping creation."
+        log "WARN" "Diffie-Hellman parameter file already exists. Skipping."
     fi
 
-    # Step 5: Process and Deploy Templates
+    # Step 5: Obtain/Generate SSL Certificate
+    local cert_fullpath=""
+    local key_fullpath=""
+
+    if [[ "$CERT_MODE" == "SELF_SIGNED" ]]; then
+        log "INFO" "Certificate Mode: SELF_SIGNED"
+        cert_fullpath="$SSL_CERT_DIR/$DOMAIN_OR_IP.crt"
+        key_fullpath="$SSL_CERT_DIR/$DOMAIN_OR_IP.key"
+        if [ ! -f "$cert_fullpath" ]; then
+            local openssl_cmd="openssl req -x509 -nodes -days \"$SSL_DAYS\" -newkey rsa:2048 -keyout \"$key_fullpath\" -out \"$cert_fullpath\" -subj \"/C=$SSL_COUNTRY/ST=$SSL_STATE/L=$SSL_LOCALITY/O=$SSL_ORGANIZATION/OU=$SSL_ORG_UNIT/CN=$DOMAIN_OR_IP\""
+            run_command "Generate self-signed certificate" "$openssl_cmd"
+        else
+            log "WARN" "Self-signed certificate for $DOMAIN_OR_IP already exists. Skipping."
+        fi
+    elif [[ "$CERT_MODE" == "LETS_ENCRYPT" ]]; then
+        log "INFO" "Certificate Mode: LETS_ENCRYPT"
+        cert_fullpath="${LE_CERT_DIR}/${DOMAIN_OR_IP}/fullchain.pem"
+        key_fullpath="${LE_CERT_DIR}/${DOMAIN_OR_IP}/privkey.pem"
+        if [ ! -f "$cert_fullpath" ]; then {
+            # Note: certbot --nginx plugin requires a temporary valid config to exist first.
+            # This is a complex chicken-and-egg problem. Using standalone is more reliable here.
+            run_command "Temporarily stop Nginx for Certbot" "systemctl stop nginx"
+            local certbot_cmd="certbot certonly --standalone -d \"$DOMAIN_OR_IP\" --non-interactive --agree-tos -m \"$LE_EMAIL\""
+            run_command "Obtain Let's Encrypt certificate" "$certbot_cmd"
+        } else {
+            log "WARN" "Let's Encrypt certificate for $DOMAIN_OR_IP already exists. Skipping."
+        } fi
+    else
+        log "FATAL" "Invalid CERT_MODE: '$CERT_MODE'. Must be 'SELF_SIGNED' or 'LETS_ENCRYPT'."
+        exit 1
+    fi
+
+    # Step 6: Process and Deploy ALL Templates
     log "INFO" "Processing and deploying Nginx templates..."
-    run_command "Deploy static SSL params template" "cp '${TEMPLATE_DIR}/nginx_ssl_params.conf.template' '${NGINX_TEMPLATE_DIR}/nginx_ssl_params.conf'"
     
-    # --- DEFINITIVE FIX: Add the new full path variables to the arguments list ---
     local template_args=(
         "DOMAIN_OR_IP=${DOMAIN_OR_IP}" "RSTUDIO_PORT=${RSTUDIO_PORT}" "WEB_TERMINAL_PORT=${WEB_TERMINAL_PORT}"
-        "WEB_SSH_PORT=${WEB_SSH_PORT}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}" 
-        "SSL_CERT_DIR=${SSL_CERT_DIR}" "SELF_SIGNED_CERT_FULLPATH=${SELF_SIGNED_CERT_FULLPATH}" 
-        "SELF_SIGNED_KEY_FULLPATH=${SELF_SIGNED_KEY_FULLPATH}"
+        "WEB_SSH_PORT=${WEB_SSH_PORT}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}"
+        "CERT_FULLPATH=${cert_fullpath}" "KEY_FULLPATH=${key_fullpath}" "DHPARAM_FULLPATH=${DHPARAM_PATH}"
     )
 
     local processed_content
     
-    process_template "${TEMPLATE_DIR}/nginx_self_signed_snippet.conf.template" "processed_content" "${template_args[@]}"
-    echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_self_signed_snippet.conf" > /dev/null
-    log "INFO" "SUCCESS: Deploy self-signed snippet"
+    process_template "${TEMPLATE_DIR}/nginx_ssl_params.conf.template" "processed_content" "${template_args[@]}"
+    echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_ssl_params.conf" > /dev/null
+    
+    process_template "${TEMPLATE_DIR}/nginx_ssl_certificate.conf.template" "processed_content" "${template_args[@]}"
+    echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_ssl_certificate.conf" > /dev/null
 
     process_template "${TEMPLATE_DIR}/nginx_proxy_location.conf.template" "processed_content" "${template_args[@]}"
     echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_proxy_location.conf" > /dev/null
-    log "INFO" "SUCCESS: Deploy proxy location snippet"
 
-    process_template "${TEMPLATE_DIR}/nginx_self_signed_site.conf.template" "processed_content" "${template_args[@]}"
+    process_template "${TEMPLATE_DIR}/nginx_site.conf.template" "processed_content" "${template_args[@]}"
     echo "$processed_content" | sudo tee "${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf" > /dev/null
-    log "INFO" "SUCCESS: Deploy main Nginx site configuration"
+    log "INFO" "SUCCESS: All templates processed and deployed."
 
-    # Step 6: Enable Site and Restart Nginx
+    # Step 7: Enable Site and Restart Nginx
     log "INFO" "Enabling site and restarting Nginx..."
     run_command "Clean Nginx 'sites-enabled' directory" "rm -f '${NGINX_DIR}/sites-enabled/'*"
     run_command "Enable Nginx site for ${DOMAIN_OR_IP}" "ln -sf '${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf' '${NGINX_DIR}/sites-enabled/'"
     run_command "Test Nginx configuration and restart service" "nginx -t && systemctl restart nginx"
 
-    # Final Output
-    # (This section is unchanged and correct)
-    echo -e "----------------------------------------"
+    # Step 8: Final Output
+    log "INFO" "----------------------------------------"
     log "INFO" "Nginx setup complete!"
     echo "Services are configured for: https://${DOMAIN_OR_IP}"
     echo "- R-Studio:       https://${DOMAIN_OR_IP}/"

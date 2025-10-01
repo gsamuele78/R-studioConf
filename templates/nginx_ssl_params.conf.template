@@ -20,6 +20,9 @@ ssl_session_timeout 1d;
 # Disable session tickets to enhance forward secrecy.
 ssl_session_tickets off;
 
+# Path to Diffie-Hellman parameter file for enhanced security.
+ssl_dhparam %%DHPARAM_FULLPATH%%;
+
 # --- OCSP Stapling (for trusted certificates) ---
 # Uncomment these lines if you are using a trusted CA like Let's Encrypt.
 # ssl_stapling on;
@@ -34,3 +37,4 @@ add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; prelo
 add_header X-Frame-Options "SAMEORIGIN" always;
 # Prevent MIME-type sniffing.
 add_header X-Content-Type-Options "nosniff" always;
+

@@ -1,0 +1,6 @@
+# Nginx snippet for SSL certificate paths.
+# This is a generic template used by the setup script for both
+# Self-Signed and Let's Encrypt certificates.
+
+ssl_certificate %%CERT_FULLPATH%%;
+ssl_certificate_key %%KEY_FULLPATH%%;
