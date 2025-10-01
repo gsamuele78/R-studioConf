@@ -2,7 +2,7 @@
 # scripts/secure-web-access-setup.sh
 
 # A manager script for installing, uninstalling, and checking secure web access services.
-# VERSION 6.0: DEFINITIVE. Uses systemd override for ttyd and fixes filebrowser group issue.
+# VERSION 6.1: VICTORIOUS. Adds a dummy user to File Browser to satisfy startup requirements.
 
 set -e
 
@@ -31,7 +31,6 @@ usage() {
 install_services() {
     log "INFO" "--- Starting Secure Web Access Installation ---"
     
-    # ... apt-get install and filebrowser download sections remain the same ...
     log "INFO" "Updating package lists..."; if ! DEBIAN_FRONTEND=noninteractive apt-get update; then handle_error $? "Failed to update package lists."; return 1; fi; log "INFO" "SUCCESS: Package lists updated."
     log "INFO" "Installing prerequisite packages..."; if ! DEBIAN_FRONTEND=noninteractive apt-get install -y ttyd libnginx-mod-http-auth-pam; then handle_error $? "Failed to install prerequisite packages."; return 1; fi; log "INFO" "SUCCESS: Prerequisite packages installed."
     log "INFO" "Downloading and installing File Browser..."; if ! curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash; then handle_error $? "Failed to install File Browser."; return 1; fi; log "INFO" "SUCCESS: File Browser installer finished."
@@ -42,12 +41,18 @@ install_services() {
 { "address": "127.0.0.1", "port": ${FILEBROWSER_PORT}, "root": "/", "database": "${FILEBROWSER_DB_PATH}", "auth": { "method": "proxy", "proxy": { "header": "X-Forwarded-User" } } }
 EOF
     run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
-    local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); ensure_dir_exists "$fb_db_dir"; run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}"; run_command "Initialize File Browser database" "sudo -u ${FILEBROWSER_USER} filebrowser config init --database ${FILEBROWSER_DB_PATH}"
+
+    local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); ensure_dir_exists "$fb_db_dir"; run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}";
+    
+    # ### DEFINITIVE FIX for File Browser ###
+    # 1. Initialize the database.
+    run_command "Initialize File Browser database" "sudo -u ${FILEBROWSER_USER} filebrowser config init --database ${FILEBROWSER_DB_PATH}"
+    # 2. Add a dummy user to satisfy the startup requirement. The user/pass don't matter.
+    run_command "Add dummy user to File Browser DB" "sudo -u ${FILEBROWSER_USER} filebrowser users add dummyuser dummypass --database ${FILEBROWSER_DB_PATH}"
 
     log "INFO" "Creating and enabling File Browser service..."
     process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
     
-    # ### DEFINITIVE FIX for ttyd ###
     log "INFO" "Creating systemd override to configure ttyd..."
     ensure_dir_exists "${TTYD_OVERRIDE_DIR}"
     process_systemd_template "${SCRIPT_DIR}/../templates/ttyd.service.override.template" "ttyd.service.d/override.conf"
@@ -59,7 +64,6 @@ EOF
     run_command "Reload systemd daemon" "systemctl daemon-reload"
     run_command "Enable and start services" "systemctl enable --now filebrowser.service ttyd.service"
     run_command "Restart services to ensure all configs are applied" "systemctl restart filebrowser.service ttyd.service"
-
 
     log "INFO" "--- Installation Complete! ---"
     log "WARN" "You must now re-run the Nginx setup script to apply the new proxy configuration."
