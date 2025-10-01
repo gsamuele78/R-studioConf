@@ -2,5 +2,9 @@
 [Service]
 # Clear out the original ExecStart
 ExecStart=
-# Define our own ExecStart with the correct, secure parameters
-ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --once --interface 127.0.0.1 login
+# Define our own ExecStart with the correct, persistent parameters
+# The --once flag has been removed.
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --interface 127.0.0.1 login
+
+# Change the restart policy to only restart on failure, not on a clean exit.
+Restart=on-failure
