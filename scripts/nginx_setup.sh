@@ -61,7 +61,7 @@ main() {
     
     prompt_for_value "R-Studio Port" "RSTUDIO_PORT"
     prompt_for_value "Web Terminal Port" "WEB_TERMINAL_PORT"
-    prompt_for_value "Web SSH Port" "WEB_SSH_PORT"
+    prompt_for_value "FileBrowser Port" "FILEBROWSER_PORT" # CORRECTED
     echo "-------------------------------------"
     log "INFO" "Configuration confirmed. Proceeding with setup..."
     
@@ -132,7 +132,7 @@ main() {
     
     local template_args=(
         "DOMAIN_OR_IP=${DOMAIN_OR_IP}" "RSTUDIO_PORT=${RSTUDIO_PORT}" "WEB_TERMINAL_PORT=${WEB_TERMINAL_PORT}"
-        "WEB_SSH_PORT=${WEB_SSH_PORT}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}"
+        "FILEBROWSER_PORT=${FILEBROWSER_PORT}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}"
         "CERT_FULLPATH=${cert_fullpath}" "KEY_FULLPATH=${key_fullpath}" "DHPARAM_FULLPATH=${DHPARAM_PATH}"
     )
 
