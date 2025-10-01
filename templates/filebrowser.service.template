@@ -5,12 +5,10 @@ After=network.target
 [Service]
 User={{FILEBROWSER_USER}}
 # The 'Group=' line has been removed to prevent the 216/GROUP error.
-# systemd will automatically use the primary group of the specified user.
 
-# DEFINITIVE FIX: The 'server' command requires BOTH the --config flag to read
-# settings like auth method, AND the --database flag to know where to store
-# state. This resolves the startup failure.
-ExecStart=/usr/local/bin/filebrowser server --config /etc/filebrowser/.filebrowser.json --database {{FILEBROWSER_DB_PATH}}
+# DEFINITIVE FIX: The command to run the server is just 'filebrowser'
+# with flags. There is no 'server' subcommand.
+ExecStart=/usr/local/bin/filebrowser --config /etc/filebrowser/.filebrowser.json --database {{FILEBROWSER_DB_PATH}}
 
 Restart=always
 RestartSec=5
