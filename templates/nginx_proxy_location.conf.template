@@ -7,6 +7,9 @@
 
 # --- Reverse Proxy for R-Studio Server ---
 location / {
+    # Specific logs for this service
+    access_log %%LOG_DIR%%/rstudio-access.log;
+    error_log %%LOG_DIR%%/rstudio-error.log;
     proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%;
     proxy_redirect off;
     proxy_http_version 1.1;
@@ -40,6 +43,10 @@ location / {
 
 # --- Reverse Proxy for Web Terminal (ttyd) ---
 location /terminal/ {
+    # Specific logs for this service
+    access_log %%LOG_DIR%%/terminal-access.log;
+    error_log %%LOG_DIR%%/terminal-error.log;
+
     # ### SECURE ### Enable PAM authentication
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
@@ -55,6 +62,10 @@ location /terminal/ {
 
 # --- Reverse Proxy for Web File Manager (File Browser) ---
 location /files/ {
+    # Specific logs for this service
+    access_log %%LOG_DIR%%/files-access.log;
+    error_log %%LOG_DIR%%/files-error.log;
+
     # ### SECURE ### Enable PAM authentication
     auth_pam "Secure Files - AD Credentials Required";
     auth_pam_service_name "nginx";
