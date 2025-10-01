@@ -331,6 +331,49 @@ add_line_if_not_present() {
     fi
 }
 
+#process_template() {
+#    local template_file="$1"
+#    local output_var_name="$2"
+#    shift 2
+#
+#    if [[ ! -f "$template_file" ]]; then
+#        log "ERROR" "Template file not found at $template_file"
+#        printf -v "$output_var_name" ""
+#        return 1
+#    fi
+#
+#    local template_content
+#    template_content=$(<"$template_file")
+#
+#    local placeholder value original_placeholder
+#    for arg in "$@"; do
+#        IFS='=' read -r original_placeholder value <<< "$arg"
+#        
+#        if [[ -z "$original_placeholder" ]]; then
+#            log "WARN" "Empty placeholder encountered in process_template for arg '$arg'. Skipping."
+#            continue
+#        fi
+#        
+#        placeholder="%%${original_placeholder}%%"
+#        
+#        local escaped_value="${value//&/\\&}"
+#        escaped_value="${escaped_value//\\/\\\\}"
+#        escaped_value="${escaped_value//\//\\/}"
+#        
+#        template_content=$(echo "$template_content" | sed "s|$placeholder|$escaped_value|g")
+#    done
+#    
+#    if printf -v "$output_var_name" "%s" "$template_content"; then
+#        return 0
+#    else
+#        log "ERROR" "Failed to assign processed content to variable '$output_var_name'."
+#        printf -v "$output_var_name" ""
+#        return 1
+#    fi
+#}
+
+
+# --- DEFINITIVE FIX: Robust Template Processing ---
 process_template() {
     local template_file="$1"
     local output_var_name="$2"
@@ -349,28 +392,33 @@ process_template() {
     for arg in "$@"; do
         IFS='=' read -r original_placeholder value <<< "$arg"
         
+        #if [[ -z "$original_placeholder" ]]; continue; fi
+
         if [[ -z "$original_placeholder" ]]; then
             log "WARN" "Empty placeholder encountered in process_template for arg '$arg'. Skipping."
             continue
         fi
+
+
         
         placeholder="%%${original_placeholder}%%"
         
-        local escaped_value="${value//&/\\&}"
-        escaped_value="${escaped_value//\\/\\\\}"
-        escaped_value="${escaped_value//\//\\/}"
+        # This is the robust fix:
+        # 1. Escape backslashes for sed.
+        # 2. Escape the sed delimiter (we use '#').
+        local escaped_value
+        escaped_value=$(sed -e 's/\\/\\\\/g' -e 's/#/\\#/g' <<<"$value")
         
-        template_content=$(echo "$template_content" | sed "s|$placeholder|$escaped_value|g")
+        # Use '#' as the sed delimiter to safely handle file paths.
+        template_content=$(echo "$template_content" | sed "s#$placeholder#$escaped_value#g")
     done
     
-    if printf -v "$output_var_name" "%s" "$template_content"; then
-        return 0
-    else
-        log "ERROR" "Failed to assign processed content to variable '$output_var_name'."
-        printf -v "$output_var_name" ""
-        return 1
-    fi
+    printf -v "$output_var_name" "%s" "$template_content"
+    return 0
 }
+
+
+
 
 # --- NEW INTERACTIVE FUNCTION ---
 # Prompts the user for input, using a default value if they just press Enter.
