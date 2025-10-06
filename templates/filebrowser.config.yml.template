@@ -1,0 +1,20 @@
+# /etc/filebrowser/config.yml
+# Global configuration for the gtsteffaniak/filebrowser service.
+
+# Server settings
+address: 127.0.0.1
+port: {{FILEBROWSER_PORT}}
+
+# Use a database for non-user-specific settings (e.g., shares).
+# NOTE: This fork does not require a database to start. We omit it for simplicity.
+# database: /var/lib/filebrowser/filebrowser.db
+
+# Authentication settings
+auth:
+  method: proxy
+  header: X-Forwarded-User
+
+# Default settings for new users (can be overridden by user-specific configs)
+# This default 'root' is relative to the user's home directory.
+# So '.' correctly scopes them to their home.
+root: .

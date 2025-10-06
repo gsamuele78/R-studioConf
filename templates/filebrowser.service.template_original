@@ -1,0 +1,24 @@
+[Unit]
+Description=File Browser - Web File Manager (gtsteffaniak fork)
+After=network.target
+
+[Service]
+# This service can run as a less privileged user
+User=root
+Group=root
+
+# The command just needs to run. It will automatically find and load
+# the configuration from /etc/filebrowser/config.yml.
+ExecStart=/usr/local/bin/filebrowser
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
