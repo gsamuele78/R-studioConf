@@ -4,13 +4,13 @@ After=network.target
 
 [Service]
 User={{FILEBROWSER_USER}}
-# The 'Group=' line has been removed to prevent the 216/GROUP error.
+# The 'Group=' line is removed to prevent 216/GROUP errors.
 
-# DEFINITIVE FIX: The command to run the server is just 'filebrowser'
-# with flags. There is no 'server' subcommand.
-ExecStart=/usr/local/bin/filebrowser --config /etc/filebrowser/.filebrowser.json --database {{FILEBROWSER_DB_PATH}}
+# The server command simply needs to be pointed to the YAML config file.
+# All other settings (port, database, auth method, etc.) are loaded from it.
+ExecStart=/usr/local/bin/filebrowser --config /etc/filebrowser/filebrowser.yml
 
-Restart=always
+Restart=on-failure
 RestartSec=5
 
 [Install]

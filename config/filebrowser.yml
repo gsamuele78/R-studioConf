@@ -1,0 +1,32 @@
+# /etc/filebrowser/filebrowser.yml
+# Main configuration for the gtsteffaniak/filebrowser fork
+
+# Server settings: Binds to localhost for security behind Nginx
+address: 127.0.0.1
+port: {{FILEBROWSER_PORT}}
+baseURL: "/files"
+database: "{{FILEBROWSER_DB_PATH}}"
+root: "/"
+
+# Authentication Settings: This is the core of the SSO integration
+auth:
+  method: proxy
+  header: "X-Forwarded-User"
+  
+# New User Defaults: This is the magic feature of this fork
+defaults:
+  # Automatically create a user if they don't exist in the database
+  autocreate: true
+  # Set the scope (root directory) for newly created users using a template.
+  # This dynamically maps each user to their own NFS home directory.
+  scope: "/nfs/home/{{.User.Username}}"
+  # Default permissions for new users
+  perm:
+    admin: false
+    execute: true
+    create: true
+    rename: true
+    modify: true
+    delete: true
+    share: true
+    download: true
