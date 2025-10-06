@@ -52,6 +52,14 @@ install_services() {
     process_systemd_template "${SCRIPT_DIR}/../config/filebrowser.yml" "${FILEBROWSER_CONFIG_DIR}/filebrowser.yml"
     run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
 
+    # ### DEFINITIVE FIX ###
+    # The second argument to process_systemd_template is just the filename/path relative to the base.
+    # The function itself prepends the full path. The bug was calling it with a full path.
+    #log "INFO" "Creating YAML config file for File Browser..."
+    #ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
+    # This call is now corrected to pass the DESTINATION path directly, not a service name
+    #run_command "Create File Browser YAML config" "process_template \"${SCRIPT_DIR}/../config/filebrowser.yml\" \"${FILEBROWSER_CONFIG_FILE}\""
+
     # The database only needs to be created, not configured via CLI
     local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); ensure_dir_exists "$fb_db_dir";
     run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}";
@@ -79,7 +87,25 @@ install_services() {
 
 # (Other functions remain mostly unchanged but are included for completeness)
 # ...
-process_systemd_template() { local template_name=$1; local service_name=$2; local template_path="$template_name"; local output_path="/etc/systemd/system/${service_name}"; if [[ "$service_name" == *"/"* ]]; then output_path="/etc/systemd/system/$service_name"; fi; log "INFO" "Processing template for ${service_name}..."; local temp_file; temp_file=$(mktemp); local sed_script=""; for var in $(grep -o '{{[A-Z_]*}}' "$template_path" | sort -u | tr -d '{}'); do sed_script+="s|{{\s*$var\s*}}|${!var}|g;"; done; sed "$sed_script" "$template_path" > "$temp_file"; sudo mv "$temp_file" "$output_path"; sudo chown root:root "$output_path"; sudo chmod 644 "$output_path"; }
+#process_systemd_template() { 
+#    local template_name=$1; 
+#    local service_name=$2; 
+#    local template_path="$template_name"; 
+#    local output_path="/etc/systemd/system/${service_name}"; 
+#    if [[ "$service_name" == *"/"* ]]; then 
+#    output_path="/etc/systemd/system/$service_name"; 
+#    fi; 
+#    log "INFO" "Processing template for ${service_name}..."; 
+#    local temp_file; temp_file=$(mktemp); 
+#    local sed_script=""; 
+#    for var in $(grep -o '{{[A-Z_]*}}' "$template_path" | sort -u | tr -d '{}');
+#     do sed_script+="s|{{\s*$var\s*}}|${!var}|g;"; 
+#     done; 
+#     sed "$sed_script" "$template_path" > "$temp_file"; 
+#     sudo mv "$temp_file" "$output_path"; 
+#     sudo chown root:root "$output_path"; 
+#     sudo chmod 644 "$output_path"; 
+#}
 uninstall_services() { log "INFO" "--- Starting Secure Web Access Uninstallation ---"; run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service filebrowser.service" || log "WARN" "Services may not have been running."; log "INFO" "Removing systemd service files and config..."; sudo rm -f /etc/systemd/system/filebrowser.service "${PAM_CONFIG_PATH}"; run_command "Remove ttyd override" "rm -rf ${TTYD_OVERRIDE_DIR}"; run_command "Reload systemd daemon" "systemctl daemon-reload"; log "INFO" "Removing packages, binaries, and data..."; run_command "Remove filebrowser binary" "rm -f /usr/local/bin/filebrowser"; local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); run_command "Remove filebrowser data directory" "rm -rf ${fb_db_dir}"; run_command "Remove File Browser config dir" "rm -rf ${FILEBROWSER_CONFIG_DIR}"; log "INFO" "Removing ttyd and Nginx PAM module..."; if ! DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y ttyd libnginx-mod-http-auth-pam; then handle_error $? "Failed to remove packages."; fi; log "INFO" "SUCCESS: Packages removed."; log "INFO" "--- Uninstallation Complete! ---"; }
 check_status() { log "INFO" "--- Checking Service Status ---"; systemctl status --no-pager ttyd.service filebrowser.service || true; }
 main() { if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2; exit 1; fi; source "$UTILS_SCRIPT_PATH"; if [ -z "$1" ]; then usage; fi; check_root; if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then log "ERROR" "Configuration file not found at '$DEFAULT_CONFIG_FILE'."; exit 1; fi; source "$DEFAULT_CONFIG_FILE"; case "$1" in install) install_services ;; uninstall) uninstall_services ;; status) check_status ;; *) usage ;; esac; }

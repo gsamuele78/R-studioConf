@@ -417,7 +417,38 @@ process_template() {
     return 0
 }
 
+process_systemd_template() {
+    local template_name=$1
+    local service_name=$2
+    local template_path="$template_name"
+    local output_path="" # Initialize as empty
 
+    # ### DEFINITIVE FIX ###
+    # Check if the 'service_name' is an absolute path.
+    if [[ "$service_name" == /* ]]; then
+        # If it starts with '/', it's an absolute path, so use it directly.
+        output_path="$service_name"
+    else
+        # Otherwise, it's a relative service name, so prepend the systemd path.
+        output_path="/etc/systemd/system/${service_name}"
+    fi
+    
+    log "INFO" "Processing template for ${output_path}..."
+    # Ensure the parent directory exists, especially for absolute paths
+    ensure_dir_exists "$(dirname "$output_path")"
+
+    local temp_file; temp_file=$(mktemp)
+    local sed_script="";
+    for var in $(grep -o '{{[A-Z_]*}}' "$template_path" | sort -u | tr -d '{}'); do
+        sed_script+="s|{{\s*$var\s*}}|${!var}|g;"
+    done
+    
+    sed "$sed_script" "$template_path" > "$temp_file"
+    
+    sudo mv "$temp_file" "$output_path"
+    sudo chown root:root "$output_path"
+    sudo chmod 644 "$output_path"
+}
 
 
 # --- NEW INTERACTIVE FUNCTION ---
