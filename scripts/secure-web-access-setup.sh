@@ -35,12 +35,16 @@ install_services() {
     log "INFO" "Installing prerequisite packages..."; if ! DEBIAN_FRONTEND=noninteractive apt-get install -y ttyd libnginx-mod-http-auth-pam curl; then handle_error $? "Failed to install prerequisite packages."; return 1; fi; log "INFO" "SUCCESS: Prerequisite packages installed."
 
     # ### MODIFIED: Install the gtsteffaniak fork ###
+    # ### DEFINITIVE FIX: Download the binary directly ###
     log "INFO" "Downloading and installing gtsteffaniak/filebrowser fork..."
-    local LATEST_URL="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/linux-amd64-filebrowser.tar.gz"
-    run_command "Download filebrowser fork" "curl -L -o /tmp/filebrowser.tar.gz \"${LATEST_URL}\""
-    run_command "Extract filebrowser binary" "tar -xvzf /tmp/filebrowser.tar.gz -C /usr/local/bin/ filebrowser"
-    run_command "Clean up downloaded archive" "rm /tmp/filebrowser.tar.gz"
-    log "INFO" "SUCCESS: gtsteffaniak/filebrowser has been installed."
+    local LATEST_URL="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/linux-amd64-filebrowser"
+    local BINARY_PATH="/usr/local/bin/filebrowser"
+    
+    # 1. Download the binary directly to the target location.
+    run_command "Download filebrowser binary" "curl -L -o ${BINARY_PATH} \"${LATEST_URL}\""
+    # 2. Make the binary executable.
+    run_command "Set executable permission for filebrowser" "chmod +x ${BINARY_PATH}"
+    log "INFO" "SUCCESS: gtsteffaniak/filebrowser has been installed to ${BINARY_PATH}."
 
     # ### MODIFIED: Create YAML configuration from a template ###
     log "INFO" "Creating YAML config file for File Browser..."
