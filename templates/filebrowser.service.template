@@ -4,11 +4,15 @@ After=network.target
 
 [Service]
 User={{FILEBROWSER_USER}}
-# The 'Group=' line is removed to prevent 216/GROUP errors.
+# Group is removed to prevent 216/GROUP error
 
-# The server command simply needs to be pointed to the YAML config file.
-# All other settings (port, database, auth method, etc.) are loaded from it.
-ExecStart=/usr/local/bin/filebrowser --config /etc/filebrowser/filebrowser.yml
+# This command starts the server with a default admin user. The init script will
+# immediately connect to it, apply the proxy settings, and effectively disable this user.
+ExecStart=/usr/local/bin/filebrowser --port {{FILEBROWSER_PORT}} --address 127.0.0.1 --database {{FILEBROWSER_DB_PATH}} --username admin --password admin
+
+# After the server starts, wait 2 seconds, then run our configuration script.
+ExecStartPost=/bin/sleep 2
+ExecStartPost={{SCRIPT_DIR}}/init-filebrowser.sh http://127.0.0.1:{{FILEBROWSER_PORT}} admin admin
 
 Restart=on-failure
 RestartSec=5

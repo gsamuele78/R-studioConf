@@ -89,26 +89,40 @@ install_services() {
     ## ### DEFINITIVE FIX: Use 'process_systemd_template' for the service file ###
     #process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
 
-    # ### DEFINITIVE FIX: Use the correct templating function for the YAML file ###
-    log "INFO" "Creating YAML config file for File Browser..."
-    local processed_content
-    if ! process_template "${SCRIPT_DIR}/../config/filebrowser.yml" "processed_content" \
-        "FILEBROWSER_PORT=${FILEBROWSER_PORT}" \
-        "FILEBROWSER_DB_PATH=${FILEBROWSER_DB_PATH}"; then
-        handle_error 1 "Failed to process filebrowser.yml template."
-        return 1
-    fi
-    ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
-    echo "$processed_content" | sudo tee "${FILEBROWSER_CONFIG_FILE}" > /dev/null
-    run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
+    ## ### DEFINITIVE FIX: Use the correct templating function for the YAML file ###
+    #log "INFO" "Creating YAML config file for File Browser..."
+    #local processed_content
+    #if ! process_template "${SCRIPT_DIR}/../config/filebrowser.yml" "processed_content" \
+    #    "FILEBROWSER_PORT=${FILEBROWSER_PORT}" \
+    #    "FILEBROWSER_DB_PATH=${FILEBROWSER_DB_PATH}"; then
+    #    handle_error 1 "Failed to process filebrowser.yml template."
+    #    return 1
+    #fi
+    #ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
+    #echo "$processed_content" | sudo tee "${FILEBROWSER_CONFIG_FILE}" > /dev/null
+    #run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
+#
+    ## The database directory still needs to exist and have correct permissions.
+    #local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); ensure_dir_exists "$fb_db_dir";
+    #run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}";
+#
+    #log "INFO" "Creating and enabling File Browser service..."
+    ## ### DEFINITIVE FIX: Use the 'sed'-based systemd function for the service file ###
+    #process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
+
+    # ### DEFINITIVE FIX: Copy and prepare the init script ###
+    log "INFO" "Copying File Browser init script..."
+    run_command "Copy init script" "cp ${SCRIPT_DIR}/init-filebrowser.sh ${FILEBROWSER_INIT_SCRIPT_DEST}"
+    run_command "Make init script executable" "chmod +x ${FILEBROWSER_INIT_SCRIPT_DEST}"
 
     # The database directory still needs to exist and have correct permissions.
     local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); ensure_dir_exists "$fb_db_dir";
     run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}";
 
     log "INFO" "Creating and enabling File Browser service..."
-    # ### DEFINITIVE FIX: Use the 'sed'-based systemd function for the service file ###
-    process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
+    # Pass the SCRIPT_DIR to the template so it knows where to find init-filebrowser.sh
+    process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service" "SCRIPT_DIR=${FILEBROWSER_INIT_SCRIPT_DEST%/*}"
+
 
     log "INFO" "Creating systemd override to configure ttyd..."
     ensure_dir_exists "${TTYD_OVERRIDE_DIR}"
