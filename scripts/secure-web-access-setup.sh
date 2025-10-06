@@ -14,8 +14,11 @@ UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/secure-web-access.conf"
 PAM_CONFIG_PATH="/etc/pam.d/nginx"
 FILEBROWSER_CONFIG_DIR="/etc/filebrowser"
-FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_DIR}/filebrowser.yml" # Switched to YAML
+#FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_DIR}/filebrowser.yml" # Switched to YAML
 TTYD_OVERRIDE_DIR="/etc/systemd/system/ttyd.service.d"
+# We no longer use a static config file for filebrowser
+FILEBROWSER_INIT_SCRIPT_DEST="/usr/local/bin/init-filebrowser.sh"
+
 
 # --- Function Definitions ---
 # (usage function remains the same)
