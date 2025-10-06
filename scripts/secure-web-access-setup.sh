@@ -46,28 +46,49 @@ install_services() {
     run_command "Set executable permission for filebrowser" "chmod +x ${BINARY_PATH}"
     log "INFO" "SUCCESS: gtsteffaniak/filebrowser has been installed to ${BINARY_PATH}."
 
-    # ### MODIFIED: Create YAML configuration from a template ###
-    log "INFO" "Creating YAML config file for File Browser..."
-    ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
-    process_systemd_template "${SCRIPT_DIR}/../config/filebrowser.yml" "${FILEBROWSER_CONFIG_DIR}/filebrowser.yml"
-    run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
-
-    # ### DEFINITIVE FIX ###
-    # The second argument to process_systemd_template is just the filename/path relative to the base.
-    # The function itself prepends the full path. The bug was calling it with a full path.
+    ## ### MODIFIED: Create YAML configuration from a template ###
     #log "INFO" "Creating YAML config file for File Browser..."
     #ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
-    # This call is now corrected to pass the DESTINATION path directly, not a service name
-    #run_command "Create File Browser YAML config" "process_template \"${SCRIPT_DIR}/../config/filebrowser.yml\" \"${FILEBROWSER_CONFIG_FILE}\""
-
-    # The database only needs to be created, not configured via CLI
+    #process_systemd_template "${SCRIPT_DIR}/../config/filebrowser.yml" "${FILEBROWSER_CONFIG_DIR}/filebrowser.yml"
+    #run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
+#
+    ## ### DEFINITIVE FIX ###
+    ## The second argument to process_systemd_template is just the filename/path relative to the base.
+    ## The function itself prepends the full path. The bug was calling it with a full path.
+    ##log "INFO" "Creating YAML config file for File Browser..."
+    ##ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
+    ## This call is now corrected to pass the DESTINATION path directly, not a service name
+    ##run_command "Create File Browser YAML config" "process_template \"${SCRIPT_DIR}/../config/filebrowser.yml\" \"${FILEBROWSER_CONFIG_FILE}\""
+#
+    ## The database only needs to be created, not configured via CLI
+    #local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); ensure_dir_exists "$fb_db_dir";
+    #run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}";
+    ## We no longer need to add a dummy user.
+#
+    #log "INFO" "Creating and enabling File Browser service..."
+    #process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
+    
+    log "INFO" "Creating YAML config file for File Browser..."
+    ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
+    
+    # ### DEFINITIVE FIX: Use the correct 'process_template' for the YAML file ###
+    local processed_content
+    if ! process_template "${SCRIPT_DIR}/../config/filebrowser.yml" "processed_content" \
+        "FILEBROWSER_PORT=${FILEBROWSER_PORT}" \
+        "FILEBROWSER_DB_PATH=${FILEBROWSER_DB_PATH}"; then
+        handle_error 1 "Failed to process filebrowser.yml template."
+        return 1
+    fi
+    echo "$processed_content" | sudo tee "${FILEBROWSER_CONFIG_FILE}" > /dev/null
+    
+    run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
     local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); ensure_dir_exists "$fb_db_dir";
     run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}";
-    # We no longer need to add a dummy user.
 
     log "INFO" "Creating and enabling File Browser service..."
+    # ### DEFINITIVE FIX: Use 'process_systemd_template' for the service file ###
     process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
-    
+
     log "INFO" "Creating systemd override to configure ttyd..."
     ensure_dir_exists "${TTYD_OVERRIDE_DIR}"
     process_systemd_template "${SCRIPT_DIR}/../templates/ttyd.service.override.template" "ttyd.service.d/override.conf"
