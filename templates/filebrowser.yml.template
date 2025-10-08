@@ -6,6 +6,9 @@ port: %%FILEBROWSER_PORT%%
 baseURL: "/files"
 database: "%%FILEBROWSER_DB_PATH%%"
 root: "/"
+# DEFINITIVE FIX: Specify a cache directory that the 'www-data' user owns.
+cacheDir: "/var/lib/filebrowser/cache"
+
 
 # Authentication Settings: This is the core of the SSO integration
 auth:

@@ -1,7 +1,6 @@
 #!/bin/bash
 # scripts/secure-web-access-setup.sh
-# Uses the correct --auth-header flag for ttyd.
-# VERSION 15.2: VICTORIOUS. Final definitive version using static YAML config.
+# VERSION 15.1: VICTORIOUS. Final simplification based on developer documentation.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -25,7 +24,6 @@ install_services() {
     
     log "INFO" "Downloading gtsteffaniak/filebrowser fork..."; local LATEST_URL="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/linux-amd64-filebrowser"; local BINARY_PATH="/usr/local/bin/filebrowser"; run_command "Download filebrowser binary" "curl -L -o ${BINARY_PATH} \"${LATEST_URL}\""; run_command "Set executable permission for filebrowser" "chmod +x ${BINARY_PATH}";
 
-    # ### DEFINITIVE WORKFLOW: Generate the static YAML config file ###
     log "INFO" "Creating YAML config file for File Browser..."
     local processed_content
     if ! process_template "${SCRIPT_DIR}/../templates/filebrowser.yml.template" "processed_content" \
@@ -39,6 +37,7 @@ install_services() {
     run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
 
     # The database directory still needs to exist and have correct permissions.
+    # The server will create the .db file itself on first run.
     local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); ensure_dir_exists "$fb_db_dir";
     run_command "Set ownership for File Browser data dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${fb_db_dir}";
 
@@ -60,19 +59,9 @@ uninstall_services() {
     log "INFO" "--- Uninstallation Complete! ---"
 }
 
-check_status() {
-    log "INFO" "--- Checking Service Status ---"
-    log "INFO" "Status for ttyd:"; systemctl status ttyd.service || true
-    log "INFO" "Status for filebrowser:"; systemctl status filebrowser.service || true
-    log "INFO" "Checking for detailed filebrowser errors..."; journalctl -u filebrowser.service --no-pager -n 20 || true
-}
-
-main() {
-    if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2; exit 1; fi
-    source "$UTILS_SCRIPT_PATH"; if [ -z "$1" ]; then usage; fi; check_root;
-    if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then log "ERROR" "Configuration file not found at '$DEFAULT_CONFIG_FILE'."; exit 1; fi
-    source "$DEFAULT_CONFIG_FILE"
-    case "$1" in install) install_services ;; uninstall) uninstall_services ;; status) check_status ;; *) usage ;; esac
-}
+# (The rest of the functions are unchanged)
+check_status() { log "INFO" "--- Checking Service Status ---"; log "INFO" "Status for ttyd:"; systemctl status ttyd.service || true; log "INFO" "Status for filebrowser:"; systemctl status filebrowser.service || true; log "INFO" "Checking for detailed filebrowser errors..."; journalctl -u filebrowser.service --no-pager -n 20 || true; }
+main() { if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2; exit 1; fi; source "$UTILS_SCRIPT_PATH"; if [ -z "$1" ]; then usage; fi; check_root; if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then log "ERROR" "Configuration file not found at '$DEFAULT_CONFIG_FILE'."; exit 1; fi; source "$DEFAULT_CONFIG_FILE"; case "$1" in install) install_services ;; uninstall) uninstall_services ;; status) check_status ;; *) usage ;; esac; }
+process_systemd_template() { local template_name=$1; local service_name=$2; local extra_vars=${3:-}; local template_path="$template_name"; local output_path="/etc/systemd/system/${service_name}"; if [[ "$service_name" == *"/"* ]]; then output_path="/etc/systemd/system/$service_name"; fi; log "INFO" "Processing template for ${service_name}..."; local temp_file; temp_file=$(mktemp); local sed_script=""; for var in $(grep -o '{{[A-Z_]*}}' "$template_path" | sort -u | tr -d '{}'); do sed_script+="s|{{\s*$var\s*}}|${!var}|g;"; done; if [[ -n "$extra_vars" ]]; then IFS='=' read -r key value <<< "$extra_vars"; sed_script+="s|{{\s*$key\s*}}|$value|g;"; fi; sed "$sed_script" "$template_path" > "$temp_file"; sudo mv "$temp_file" "$output_path"; sudo chown root:root "$output_path"; sudo chmod 644 "$output_path"; }
 
 main "$@"

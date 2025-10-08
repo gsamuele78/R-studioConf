@@ -5,8 +5,8 @@ After=network.target
 [Service]
 User={{FILEBROWSER_USER}}
 
-# The server command simply needs to be pointed to the YAML config file.
-# All other settings (port, database, auth method, etc.) are loaded from it.
+# DEFINITIVE FIX: The server command only needs the --config flag.
+# All other settings, including the database path, are read from this file.
 ExecStart=/usr/local/bin/filebrowser --config /etc/filebrowser/filebrowser.yml
 
 Restart=on-failure
