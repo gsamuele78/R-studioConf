@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------
-# NGINX PROXY LOCATION CONFIGURATION (v3.1 - Victorious)
+# NGINX PROXY LOCATION CONFIGURATION (v3.0 - Definitive SSO)
 # ----------------------------------------------------------------
 
 # --- Reverse Proxy for R-Studio Server ---
@@ -17,17 +17,13 @@ location / {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-# ### DEFINITIVE FIX for ttyd ###
-# This block now uses a regular expression to correctly capture and forward
-# all sub-requests (like /ws) to the ttyd backend, as per the official documentation.
-location ~ ^/terminal(.*)$ {
+# --- Reverse Proxy for Web Terminal (ttyd) with SSO ---
+location /terminal/ {
     access_log %%LOG_DIR%%/terminal-access.log;
     error_log %%LOG_DIR%%/terminal-error.log;
-    
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
-    
-    proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%$1;
+    proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -36,28 +32,31 @@ location ~ ^/terminal(.*)$ {
     proxy_set_header X-Forwarded-User $remote_user;
 }
 
-# --- Reverse Proxy for Web File Manager (File Browser) ---
-# (This section is already correct)
+# ### DEFINITIVE FIX ###
+# A separate location for the API is needed. It proxies to the same backend
+# but does *not* have PAM auth enabled. This is secure because API calls require
+# a bearer token (for the init script) or a session cookie (for logged-in users),
+# which can only be obtained after a successful PAM login on the main /files/ location.
 location /files/api/ {
     access_log %%LOG_DIR%%/files-api-access.log;
     error_log %%LOG_DIR%%/files-api-error.log;
     proxy_pass http://127.0.0.1:%%FILEBROWSER_PORT%%/api/;
-    # ... (rest of filebrowser api config is correct)
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-User $remote_user;
+    proxy_set_header X-Forwarded-User $remote_user; # Pass user for logging if available
 }
+
+# --- Reverse Proxy for Web File Manager (File Browser) ---
 location /files/ {
     access_log %%LOG_DIR%%/files-access.log;
     error_log %%LOG_DIR%%/files-error.log;
     auth_pam "Secure Files - AD Credentials Required";
     auth_pam_service_name "nginx";
     proxy_pass http://127.0.0.1:%%FILEBROWSER_PORT%%/;
-    # ... (rest of filebrowser config is correct)
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
