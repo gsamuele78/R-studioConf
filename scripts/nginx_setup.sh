@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # A script to set up Nginx as a reverse proxy for R-Studio Server and other web services.
-# VERSION 7.0: DEFINITIVE. Correctly reinstalls nginx-full and handles missing configs.
+# VERSION 8.0: DEFINITIVE. Simplifies and corrects the nginx-full installation logic.
 
 set -e
 
@@ -36,17 +36,19 @@ main() {
     prompt_for_value "R-Studio Port" "RSTUDIO_PORT"; prompt_for_value "Web Terminal Port" "WEB_TERMINAL_PORT"; prompt_for_value "FileBrowser Port" "FILEBROWSER_PORT"; echo "-------------------------------------"
     log "INFO" "Configuration confirmed. Proceeding with setup..."
 
-    # ### DEFINITIVE FIX: Force re-installation of nginx-full with config files ###
-    log "INFO" "Installing/reinstalling 'nginx-full' to ensure PAM support..."
+    # ### DEFINITIVE FIX: Simplified and robust installation ###
+    log "INFO" "Starting installation/reinstallation of 'nginx-full'..."
     
-    # First, remove any residual basic nginx packages to avoid conflicts.
-    if dpkg -l | grep -q "nginx "; then
-        run_command "Purge existing basic nginx package" "apt-get remove --purge -y nginx nginx-common nginx-core nginx-full"
-        run_command "Purge existing nginx dependance" "apt-get autoremove -y"
-    fi
+    # First, ensure apt is up to date.
+    run_command "Update package lists" "apt-get -y update"
 
-    # Now, install nginx-full. The -o Dpkg options force restoration of missing config files.
-    if ! sudo apt-get -y update && sudo apt-get -y --reinstall install -o Dpkg::Options::="--force-confask" nginx-full; then
+    # Second, completely remove any old versions to ensure a clean state.
+    # This will succeed even if the packages are not installed.
+    run_command "Purge any existing Nginx packages" "apt-get remove --purge -y nginx nginx-common nginx-core nginx-full"
+    
+    # Finally, install nginx-full. This will always create the config files.
+    log "INFO" "Installing 'nginx-full'. Apt output will follow:"
+    if ! DEBIAN_FRONTEND=noninteractive apt-get -y install nginx-full; then
         log "ERROR" "Failed to install nginx-full package."; exit 1;
     fi
     log "INFO" "SUCCESS: 'nginx-full' package is correctly installed."
@@ -54,6 +56,7 @@ main() {
     # ### DEFINITIVE FIX: Explicitly load the PAM module ###
     log "INFO" "Ensuring Nginx PAM module is loaded..."
     local module_line="load_module modules/ngx_http_auth_pam_module.so;"
+    # Check if the line is NOT present, then add it.
     if ! grep -qF -- "$module_line" "$NGINX_CONF_PATH"; then
         run_command "Add PAM module to nginx.conf" "sed -i '1i ${module_line}' ${NGINX_CONF_PATH}"
         log "INFO" "SUCCESS: Nginx PAM module loading has been configured."
