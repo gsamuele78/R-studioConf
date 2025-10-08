@@ -9,9 +9,9 @@ User={{FILEBROWSER_USER}}
 # immediately connect to it, apply the proxy settings, and effectively disable this user.
 ExecStart=/usr/local/bin/filebrowser --port {{FILEBROWSER_PORT}} --address 127.0.0.1 --database {{FILEBROWSER_DB_PATH}} --username admin --password admin
 
-# After the server starts, wait 2 seconds, then run our configuration script
+# After the server starts, wait 5 seconds, then run our configuration script
 # which is now in a system-wide location.
-ExecStartPost=/bin/sleep 2
+ExecStartPost=/bin/sleep 5
 ExecStartPost=/usr/local/bin/init-filebrowser.sh http://127.0.0.1:{{FILEBROWSER_PORT}} admin admin
 
 Restart=on-failure
