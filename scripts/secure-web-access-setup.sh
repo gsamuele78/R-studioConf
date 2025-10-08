@@ -1,6 +1,6 @@
 #!/bin/bash
 # scripts/secure-web-access-setup.sh
-# VERSION 12.1: VICTORIOUS. Final robust systemd workflow.
+# VERSION 13.0: VICTORIOUS. Actively repairs dpkg state before installation.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -14,6 +14,11 @@ usage() { echo "Usage: $0 [install|uninstall|status]"; exit 1; }
 
 install_services() {
     log "INFO" "--- Starting Secure Web Access Installation (API method) ---"
+    
+    # ### DEFINITIVE FIX: Repair any broken package manager state first ###
+    log "INFO" "Attempting to repair any broken package dependencies..."
+    run_command "Force configure all pending packages" "dpkg --configure -a"
+    run_command "Fix broken dependencies" "apt-get -f install -y"
     
     log "INFO" "Installing prerequisite packages..."; if ! DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y ttyd libnginx-mod-http-auth-pam curl; then handle_error $? "Failed to install prerequisites."; return 1; fi; log "INFO" "SUCCESS: Prerequisites installed."
     log "INFO" "Downloading gtsteffaniak/filebrowser fork..."; local LATEST_URL="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/linux-amd64-filebrowser"; local BINARY_PATH="/usr/local/bin/filebrowser"; run_command "Download filebrowser binary" "curl -L -o ${BINARY_PATH} \"${LATEST_URL}\""; run_command "Set executable permission for filebrowser" "chmod +x ${BINARY_PATH}"; log "INFO" "SUCCESS: gtsteffaniak/filebrowser has been installed."
@@ -31,13 +36,10 @@ install_services() {
     log "INFO" "Creating PAM service configuration for Nginx..."
     echo "@include common-auth" | sudo tee "${PAM_CONFIG_PATH}" > /dev/null
     
-    # ### DEFINITIVE FIX: Most robust systemd workflow ###
     log "INFO" "Reloading systemd and restarting services..."
     run_command "Reload systemd daemon" "systemctl daemon-reload"
-    # Ensure both services are enabled to start on boot.
     run_command "Enable ttyd service" "systemctl enable ttyd.service"
     run_command "Enable filebrowser service" "systemctl enable filebrowser.service"
-    # Restart the services to apply all new configurations and overrides.
     run_command "Restart services to apply all configs" "systemctl restart ttyd.service filebrowser.service"
 
     log "INFO" "--- Installation Complete! ---"
@@ -46,6 +48,7 @@ install_services() {
 }
 
 # (Other functions are unchanged)
+# ...
 process_systemd_template() { local template_name=$1; local service_name=$2; local extra_vars=${3:-}; local template_path="$template_name"; local output_path="/etc/systemd/system/${service_name}"; if [[ "$service_name" == *"/"* ]]; then output_path="/etc/systemd/system/$service_name"; fi; log "INFO" "Processing template for ${service_name}..."; local temp_file; temp_file=$(mktemp); local sed_script=""; for var in $(grep -o '{{[A-Z_]*}}' "$template_path" | sort -u | tr -d '{}'); do sed_script+="s|{{\s*$var\s*}}|${!var}|g;"; done; if [[ -n "$extra_vars" ]]; then IFS='=' read -r key value <<< "$extra_vars"; sed_script+="s|{{\s*$key\s*}}|$value|g;"; fi; sed "$sed_script" "$template_path" > "$temp_file"; sudo mv "$temp_file" "$output_path"; sudo chown root:root "$output_path"; sudo chmod 644 "$output_path"; }
 uninstall_services() { log "INFO" "--- Starting Secure Web Access Uninstallation ---"; run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service filebrowser.service" || log "WARN" "Services may not have been running."; log "INFO" "Removing systemd service files and config..."; sudo rm -f /etc/systemd/system/filebrowser.service "${PAM_CONFIG_PATH}"; run_command "Remove ttyd override" "rm -rf ${TTYD_OVERRIDE_DIR}"; run_command "Reload systemd daemon" "systemctl daemon-reload"; log "INFO" "Removing packages, binaries, and data..."; run_command "Remove filebrowser binary" "rm -f /usr/local/bin/filebrowser"; run_command "Remove filebrowser init script" "rm -f ${FILEBROWSER_INIT_SCRIPT_DEST}"; local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); run_command "Remove filebrowser data directory" "rm -rf ${fb_db_dir}"; log "INFO" "Removing ttyd and Nginx PAM module..."; if ! DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y ttyd libnginx-mod-http-auth-pam; then handle_error $? "Failed to remove packages."; fi; log "INFO" "SUCCESS: Packages removed."; log "INFO" "--- Uninstallation Complete! ---"; }
 check_status() { log "INFO" "--- Checking Service Status ---"; systemctl status --no-pager ttyd.service filebrowser.service || true; }
