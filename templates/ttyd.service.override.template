@@ -2,10 +2,14 @@
 [Service]
 # Clear out the original ExecStart
 ExecStart=
-# Define our own ExecStart to call our wrapper script.
-# ttyd will automatically make the header available as an environment variable
-# to the script it calls.
-ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --check-origin --interface 127.0.0.1 --client-header "X-Forwarded-User" /usr/local/bin/ttyd-login-wrapper.sh
+# Define our own ExecStart with the correct, seamless SSO parameters
+
+# ### DEFINITIVE FIX ###
+# The '--client-header' flag requires a mapping from the HTTP Header Name
+# to the Environment Variable Name. The correct syntax is "Header:Variable".
+# This tells ttyd to take the value of the "X-Forwarded-User" header and
+# put it into an environment variable named "X_FORWARDED_USER" for our script.
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --check-origin --interface 127.0.0.1 --client-header "X-Forwarded-User:X_FORWARDED_USER" /usr/local/bin/ttyd-login-wrapper.sh
 
 # Restart on failure
 Restart=on-failure
