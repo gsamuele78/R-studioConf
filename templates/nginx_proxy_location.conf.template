@@ -1,13 +1,9 @@
 # ----------------------------------------------------------------
-# NGINX PROXY LOCATION CONFIGURATION (v1.2)
-#
-# This template configures the reverse proxy for all web services.
-# CORRECTED: Ensured clean newlines between location blocks to prevent parsing errors.
+# NGINX PROXY LOCATION CONFIGURATION (v3.0 - Definitive SSO)
 # ----------------------------------------------------------------
 
 # --- Reverse Proxy for R-Studio Server ---
 location / {
-    # Specific logs for this service
     access_log %%LOG_DIR%%/rstudio-access.log;
     error_log %%LOG_DIR%%/rstudio-error.log;
     proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%;
@@ -21,62 +17,50 @@ location / {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-## --- Reverse Proxy for Web Terminal ---
-#location /terminal/ {
-#    proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/;
-#    proxy_http_version 1.1;
-#    proxy_set_header Upgrade $http_upgrade;
-#    proxy_set_header Connection "upgrade";
-#    proxy_set_header Host $host;
-#    proxy_read_timeout 86400;
-#}
-
-## --- Reverse Proxy for Web SSH ---
-#location /ssh/ { 
-#    proxy_pass http://127.0.0.1:%%WEB_SSH_PORT%%/;
-#    proxy_http_version 1.1;
-#    proxy_set_header Upgrade $http_upgrade;
-#    proxy_set_header Connection "upgrade";
-#    proxy_set_header Host $host;
-#    proxy_read_timeout 86400;
-#}
-
-# --- Reverse Proxy for Web Terminal (ttyd) ---
+# --- Reverse Proxy for Web Terminal (ttyd) with SSO ---
 location /terminal/ {
-    # Specific logs for this service
     access_log %%LOG_DIR%%/terminal-access.log;
     error_log %%LOG_DIR%%/terminal-error.log;
-
-    # ### SECURE ### Enable PAM authentication
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
-
     proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_read_timeout 86400;
+    proxy_set_header X-Forwarded-User $remote_user;
 }
 
+# ### DEFINITIVE FIX ###
+# A separate location for the API is needed. It proxies to the same backend
+# but does *not* have PAM auth enabled. This is secure because API calls require
+# a bearer token (for the init script) or a session cookie (for logged-in users),
+# which can only be obtained after a successful PAM login on the main /files/ location.
+location /files/api/ {
+    access_log %%LOG_DIR%%/files-api-access.log;
+    error_log %%LOG_DIR%%/files-api-error.log;
+    proxy_pass http://127.0.0.1:%%FILEBROWSER_PORT%%/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-User $remote_user; # Pass user for logging if available
+}
 
 # --- Reverse Proxy for Web File Manager (File Browser) ---
 location /files/ {
-    # Specific logs for this service
     access_log %%LOG_DIR%%/files-access.log;
     error_log %%LOG_DIR%%/files-error.log;
-
-    # ### SECURE ### Enable PAM authentication
     auth_pam "Secure Files - AD Credentials Required";
     auth_pam_service_name "nginx";
-
     proxy_pass http://127.0.0.1:%%FILEBROWSER_PORT%%/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_read_timeout 86400;
-
-    # ### SECURE ### Pass the authenticated username to the File Browser backend
     proxy_set_header X-Forwarded-User $remote_user;
 }

@@ -2,9 +2,7 @@
 [Service]
 # Clear out the original ExecStart
 ExecStart=
-# Define our own ExecStart with the correct, persistent parameters
-# The --once flag has been removed.
-ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --interface 127.0.0.1 login
+# Define our own ExecStart with the correct, seamless SSO parameters
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --check-origin --interface 127.0.0.1 --client-header "X-Forwarded-User:X-Forwarded-User" login -f %h
 
-# Change the restart policy to only restart on failure, not on a clean exit.
 Restart=on-failure

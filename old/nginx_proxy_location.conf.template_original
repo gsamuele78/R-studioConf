@@ -57,8 +57,6 @@ location /terminal/ {
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_read_timeout 86400;
-    # ### SSO FIX ### Pass the authenticated username to the ttyd backend
-    proxy_set_header X-Forwarded-User $remote_user;
 }
 
 
