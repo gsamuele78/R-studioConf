@@ -78,7 +78,15 @@ main() {
     process_template "${TEMPLATE_DIR}/nginx_proxy_location.conf.template" "processed_content" "${template_args[@]}"; echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_proxy_location.conf" > /dev/null
     process_template "${TEMPLATE_DIR}/nginx_site.conf.template" "processed_content" "${template_args[@]}"; echo "$processed_content" | sudo tee "${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf" > /dev/null; log "INFO" "SUCCESS: All templates processed and deployed."
     log "INFO" "Enabling site and restarting Nginx..."; run_command "Clean Nginx 'sites-enabled' directory" "rm -f '${NGINX_DIR}/sites-enabled/'*"; run_command "Enable Nginx site for ${DOMAIN_OR_IP}" "ln -sf '${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf' '${NGINX_DIR}/sites-enabled/'"; run_command "Test Nginx configuration and restart service" "nginx -t && systemctl restart nginx"
-    log "INFO" "----------------------------------------"; log "INFO" "Nginx setup complete!"; echo "Services are configured for: https://${DOMAIN_OR_IP}"; echo "- R-Studio:       https://${DOMAIN_OR_IP}/"; echo "- Web Terminal:   https://${DOMAIN_OR_IP}/terminal/"; echo "- FileBrowser:    https://${DOMAIN_OR_IP}/files/"; echo -e "----------------------------------------"
+        # Step 8: Final Output
+    log "INFO" "-------------------------------------------------------"
+    log "INFO" "Nginx setup complete!"
+    echo "Services are configured for: https://${DOMAIN_OR_IP}"
+    echo "- R-Studio:                  https://${DOMAIN_OR_IP}/"
+    echo "- Web Terminal:              https://${DOMAIN_OR_IP}/terminal/"
+    echo "- FileBrowser:               https://${DOMAIN_OR_IP}/files/"
+    echo "- FileBrowser Api:           https://${DOMAIN_OR_IP}/files/api"
+    echo -e "-----------------------------------------------------------"
 }
 
 main "$@"
