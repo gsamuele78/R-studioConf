@@ -63,7 +63,7 @@ main() {
     # ### DEFINITIVE FIX: Simplified and robust installation ###
     log "INFO" "Starting installation/reinstallation of 'nginx-full'..."
     run_command "Update package lists" "apt-get -y update"
-    run_command "Purge any existing Nginx packages" "apt-get remove --purge -y nginx nginx-common nginx-core nginx-full"
+    run_command "Purge any existing Nginx packages" "DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y nginx nginx-common nginx-core nginx-full"
     
     log "INFO" "Installing 'nginx-full'. Apt output will follow:"
     # We expect this might fail, so we don't exit on error here.
