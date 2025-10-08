@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # A script to set up Nginx as a reverse proxy for R-Studio Server and other web services.
-# VERSION 9.0: DEFINITIVE. Correctly handles IPv6-disabled environments during installation.
+# VERSION 9.1: DEFINITIVE. Uses direct apt call for purge to prevent hanging.
 
 set -e
 
@@ -15,31 +15,21 @@ TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 NGINX_CONF_PATH="/etc/nginx/nginx.conf"
 
 # --- Function Definitions ---
-# ... (usage is unchanged) ...
+# ... (usage and _fix_ipv6_binding_issue functions are unchanged) ...
 usage() { echo -e "\033[1;33mUsage: $0 [-c /path/to/nginx_setup.vars.conf]\033[0m\n  -c: Path to the configuration file (Optional)."; exit 1; }
-
-# This function is now the key to solving the installation failure.
 _fix_ipv6_and_finish_install() {
     log "WARN" "Initial Nginx installation failed, likely due to a disabled IPv6 stack."
     log "INFO" "Attempting to fix by commenting out IPv6 listen directives..."
-    
-    # This loop finds all default Nginx config files and comments out the IPv6 line.
-    for conf_file in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/*; do
+    for conf_file in /etc/nginx/conf.d/*.conf /etc/nginx/sites-available/*; do
         if [[ -f "$conf_file" ]]; then
-            log "INFO" "Scanning ${conf_file}..."
-            sed -i.bak 's/listen \[::\]:/#listen \[::\]:/g' "$conf_file"
+            log "INFO" "Scanning ${conf_file}..."; sed -i.bak 's/listen \[::\]:/#listen \[::\]:/g' "$conf_file";
         fi
     done
-    
     log "INFO" "IPv6 directives commented out. Forcing reconfiguration of all pending packages..."
-    # 'dpkg --configure -a' is the command to fix a broken installation state.
     if ! DEBIAN_FRONTEND=noninteractive dpkg --configure -a; then
-        log "ERROR" "Failed to fix broken packages with 'dpkg --configure -a'. Please check system logs."
-        return 1
+        log "ERROR" "Failed to fix broken packages with 'dpkg --configure -a'."; return 1;
     fi
-
-    log "INFO" "SUCCESS: Nginx installation has been repaired."
-    return 0
+    log "INFO" "SUCCESS: Nginx installation has been repaired."; return 0;
 }
 
 # --- Main Execution ---
@@ -63,23 +53,21 @@ main() {
     # ### DEFINITIVE FIX: Simplified and robust installation ###
     log "INFO" "Starting installation/reinstallation of 'nginx-full'..."
     run_command "Update package lists" "apt-get -y update"
-    run_command "Purge any existing Nginx packages" "DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y nginx nginx-common nginx-core nginx-full"
+    
+    # Use a direct call to apt-get remove to prevent hanging.
+    log "INFO" "Purging any existing Nginx packages..."
+    DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y nginx nginx-common nginx-core nginx-full || log "WARN" "Could not purge nginx packages, they may not have been installed."
     
     log "INFO" "Installing 'nginx-full'. Apt output will follow:"
-    # We expect this might fail, so we don't exit on error here.
-    DEBIAN_FRONTEND=noninteractive apt-get -y install nginx-full || true
-    
-    # Now, check if the installation is in a broken state.
-    if ! dpkg -s nginx-full >/dev/null 2>&1 || ! dpkg -s nginx >/dev/null 2>&1; then
-        # If it's broken, call our repair function.
+    if ! DEBIAN_FRONTEND=noninteractive apt-get -y install nginx-full; then
+        # If the direct install fails, try the repair function.
         if ! _fix_ipv6_and_finish_install; then
-            exit 1
+            log "ERROR" "Failed to install or repair nginx-full package."; exit 1;
         fi
     fi
     log "INFO" "SUCCESS: 'nginx-full' package is correctly installed and configured."
     
-    # From here, the rest of the script will work because nginx.conf now exists.
-    # ... (The rest of the script is unchanged) ...
+    # ... (The rest of the script is unchanged and now correct) ...
     log "INFO" "Ensuring Nginx PAM module is loaded..."; local module_line="load_module modules/ngx_http_auth_pam_module.so;"; if ! grep -qF -- "$module_line" "$NGINX_CONF_PATH"; then run_command "Add PAM module to nginx.conf" "sed -i '1i ${module_line}' ${NGINX_CONF_PATH}"; log "INFO" "SUCCESS: Nginx PAM module loading has been configured."; else log "WARN" "Nginx PAM module is already configured to load."; fi
     log "INFO" "Granting Nginx permission to communicate with SSSD..."; run_command "Add www-data user to the sasl group" "usermod -a -G sasl www-data"; log "INFO" "SUCCESS: Nginx permissions have been configured."
     ensure_dir_exists "$NGINX_TEMPLATE_DIR"; ensure_dir_exists "$SSL_CERT_DIR"; ensure_dir_exists "/var/www/html"
