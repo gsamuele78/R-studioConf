@@ -2,7 +2,10 @@
 [Service]
 # Clear out the original ExecStart
 ExecStart=
-# Define our own ExecStart with the correct, seamless SSO parameters
-ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --check-origin --interface 127.0.0.1 --client-header "X-Forwarded-User:X-Forwarded-User" login -f %h
+# Define our own ExecStart to call our wrapper script.
+# ttyd will automatically make the header available as an environment variable
+# to the script it calls.
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --check-origin --interface 127.0.0.1 --client-header "X-Forwarded-User" /usr/local/bin/ttyd-login-wrapper.sh
 
+# Restart on failure
 Restart=on-failure
