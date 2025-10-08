@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------
-# NGINX SETUP VARS (v2.1)
+# NGINX SETUP VARS (v2.0)
 # ----------------------------------------------------------------
 
 # --- Certificate Mode ---
@@ -17,6 +17,8 @@ NGINX_DIR="/etc/nginx"
 NGINX_TEMPLATE_DIR="/etc/nginx/templates"
 # Log directory for the site.
 LOG_DIR="/var/log/nginx"
+# DEFINITIVE FIX: Added the missing DHPARAM variable
+#DHPARAM_FULLPATH="${SSL_CERT_DIR}/dhparam.pem"
 # Path for the Diffie-Hellman parameter file, used for enhancing security.
 DHPARAM_PATH="/etc/nginx/dhparam.pem"
 
@@ -24,10 +26,10 @@ DHPARAM_PATH="/etc/nginx/dhparam.pem"
 # --- R-Studio and Web Services Ports ---
 # Port where R-Studio Server is listening.
 RSTUDIO_PORT="8787"
-# Port for the Web Terminal service (ttyd).
+# Port for the Web Terminal service (e.g., ttyd).
 WEB_TERMINAL_PORT="2222"
-# Port for the Web File Manager service (File Browser).
-FILEBROWSER_PORT="2223"
+# Port for the Web FILEBROWSER service (e.g., wetty).
+FILEBROWSER_PORT="2223" # Replaced WEB_SSH_PORT
 
 # --- Self-Signed Certificate Details ---
 # Directory to store the SSL certificate and key.
@@ -41,6 +43,14 @@ SSL_LOCALITY="New York"
 SSL_ORGANIZATION="Global Tech"
 SSL_ORG_UNIT="IT Department"
 
+
+# --- DEFINITIVE FIX: Added Full Path Variables ---
+# These variables are constructed from the ones above and are required by the templates.
+SELF_SIGNED_CERT_FULLPATH="${SSL_CERT_DIR}/${DOMAIN_OR_IP}.crt"
+SELF_SIGNED_KEY_FULLPATH="${SSL_CERT_DIR}/${DOMAIN_OR_IP}.key"
+
+
 # --- Let's Encrypt Details (used if CERT_MODE="LETS_ENCRYPT") ---
 LE_EMAIL="your-email@example.com"
 LE_CERT_DIR="/etc/letsencrypt/live"
+
