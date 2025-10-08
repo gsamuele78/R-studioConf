@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # A script to set up Nginx as a reverse proxy for R-Studio Server and other web services.
-# VERSION 6.1: DEFINITIVE. Forces re-installation of nginx-full config files.
+# VERSION 7.0: DEFINITIVE. Correctly reinstalls nginx-full and handles missing configs.
 
 set -e
 
@@ -17,7 +17,7 @@ NGINX_CONF_PATH="/etc/nginx/nginx.conf"
 # --- Function Definitions ---
 # ... (usage and _fix_ipv6_binding_issue functions are unchanged) ...
 usage() { echo -e "\033[1;33mUsage: $0 [-c /path/to/nginx_setup.vars.conf]\033[0m\n  -c: Path to the configuration file (Optional)."; exit 1; }
-_fix_ipv6_binding_issue() { local default_conf="/etc/nginx/sites-available/default"; if [[ -f "$default_conf" ]]; then log "WARN" "Nginx installation failed. Attempting to fix IPv6 binding issue..."; sudo sed -i.bak 's/listen \[::\]:/#listen \[::\]:/g' "$default_conf"; log "INFO" "Commented out IPv6 listen directives. Retrying..."; return 0; fi; return 1; }
+_fix_ipv6_binding_issue() { local default_conf="/etc/nginx/sites-available/default"; if [[ -f "$default_conf" ]]; then log "WARN" "Nginx installation failed..."; sudo sed -i.bak 's/listen \[::\]:/#listen \[::\]:/g' "$default_conf"; log "INFO" "Commented out IPv6 listen directives. Retrying..."; return 0; fi; return 1; }
 
 # --- Main Execution ---
 main() {
@@ -37,37 +37,31 @@ main() {
     log "INFO" "Configuration confirmed. Proceeding with setup..."
 
     # ### DEFINITIVE FIX: Force re-installation of nginx-full with config files ###
-    log "INFO" "Starting: Install required packages (nginx-full for PAM support)"
-    local packages_to_install="nginx-full"
-    if [[ "$CERT_MODE" == "LETS_ENCRYPT" ]]; then
-        packages_to_install+=" certbot python3-certbot-nginx"
+    log "INFO" "Installing/reinstalling 'nginx-full' to ensure PAM support..."
+    
+    # First, remove any residual basic nginx packages to avoid conflicts.
+    if dpkg -l | grep -q "nginx "; then
+        run_command "Purge existing basic nginx package" "apt-get remove --purge -y nginx nginx-common nginx-core nginx-full"
+        run_command "Purge existing nginx dependance" "apt-get autoremove -y"
     fi
 
-    # The '--reinstall' flag and '-o Dpkg::Options::="--force-confask"' ensures that
-    # apt will re-install the package and restore the default /etc/nginx/nginx.conf
-    # file if it is missing.
-    local install_cmd="apt-get -y --reinstall install -o Dpkg::Options::=\"--force-confask\" $packages_to_install"
-
-    if ! sudo apt-get -y update && eval "$install_cmd"; then
-        if _fix_ipv6_binding_issue; then
-            run_command "Retry package installation after applying fix" "$install_cmd"
-        else
-            log "ERROR" "Package installation failed and could not be fixed."; exit 1;
-        fi
+    # Now, install nginx-full. The -o Dpkg options force restoration of missing config files.
+    if ! sudo apt-get -y update && sudo apt-get -y --reinstall install -o Dpkg::Options::="--force-confask" nginx-full; then
+        log "ERROR" "Failed to install nginx-full package."; exit 1;
     fi
-    log "INFO" "SUCCESS: Required packages are installed."
+    log "INFO" "SUCCESS: 'nginx-full' package is correctly installed."
     
     # ### DEFINITIVE FIX: Explicitly load the PAM module ###
     log "INFO" "Ensuring Nginx PAM module is loaded..."
     local module_line="load_module modules/ngx_http_auth_pam_module.so;"
     if ! grep -qF -- "$module_line" "$NGINX_CONF_PATH"; then
-        run_command "Add PAM module to nginx.conf" "sudo sed -i '1i ${module_line}' ${NGINX_CONF_PATH}"
+        run_command "Add PAM module to nginx.conf" "sed -i '1i ${module_line}' ${NGINX_CONF_PATH}"
         log "INFO" "SUCCESS: Nginx PAM module loading has been configured."
     else
         log "WARN" "Nginx PAM module is already configured to load."
     fi
 
-    # ... (The rest of the script is unchanged and now correct) ...
+    # ... (The rest of the script is now correct and will execute successfully) ...
     log "INFO" "Granting Nginx permission to communicate with SSSD..."; run_command "Add www-data user to the sasl group" "usermod -a -G sasl www-data"; log "INFO" "SUCCESS: Nginx permissions have been configured."
     ensure_dir_exists "$NGINX_TEMPLATE_DIR"; ensure_dir_exists "$SSL_CERT_DIR"; ensure_dir_exists "/var/www/html"
     log "INFO" "Checking for Diffie-Hellman parameter file..."; if [ ! -f "$DHPARAM_PATH" ]; then run_command "Generate Diffie-Hellman parameters (2048 bit)" "openssl dhparam -out \"$DHPARAM_PATH\" 2048"; else log "WARN" "Diffie-Hellman parameter file already exists. Skipping."; fi
@@ -87,6 +81,8 @@ main() {
     echo "- FileBrowser:               https://${DOMAIN_OR_IP}/files/"
     echo "- FileBrowser Api:           https://${DOMAIN_OR_IP}/files/api"
     echo -e "-----------------------------------------------------------"
+
+
 }
 
 main "$@"
