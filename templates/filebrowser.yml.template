@@ -6,23 +6,26 @@ port: %%FILEBROWSER_PORT%%
 baseURL: "/files"
 database: "%%FILEBROWSER_DB_PATH%%"
 root: "/"
-# DEFINITIVE FIX: Specify a cache directory that the 'www-data' user owns.
 cacheDir: "/var/lib/filebrowser/cache"
 
-
-# Authentication Settings: This is the core of the SSO integration
+# ### DEFINITIVE FIX: The YAML structure for authentication is nested under 'methods'. ###
 auth:
-  method: proxy
-  header: "X-Forwarded-User"
+  methods:
+    # We are explicitly using the 'proxy' method.
+    proxy:
+      enabled: true
+      header: "X-Forwarded-User"
+      # 'autocreate' is called 'createUser' and belongs under the 'proxy' block.
+      createUser: true
+    # For security, explicitly disable other login methods.
+    password:
+      enabled: false
+    noauth: false
   
-# New User Defaults: This is the magic feature of this fork
+# New User Defaults: These settings are applied when a user is auto-created via proxy.
 defaults:
-  # Automatically create a user if they don't exist in the database
-  autocreate: true
-  # Set the scope (root directory) for newly created users using a template.
-  # This dynamically maps each user to their own NFS home directory.
+  # The scope and perm settings for auto-created users go here.
   scope: "/nfs/home/{{ strings.Split .User.Username \"@\" | head 1 }}"
-  # Default permissions for new users
   perm:
     admin: false
     execute: true
