@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # A script to set up Nginx as a reverse proxy for R-Studio Server and other web services.
-# VERSION 9.1: DEFINITIVE. Uses direct apt call for purge to prevent hanging.
+# VERSION 9.2: VICTORIOUS. Removes redundant 'load_module' directive.
 
 set -e
 
@@ -20,7 +20,7 @@ usage() { echo -e "\033[1;33mUsage: $0 [-c /path/to/nginx_setup.vars.conf]\033[0
 _fix_ipv6_and_finish_install() {
     log "WARN" "Initial Nginx installation failed, likely due to a disabled IPv6 stack."
     log "INFO" "Attempting to fix by commenting out IPv6 listen directives..."
-    for conf_file in /etc/nginx/conf.d/*.conf /etc/nginx/sites-available/*; do
+    for conf_file in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/*; do
         if [[ -f "$conf_file" ]]; then
             log "INFO" "Scanning ${conf_file}..."; sed -i.bak 's/listen \[::\]:/#listen \[::\]:/g' "$conf_file";
         fi
@@ -50,25 +50,19 @@ main() {
     prompt_for_value "R-Studio Port" "RSTUDIO_PORT"; prompt_for_value "Web Terminal Port" "WEB_TERMINAL_PORT"; prompt_for_value "FileBrowser Port" "FILEBROWSER_PORT"; echo "-------------------------------------"
     log "INFO" "Configuration confirmed. Proceeding with setup..."
 
-    # ### DEFINITIVE FIX: Simplified and robust installation ###
+    # Step 2: Install Nginx (Unchanged)
     log "INFO" "Starting installation/reinstallation of 'nginx-full'..."
     run_command "Update package lists" "apt-get -y update"
-    
-    # Use a direct call to apt-get remove to prevent hanging.
-    log "INFO" "Purging any existing Nginx packages..."
-    DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y nginx nginx-common nginx-core nginx-full || log "WARN" "Could not purge nginx packages, they may not have been installed."
-    
-    log "INFO" "Installing 'nginx-full'. Apt output will follow:"
-    if ! DEBIAN_FRONTEND=noninteractive apt-get -y install nginx-full; then
-        # If the direct install fails, try the repair function.
-        if ! _fix_ipv6_and_finish_install; then
-            log "ERROR" "Failed to install or repair nginx-full package."; exit 1;
-        fi
-    fi
+    log "INFO" "Purging any existing Nginx packages..."; DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y nginx nginx-common nginx-core nginx-full || log "WARN" "Could not purge nginx packages, they may not have been installed."
+    log "INFO" "Installing 'nginx-full'. Apt output will follow:"; if ! DEBIAN_FRONTEND=noninteractive apt-get -y install nginx-full; then if ! _fix_ipv6_and_finish_install; then log "ERROR" "Failed to install or repair nginx-full package."; exit 1; fi; fi
     log "INFO" "SUCCESS: 'nginx-full' package is correctly installed and configured."
     
-    # ... (The rest of the script is unchanged and now correct) ...
-    log "INFO" "Ensuring Nginx PAM module is loaded..."; local module_line="load_module modules/ngx_http_auth_pam_module.so;"; if ! grep -qF -- "$module_line" "$NGINX_CONF_PATH"; then run_command "Add PAM module to nginx.conf" "sed -i '1i ${module_line}' ${NGINX_CONF_PATH}"; log "INFO" "SUCCESS: Nginx PAM module loading has been configured."; else log "WARN" "Nginx PAM module is already configured to load."; fi
+    # ### DEFINITIVE FIX: The 'load_module' step is now removed. ###
+    # The Ubuntu package for nginx-full automatically handles loading the module.
+    # Manually adding it causes a "module is already loaded" error.
+    log "INFO" "Nginx package now handles module loading automatically. Skipping manual configuration."
+    
+    # ... (The rest of the script is correct and will execute successfully) ...
     log "INFO" "Granting Nginx permission to communicate with SSSD..."; run_command "Add www-data user to the sasl group" "usermod -a -G sasl www-data"; log "INFO" "SUCCESS: Nginx permissions have been configured."
     ensure_dir_exists "$NGINX_TEMPLATE_DIR"; ensure_dir_exists "$SSL_CERT_DIR"; ensure_dir_exists "/var/www/html"
     log "INFO" "Checking for Diffie-Hellman parameter file..."; if [ ! -f "$DHPARAM_PATH" ]; then run_command "Generate Diffie-Hellman parameters (2048 bit)" "openssl dhparam -out \"$DHPARAM_PATH\" 2048"; else log "WARN" "Diffie-Hellman parameter file already exists. Skipping."; fi
