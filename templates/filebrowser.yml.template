@@ -2,38 +2,61 @@
 # Definitive configuration for the gtsteffaniak/filebrowser fork
 
 server:
-  port: %%FILEBROWSER_PORT%%
-  address: 127.0.0.1
+  port: 2223
+  #baseURL: "/"                            # base URL for the server, the subpath that the server is running on.
+  logging:
+    - levels: "%%FILEBROWSER_LOG_LEVEL%%"                          # separated list of log levels to enable. (eg. "info|warning|error|debug")
+      apiLevels: "%%FILEBROWSER_LOG_LEVEL%%"                       # separated list of log levels to enable for the API. (eg. "info|warning|error")
+      output: "%%FILEBROWSER_LOG_PATH%%"                    # output location. (eg. "stdout" or "path/to/file.log")
+      noColors: false                     # disable colors in the output
+      json: false                         # output in json format
+      utc: false                          # use UTC time in the output instead of local time
   baseURL: "/files"
   database: "%%FILEBROWSER_DB_PATH%%"
-  cacheDir: "/var/lib/filebrowser/cache"
+  cacheDir: "%%FILEBROWSER_CACHE_PATH%%"
   # This is the mandatory sources block. We define one source.
   sources:
-    - path: "/"
+    - path: "%%FILEBROWSER_ROOT_DIR%%"
+    #- path: "/"
       name: "Root Filesystem"
       config:
         defaultEnabled: true
+        defaultUserScope: "/nfs/home/{{ strings.Split .User.Username \"@\" | head 1 }}"             # default "/" should match folders under path
+        #defaultEnabled: true              # should be added as a default source for new users?  
+
+  maxArchiveSize: 50                      # max pre-archive combined size of files/folder that are allowed to be archived (in GB)
+  filesystem:                             # filesystem settings
+    createFilePermission: "644"           # Unix permissions like 644, 755, 2755 (default: 644)  validate:required,file_permission
+    createDirectoryPermission: "755"      # Unix permissions like 755, 2755, 1777 (default: 755)  validate:required,file_permission
 
 # Auth configuration - all methods at the same level
 auth:
   methods:
     proxy:
       enabled: true
-      header: "X-Forwarded-User"
       createUser: true
+      header: "X-Forwarded-User"
     password:
       enabled: false
     noauth: false
 
+frontend:
+  name: Biome-Calc
 # User defaults - correctly named 'userDefaults' (NOT 'defaults')
 userDefaults:
-  scope: "/nfs/home/{{ strings.Split .User.Username \"@\" | head 1 }}"
+  #scope: "/nfs/home/{{ strings.Split .User.Username \"@\" | head 1 }}"
   permissions:
     admin: false
-    execute: true
-    create: true
-    rename: true
+    #execute: true
+    #create: true
+    #rename: true
     modify: true
-    delete: true
+    #delete: true
     share: true
-    download: true
+    #download: true
+  disableUpdateNotifications: false       # disable update notifications banner for admin users
+  deleteWithoutConfirming: false          # delete files without confirmation
+  fileLoading:                            # upload and download settings
+    maxConcurrentUpload: 10
+    uploadChunkSizeMb: 30
+    clearAll: false

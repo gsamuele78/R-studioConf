@@ -30,7 +30,7 @@ install_services() {
     ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"; ensure_dir_exists "$fb_db_dir"; ensure_dir_exists "$fb_cache_dir";
     
     log "INFO" "Generating YAML config from template..."
-    local processed_content; if ! process_template "${SCRIPT_DIR}/../templates/filebrowser.yml.template" "processed_content" "FILEBROWSER_PORT=${FILEBROWSER_PORT}" "FILEBROWSER_DB_PATH=${FILEBROWSER_DB_PATH}"; then handle_error 1 "Failed to process filebrowser.yml.template."; return 1; fi
+    local processed_content; if ! process_template "${SCRIPT_DIR}/../templates/filebrowser.yml.template" "processed_content" "FILEBROWSER_PORT=${FILEBROWSER_PORT}" "FILEBROWSER_DB_PATH=${FILEBROWSER_DB_PATH}" "FILEBROWSER_CACHE_PATH=${FILEBROWSER_CACHE_PATH}" "FILEBROWSER_CONFIG_PATH=${FILEBROWSER_CONFIG_PATH}" "FILEBROWSER_ROOT_DIR=${FILEBROWSER_ROOT_DIR}" "FILEBROWSER_ADMIN_USER=${FILEBROWSER_ADMIN_USER}" "FILEBROWSER_ADMIN_PASSWORD=${FILEBROWSER_ADMIN_PASSWORD}" "FILEBROWSER_LOG_PATH=${FILEBROWSER_LOG_PATH}" "FILEBROWSER_LOG_LEVEL=${FILEBROWSER_LOG_LEVEL}"; then handle_error 1 "Failed to process filebrowser.yml.template."; return 1; fi
     echo "$processed_content" | sudo tee "${FILEBROWSER_CONFIG_FILE}" > /dev/null
     
     log "INFO" "Setting permissions for File Browser directories..."
