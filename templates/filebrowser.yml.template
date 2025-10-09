@@ -11,19 +11,24 @@ server:
   sources:
     - path: "/"
       name: "Root Filesystem"
+      config:
+        defaultEnabled: true
 
-# This auth block now perfectly matches the developer's schema.
+# Auth configuration - all methods at the same level
 auth:
   methods:
     proxy:
       enabled: true
       header: "X-Forwarded-User"
       createUser: true
+    password:
+      enabled: false
+    noauth: false
 
-# This block has been renamed from 'defaults' to 'userDefaults' to match the schema.
+# User defaults - correctly named 'userDefaults' (NOT 'defaults')
 userDefaults:
   scope: "/nfs/home/{{ strings.Split .User.Username \"@\" | head 1 }}"
-  perm:
+  permissions:
     admin: false
     execute: true
     create: true
