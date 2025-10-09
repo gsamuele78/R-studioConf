@@ -1,6 +1,6 @@
 #!/bin/bash
 # scripts/secure-web-access-setup.sh
-# VERSION 16.0: VICTORIOUS. Uses the definitive YAML structure.
+# VERSION 15.1: VICTORIOUS. Final version with all known fixes.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -24,16 +24,26 @@ install_services() {
     
     log "INFO" "Downloading gtsteffaniak/filebrowser fork..."; local LATEST_URL="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/linux-amd64-filebrowser"; local BINARY_PATH="/usr/local/bin/filebrowser"; run_command "Download filebrowser binary" "curl -L -o ${BINARY_PATH} \"${LATEST_URL}\""; run_command "Set executable permission for filebrowser" "chmod +x ${BINARY_PATH}";
 
+    # ### DEFINITIVE WORKFLOW for File Browser ###
     log "INFO" "Creating directories and config for File Browser..."
-    local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}");
+    # 1. Create all necessary directories.
+    local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}")
     local fb_cache_dir="/var/lib/filebrowser/cache"
-    ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"; ensure_dir_exists "$fb_db_dir"; ensure_dir_exists "$fb_cache_dir";
+    ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"
+    ensure_dir_exists "$fb_db_dir"
+    ensure_dir_exists "$fb_cache_dir"
     
-    log "INFO" "Generating YAML config from template..."
-    local processed_content; if ! process_template "${SCRIPT_DIR}/../templates/filebrowser.yml.template" "processed_content" "FILEBROWSER_PORT=${FILEBROWSER_PORT}" "FILEBROWSER_DB_PATH=${FILEBROWSER_DB_PATH}"; then handle_error 1 "Failed to process filebrowser.yml.template."; return 1; fi
+    # 2. Generate the YAML config from the template.
+    local processed_content
+    if ! process_template "${SCRIPT_DIR}/../templates/filebrowser.yml.template" "processed_content" \
+        "FILEBROWSER_PORT=${FILEBROWSER_PORT}" \
+        "FILEBROWSER_DB_PATH=${FILEBROWSER_DB_PATH}"; then
+        handle_error 1 "Failed to process filebrowser.yml.template."
+        return 1
+    fi
     echo "$processed_content" | sudo tee "${FILEBROWSER_CONFIG_FILE}" > /dev/null
     
-    log "INFO" "Setting permissions for File Browser directories..."
+    # 3. Set ownership for ALL related directories.
     run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
     run_command "Set ownership for File Browser library dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} /var/lib/filebrowser"
 
@@ -62,8 +72,8 @@ uninstall_services() {
 
 check_status() {
     log "INFO" "--- Checking Service Status ---"
-    log "INFO" "Status for ttyd:"; systemctl --no-pager status ttyd.service || true
-    log "INFO" "Status for filebrowser:"; systemctl --no-pager status filebrowser.service || true
+    log "INFO" "Status for ttyd:"; systemctl status ttyd.service || true
+    log "INFO" "Status for filebrowser:"; systemctl status filebrowser.service || true
     log "INFO" "Checking for detailed filebrowser errors..."; journalctl -u filebrowser.service --no-pager -n 20 || true
 }
 

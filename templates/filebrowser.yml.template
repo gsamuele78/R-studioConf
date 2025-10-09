@@ -1,30 +1,27 @@
 # /etc/filebrowser/filebrowser.yml
-# Main configuration for the gtsteffaniak/filebrowser fork
+# Definitive configuration for the gtsteffaniak/filebrowser fork
 
-address: 127.0.0.1
-port: %%FILEBROWSER_PORT%%
-baseURL: "/files"
-database: "%%FILEBROWSER_DB_PATH%%"
-root: "/"
-cacheDir: "/var/lib/filebrowser/cache"
+server:
+  port: %%FILEBROWSER_PORT%%
+  address: 127.0.0.1
+  baseURL: "/files"
+  database: "%%FILEBROWSER_DB_PATH%%"
+  cacheDir: "/var/lib/filebrowser/cache"
+  # This is the mandatory sources block. We define one source.
+  sources:
+    - path: "/"
+      name: "Root Filesystem"
 
-# ### DEFINITIVE FIX: The YAML structure for authentication is nested under 'methods'. ###
+# This auth block now perfectly matches the developer's schema.
 auth:
   methods:
-    # We are explicitly using the 'proxy' method.
     proxy:
       enabled: true
       header: "X-Forwarded-User"
-      # 'autocreate' is called 'createUser' and belongs under the 'proxy' block.
       createUser: true
-    # For security, explicitly disable other login methods.
-    password:
-      enabled: false
-    noauth: false
-  
-# New User Defaults: These settings are applied when a user is auto-created via proxy.
-defaults:
-  # The scope and perm settings for auto-created users go here.
+
+# This block has been renamed from 'defaults' to 'userDefaults' to match the schema.
+userDefaults:
   scope: "/nfs/home/{{ strings.Split .User.Username \"@\" | head 1 }}"
   perm:
     admin: false
