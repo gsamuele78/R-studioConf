@@ -8,13 +8,14 @@ UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/secure-web-access.conf"
 PAM_CONFIG_PATH="/etc/pam.d/nginx"
 TTYD_OVERRIDE_DIR="/etc/systemd/system/ttyd.service.d"
+#The File Browser variables will assigned after sourching conf file (see config/secure-web-access.conf)
 #FILEBROWSER_CONFIG_DIR="/etc/filebrowser"
-FILEBROWSER_CONFIG_DIR="$(dirname "${FILEBROWSER_CONFIG_PATH}")"
+FILEBROWSER_CONFIG_DIR=""
 #FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_DIR}/filebrowser.yml"
-FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_PATH}"
-FILEBROWSER_DB_DIR="$(dirname "${FILEBROWSER_DB_PATH}")"
-FILEBROWSER_CACHE_DIR="${FILEBROWSER_CACHE_PATH}"
-FILEBROWSER_LOG_DIR="$(dirname "${FILEBROWSER_LOG_PATH}")"
+FILEBROWSER_CONFIG_FILE=""
+FILEBROWSER_DB_DIR=""
+FILEBROWSER_CACHE_DIR=""
+FILEBROWSER_LOG_DIR=""
 
 usage() { echo "Usage: $0 [install|uninstall|status]"; exit 1; }
 
@@ -85,6 +86,15 @@ main() {
     source "$UTILS_SCRIPT_PATH"; if [ -z "$1" ]; then usage; fi; check_root;
     if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then log "ERROR" "Configuration file not found at '$DEFAULT_CONFIG_FILE'."; exit 1; fi
     source "$DEFAULT_CONFIG_FILE"
+    echo "UTILS_SCRIPT_PATH: $UTILS_SCRIPT_PATH"
+    #FILEBROWSER_CONFIG_DIR="/etc/filebrowser"
+    FILEBROWSER_CONFIG_DIR="$(dirname "${FILEBROWSER_CONFIG_PATH}")"
+    #FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_DIR}/filebrowser.yml"
+    FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_PATH}"
+    FILEBROWSER_DB_DIR="$(dirname "${FILEBROWSER_DB_PATH}")"
+    FILEBROWSER_CACHE_DIR="${FILEBROWSER_CACHE_PATH}"
+    FILEBROWSER_LOG_DIR="$(dirname "${FILEBROWSER_LOG_PATH}")"
+
     case "$1" in install) install_services ;; uninstall) uninstall_services ;; status) check_status ;; *) usage ;; esac
 }
 
