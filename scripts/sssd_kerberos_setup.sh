@@ -68,9 +68,17 @@ ensure_time_sync() {
     fi
     log "Using NTP client: $ntp_client_to_use"
     
-    if [[ "$ntp_client_to_use" == "chrony" ]]; then run_command "systemctl stop systemd-timesyncd ntp" &>/dev/null; run_command "systemctl disable systemd-timesyncd ntp" &>/dev/null
-    elif [[ "$ntp_client_to_use" == "ntp" ]]; then run_command "systemctl stop chrony systemd-timesyncd" &>/dev/null; run_command "systemctl disable chrony systemd-timesyncd" &>/dev/null;
-    elif [[ "$ntp_client_to_use" == "systemd-timesyncd" ]]; then run_command "systemctl stop chrony ntp" &>/dev/null; run_command "systemctl disable chrony ntp" &>/dev/null; fi
+    # Stop and disable other time sync services
+    if [[ "$ntp_client_to_use" == "chrony" ]]; then
+        systemctl stop systemd-timesyncd ntp 2>/dev/null || true
+        systemctl disable systemd-timesyncd ntp 2>/dev/null || true
+    elif [[ "$ntp_client_to_use" == "ntp" ]]; then
+        systemctl stop chrony systemd-timesyncd 2>/dev/null || true
+        systemctl disable chrony systemd-timesyncd 2>/dev/null || true
+    elif [[ "$ntp_client_to_use" == "systemd-timesyncd" ]]; then
+        systemctl stop chrony ntp 2>/dev/null || true
+        systemctl disable chrony ntp 2>/dev/null || true
+    fi
 
     if [[ "$ntp_client_to_use" == "chrony" ]]; then
         local -a discovered_servers=()
@@ -187,9 +195,13 @@ join_ad_domain_realm() {
     fi
     
     # Join domain
-    log "Joining domain (will prompt for password for $AD_ADMIN_USER)..."
-    local realm_join_cmd="realm join --verbose -U \"$AD_ADMIN_USER\" --computer-ou=\"$FULL_COMPUTER_OU\" --os-name=\"$OS_NAME\" \"$AD_DOMAIN_LOWER\""
-    if run_command "$realm_join_cmd"; then
+    log "Joining domain with $AD_ADMIN_USER..."
+    local admin_password
+    read -r -s -p "Enter password for $AD_ADMIN_USER: " admin_password
+    echo
+    
+    local realm_join_cmd="realm join --verbose --user-principal=\"$AD_ADMIN_USER\" --computer-ou=\"$FULL_COMPUTER_OU\" --os-name=\"$OS_NAME\" \"$AD_DOMAIN_LOWER\""
+    if printf "%s\n" "$admin_password" | run_command "$realm_join_cmd"; then
         log "Successfully joined domain $AD_DOMAIN_LOWER."
     else
         log "ERROR: 'realm join' failed. Command: $realm_join_cmd"
