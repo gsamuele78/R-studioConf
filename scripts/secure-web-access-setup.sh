@@ -86,7 +86,7 @@ main() {
     source "$UTILS_SCRIPT_PATH"; if [ -z "$1" ]; then usage; fi; check_root;
     if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then log "ERROR" "Configuration file not found at '$DEFAULT_CONFIG_FILE'."; exit 1; fi
     source "$DEFAULT_CONFIG_FILE"
-    echo "UTILS_SCRIPT_PATH: $UTILS_SCRIPT_PATH"
+    #echo "UTILS_SCRIPT_PATH: $UTILS_SCRIPT_PATH"
     #FILEBROWSER_CONFIG_DIR="/etc/filebrowser"
     FILEBROWSER_CONFIG_DIR="$(dirname "${FILEBROWSER_CONFIG_PATH}")"
     #FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_DIR}/filebrowser.yml"
