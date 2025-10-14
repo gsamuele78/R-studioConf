@@ -200,7 +200,16 @@ join_ad_domain_realm() {
     read -r -s -p "Enter password for $AD_ADMIN_USER: " admin_password
     echo
     
-    local realm_join_cmd="realm join --verbose --user-principal=\"$AD_ADMIN_USER\" --computer-ou=\"$FULL_COMPUTER_OU\" --os-name=\"$OS_NAME\" \"$AD_DOMAIN_LOWER\""
+    log "Attempting domain join with parameters:"
+    log "  Domain: $AD_DOMAIN_LOWER"
+    log "  Admin UPN: $AD_ADMIN_USER"
+    log "  Target Computer OU: $FULL_COMPUTER_OU"
+    log "  OS Name attribute: $OS_NAME"
+
+
+
+    #local realm_join_cmd="realm join --verbose --user-principal=\"$AD_ADMIN_USER\" --computer-ou=\"$FULL_COMPUTER_OU\" --os-name=\"$OS_NAME\" \"$AD_DOMAIN_LOWER\""
+    local realm_join_cmd="realm join --verbose -U \"$AD_ADMIN_USER\" --computer-ou=\"$FULL_COMPUTER_OU\" --os-name=\"$OS_NAME\" \"$AD_DOMAIN_LOWER\""
     if printf "%s\n" "$admin_password" | run_command "$realm_join_cmd"; then
         log "Successfully joined domain $AD_DOMAIN_LOWER."
     else
