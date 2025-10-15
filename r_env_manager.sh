@@ -583,27 +583,55 @@ get_latest_rstudio_info() {
         echo "$rstudio_version $rstudio_arch"
         return 0
     fi
-    # Try to parse a modern version format safely. Avoid letting grep/sed failures
-    # trigger 'set -e' by using '|| true' and checking results before using them.
-    if [[ -n "$html" ]]; then
-        local parsed_filename=""
-        # Prefer grep -oE (extended regex) which is more portable than -P (Perl)
-        parsed_filename=$(printf "%s" "$html" | grep -oE 'rstudio-server-[0-9]+(\.[0-9]+)*(-[0-9]+)?-amd64\\.deb' | head -n1 || true)
+    # Prefer a codename-specific path (e.g., jammy, focal). Determine distro codename.
+    local ubuntu_codename
+    ubuntu_codename=$(lsb_release -cs 2>/dev/null || true)
+    if [[ -z "$ubuntu_codename" ]]; then
+        ubuntu_codename="bionic" # safe default used historically by RStudio downloads
+    fi
 
-        if [[ -n "$parsed_filename" ]]; then
-            # Extract version portion from filename safely
-            local parsed_version=""
-            parsed_version=$(sed -E 's/rstudio-server-([0-9]+(\.[0-9]+)*(\-[0-9]+)?)\-amd64\\.deb/\1/' <<<"$parsed_filename" || true)
-            if [[ -n "$parsed_version" ]]; then
-                rstudio_version="$parsed_version"
-            fi
-        else
-            log "DEBUG" "Could not parse RStudio .deb filename from HTML; keeping fallback: ${rstudio_version}"
+    # Try to find a codename-specific download first (download2.rstudio.org/server/<codename>/amd64/...)
+    local match=""
+    if [[ -n "$html" ]]; then
+        # Find links pointing to download2.rstudio.org with the detected codename and amd64
+        # Use a portable extended regex and allow for different filename patterns
+        match=$(printf "%s" "$html" | grep -oE "https?://download2\.rstudio\.org/server/${ubuntu_codename}/amd64/rstudio-server-[^\"]+\.deb" | head -n1 || true)
+
+        # If no codename-specific match, try any amd64 server link
+        if [[ -z "$match" ]]; then
+            match=$(printf "%s" "$html" | grep -oE "https?://download2\.rstudio\.org/server/[^/]+/amd64/rstudio-server-[^\"]+\.deb" | head -n1 || true)
         fi
     fi
 
+    if [[ -n "$match" ]]; then
+        # Extract filename and version safely
+        RSTUDIO_DEB_URL="$match"
+        RSTUDIO_DEB_FILENAME=$(basename "$RSTUDIO_DEB_URL")
+        # version is the part after 'rstudio-server-' and before '-amd64.deb'
+        rstudio_version=${RSTUDIO_DEB_FILENAME#rstudio-server-}
+        rstudio_version=${rstudio_version%-amd64.deb}
+
+        # Validate the URL is reachable before using it
+        if curl -I --fail -m 10 -sS "$RSTUDIO_DEB_URL" >/dev/null 2>&1; then
+            log "INFO" "Detected RStudio Server: ${RSTUDIO_DEB_FILENAME}"
+            log "INFO" "RStudio Server download URL: ${RSTUDIO_DEB_URL}"
+            return 0
+        else
+            log "WARN" "Detected URL ${RSTUDIO_DEB_URL} is not reachable. Falling back to default behavior."
+        fi
+    else
+        log "DEBUG" "No RStudio .deb link found on page for codename '${ubuntu_codename}'."
+    fi
+
+    # Fallback: construct the URL using fallback version and codename (try jammy then bionic)
     RSTUDIO_DEB_FILENAME="rstudio-server-${rstudio_version}-${rstudio_arch}.deb"
-    RSTUDIO_DEB_URL="https://download2.rstudio.org/server/bionic/${rstudio_arch}/${RSTUDIO_DEB_FILENAME}"
+    # Try codename-specific first (jammy/focal/etc.), then bionic as legacy
+    RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${ubuntu_codename}/${rstudio_arch}/${RSTUDIO_DEB_FILENAME}"
+    if ! curl -I --fail -m 10 -sS "$RSTUDIO_DEB_URL" >/dev/null 2>&1; then
+        # try bionic path as a last resort
+        RSTUDIO_DEB_URL="https://download2.rstudio.org/server/bionic/${rstudio_arch}/${RSTUDIO_DEB_FILENAME}"
+    fi
+
     log "INFO" "Using RStudio Server version: ${rstudio_version}"
     log "INFO" "RStudio Server download URL: ${RSTUDIO_DEB_URL}"
 }   
