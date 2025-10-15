@@ -392,7 +392,7 @@ setup_cran_repo() {
 install_r() {
     if command -v R &>/dev/null; then log "INFO" "R is already installed."; return 0; fi
     log "INFO" "Installing R base and development packages..."
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends r-base r-base-dev; then
+        if run_command "Install R base packages" "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends r-base r-base-dev"; then
         log "INFO" "SUCCESS: R base packages installed."
     else
         handle_error $? "Failed to install R base packages."; return 1
@@ -583,16 +583,25 @@ get_latest_rstudio_info() {
         echo "$rstudio_version $rstudio_arch"
         return 0
     fi
-
+    # Try to parse a modern version format safely. Avoid letting grep/sed failures
+    # trigger 'set -e' by using '|| true' and checking results before using them.
     if [[ -n "$html" ]]; then
-        # Attempt to parse a modern version format
-        local parsed_version
-        parsed_version=$(echo "$html" | grep -oP 'rstudio-server-[\d.]+-amd64\.deb' | head -n1 | sed -E 's/rstudio-server-([0-9]+\.[0-9]+\.[0-9]+-[0-9]+)-amd64\.deb/\1/')
-        if [[ -n "$parsed_version" ]]; then
-             rstudio_version="$parsed_version"
+        local parsed_filename=""
+        # Prefer grep -oE (extended regex) which is more portable than -P (Perl)
+        parsed_filename=$(printf "%s" "$html" | grep -oE 'rstudio-server-[0-9]+(\.[0-9]+)*(-[0-9]+)?-amd64\\.deb' | head -n1 || true)
+
+        if [[ -n "$parsed_filename" ]]; then
+            # Extract version portion from filename safely
+            local parsed_version=""
+            parsed_version=$(sed -E 's/rstudio-server-([0-9]+(\.[0-9]+)*(\-[0-9]+)?)\-amd64\\.deb/\1/' <<<"$parsed_filename" || true)
+            if [[ -n "$parsed_version" ]]; then
+                rstudio_version="$parsed_version"
+            fi
+        else
+            log "DEBUG" "Could not parse RStudio .deb filename from HTML; keeping fallback: ${rstudio_version}"
         fi
     fi
-    
+
     RSTUDIO_DEB_FILENAME="rstudio-server-${rstudio_version}-${rstudio_arch}.deb"
     RSTUDIO_DEB_URL="https://download2.rstudio.org/server/bionic/${rstudio_arch}/${RSTUDIO_DEB_FILENAME}"
     log "INFO" "Using RStudio Server version: ${rstudio_version}"
