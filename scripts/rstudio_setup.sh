@@ -136,20 +136,16 @@ configure_rstudio_user_dirs_and_login_script() {
         run_command "apt-get update -y && apt-get install -y jq" || { log "Failed to install jq. User preferences in login script might fail."; return 1; }
     fi
 
-    local login_script_template_content
-    login_script_template_content=$(_get_template_content "rstudio_user_login_script.sh.template") || return 1
-
-    log "Creating/Updating user login script ${RSTUDIO_PROFILE_SCRIPT_PATH} from template..."
     local final_script_content
-    final_script_content=$(apply_replacements "$login_script_template_content" \
-        "%%RSTUDIO_PROFILE_SCRIPT_PATH%%" "${RSTUDIO_PROFILE_SCRIPT_PATH}" \
-        "%%R_PROJECTS_ROOT%%" "$user_dir_template" \
-        "%%USER_LOGIN_LOG_ROOT%%" "${USER_LOGIN_LOG_ROOT}" \
-        "%%DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT%%" "${DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT}" \
-        "%%DEFAULT_PYTHON_PATH_LOGIN_SCRIPT%%" "${DEFAULT_PYTHON_PATH_LOGIN_SCRIPT}" \
-    )
-
-    # Write the processed content to the target script path
+    if ! process_template "${TEMPLATE_DIR}/rstudio_user_login_script.sh.template" final_script_content \
+        RSTUDIO_PROFILE_SCRIPT_PATH="${RSTUDIO_PROFILE_SCRIPT_PATH}" \
+        R_PROJECTS_ROOT="$user_dir_template" \
+        USER_LOGIN_LOG_ROOT="${USER_LOGIN_LOG_ROOT}" \
+        DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT="${DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT}" \
+        DEFAULT_PYTHON_PATH_LOGIN_SCRIPT="${DEFAULT_PYTHON_PATH_LOGIN_SCRIPT}"; then
+        log "ERROR: Failed to process template for user login script"
+        return 1
+    fi
     if ! printf "%s" "$final_script_content" > "${RSTUDIO_PROFILE_SCRIPT_PATH}"; then
         log "ERROR: Failed to write user login script to ${RSTUDIO_PROFILE_SCRIPT_PATH}"
         return 1
@@ -237,13 +233,13 @@ configure_rstudio_session_env_settings() {
     log "${RSESSION_CONF_PATH} updated."
 
     # Configure logging.conf from template
-    local logging_template_content
-    logging_template_content=$(_get_template_content "rstudio_logging.conf.template") || return 1
     local final_logging_conf
-    final_logging_conf=$(apply_replacements "$logging_template_content" \
-        "%%RSTUDIO_SERVER_LOG_DIR%%" "${RSTUDIO_SERVER_LOG_DIR}" \
-        "%%RSTUDIO_FILE_LOCKING_LOG_DIR%%" "${RSTUDIO_FILE_LOCKING_LOG_DIR}" \
-    )
+    if ! process_template "${TEMPLATE_DIR}/rstudio_logging.conf.template" final_logging_conf \
+        RSTUDIO_SERVER_LOG_DIR="${RSTUDIO_SERVER_LOG_DIR}" \
+        RSTUDIO_FILE_LOCKING_LOG_DIR="${RSTUDIO_FILE_LOCKING_LOG_DIR}"; then
+        log "ERROR: Failed to process template for logging.conf"
+        return 1
+    fi
     if ! printf "%s" "$final_logging_conf" > "${RSTUDIO_LOGGING_CONF_PATH}"; then
         log "ERROR: Failed to write ${RSTUDIO_LOGGING_CONF_PATH} from template"
         return 1
@@ -270,14 +266,14 @@ configure_rstudio_session_env_settings() {
     # Check if the sentinel is already in the file to prevent duplicate appends
     if ! grep -qF "$welcome_sentinel_check" "${GLOBAL_R_PROFILE_SITE_PATH}"; then
         log "Adding welcome message to ${GLOBAL_R_PROFILE_SITE_PATH} from template..."
-        local welcome_template_content
-        welcome_template_content=$(_get_template_content "r_profile_site_welcome.R.template") || return 1
         local final_welcome_message
-        final_welcome_message=$(apply_replacements "$welcome_template_content" \
-            "%%R_HOST%%" "$r_host" \
-            "%%R_IP%%" "$r_ip" \
-            "%%R_PROJECTS_ROOT%%" "${R_PROJECTS_ROOT}" \
-        )
+        if ! process_template "${TEMPLATE_DIR}/r_profile_site_welcome.R.template" final_welcome_message \
+            R_HOST="$r_host" \
+            R_IP="$r_ip" \
+            R_PROJECTS_ROOT="${R_PROJECTS_ROOT}"; then
+            log "ERROR: Failed to process template for welcome message"
+            return 1
+        fi
         # Append the processed template content to Rprofile.site
         if ! printf "\n%s\n" "$final_welcome_message" >> "${GLOBAL_R_PROFILE_SITE_PATH}"; then
              log "ERROR: Failed to append welcome message to ${GLOBAL_R_PROFILE_SITE_PATH}"
