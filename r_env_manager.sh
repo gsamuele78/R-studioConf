@@ -42,11 +42,72 @@ export DEBIAN_FRONTEND=noninteractive
 declare -A OPERATION_STATE
 
 # --- Core Infrastructure ---
-acquire_lock() { if [[ -e "$LOCK_FILE" ]]; then local pid; pid=$(cat "$PID_FILE" 2>/dev/null || echo "unknown"); log "FATAL" "Another instance is running (PID: $pid)."; exit 1; fi; ensure_dir_exists "$(dirname "$LOCK_FILE")"; touch "$LOCK_FILE"; echo $$ > "$PID_FILE"; }
-check_system_resources() { local min_memory=${MIN_MEMORY_MB:-2048}; local min_disk=${MIN_DISK_MB:-5120}; local available_memory; available_memory=$(free -m | awk '/^Mem:/{print $7}'); if (( available_memory < min_memory )); then handle_error 4 "Insufficient memory."; return 1; fi; local available_disk; available_disk=$(df -m "$SCRIPT_DIR" | awk 'NR==2 {print $4}'); if (( available_disk < min_disk )); then handle_error 4 "Insufficient disk space."; return 1; fi; return 0; }
-setup_logging() { ensure_dir_exists "$LOG_DIR"; if [[ ! -f "$LOG_FILE" ]]; then touch "$LOG_FILE"; chmod 640 "$LOG_FILE"; fi; exec 3>&2; exec 2> >(tee -a "$LOG_FILE" >&2); }
-cleanup() { local exit_code=$?; log "INFO" "Script execution ending with code: $exit_code"; if [[ -f "$LOCK_FILE" ]]; then rm -f "$LOCK_FILE"; fi; if [[ -f "$PID_FILE" ]]; then rm -f "$PID_FILE"; fi; exec 2>&3; exit "$exit_code"; }
-trap cleanup EXIT; trap 'log "FATAL" "Received signal to terminate."; exit 1' HUP INT QUIT TERM;
+acquire_lock() {
+    if [[ -e "$LOCK_FILE" ]]; then
+        local pid
+        pid=$(cat "$PID_FILE" 2>/dev/null || echo "unknown")
+        log "FATAL" "Another instance is running (PID: $pid)."
+        exit 1
+    fi
+    ensure_dir_exists "$(dirname "$LOCK_FILE")"
+    touch "$LOCK_FILE"
+    echo $$ > "$PID_FILE"
+}
+
+check_system_resources() {
+    local min_memory=${MIN_MEMORY_MB:-2048}
+    local min_disk=${MIN_DISK_MB:-5120}
+    
+    # Check available memory
+    local available_memory
+    available_memory=$(free -m | awk '/^Mem:/{print $7}')
+    if (( available_memory < min_memory )); then
+        handle_error 4 "Insufficient memory (${available_memory}MB available, ${min_memory}MB required)."
+        return 1
+    fi
+    
+    # Check available disk space
+    local available_disk
+    available_disk=$(df -m "$SCRIPT_DIR" | awk 'NR==2 {print $4}')
+    if (( available_disk < min_disk )); then
+        handle_error 4 "Insufficient disk space (${available_disk}MB available, ${min_disk}MB required)."
+        return 1
+    fi
+    
+    return 0
+}
+
+setup_logging() {
+    ensure_dir_exists "$LOG_DIR"
+    if [[ ! -f "$LOG_FILE" ]]; then
+        touch "$LOG_FILE"
+        chmod 640 "$LOG_FILE"
+    fi
+    # Save original stderr
+    exec 3>&2
+    # Redirect stderr through tee
+    exec 2> >(tee -a "$LOG_FILE" >&2)
+}
+
+cleanup() {
+    local exit_code=$?
+    log "INFO" "Script execution ending with code: $exit_code"
+    # Remove lock file if it exists
+    if [[ -f "$LOCK_FILE" ]]; then
+        rm -f "$LOCK_FILE"
+    fi
+    # Remove PID file if it exists
+    if [[ -f "$PID_FILE" ]]; then
+        rm -f "$PID_FILE"
+    fi
+    # Restore original stderr
+    exec 2>&3
+    exit "$exit_code"
+}
+
+# Set up trap handlers
+trap cleanup EXIT
+trap 'log "FATAL" "Received signal to terminate."; exit 1' HUP INT QUIT TERM
 check_security_requirements() { if [[ $EUID -ne 0 ]]; then log "FATAL" "This script must be run as root."; exit 1; fi; local insecure_path_found=0; local old_ifs="$IFS"; IFS=':'; for dir in $PATH; do if [[ "$dir" == "." ]] || [[ -z "$dir" ]]; then insecure_path_found=1; break; fi; done; IFS="$old_ifs"; if [[ $insecure_path_found -eq 1 ]]; then log "FATAL" "Insecure PATH detected."; exit 1; fi; for dir in "$LOG_DIR" "$BACKUP_DIR"; do ensure_dir_exists "$dir"; chmod 750 "$dir"; done; }
 # (Other core functions like config loading, state management, etc. are omitted for brevity but should be included from previous versions)
 
@@ -490,12 +551,38 @@ verify_bspm() {
 # --- RStudio Server Functions ---
 get_latest_rstudio_info() {
     log "INFO" "Detecting latest RStudio Server version..."
-    # Fallback values from config
+    
+    # Fallback values from configuration
     local rstudio_version=${RSTUDIO_VERSION_FALLBACK:-"2023.06.0"}
     local rstudio_arch=${RSTUDIO_ARCH_FALLBACK:-"amd64"}
-
-    local html
-    html=$(curl -fsSL "https://rstudio.com/products/rstudio/download-server/" 2>/dev/null || true)
+    local max_retry_attempts=3
+    local retry_delay=5
+    local attempt=1
+    
+    # Try to get the download page with retries
+    local html=""
+    while [[ $attempt -le $max_retry_attempts ]]; do
+        log "INFO" "Attempt $attempt of $max_retry_attempts: Fetching RStudio Server version info..."
+        if html=$(curl -m 30 -fsSL "https://posit.co/download/rstudio-server/" 2>/dev/null); then
+            log "INFO" "Successfully retrieved version information."
+            break
+        else
+            log "WARN" "Attempt $attempt failed to fetch version information."
+            if [[ $attempt -lt $max_retry_attempts ]]; then
+                log "INFO" "Retrying in $retry_delay seconds..."
+                sleep $retry_delay
+            fi
+            ((attempt++))
+        fi
+    done
+    
+    # If all attempts failed, use fallback values
+    if [[ -z "$html" ]]; then
+        log "WARN" "Could not fetch latest version info after $max_retry_attempts attempts."
+        log "INFO" "Using fallback version: $rstudio_version ($rstudio_arch)"
+        echo "$rstudio_version $rstudio_arch"
+        return 0
+    fi
 
     if [[ -n "$html" ]]; then
         # Attempt to parse a modern version format
@@ -505,7 +592,7 @@ get_latest_rstudio_info() {
              rstudio_version="$parsed_version"
         fi
     fi
-
+    
     RSTUDIO_DEB_FILENAME="rstudio-server-${rstudio_version}-${rstudio_arch}.deb"
     RSTUDIO_DEB_URL="https://download2.rstudio.org/server/bionic/${rstudio_arch}/${RSTUDIO_DEB_FILENAME}"
     log "INFO" "Using RStudio Server version: ${rstudio_version}"
