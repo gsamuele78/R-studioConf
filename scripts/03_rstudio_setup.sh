@@ -9,7 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 # Define paths relative to SCRIPT_DIR
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-SSSD_KERBEROS_SCRIPT_PATH="${SCRIPT_DIR}/sssd_kerberos_setup.sh" # Path to SSSD script
+# Resolve SSSD/Kerberos script path (support numeric prefix like 00_...)
+SSSD_KERBEROS_SCRIPT_PATH="$(ls "${SCRIPT_DIR}"/*sssd_kerberos_setup.sh 2>/dev/null | head -n1 || true)"
+SSSD_KERBEROS_SCRIPT_PATH="${SSSD_KERBEROS_SCRIPT_PATH:-${SCRIPT_DIR}/00_sssd_kerberos_setup.sh}"
 CONF_VARS_FILE="${SCRIPT_DIR}/../config/rstudio_setup.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates" # Used by _get_template_content
 

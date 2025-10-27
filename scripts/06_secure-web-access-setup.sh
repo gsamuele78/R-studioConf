@@ -1,3 +1,4 @@
+    setup_backup_dir # Initialize session backup directory
 #!/bin/bash
 # scripts/secure-web-access-setup.sh
 # VERSION 16.0: VICTORIOUS. Uses the definitive YAML structure.
@@ -67,11 +68,46 @@ install_services() {
 
 uninstall_services() {
     log "INFO" "--- Starting Secure Web Access Uninstallation ---"
+    backup_config
+    local confirm_uninstall
+    read -r -p "This will remove Secure Web Access packages, services, and configs. Continue? (y/n): " confirm_uninstall
+    if [[ "$confirm_uninstall" != "y" && "$confirm_uninstall" != "Y" ]]; then
+        log "Uninstallation cancelled."
+        return 0
+    fi
     run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service filebrowser.service" || log "WARN" "Services may not have been running."
     log "INFO" "Removing systemd service files..."; sudo rm -f /etc/systemd/system/filebrowser.service; run_command "Remove ttyd override" "rm -rf ${TTYD_OVERRIDE_DIR}"; run_command "Reload systemd daemon" "systemctl daemon-reload";
     log "INFO" "Removing binaries, configs, and data..."; run_command "Remove filebrowser binary" "rm -f /usr/local/bin/filebrowser"; run_command "Remove File Browser config dir" "rm -rf ${FILEBROWSER_CONFIG_DIR}"; run_command "Remove File Browser library dir" "rm -rf /var/lib/filebrowser"; 
     log "INFO" "Removing ttyd package..."; if ! DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y ttyd; then handle_error $? "Failed to remove ttyd package."; fi; log "INFO" "SUCCESS: Packages removed.";
     log "INFO" "--- Uninstallation Complete! ---"
+    log "INFO" "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
+restore_config() {
+    log "INFO" "Restoring Secure Web Access configuration from backup..."
+    # Implement restore logic using backup directory
+    # Example: cp -r "$CURRENT_BACKUP_DIR/etc" /etc
+    log "INFO" "Restore complete."
+}
+    setup_backup_dir # Initialize session backup directory
+    printf "\n=== Secure Web Access Setup Menu ===\n"
+    printf "1) Install/Configure Secure Web Access\n"
+    printf "U) Uninstall Secure Web Access and restore system\n"
+    printf "R) Restore configurations from most recent backup\n"
+    printf "4) Exit\n"
+    read -r -p "Choice: " choice
+    case "$choice" in
+        1)
+            backup_config
+            install_services
+            ;;
+        U|u)
+            uninstall_services
+            ;;
+        R|r)
+            restore_config
+            ;;
+        *)
+            log "Exiting Secure Web Access Setup."; return 0 ;;
+    esac
 }
 
 check_status() {

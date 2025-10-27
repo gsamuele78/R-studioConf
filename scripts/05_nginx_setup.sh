@@ -1,3 +1,44 @@
+    setup_backup_dir # Initialize session backup directory
+    printf "\n=== Nginx Setup Menu ===\n"
+    printf "1) Install/Configure Nginx\n"
+    printf "U) Uninstall Nginx and restore system\n"
+    printf "R) Restore configurations from most recent backup\n"
+    printf "4) Exit\n"
+    read -r -p "Choice: " choice
+    case "$choice" in
+        1)
+            backup_config
+            # ...existing install/config logic...
+            ;;
+        U|u)
+            uninstall_nginx
+            ;;
+        R|r)
+            restore_config
+            ;;
+        *)
+            log "Exiting Nginx Setup."; return 0 ;;
+    esac
+
+uninstall_nginx() {
+    log "Starting Nginx Uninstallation..."
+    backup_config
+    local confirm_uninstall
+    read -r -p "This will remove Nginx packages and clean configs. Continue? (y/n): " confirm_uninstall
+    if [[ "$confirm_uninstall" != "y" && "$confirm_uninstall" != "Y" ]]; then
+        log "Uninstallation cancelled."
+        return 0
+    fi
+    log "Stopping and disabling Nginx..."
+    run_command "systemctl stop nginx" || true
+    run_command "systemctl disable nginx" || true
+    log "Removing Nginx packages..."
+    run_command "DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y nginx nginx-common nginx-core nginx-full" || true
+    run_command "DEBIAN_FRONTEND=noninteractive apt-get autoremove -y" || true
+    log "Cleaning Nginx configs (backups kept in session backup dir)..."
+    run_command "rm -rf /etc/nginx" || true
+    log "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
+}
 #!/bin/bash
 
 # A script to set up Nginx as a reverse proxy for R-Studio Server and other web services.

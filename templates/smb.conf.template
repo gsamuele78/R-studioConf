@@ -1,0 +1,59 @@
+# Samba smb.conf template
+# Placeholders use the %%PLACEHOLDER%% convention expected by process_template
+
+[global]
+   # Domain settings
+   security = ads
+   encrypt passwords = yes
+
+   # Winbind configuration
+   winbind use default domain = yes
+   winbind offline logon = yes
+   winbind enum users = no
+   winbind enum groups = no
+   winbind refresh tickets = yes
+   winbind normalize names = yes
+
+# ID mapping with RID backend matching your ranges
+idmap config %%AD_DOMAIN_UPPER%% : backend = rid
+idmap config %%AD_DOMAIN_UPPER%% : range = %%IDMAP_PERSONALE_RANGE_LOW%%-%%IDMAP_PERSONALE_RANGE_HIGH%%
+# ID mapping for other domains
+idmap config * : backend = tdb
+idmap config * : range = %%IDMAP_STAR_RANGE_LOW%%-%%IDMAP_STAR_RANGE_HIGH%%
+
+   # User/Group templates
+   template shell = /bin/bash
+   template homedir = %%TEMPLATE_HOMEDIR%%
+
+   # Kerberos settings
+   kerberos method = secrets and keytab
+
+   # Performance settings
+   winbind cache time = 300
+   winbind max clients = 200
+
+   # Logging
+   log level = %%SAMBA_LOG_LEVEL%%
+   max log size = %%SAMBA_MAX_LOG_SIZE%%
+   realm = %%AD_DOMAIN_UPPER%%
+   workgroup = %%WORKGROUP%%
+
+%# Optional: access control rules inserted here
+%%SIMPLE_ALLOW_GROUPS_LINE%%
+
+[homes]
+   comment = Home Directories
+   browseable = no
+   read only = no
+   #valid users = %S
+   valid users = %%VALID_USERS_LINE%%
+   invalid users = %%INVALID_USERS_LINE%%
+
+[printers]
+   comment = All Printers
+   browseable = no
+   path = /var/spool/samba
+   printable = yes
+   guest ok = no
+   read only = yes
+   create mask = 0700

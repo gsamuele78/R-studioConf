@@ -19,6 +19,43 @@
 set -euo pipefail
 
 # --- Configuration ---
+setup_backup_dir # Initialize session backup directory
+printf "\n=== VM Optimization Menu ===\n"
+printf "1) Optimize VM\n"
+printf "U) Uninstall VM optimizations and restore system\n"
+printf "R) Restore configurations from most recent backup\n"
+printf "4) Exit\n"
+read -r -p "Choice: " choice
+case "$choice" in
+    1)
+        backup_config
+        # ...existing optimization logic...
+        ;;
+    U|u)
+        uninstall_vm_optimizations
+        ;;
+    R|r)
+        restore_config
+        ;;
+    *)
+        echo "Exiting VM Optimization."; return 0 ;;
+esac
+
+uninstall_vm_optimizations() {
+    echo "Starting VM Optimization Uninstallation..."
+    backup_config
+    local confirm_uninstall
+    read -r -p "This will attempt to revert VM optimizations. Continue? (y/n): " confirm_uninstall
+    if [[ "$confirm_uninstall" != "y" && "$confirm_uninstall" != "Y" ]]; then
+        echo "Uninstallation cancelled."
+        return 0
+    fi
+    # Implement logic to revert optimizations (reset CPU, NUMA, balloon, disk, network)
+    # Example:
+    qm set "$VMID" --cpu default --numa 0 --balloon 1
+    # ...other revert logic as needed...
+    echo "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
+}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/../config/optimize_vm.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
