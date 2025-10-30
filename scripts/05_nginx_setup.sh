@@ -33,8 +33,8 @@ uninstall_nginx() {
     run_command "systemctl stop nginx" || true
     run_command "systemctl disable nginx" || true
     log "Removing Nginx packages..."
-    run_command "DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y nginx nginx-common nginx-core nginx-full" || true
-    run_command "DEBIAN_FRONTEND=noninteractive apt-get autoremove -y" || true
+        run_command "Remove Nginx packages" "apt-get remove --purge -y nginx nginx-common nginx-core nginx-full" || true
+        run_command "Autoremove unused packages" "apt-get autoremove -y" || true
     log "Cleaning Nginx configs (backups kept in session backup dir)..."
     run_command "rm -rf /etc/nginx" || true
     log "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
@@ -67,7 +67,7 @@ _fix_ipv6_and_finish_install() {
         fi
     done
     log "INFO" "IPv6 directives commented out. Forcing reconfiguration of all pending packages..."
-    if ! DEBIAN_FRONTEND=noninteractive dpkg --configure -a; then
+    if ! run_command "Force configure all pending packages" "dpkg --configure -a"; then
         log "ERROR" "Failed to fix broken packages with 'dpkg --configure -a'."; return 1;
     fi
     log "INFO" "SUCCESS: Nginx installation has been repaired."; return 0;
@@ -94,8 +94,13 @@ main() {
     # Step 2: Install Nginx (Unchanged)
     log "INFO" "Starting installation/reinstallation of 'nginx-full'..."
     run_command "Update package lists" "apt-get -y update"
-    log "INFO" "Purging any existing Nginx packages..."; DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y nginx nginx-common nginx-core nginx-full || log "WARN" "Could not purge nginx packages, they may not have been installed."
-    log "INFO" "Installing 'nginx-full'. Apt output will follow:"; if ! DEBIAN_FRONTEND=noninteractive apt-get -y install nginx-full; then if ! _fix_ipv6_and_finish_install; then log "ERROR" "Failed to install or repair nginx-full package."; exit 1; fi; fi
+    log "INFO" "Purging any existing Nginx packages..."; run_command "Purge nginx packages" "apt-get remove --purge -y nginx nginx-common nginx-core nginx-full" || log "WARN" "Could not purge nginx packages, they may not have been installed."
+    log "INFO" "Installing 'nginx-full'. Apt output will follow:";
+    if ! run_command "Install nginx-full" "apt-get -y install nginx-full"; then
+        if ! _fix_ipv6_and_finish_install; then
+            log "ERROR" "Failed to install or repair nginx-full package."; exit 1;
+        fi
+    fi
     log "INFO" "SUCCESS: 'nginx-full' package is correctly installed and configured."
     
     # ### DEFINITIVE FIX: The 'load_module' step is now removed. ###

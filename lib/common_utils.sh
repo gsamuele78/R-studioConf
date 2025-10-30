@@ -131,8 +131,11 @@ run_command() {
     while [ $retry_count -lt "$max_retries" ]; do
         log "DEBUG" "Executing: ${cmd} (Attempt $((retry_count + 1))/${max_retries})"
         
-        # Execute command, redirecting its output to the main log file if available
+        # Create temp file for output
         local target_log_file="${MAIN_LOG_FILE:-$LOG_FILE}"
+        local output_file
+        output_file=$(mktemp)
+        
         # If the command is apt/apt-get, automatically ensure it runs non-interactively
         # and pass safe dpkg options to avoid configuration prompts during automated runs.
         local exec_cmd
@@ -169,16 +172,20 @@ run_command() {
             exec_cmd="${cmd}"
         fi
 
-        if timeout "${timeout_seconds}s" bash -c "${exec_cmd}" >>"$target_log_file" 2>&1; then
+        # Run command with output going to both terminal and temp file
+        if timeout "${timeout_seconds}s" bash -c "${exec_cmd}" 2>&1 | tee -a "$target_log_file" > "$output_file"; then
             log "INFO" "SUCCESS: ${description}"
+            rm -f "$output_file"  # Clean up temp file
             return 0
         else
             local exit_code=$?
             retry_count=$((retry_count + 1))
             if [ $retry_count -lt "$max_retries" ]; then
                 log "WARN" "Task '${description}' failed (Exit Code: ${exit_code}). Retrying in 5 seconds..."
+                rm -f "$output_file"  # Clean up temp file
                 sleep 5
             else
+                rm -f "$output_file"  # Clean up temp file
                 handle_error "${exit_code}" "Task '${description}' failed after ${max_retries} attempts. See log for details."
                 return "${exit_code}"
             fi

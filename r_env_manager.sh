@@ -857,25 +857,31 @@ uninstall() {
                 source "$R_ENV_STATE_FILE"
             fi
             if [[ ${#INSTALLED_CRAN_PACKAGES[@]} -gt 0 ]]; then
-                run_command "Uninstall user CRAN packages" Rscript -e "remove.packages(c($(printf "'%s'," "${INSTALLED_CRAN_PACKAGES[@]}")))"
+                local pkg_list
+                pkg_list=$(printf "'%s', " "${INSTALLED_CRAN_PACKAGES[@]}")
+                pkg_list="${pkg_list%, }"
+                run_command "Uninstall user CRAN packages" "Rscript -e \"remove.packages(c(${pkg_list}))\""
             fi
             if [[ ${#INSTALLED_GITHUB_PACKAGES[@]} -gt 0 ]]; then
-                run_command "Uninstall user GitHub packages" Rscript -e "remove.packages(c($(printf "'%s'," "${INSTALLED_GITHUB_PACKAGES[@]}")))"
+                local pkg_list_github
+                pkg_list_github=$(printf "'%s', " "${INSTALLED_GITHUB_PACKAGES[@]}")
+                pkg_list_github="${pkg_list_github%, }"
+                run_command "Uninstall user GitHub packages" "Rscript -e \"remove.packages(c(${pkg_list_github}))\""
             fi
         fi
     fi
 
     # Uninstall system packages
-    run_command "Uninstall RStudio Server" apt-get purge -y rstudio-server
-    run_command "Uninstall R and related packages" apt-get purge -y r-base r-base-dev r-cran-bspm
-    run_command "Uninstall build dependencies" apt-get purge -y build-essential libcurl4-openssl-dev libssl-dev libxml2-dev
-    run_command "Autoremove unused packages" apt-get autoremove -y
+    run_command "Uninstall RStudio Server" "apt-get purge -y rstudio-server"
+    run_command "Uninstall R and related packages" "apt-get purge -y r-base r-base-dev r-cran-bspm"
+    run_command "Uninstall build dependencies" "apt-get purge -y build-essential libcurl4-openssl-dev libssl-dev libxml2-dev"
+    run_command "Autoremove unused packages" "apt-get autoremove -y"
 
     # Remove config files
-    run_command "Remove Rprofile.site" rm -f "$R_PROFILE_SITE_PATH"
-    run_command "Remove CRAN apt source" rm -f /etc/apt/sources.list.d/cran.list
-    run_command "Remove R2U apt source" rm -f "$R2U_APT_SOURCES_LIST_D_FILE"
-    run_command "Remove environment state file" rm -f "$R_ENV_STATE_FILE"
+    run_command "Remove Rprofile.site" "rm -f \"$R_PROFILE_SITE_PATH\""
+    run_command "Remove CRAN apt source" "rm -f /etc/apt/sources.list.d/cran.list"
+    run_command "Remove R2U apt source" "rm -f \"$R2U_APT_SOURCES_LIST_D_FILE\""
+    run_command "Remove environment state file" "rm -f \"$R_ENV_STATE_FILE\""
 
     log "INFO" "Uninstall process completed."
 }

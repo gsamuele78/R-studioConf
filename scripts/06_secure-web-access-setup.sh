@@ -25,8 +25,11 @@ install_services() {
     
     log "INFO" "Attempting to repair any broken package dependencies..."; run_command "Force configure all pending packages" "dpkg --configure -a"; run_command "Fix broken dependencies" "apt-get -f install -y";
     log "INFO" "Installing prerequisite packages..."; run_command "Update package lists" "apt-get -y update";
-    log "INFO" "Installing ttyd..."; if ! DEBIAN_FRONTEND=noninteractive apt-get -y install ttyd; then handle_error $? "Failed to install ttyd."; return 1; fi;
-    log "INFO" "Installing curl..."; if ! DEBIAN_FRONTEND=noninteractive apt-get -y install curl; then handle_error $? "Failed to install curl."; return 1; fi;
+        log "INFO" "Installing ttyd..."; if ! run_command "Install ttyd" "apt-get -y install ttyd"; then handle_error $? "Failed to install ttyd."; return 1; fi;
+    log "INFO" "Installing curl..."
+    if ! run_command "Install curl" "apt-get -y install curl"; then
+        handle_error $? "Failed to install curl."; return 1
+    fi
     log "INFO" "SUCCESS: Prerequisites are correctly installed."
     
     log "INFO" "Downloading gtsteffaniak/filebrowser fork..."; local LATEST_URL="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/linux-amd64-filebrowser"; local BINARY_PATH="/usr/local/bin/filebrowser"; run_command "Download filebrowser binary" "curl -L -o ${BINARY_PATH} \"${LATEST_URL}\""; run_command "Set executable permission for filebrowser" "chmod +x ${BINARY_PATH}";
@@ -78,7 +81,11 @@ uninstall_services() {
     run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service filebrowser.service" || log "WARN" "Services may not have been running."
     log "INFO" "Removing systemd service files..."; sudo rm -f /etc/systemd/system/filebrowser.service; run_command "Remove ttyd override" "rm -rf ${TTYD_OVERRIDE_DIR}"; run_command "Reload systemd daemon" "systemctl daemon-reload";
     log "INFO" "Removing binaries, configs, and data..."; run_command "Remove filebrowser binary" "rm -f /usr/local/bin/filebrowser"; run_command "Remove File Browser config dir" "rm -rf ${FILEBROWSER_CONFIG_DIR}"; run_command "Remove File Browser library dir" "rm -rf /var/lib/filebrowser"; 
-    log "INFO" "Removing ttyd package..."; if ! DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y ttyd; then handle_error $? "Failed to remove ttyd package."; fi; log "INFO" "SUCCESS: Packages removed.";
+    log "INFO" "Removing ttyd package..."
+    if ! run_command "Remove ttyd package" "apt-get remove --purge -y ttyd"; then
+        handle_error $? "Failed to remove ttyd package.";
+    fi
+    log "INFO" "SUCCESS: Packages removed."
     log "INFO" "--- Uninstallation Complete! ---"
     log "INFO" "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
 restore_config() {
