@@ -392,8 +392,9 @@ setup_cran_repo() {
 install_r() {
     if command -v R &>/dev/null; then log "INFO" "R is already installed."; return 0; fi
     log "INFO" "Installing R base and development packages..."
-        if run_command "Install R base packages" "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends r-base r-base-dev"; then
-        log "INFO" "SUCCESS: R base packages installed."
+    # Use explicit noninteractive env and force dpkg options to avoid trigger prompts
+    if run_command "Install R base packages" "DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' install -y --no-install-recommends r-base r-base-dev"; then
+    log "INFO" "SUCCESS: R base packages installed."
     else
         handle_error $? "Failed to install R base packages."; return 1
     fi
@@ -401,7 +402,9 @@ install_r() {
 
 install_openblas_openmp() {
     log "INFO" "Installing OpenBLAS and OpenMP for performance..."
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y libopenblas-dev libomp-dev; then
+    # Install OpenBLAS/OpenMP using the centralized run_command wrapper which
+    # ensures apt runs in noninteractive mode and applies safe dpkg options.
+    if run_command "Install OpenBLAS and OpenMP" "apt-get install -y libopenblas-dev libomp-dev"; then
         log "INFO" "SUCCESS: OpenBLAS and OpenMP installed."
     else
         handle_error $? "Failed to install OpenBLAS/OpenMP packages."; return 1
@@ -474,7 +477,7 @@ setup_bspm() {
 
     # 4. Install the binary package 'r-cran-bspm' and its prerequisites.
     log "INFO" "Installing r-cran-bspm and prerequisites..."
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y r-cran-bspm python3-dbus python3-gi python3-apt; then
+    if ! run_command "Install r-cran-bspm and prerequisites" "apt-get install -y r-cran-bspm python3-dbus python3-gi python3-apt"; then
         handle_error $? "Failed to install r-cran-bspm package via apt."; return 1
     fi
 
@@ -654,7 +657,8 @@ install_rstudio_server() {
     # --- MODIFIED BLOCK ---
     # Call apt-get directly to prevent hanging on hidden prompts and to show progress.
     log "INFO" "Installing the downloaded .deb package. Apt output will be displayed below:"
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y "${rstudio_deb_path}"; then
+    # Install the downloaded .deb package non-interactively and force dpkg defaults to avoid prompts
+    if run_command "Install downloaded RStudio .deb" "apt-get install -y \"${rstudio_deb_path}\""; then
         log "INFO" "SUCCESS: RStudio Server package installed."
     else
         handle_error $? "Failed to install RStudio .deb package."
@@ -690,7 +694,10 @@ install_r_build_deps() {
         libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev zlib1g-dev
     )
     log "INFO" "Apt output will be displayed below:"
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y "${build_deps[@]}"; then
+    # Build a single string from the array so it can be passed as one command argument
+    local build_deps_str
+    build_deps_str="${build_deps[*]}"
+    if run_command "Install R build dependencies" "apt-get install -y ${build_deps_str}"; then
         log "INFO" "SUCCESS: R build dependencies installed."
     else
         handle_error $? "Failed to install R build dependencies."

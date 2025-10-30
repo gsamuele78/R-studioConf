@@ -133,7 +133,43 @@ run_command() {
         
         # Execute command, redirecting its output to the main log file if available
         local target_log_file="${MAIN_LOG_FILE:-$LOG_FILE}"
-        if timeout "${timeout_seconds}s" bash -c "${cmd}" >>"$target_log_file" 2>&1; then
+        # If the command is apt/apt-get, automatically ensure it runs non-interactively
+        # and pass safe dpkg options to avoid configuration prompts during automated runs.
+        local exec_cmd
+        local first_word
+        first_word=$(awk '{print $1}' <<<"${cmd}")
+
+        # Handle the common case where scripts (or callers) prefix commands with sudo.
+        # In this repository most scripts are run as root; when the literal command
+        # starts with 'sudo apt-get' or 'sudo apt' it's safe to strip the leading
+        # sudo and apply the noninteractive wrapper directly. This avoids issues
+        # with sudo stripping environment variables in some environments.
+        if [[ "${first_word}" == "sudo" ]]; then
+            # Extract second token and the rest of the command
+            local second_word
+            second_word=$(awk '{print $2}' <<<"${cmd}")
+            if [[ "${second_word}" == "apt-get" || "${second_word}" == "apt" ]]; then
+                # Remove the leading 'sudo ' safely
+                cmd="${cmd#sudo }"
+                first_word="${second_word}"
+            fi
+        fi
+
+        if [[ "${first_word}" == "apt-get" || "${first_word}" == "apt" ]]; then
+            # Avoid double-inserting options if they are already present
+            if [[ "${cmd}" != *"Dpkg::Options::="* && "${cmd}" != *"DEBIAN_FRONTEND="* ]]; then
+                # Insert dpkg option flags right after the apt/apt-get token
+                local rest
+                rest="${cmd#${first_word}}"
+                exec_cmd="DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none ${first_word} -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' ${rest}"
+            else
+                exec_cmd="DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none ${cmd}"
+            fi
+        else
+            exec_cmd="${cmd}"
+        fi
+
+        if timeout "${timeout_seconds}s" bash -c "${exec_cmd}" >>"$target_log_file" 2>&1; then
             log "INFO" "SUCCESS: ${description}"
             return 0
         else
