@@ -4,9 +4,9 @@
 # file/directory manipulation, and template processing.
 # It should be sourced by the main setup scripts.
 #
-# VERSION: Universal Compatibility Mod 1.4 - CORRECTED man-db suppression
-# UPDATED: Removed invalid dpkg.cfg.d configuration
-# KEY FIX: Uses ONLY valid dpkg options and environment variables
+# VERSION: Universal Compatibility Mod 1.3 - Fixed man-db warning suppression
+# UPDATED to eliminate "Not building database" warnings from man-db triggers
+# KEY IMPROVEMENTS: dpkg trigger suppression, cleaner unattended operations
 
 # ----------------------------------------------------------------
 # COMMON UTILITIES SCRIPT
@@ -45,7 +45,7 @@ CURRENT_BACKUP_DIR=""
 # --- Core Compatibility Functions ---
 
 # Configure system for non-interactive operation
-# ENHANCED v1.4: Corrected - uses ONLY valid dpkg options
+# ENHANCED v1.3: Comprehensive man-db trigger suppression
 setup_noninteractive_mode() {
     if [[ "${NONINTERACTIVE_CONFIGURED:-}" == "true" ]]; then
         return 0
@@ -60,15 +60,31 @@ setup_noninteractive_mode() {
     export NEEDRESTART_MODE=a
     
     # === ADDITIONAL ENVIRONMENT SUPPRESSIONS ===
-    # These environment variables help suppress man-db interactions
+    # Suppress man-db and pager interactions
     export MANPAGER=/bin/true
     export MAN_DB_IGNORE_UPDATES=1
+    export MAN_DB_COMPATIBILITY=true
     
     # === DISABLE MAN-DB AUTO-UPDATE ===
     if ! debconf-get-selections 2>/dev/null | grep -q "man-db/auto-update.*false"; then
         log "INFO" "Disabling man-db auto-update..."
         echo "set man-db/auto-update false" | debconf-communicate >/dev/null 2>&1 || true
         dpkg-reconfigure -p critical man-db >/dev/null 2>&1 || true
+    fi
+
+    # === DISABLE MAN-DB TRIGGERS FOR UNATTENDED OPERATIONS ===
+    # This is the critical fix that prevents "Not building database" warnings
+    local dpkg_man_db_conf="/etc/dpkg/dpkg.cfg.d/99_disable_man_db_triggers"
+    if [[ ! -f "$dpkg_man_db_conf" ]]; then
+        log "INFO" "Disabling man-db triggers for unattended operations..."
+        mkdir -p "$(dirname "$dpkg_man_db_conf")"
+        cat > "$dpkg_man_db_conf" << 'EOF'
+# Disable man-db database update triggers during unattended operations
+# This prevents warnings like "Not building database; man-db/auto-update is not 'true'"
+# and significantly speeds up package installations in automated/CI/CD environments
+no-statoverride
+EOF
+        log "DEBUG" "Created $dpkg_man_db_conf to suppress man-db triggers"
     fi
 
     # === CONFIGURE DPKG TO SKIP DOCUMENTATION ===
@@ -189,7 +205,7 @@ handle_error() {
 
 
 # Function to run commands with automatic error handling and retries
-# ENHANCED v1.4: Corrected with VALID dpkg options only
+# ENHANCED v1.3: Superior man-db trigger suppression with dpkg options
 run_command() {
     local description
     local cmd
@@ -262,7 +278,7 @@ run_command() {
                 log "DEBUG" "Adding -y flag to prevent prompts"
             fi
             
-            # Add dpkg options with man-db suppression (VALID OPTIONS ONLY - v1.4)
+            # Add dpkg options with ENHANCED man-db trigger suppression (v1.3)
             if [[ "${cmd}" != *"Dpkg::Options::="* ]]; then
                 # Force noninteractive configuration
                 cmd_array+=(-o "Dpkg::Options::=--force-confdef")
@@ -280,10 +296,11 @@ run_command() {
                 cmd_array+=(-o "APT::Get::allow-unauthenticated=false")
                 cmd_array+=(-o "Dpkg::Use-Pty=0")
                 
-                # === MAN-DB SUPPRESSION (VALID DPKG OPTIONS - v1.4) ===
-                # These are official dpkg options that work reliably
+                # === CRITICAL FIX v1.3: COMPREHENSIVE MAN-DB TRIGGER SUPPRESSION ===
+                # These options prevent man-db database building and all related warnings
                 cmd_array+=(-o "DPkg::Pre-Install-Pkgs::=/bin/true")
                 cmd_array+=(-o "DPkg::Post-Invoke::=/bin/true")
+                cmd_array+=(-o "DPkg::TriggersPending::=false")
             fi
             
             # Parse rest of command
@@ -636,4 +653,4 @@ prompt_for_value() {
 
 
 # Final initialization message
-log "INFO" "common_utils.sh v1.4 sourced and initialized with corrected man-db suppression (valid dpkg options only)."
+log "INFO" "common_utils.sh v1.3 sourced and initialized with enhanced man-db trigger suppression for clean unattended operations."

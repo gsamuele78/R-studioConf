@@ -4,9 +4,9 @@
 # file/directory manipulation, and template processing.
 # It should be sourced by the main setup scripts.
 #
-# VERSION: Universal Compatibility Mod 1.4 - CORRECTED man-db suppression
-# UPDATED: Removed invalid dpkg.cfg.d configuration
-# KEY FIX: Uses ONLY valid dpkg options and environment variables
+# VERSION: Universal Compatibility Mod 1.2 - FIXED apt-get hang issue
+# UPDATED to fix Exit Code 124 timeout issues with apt-get operations
+# KEY FIX: Proper stdin redirection and array-based command execution
 
 # ----------------------------------------------------------------
 # COMMON UTILITIES SCRIPT
@@ -22,8 +22,10 @@ NC='\033[0m' # No Color
 
 
 # --- Function: Check for Root Privileges ---
+# Scripts should call this function explicitly after sourcing this library.
 check_root() {
     if [[ "$EUID" -ne 0 ]]; then
+        # Use the log function if it exists, otherwise printf
         if command -v log &> /dev/null; then
             log "ERROR" "This script must be run as root."
         else
@@ -34,19 +36,25 @@ check_root() {
 }
 
 # --- CONFIGURATION VARIABLES (Internal to common_utils) ---
+# Log file for all operations
 if [[ -z "${LOG_FILE:-}" ]]; then
+    # Ensure a default log directory exists if we have to create a log file
     mkdir -p "/var/log/r_env_manager"
     LOG_FILE="/var/log/r_env_manager/common_utils.log"
 fi
 
+# Base directory for configuration backups
 BACKUP_DIR_BASE="/var/backups/r_env_manager/config_backups_$(date +%Y%m%d)"
-CURRENT_BACKUP_DIR=""
+# --- END CONFIGURATION VARIABLES ---
+
+# Global variable to hold the unique backup directory path for the current script execution session
+CURRENT_BACKUP_DIR="" # Populated by setup_backup_dir
 
 # --- Core Compatibility Functions ---
 
 # Configure system for non-interactive operation
-# ENHANCED v1.4: Corrected - uses ONLY valid dpkg options
 setup_noninteractive_mode() {
+    # Only run once per session
     if [[ "${NONINTERACTIVE_CONFIGURED:-}" == "true" ]]; then
         return 0
     fi
@@ -54,17 +62,14 @@ setup_noninteractive_mode() {
     log "INFO" "Configuring system for non-interactive operation..."
     
     # === SYSTEM-WIDE NONINTERACTIVE SETTINGS ===
+    # Export these for the current session
     export DEBIAN_FRONTEND=noninteractive
     export DEBCONF_NONINTERACTIVE_SEEN=true
     export APT_LISTCHANGES_FRONTEND=none
     export NEEDRESTART_MODE=a
     
-    # === ADDITIONAL ENVIRONMENT SUPPRESSIONS ===
-    # These environment variables help suppress man-db interactions
-    export MANPAGER=/bin/true
-    export MAN_DB_IGNORE_UPDATES=1
-    
     # === DISABLE MAN-DB AUTO-UPDATE ===
+    # First check if it's already disabled
     if ! debconf-get-selections 2>/dev/null | grep -q "man-db/auto-update.*false"; then
         log "INFO" "Disabling man-db auto-update..."
         echo "set man-db/auto-update false" | debconf-communicate >/dev/null 2>&1 || true
@@ -86,6 +91,8 @@ path-exclude /usr/share/locale/*
 path-include /usr/share/locale/*/LC_MESSAGES/*.mo
 EOF
         log "INFO" "Created $nodoc_conf to skip documentation"
+        
+        # Force dpkg to recognize the new configuration
         dpkg --clear-avail || true
     fi
 
@@ -108,7 +115,9 @@ EOF
 }
 
 
-# Run lightweight apt/dpkg health checks
+# Run lightweight apt/dpkg health checks to reduce the chance of apt hanging.
+# This is intentionally conservative: it attempts non-destructive fixes first,
+# logs results, and only removes stale lock files when no process is holding them.
 check_apt_health() {
     log "INFO" "Running apt/dpkg health checks..."
 
@@ -128,7 +137,8 @@ check_apt_health() {
         fi
     fi
 
-    # 3) Check for and remove stale lock files
+    # 3) Check for and remove stale lock files only when they are not held
+    # by any running process. We prefer fuser over blindly deleting the locks.
     for lock in /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock; do
         if [[ -e "$lock" ]]; then
             if lsof "$lock" >/dev/null 2>&1 || fuser "$lock" >/dev/null 2>&1; then
@@ -140,7 +150,7 @@ check_apt_health() {
         fi
     done
 
-    # 4) Check disk space on root and /var
+    # 4) Check disk space on root and /var. Warn if <5% available.
     local avail_root avail_var
     avail_root=$(df --output=pcent / | tail -1 | tr -dc '0-9') || avail_root=0
     avail_var=$(df --output=pcent /var 2>/dev/null | tail -1 | tr -dc '0-9' ) || avail_var=$avail_root
@@ -154,42 +164,60 @@ check_apt_health() {
     log "DEBUG" "Apt/dpkg health checks complete"
 }
 
-# Universal log function
+# Universal log function that supports both old and new calling styles.
+# New style (from r_env_manager.sh): log "LEVEL" "My message here"
+# Old style (from this library):      log "My message here"
 log() {
+    # Do nothing if no arguments are provided.
     if [[ $# -eq 0 ]]; then
         return
     fi
 
-    local level="INFO"
+    local level="INFO" # Default level for old-style calls
     local message
 
+    # Check if the first argument is a recognized log level and there is more than one argument.
+    # This detects the new calling style.
     if [[ "$1" =~ ^(INFO|WARN|ERROR|FATAL|DEBUG)$ ]] && [[ $# -gt 1 ]]; then
         level="$1"
-        shift
+        shift # Remove the level from the argument list, leaving the message
         message="$*"
     else
+        # This handles the old style where all arguments are part of the message.
         message="$*"
     fi
 
     local timestamp
     timestamp=$(date +"%Y-%m-%d %H:%M:%S")
 
+    # Use the detailed format that r_env_manager.sh expects.
+    # Appends to both the main script's log file and this library's log file for full traceability.
     printf "%s - %-5s - %s\n" "$timestamp" "$level" "$message" | tee -a "${LOG_FILE}"
     if [[ -n "${MAIN_LOG_FILE:-}" ]] && [[ "$LOG_FILE" != "$MAIN_LOG_FILE" ]]; then
         printf "%s - %-5s - %s\n" "$timestamp" "$level" "$message" >> "$MAIN_LOG_FILE"
     fi
 }
 
-# Handle errors
+# Added the handle_error function required by r_env_manager.sh
+# This function logs a formatted error message.
 handle_error() {
-    local exit_code="${1:-1}"
+    local exit_code="${1:-1}" # Default exit code to 1 if not provided
     local message="${2:-Unknown error}"
     log "ERROR" "An error occurred: ${message} (Exit Code: ${exit_code})"
+    # The main script's trap handler will manage the actual exit.
+    # This function's role is primarily to log the error in a consistent format.
 }
 
 
-# Function to run commands with automatic error handling and retries
-# ENHANCED v1.4: Corrected with VALID dpkg options only
+# Function to run commands, log them, and check for errors
+# Usage: run_command "Description of task" "your_command -with --args"
+# Returns 0 on success, command's exit code on failure.
+#
+# FIXED VERSION 1.2 - Resolves Exit Code 124 timeout issues
+# Key fixes:
+# - Uses array-based command construction to preserve quoting
+# - Redirects stdin from /dev/null to prevent interactive prompts
+# - Uses PIPESTATUS to get correct exit codes
 run_command() {
     local description
     local cmd
@@ -202,6 +230,8 @@ run_command() {
     fi
 
     local retry_count=0
+    
+    # Use MAX_RETRIES and TIMEOUT from the main script, with defaults if not set
     local max_retries=${MAX_RETRIES:-3}
     local timeout_seconds=${TIMEOUT:-1800}
 
@@ -210,15 +240,18 @@ run_command() {
     while [ $retry_count -lt "$max_retries" ]; do
         log "DEBUG" "Executing: ${cmd} (Attempt $((retry_count + 1))/${max_retries})"
         
+        # Set up logging
         local target_log_file="${MAIN_LOG_FILE:-$LOG_FILE}"
+        
         local first_word
         first_word=$(awk '{print $1}' <<<"${cmd}")
 
-        # Handle sudo prefix
+        # Handle the common case where scripts (or callers) prefix commands with sudo.
         if [[ "${first_word}" == "sudo" ]]; then
             local second_word
             second_word=$(awk '{print $2}' <<<"${cmd}")
             if [[ "${second_word}" == "apt-get" || "${second_word}" == "apt" ]]; then
+                # Remove the leading 'sudo ' safely
                 cmd="${cmd#sudo }"
                 first_word="${second_word}"
             fi
@@ -226,30 +259,38 @@ run_command() {
 
         # Check if this is an apt/apt-get command
         if [[ "${first_word}" == "apt-get" || "${first_word}" == "apt" ]]; then
+            # Ensure system is configured for non-interactive operation
             setup_noninteractive_mode
+
+            # Run lightweight apt/dpkg health checks
             check_apt_health
 
+            # Get the rest of the command after apt/apt-get
             local rest
             rest="${cmd#${first_word}}"
             
             # Determine timeout based on operation
-            local cmd_timeout=180
+            local cmd_timeout=180  # Default 3 minutes for remove operations
             if [[ "${cmd}" =~ (install|upgrade|dist-upgrade) ]]; then
-                cmd_timeout=300
+                cmd_timeout=300  # 5 minutes
             elif [[ "${cmd}" =~ update ]]; then
-                cmd_timeout=120
+                cmd_timeout=120  # 2 minutes
             elif [[ "${cmd}" =~ (remove|purge|autoremove) ]]; then
-                cmd_timeout=180
+                cmd_timeout=180  # 3 minutes
             fi
             
-            # Build command array
+            # Build command as an ARRAY to preserve quoting
             local -a cmd_array=()
+            
+            # Add timeout wrapper
             cmd_array+=(timeout)
             cmd_array+=(--kill-after=30s)
             cmd_array+=("${cmd_timeout}s")
+            
+            # Add the apt/apt-get command
             cmd_array+=("${first_word}")
             
-            # Determine if -y is needed
+            # Determine if we need to add -y for this operation
             local need_yes=0
             if [[ "${rest}" =~ ^[[:space:]]*(install|remove|purge|upgrade|dist-upgrade|autoremove)[[:space:]] ]]; then
                 if [[ "${rest}" != *" -y"* ]] && [[ "${rest}" != *" --yes"* ]]; then
@@ -257,18 +298,19 @@ run_command() {
                 fi
             fi
             
+            # Add -y flag if needed (immediately after apt/apt-get)
             if [ "$need_yes" -eq 1 ]; then
                 cmd_array+=(-y)
                 log "DEBUG" "Adding -y flag to prevent prompts"
             fi
             
-            # Add dpkg options with man-db suppression (VALID OPTIONS ONLY - v1.4)
+            # Add dpkg options if not already present
             if [[ "${cmd}" != *"Dpkg::Options::="* ]]; then
                 # Force noninteractive configuration
                 cmd_array+=(-o "Dpkg::Options::=--force-confdef")
                 cmd_array+=(-o "Dpkg::Options::=--force-confold")
                 
-                # Prevent install of recommended packages
+                # Prevent install of recommended packages by default
                 cmd_array+=(--no-install-recommends)
                 
                 # Disable progress and status output
@@ -279,21 +321,19 @@ run_command() {
                 cmd_array+=(-o "APT::Get::Assume-Yes=true")
                 cmd_array+=(-o "APT::Get::allow-unauthenticated=false")
                 cmd_array+=(-o "Dpkg::Use-Pty=0")
-                
-                # === MAN-DB SUPPRESSION (VALID DPKG OPTIONS - v1.4) ===
-                # These are official dpkg options that work reliably
-                cmd_array+=(-o "DPkg::Pre-Install-Pkgs::=/bin/true")
-                cmd_array+=(-o "DPkg::Post-Invoke::=/bin/true")
             fi
             
-            # Parse rest of command
+            # Parse the rest of the command and add each argument
             local -a rest_args
             read -ra rest_args <<<"${rest}"
             cmd_array+=("${rest_args[@]}")
             
+            # Display the command for debugging
             log "DEBUG" "Command array: ${cmd_array[*]}"
             
-            # Execute with stdin from /dev/null (critical for non-interactive)
+            # THE KEY FIX: Execute with stdin redirected from /dev/null
+            # This ensures apt-get knows it's in non-interactive mode and
+            # cannot wait for user input
             set -o pipefail
             
             if env \
@@ -304,9 +344,8 @@ run_command() {
                 DPKG_TRIGGER_TIMEOUT=30 \
                 MAN_DB_DISABLE_UPDATE=1 \
                 MANDB_DONT_UPDATE=1 \
-                MANPAGER=/bin/true \
-                MAN_DB_IGNORE_UPDATES=1 \
                 "${cmd_array[@]}" < /dev/null 2>&1 | tee -a "$target_log_file"; then
+                # Use PIPESTATUS to get the exit code of the command, not tee
                 local exit_code=${PIPESTATUS[0]}
                 set +o pipefail
                 
@@ -314,6 +353,7 @@ run_command() {
                     log "INFO" "SUCCESS: ${description}"
                     return 0
                 else
+                    # Command completed but with non-zero exit code
                     set +o pipefail
                     retry_count=$((retry_count + 1))
                     
@@ -339,7 +379,7 @@ run_command() {
                 fi
             fi
         else
-            # Non-apt commands
+            # Non-apt commands: execute normally with stdin redirect
             local cmd_timeout="${timeout_seconds}"
             set -o pipefail
             
@@ -382,6 +422,7 @@ run_command() {
 
 # --- Backup and Restore Functions ---
 
+# Sets up a unique backup directory for the current session
 setup_backup_dir() {
     if [[ -z "$CURRENT_BACKUP_DIR" ]]; then
         CURRENT_BACKUP_DIR="${BACKUP_DIR_BASE}/run_$(date +%Y%m%d_%H%M%S)"
@@ -393,6 +434,7 @@ setup_backup_dir() {
     fi
 }
 
+# Helper to backup a single item (file or directory)
 _backup_item() {
     local src_path="$1"
     local dest_parent_dir="$2"
@@ -413,6 +455,7 @@ _backup_item() {
     fi
 }
 
+# Main backup function
 backup_config() {
     if [[ -z "$CURRENT_BACKUP_DIR" ]]; then
         log "ERROR" "Backup directory not set. Call setup_backup_dir first."
@@ -508,9 +551,9 @@ restore_config() {
     fi
 
     log "INFO" "Restoring from $latest_backup..."
+
     log "INFO" "Configuration files restored from $latest_backup."
     log "INFO" "Restarting services if they are installed..."
-    
     local -a services_to_restart=()
     if command -v sssd &>/dev/null && systemctl list-units --full -all | grep -q 'sssd.service'; then services_to_restart+=("sssd"); fi
     if command -v rstudio-server &>/dev/null && systemctl list-units --full -all | grep -q 'rstudio-server.service'; then services_to_restart+=("rstudio-server"); fi
@@ -581,9 +624,11 @@ process_template() {
         
         placeholder="%%${original_placeholder}%%"
         
+        # Robust fix: Escape backslashes and the sed delimiter
         local escaped_value
         escaped_value=$(sed -e 's/\\/\\\\/g' -e 's/#/\\#/g' <<<"$value")
         
+        # Use '#' as the sed delimiter to safely handle file paths
         template_content=$(echo "$template_content" | sed "s#$placeholder#$escaped_value#g")
     done
     
@@ -597,6 +642,7 @@ process_systemd_template() {
     local template_path="$template_name"
     local output_path=""
 
+    # Check if the 'service_name' is an absolute path
     if [[ "$service_name" == /* ]]; then
         output_path="$service_name"
     else
@@ -621,6 +667,7 @@ process_systemd_template() {
 
 
 # --- Interactive Function ---
+# Prompts the user for input, using a default value if they just press Enter.
 prompt_for_value() {
     local prompt_text="$1"
     local var_name="$2"
@@ -635,5 +682,5 @@ prompt_for_value() {
 }
 
 
-# Final initialization message
-log "INFO" "common_utils.sh v1.4 sourced and initialized with corrected man-db suppression (valid dpkg options only)."
+# Final initialization message to confirm the script has been sourced
+log "INFO" "common_utils.sh v1.2 sourced and initialized with universal log support and fixed apt-get handling."
