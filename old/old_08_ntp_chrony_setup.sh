@@ -1,6 +1,5 @@
 #!/bin/bash
 # 08_ntp_chrony_setup.sh - Unified NTP/chrony setup script
-# FIXED VERSION: Separate apt-get commands for proper v1.4 compatibility
 # Installs, configures, and restarts chrony/ntp/systemd-timesyncd as needed
 # Uses process_template and backup logic from common_utils.sh
 
@@ -33,28 +32,17 @@ else
     NTP_FALLBACK_SERVERS=("0.debian.pool.ntp.org" "1.debian.pool.ntp.org" "2.debian.pool.ntp.org" "3.debian.pool.ntp.org")
 fi
 
-# FIXED: Separate apt-get commands instead of using && operators
-# The run_command() function is designed for single apt operations
-# Compound commands with && break the dpkg options parsing
 install_ntp_client() {
     case "$NTP_PREFERRED_CLIENT" in
         chrony)
-            log "Updating package lists..."
-            run_command "Update package lists" "apt-get update" || return 1
-            log "Installing chrony..."
-            run_command "Install chrony" "apt-get install -y chrony" || return 1
+            run_command "apt-get update -y && apt-get install -y chrony" || return 1
             ;;
         ntp)
-            log "Updating package lists..."
-            run_command "Update package lists" "apt-get update" || return 1
-            log "Installing ntp..."
-            run_command "Install ntp" "apt-get install -y ntp" || return 1
+            run_command "apt-get update -y && apt-get install -y ntp" || return 1
             ;;
         systemd-timesyncd)
-            log "Enabling systemd-timesyncd..."
-            run_command "Enable systemd-timesyncd" "systemctl enable systemd-timesyncd" || return 1
-            log "Starting systemd-timesyncd..."
-            run_command "Start systemd-timesyncd" "systemctl start systemd-timesyncd" || return 1
+            run_command "systemctl enable systemd-timesyncd"
+            run_command "systemctl start systemd-timesyncd"
             ;;
         *)
             log "ERROR: Unknown NTP client: $NTP_PREFERRED_CLIENT"
@@ -95,10 +83,10 @@ deploy_chrony_conf() {
         log "ERROR: Failed to write ${dest_path}"
         return 1
     fi
-    run_command "Set chrony.conf ownership" "chown root:root ${dest_path}" || true
-    run_command "Set chrony.conf permissions" "chmod 644 ${dest_path}" || true
+    run_command "chown root:root ${dest_path}" || true
+    run_command "chmod 644 ${dest_path}" || true
     log "Chrony config deployed. Restarting chrony..."
-    run_command "Restart chrony service" "systemctl restart chrony" || log "Warning: restart may have failed; check service status"
+    run_command "systemctl restart chrony" || log "Warning: restart may have failed; check service status"
 }
 
 main_menu() {
@@ -144,9 +132,8 @@ uninstall_ntp_chrony() {
         return 0
     fi
     log "Stopping NTP/chrony services..."
-    run_command "Stop chrony/ntp services" "systemctl stop chrony ntp systemd-timesyncd" &>/dev/null || true
-    run_command "Disable chrony/ntp services" "systemctl disable chrony ntp systemd-timesyncd" &>/dev/null || true
-    
+    run_command "systemctl stop chrony ntp systemd-timesyncd" &>/dev/null || true
+    run_command "systemctl disable chrony ntp systemd-timesyncd" &>/dev/null || true
     log "Removing packages..."
     local -a packages_to_remove=( chrony ntp systemd-timesyncd )
     local -a actually_installed_for_removal=()
@@ -155,19 +142,16 @@ uninstall_ntp_chrony() {
             actually_installed_for_removal+=("$pkg")
         fi
     done
-    
     if [[ ${#actually_installed_for_removal[@]} -gt 0 ]]; then
-        # FIXED: Separate commands instead of && operator
-        log "Removing NTP/chrony packages: ${actually_installed_for_removal[*]}"
-        run_command "Remove NTP/chrony packages" "apt-get remove --purge -y ${actually_installed_for_removal[*]}" && \
-        run_command "Auto-remove unused dependencies" "apt-get autoremove -y"
+        run_command "DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y ${actually_installed_for_removal[*]}" && \
+        run_command "DEBIAN_FRONTEND=noninteractive apt-get autoremove -y"
         log "Packages removed: ${actually_installed_for_removal[*]}"
     fi
-    
     log "Cleaning chrony/ntp configs (backups kept in session backup dir)..."
-    run_command "Remove chrony/ntp config files" "rm -rf /etc/chrony /etc/ntp.conf /etc/systemd/timesyncd.conf" || true
+    run_command "rm -rf /etc/chrony /etc/ntp.conf /etc/systemd/timesyncd.conf" || true
     log "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
 }
 
 log "=== NTP/Chrony Setup Script Started ==="
 main_menu
+log "=== NTP/Chrony Setup Script Finished ==="
