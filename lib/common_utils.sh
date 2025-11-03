@@ -122,6 +122,56 @@ EOF
     export NONINTERACTIVE_CONFIGURED="true"
 }
 
+
+# Run lightweight apt/dpkg health checks to reduce the chance of apt hanging.
+# This is intentionally conservative: it attempts non-destructive fixes first,
+# logs results, and only removes stale lock files when no process is holding them.
+check_apt_health() {
+    log "INFO" "Running apt/dpkg health checks..."
+
+    # 1) Try to finish any interrupted configuration
+    if dpkg --configure -a >/dev/null 2>&1; then
+        log "DEBUG" "dpkg --configure -a completed"
+    else
+        log "WARN" "dpkg --configure -a returned non-zero (see logs)"
+    fi
+
+    # 2) Attempt to fix broken dependencies (non-interactive)
+    if command -v apt-get >/dev/null 2>&1; then
+        if apt-get -y -f install >/dev/null 2>&1; then
+            log "DEBUG" "apt-get -f install completed"
+        else
+            log "WARN" "apt-get -f install returned non-zero (see logs)"
+        fi
+    fi
+
+    # 3) Check for and remove stale lock files only when they are not held
+    # by any running process. We prefer fuser over blindly deleting the locks.
+    for lock in /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock; do
+        if [[ -e "$lock" ]]; then
+            if lsof "$lock" >/dev/null 2>&1 || fuser "$lock" >/dev/null 2>&1; then
+                log "DEBUG" "Lock $lock is held by a running process"
+            else
+                log "WARN" "Removing stale lock file $lock"
+                rm -f "$lock" || log "ERROR" "Failed to remove stale lock $lock"
+            fi
+        fi
+    done
+
+    # 4) Check disk space on root and /var. Warn if <5% available.
+    local avail_root avail_var
+    avail_root=$(df --output=pcent / | tail -1 | tr -dc '0-9') || avail_root=0
+    avail_var=$(df --output=pcent /var 2>/dev/null | tail -1 | tr -dc '0-9' ) || avail_var=$avail_root
+    if [[ -n "$avail_root" && "$avail_root" -ge 95 ]]; then
+        log "WARN" "Low disk space on / (used ${avail_root}%). apt operations may fail."
+    fi
+    if [[ -n "$avail_var" && "$avail_var" -ge 95 ]]; then
+        log "WARN" "Low disk space on /var (used ${avail_var}%). apt operations may fail."
+    fi
+
+    log "DEBUG" "Apt/dpkg health checks complete"
+}
+
 # Universal log function that supports both old and new calling styles.
 # New style (from r_env_manager.sh): log "LEVEL" "My message here"
 # Old style (from this library):      log "My message here"
@@ -217,9 +267,14 @@ run_command() {
             fi
         fi
 
-        if [[ "${first_word}" == "apt-get" || "${first_word}" == "apt" ]]; then
+            if [[ "${first_word}" == "apt-get" || "${first_word}" == "apt" ]]; then
             # Ensure system is configured for non-interactive operation
             setup_noninteractive_mode
+
+            # Run lightweight apt/dpkg health checks to try to avoid common
+            # situations where apt hangs (unfinished configuration, stale locks,
+            # broken dependencies, low disk space).
+            check_apt_health
 
             # Get the rest of the command after apt/apt-get
             local rest
@@ -241,7 +296,26 @@ run_command() {
             
             # Command with options
             base_cmd+=" ${first_word}"
-            
+
+            # Determine if we need to add -y for this operation. Set a flag so
+            # we can insert -y immediately after the command name (safer than
+            # appending later) to avoid it being interpreted as a package.
+            local need_yes=0
+            if [[ "${rest}" =~ ^[[:space:]]*(install|remove|purge|upgrade|dist-upgrade|update|autoremove)[[:space:]] ]] || \
+               [[ "${rest}" =~ ^[[:space:]]*remove[[:space:]]+--purge[[:space:]] ]] || \
+               [[ "${rest}" =~ ^[[:space:]]*purge[[:space:]] ]]; then
+                if [[ "${rest}" != *" -y"* ]] && [[ "${rest}" != *" --yes"* ]]; then
+                    need_yes=1
+                fi
+            fi
+
+            # Insert -y immediately after apt/apt-get when needed so it's
+            # recognized as an apt option rather than a package name.
+            if [ "$need_yes" -eq 1 ]; then
+                base_cmd+=" -y"
+                log "DEBUG" "Will add -y flag immediately after ${first_word} to prevent prompts"
+            fi
+
             # Add dpkg options if not already present
             if [[ "${cmd}" != *"Dpkg::Options::="* ]]; then
                 # Force noninteractive configuration
@@ -266,20 +340,14 @@ run_command() {
                 base_cmd+=" -o Dpkg::MaxTriggerDepth='1'"  # Limit trigger recursion
             fi
             
-            # Add -y if needed for certain commands
-            if [[ "${rest}" =~ ^[[:space:]]*(install|remove|upgrade|dist-upgrade|update)[[:space:]] ]] && \
-               [[ "${rest}" != *" -y"* ]] && [[ "${rest}" != *" --yes"* ]]; then
-                base_cmd+=" -y"
-            fi
-            
-            # Add -y if not already present and this is an install/remove/update/upgrade command
-            if [[ "${rest}" =~ ^[[:space:]]*(install|remove|upgrade|dist-upgrade|update)[[:space:]] ]] && [[ "${rest}" != *" -y"* ]] && [[ "${rest}" != *" --yes"* ]]; then
-                base_cmd+=" -y"
-            fi
+            # Note: -y (if required) was inserted earlier right after the
+            # apt/apt-get token to ensure correct parsing by apt.
             
             exec_cmd="${base_cmd}${rest}"
+            echo "Constructed command: ${exec_cmd}"  # Debug output
         else
             exec_cmd="${cmd}"
+            echo "Constructed command: ${exec_cmd}"  # Debug output
         fi
 
         # Enable pipefail to catch errors in the command even with tee
@@ -291,6 +359,8 @@ run_command() {
             # Use different timeouts based on the operation
             if [[ "${cmd}" =~ (install|upgrade|dist-upgrade) ]]; then
                 cmd_timeout=300  # 5 minutes for installs/upgrades
+            elif [[ "${cmd}" =~ (remove|purge|remove[[:space:]]+--purge) ]]; then
+                cmd_timeout=180  # 3 minutes for package removal operations
             elif [[ "${cmd}" =~ update ]]; then
                 cmd_timeout=120  # 2 minutes for updates
             else
