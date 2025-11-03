@@ -60,6 +60,68 @@ CURRENT_BACKUP_DIR="" # Populated by setup_backup_dir
 
 # --- Core Compatibility Functions ---
 
+# Configure system for non-interactive operation
+setup_noninteractive_mode() {
+    # Only run once per session
+    if [[ "${NONINTERACTIVE_CONFIGURED:-}" == "true" ]]; then
+        return 0
+    fi
+
+    log "INFO" "Configuring system for non-interactive operation..."
+    
+    # === SYSTEM-WIDE NONINTERACTIVE SETTINGS ===
+    # Export these for the current session
+    export DEBIAN_FRONTEND=noninteractive
+    export DEBCONF_NONINTERACTIVE_SEEN=true
+    export APT_LISTCHANGES_FRONTEND=none
+    export NEEDRESTART_MODE=a
+    
+    # === DISABLE MAN-DB AUTO-UPDATE ===
+    # First check if it's already disabled
+    if ! debconf-get-selections 2>/dev/null | grep -q "man-db/auto-update.*false"; then
+        log "INFO" "Disabling man-db auto-update..."
+        echo "set man-db/auto-update false" | debconf-communicate >/dev/null 2>&1 || true
+        dpkg-reconfigure -p critical man-db >/dev/null 2>&1 || true
+    fi
+
+    # === CONFIGURE DPKG TO SKIP DOCUMENTATION ===
+    local nodoc_conf="/etc/dpkg/dpkg.cfg.d/01_nodoc"
+    if [[ ! -f "$nodoc_conf" ]] || ! grep -q "path-exclude /usr/share/man" "$nodoc_conf" 2>/dev/null; then
+        log "INFO" "Configuring dpkg to skip documentation..."
+        mkdir -p "$(dirname "$nodoc_conf")"
+        cat > "$nodoc_conf" << 'EOF'
+# Automatically added by common_utils.sh to prevent documentation triggers
+path-exclude /usr/share/doc/*
+path-exclude /usr/share/man/*
+path-exclude /usr/share/info/*
+path-include /usr/share/doc/*/copyright
+path-exclude /usr/share/locale/*
+path-include /usr/share/locale/*/LC_MESSAGES/*.mo
+EOF
+        log "INFO" "Created $nodoc_conf to skip documentation"
+        
+        # Force dpkg to recognize the new configuration
+        dpkg --clear-avail || true
+    fi
+
+    # === VERIFY CONFIGURATION ===
+    local config_status="OK"
+    if [[ ! -f "$nodoc_conf" ]]; then
+        config_status="WARNING: $nodoc_conf not created"
+    fi
+    if ! debconf-get-selections 2>/dev/null | grep -q "man-db/auto-update.*false"; then
+        config_status="WARNING: man-db auto-update not disabled"
+    fi
+
+    if [[ "$config_status" == "OK" ]]; then
+        log "INFO" "Non-interactive mode configured successfully"
+    else
+        log "WARN" "Non-interactive mode configuration issues: $config_status"
+    fi
+
+    export NONINTERACTIVE_CONFIGURED="true"
+}
+
 # Universal log function that supports both old and new calling styles.
 # New style (from r_env_manager.sh): log "LEVEL" "My message here"
 # Old style (from this library):      log "My message here"
@@ -131,11 +193,8 @@ run_command() {
     while [ $retry_count -lt "$max_retries" ]; do
         log "DEBUG" "Executing: ${cmd} (Attempt $((retry_count + 1))/${max_retries})"
         
-        # Create temp file for output
+        # Set up logging
         local target_log_file="${MAIN_LOG_FILE:-$LOG_FILE}"
-        local output_file
-        output_file=$(mktemp)
-        
         # If the command is apt/apt-get, automatically ensure it runs non-interactively
         # and pass safe dpkg options to avoid configuration prompts during automated runs.
         local exec_cmd
@@ -159,33 +218,101 @@ run_command() {
         fi
 
         if [[ "${first_word}" == "apt-get" || "${first_word}" == "apt" ]]; then
-            # Avoid double-inserting options if they are already present
-            if [[ "${cmd}" != *"Dpkg::Options::="* && "${cmd}" != *"DEBIAN_FRONTEND="* ]]; then
-                # Insert dpkg option flags right after the apt/apt-get token
-                local rest
-                rest="${cmd#${first_word}}"
-                exec_cmd="DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none ${first_word} -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' ${rest}"
-            else
-                exec_cmd="DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none ${cmd}"
+            # Ensure system is configured for non-interactive operation
+            setup_noninteractive_mode
+
+            # Get the rest of the command after apt/apt-get
+            local rest
+            rest="${cmd#${first_word}}"
+            
+            # Build the command with comprehensive noninteractive flags
+            local base_cmd=""
+            
+            # Core env vars (reinforce even though they're exported)
+            base_cmd+="DEBIAN_FRONTEND=noninteractive"
+            base_cmd+=" DEBCONF_NONINTERACTIVE_SEEN=true"
+            base_cmd+=" APT_LISTCHANGES_FRONTEND=none"
+            base_cmd+=" NEEDRESTART_MODE=a"
+            
+            # Additional safeguards
+            base_cmd+=" DPKG_TRIGGER_TIMEOUT=30"  # 30 second trigger timeout
+            base_cmd+=" MAN_DB_DISABLE_UPDATE=1"
+            base_cmd+=" MANDB_DONT_UPDATE=1"
+            
+            # Command with options
+            base_cmd+=" ${first_word}"
+            
+            # Add dpkg options if not already present
+            if [[ "${cmd}" != *"Dpkg::Options::="* ]]; then
+                # Force noninteractive configuration
+                base_cmd+=" -o Dpkg::Options::='--force-confdef'"
+                base_cmd+=" -o Dpkg::Options::='--force-confold'"
+                
+                # Prevent install of recommended packages by default
+                base_cmd+=" --no-install-recommends"
+                
+                # Disable progress and status output that can cause buffering
+                base_cmd+=" -o Dpkg::Progress-Fancy='0'"
+                base_cmd+=" -o Dpkg::Progress='0'"
+                base_cmd+=" -o Dpkg::Status-Fd='0'"
+                
+                # Minimize maintainer script interaction
+                base_cmd+=" -o DPkg::Pre-Install-Pkgs::=''"
+                base_cmd+=" -o DPkg::Tools::Options::=/usr/bin/ucf::'--debconf-ok'"
+                
+                # Additional optimizations
+                base_cmd+=" -o Acquire::Languages=none"  # Skip translation downloads
+                base_cmd+=" -o Dpkg::Use-Pty='0'"       # Disable PTY allocation
+                base_cmd+=" -o Dpkg::MaxTriggerDepth='1'"  # Limit trigger recursion
             fi
+            
+            # Add -y if needed for certain commands
+            if [[ "${rest}" =~ ^[[:space:]]*(install|remove|upgrade|dist-upgrade|update)[[:space:]] ]] && \
+               [[ "${rest}" != *" -y"* ]] && [[ "${rest}" != *" --yes"* ]]; then
+                base_cmd+=" -y"
+            fi
+            
+            # Add -y if not already present and this is an install/remove/update/upgrade command
+            if [[ "${rest}" =~ ^[[:space:]]*(install|remove|upgrade|dist-upgrade|update)[[:space:]] ]] && [[ "${rest}" != *" -y"* ]] && [[ "${rest}" != *" --yes"* ]]; then
+                base_cmd+=" -y"
+            fi
+            
+            exec_cmd="${base_cmd}${rest}"
         else
             exec_cmd="${cmd}"
         fi
 
-        # Run command with output going to both terminal and temp file
-        if timeout "${timeout_seconds}s" bash -c "${exec_cmd}" 2>&1 | tee -a "$target_log_file" > "$output_file"; then
+        # Enable pipefail to catch errors in the command even with tee
+        set -o pipefail
+        
+        # For apt commands, use carefully tuned timeouts
+        local cmd_timeout="${timeout_seconds}"
+        if [[ "${first_word}" == "apt-get" || "${first_word}" == "apt" ]]; then
+            # Use different timeouts based on the operation
+            if [[ "${cmd}" =~ (install|upgrade|dist-upgrade) ]]; then
+                cmd_timeout=300  # 5 minutes for installs/upgrades
+            elif [[ "${cmd}" =~ update ]]; then
+                cmd_timeout=120  # 2 minutes for updates
+            else
+                cmd_timeout=60   # 1 minute for other apt operations
+            fi
+        fi
+        
+        # Run command with output going to both terminal and log file
+        # Note: Using bash -c to ensure proper environment variable expansion
+        if timeout --kill-after=30s "${cmd_timeout}s" bash -c "${exec_cmd}" 2>&1 | tee -a "$target_log_file"; then
+            local exit_code=$?
+            set +o pipefail
             log "INFO" "SUCCESS: ${description}"
-            rm -f "$output_file"  # Clean up temp file
-            return 0
+            return "${exit_code}"
         else
             local exit_code=$?
+            set +o pipefail
             retry_count=$((retry_count + 1))
             if [ $retry_count -lt "$max_retries" ]; then
                 log "WARN" "Task '${description}' failed (Exit Code: ${exit_code}). Retrying in 5 seconds..."
-                rm -f "$output_file"  # Clean up temp file
                 sleep 5
             else
-                rm -f "$output_file"  # Clean up temp file
                 handle_error "${exit_code}" "Task '${description}' failed after ${max_retries} attempts. See log for details."
                 return "${exit_code}"
             fi
