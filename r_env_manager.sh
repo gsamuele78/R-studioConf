@@ -651,20 +651,39 @@ install_rstudio_server() {
     log "INFO" "Installing RStudio Server..."
     local rstudio_deb_path="/tmp/${RSTUDIO_DEB_FILENAME}"
     
-    # Downloading the file is fine with run_command
-    run_command "Download RStudio Server" "wget -O \"${rstudio_deb_path}\" \"${RSTUDIO_DEB_URL}\""
+    ## Downloading the file is fine with run_command
+    #run_command "Download RStudio Server" "wget -O \"${rstudio_deb_path}\" \"${RSTUDIO_DEB_URL}\""
+    #
+    ## --- MODIFIED BLOCK ---
+    ## Call apt-get directly to prevent hanging on hidden prompts and to show progress.
+    #log "INFO" "Installing the downloaded .deb package. Apt output will be displayed below:"
+    ## Install the downloaded .deb package non-interactively and force dpkg defaults to avoid prompts
+    #if run_command "Install downloaded RStudio .deb" "apt-get install -y \"${rstudio_deb_path}\""; then
+    #    log "INFO" "SUCCESS: RStudio Server package installed."
+    #else
+    #    handle_error $? "Failed to install RStudio .deb package."
+    #    rm -f "${rstudio_deb_path}" # Clean up the downloaded file on failure
+    #    return 1
+    #fi
+
+    # Step 1: Install gdebi-core (following Posit docs)
+    run_command "Install gdebi-core" "apt-get install -y gdebi-core" || return 1
     
-    # --- MODIFIED BLOCK ---
-    # Call apt-get directly to prevent hanging on hidden prompts and to show progress.
-    log "INFO" "Installing the downloaded .deb package. Apt output will be displayed below:"
-    # Install the downloaded .deb package non-interactively and force dpkg defaults to avoid prompts
-    if run_command "Install downloaded RStudio .deb" "apt-get install -y \"${rstudio_deb_path}\""; then
-        log "INFO" "SUCCESS: RStudio Server package installed."
+    # Step 2: Download .deb
+    run_command "Download RStudio Server" \
+        "wget -O \"${rstudio_deb_path}\" \"${RSTUDIO_DEB_URL}\""
+    
+    # Step 3: Install with gdebi (official Posit method, non-interactive)
+    log "INFO" "Installing with gdebi (automatic dependency handling)..."
+    if DEBIAN_FRONTEND=noninteractive gdebi -n -q "${rstudio_deb_path}"; then
+        log "INFO" "SUCCESS: RStudio installed."
     else
-        handle_error $? "Failed to install RStudio .deb package."
-        rm -f "${rstudio_deb_path}" # Clean up the downloaded file on failure
+        handle_error $? "Failed to install RStudio."
+        rm -f "${rstudio_deb_path}"
         return 1
     fi
+
+
     # --- END MODIFIED BLOCK ---
     
     # Clean up the downloaded file on success
