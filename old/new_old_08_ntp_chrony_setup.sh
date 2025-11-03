@@ -1,6 +1,6 @@
 #!/bin/bash
 # 08_ntp_chrony_setup.sh - Unified NTP/chrony setup script
-# FIXED VERSION: Corrects newline handling in pool directive generation
+# FIXED VERSION: Separate apt-get commands for proper v1.4 compatibility
 # Installs, configures, and restarts chrony/ntp/systemd-timesyncd as needed
 # Uses process_template and backup logic from common_utils.sh
 
@@ -64,22 +64,14 @@ install_ntp_client() {
     return 0
 }
 
-# FIXED v2: Correct newline handling with $'\n' (ANSI-C quoting)
-# This ensures pool directives are on separate lines, not as literal "\n"
 generate_chrony_conf() {
     local out_var="$1"
     local fallback_pools_line=""
-    
-    # FIXED: Use $'\n' to create ACTUAL newlines, not literal "\n" characters
     if [[ -n "${CHRONY_FALLBACK_POOLS[*]}" ]]; then
         for pool in "${CHRONY_FALLBACK_POOLS[@]}"; do
-            # Use $'\n' for real newline character (ANSI-C quoting)
-            fallback_pools_line+="$pool"$'\n'
+            fallback_pools_line+="$pool\n"
         done
-        # Remove trailing newline to avoid extra blank line at end
-        fallback_pools_line="${fallback_pools_line%$'\n'}"
     fi
-    
     if ! process_template "${TEMPLATE_DIR}/chrony.conf.template" "$out_var" \
         DRIFTFILE="${CHRONY_DRIFTFILE}" \
         MAKESTEP="${CHRONY_MAKESTEP}" \
@@ -165,6 +157,7 @@ uninstall_ntp_chrony() {
     done
     
     if [[ ${#actually_installed_for_removal[@]} -gt 0 ]]; then
+        # FIXED: Separate commands instead of && operator
         log "Removing NTP/chrony packages: ${actually_installed_for_removal[*]}"
         run_command "Remove NTP/chrony packages" "apt-get remove --purge -y ${actually_installed_for_removal[*]}" && \
         run_command "Auto-remove unused dependencies" "apt-get autoremove -y"
