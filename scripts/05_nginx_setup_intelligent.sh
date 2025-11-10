@@ -520,13 +520,24 @@ SAMBA_PAM_EOF
 install_and_configure_nginx() {
   log INFO "--- Interactive Nginx Setup (Intelligent Detection) ---"
   echo "Please confirm or edit the settings. Press Enter to accept default values."
-  
+
   # Load configuration
   if [[ ! -f "$config_file" ]]; then
     log ERROR "Config file not found: $config_file"
     return 1
   fi
   source "$config_file"
+
+  # Use the flag set by menu choice
+  if [[ "${enable_autodetect:-}" != "true" ]]; then
+    enable_autodetect="false"
+  fi
+
+  if [[ "$enable_autodetect" == "true" ]]; then
+    log INFO "Auto-detect enabled by user menu choice."
+  else
+    log INFO "Auto-detect disabled; proceeding with manual configuration."
+  fi
   
   # Determine authentication backend
   local selected_auth_backend="${AUTH_BACKEND:-NONE}"
@@ -762,15 +773,22 @@ uninstall_nginx() {
 show_menu() {
   echo ""
   printf "\n=== Nginx Setup Menu (Intelligent Detection) ===\n"
-  printf "1) Install/Configure Nginx (with Auto-Detection)\n"
+  printf "1) Install/Configure Nginx (Manual Configuration)\n"
+  printf "2) Install/Configure Nginx (Enable Auto Detection)\n"
   printf "U) Uninstall Nginx and restore system\n"
   printf "R) Restore configurations from most recent backup\n"
   printf "4) Exit\n"
   read -r -p "Choice: " choice
-  
+
   case "$choice" in
     1)
       backup_config
+      enable_autodetect="false"
+      install_and_configure_nginx
+      ;;
+    2)
+      backup_config
+      enable_autodetect="true"
       install_and_configure_nginx
       ;;
     U|u)
@@ -779,7 +797,7 @@ show_menu() {
     R|r)
       restore_config
       ;;
-    4|*) 
+    4|*)
       log INFO "Exiting Nginx Setup."
       return 0
       ;;
