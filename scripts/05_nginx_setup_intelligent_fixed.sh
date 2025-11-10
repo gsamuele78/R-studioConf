@@ -85,7 +85,8 @@ detect_auth_from_nsswitch() {
   fi
   
   # Check for winbind entry
-  if [[ grep -q "^passwd.*winbind" /etc/nsswitch.conf 2>/dev/null ]]; then
+  #if [[ grep -q "^passwd.*winbind" /etc/nsswitch.conf 2>/dev/null ]]; then
+  if grep -q "^passwd.*winbind" /etc/nsswitch.conf 2>/dev/null; then
     echo "SAMBA"
     return 0
   fi
