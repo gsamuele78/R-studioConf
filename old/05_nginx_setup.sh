@@ -1,4 +1,4 @@
-    setup_backup_dir # Initialize session backup directory
+    
     printf "\n=== Nginx Setup Menu ===\n"
     printf "1) Install/Configure Nginx\n"
     printf "U) Uninstall Nginx and restore system\n"
@@ -58,6 +58,8 @@ NGINX_CONF_PATH="/etc/nginx/nginx.conf"
 # --- Function Definitions ---
 # ... (usage and _fix_ipv6_binding_issue functions are unchanged) ...
 usage() { echo -e "\033[1;33mUsage: $0 [-c /path/to/nginx_setup.vars.conf]\033[0m\n  -c: Path to the configuration file (Optional)."; exit 1; }
+setup_backup_dir # Initialize session backup directory
+
 _fix_ipv6_and_finish_install() {
     log "WARN" "Initial Nginx installation failed, likely due to a disabled IPv6 stack."
     log "INFO" "Attempting to fix by commenting out IPv6 listen directives..."
