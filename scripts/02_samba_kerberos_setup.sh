@@ -129,24 +129,38 @@ perform_realm_join() {
         ou_full="${COMPUTER_OU_CUSTOM_PART},${COMPUTER_OU_BASE}"
     fi
     
-    # Check if already joined to a realm
+    # === AUTOMATIC REALM LEAVE BEFORE JOIN ===
+    # Check if already joined to any realm and force leave it for clean join
     log "DEBUG" "Checking if system is already joined to a realm..."
-    if realm list --name-only --configured=yes >/dev/null 2>&1; then
+    
+    # Try to get all realms (both configured and joined) - use 'realm list' without filters
+    local realms_info
+    realms_info=$(realm list 2>/dev/null)
+    
+    if [[ -n "$realms_info" ]]; then
+        # Extract realm names from the output (lines starting with spaces are details, first word on non-indented lines is realm name)
         local current_realm
-        current_realm=$(realm list --name-only --configured=yes | head -n 1)
-        log "WARN" "System is already joined to realm: $current_realm"
-        local leave_choice
-        read -r -p "Leave the current realm before joining ${AD_DOMAIN_LOWER}? (y/n): " leave_choice
-        if [[ "$leave_choice" == "y" || "$leave_choice" == "Y" ]]; then
-            log "Attempting to leave realm: $current_realm"
-            if realm leave "$current_realm"; then
-                log "Successfully left realm $current_realm"
+        current_realm=$(echo "$realms_info" | grep -v '^\s' | head -n 1)
+        
+        if [[ -n "$current_realm" ]]; then
+            log "WARN" "System is currently joined to realm: $current_realm"
+            log "INFO" "Automatically leaving realm $current_realm for clean join..."
+            
+            # Try to leave the realm (may require admin credentials or work unauthenticated)
+            if realm leave "$current_realm" 2>&1; then
+                log "INFO" "Successfully left realm $current_realm"
             else
-                log "WARN" "Failed to leave realm, attempting join anyway"
+                # If leave fails, try with authentication
+                log "WARN" "Realm leave without auth failed, attempting with admin credentials..."
+                local leave_password
+                read -r -s -p "Enter password for ${admin_user} to leave realm: " leave_password
+                echo
+                if printf "%s\n" "$leave_password" | realm leave -U "$admin_user" "$current_realm" 2>&1; then
+                    log "INFO" "Successfully left realm $current_realm with authentication"
+                else
+                    log "WARN" "Failed to leave realm $current_realm, but attempting join anyway..."
+                fi
             fi
-        else
-            log "ERROR" "Cannot join while already in a realm. Please leave the current realm first."
-            return 1
         fi
     else
         log "DEBUG" "System is not joined to any realm, proceeding with join"
