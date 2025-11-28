@@ -380,15 +380,20 @@ run_command() {
             
             set -o pipefail
             
-            # For interactive commands, use eval so prompts appear on terminal
-            # For non-interactive, use bash -c with tee
+            # For interactive commands, run directly with TTY attached (no piping)
+            # For non-interactive, use bash -c with tee for logging
             if [[ "${INTERACTIVE:-false}" == "true" ]]; then
-                # Interactive mode: run command with eval (direct shell evaluation)
-                # This preserves terminal control for password prompts
+                # Interactive mode: run command directly with TTY attached
+                # Output goes to terminal and is logged after completion
                 log "DEBUG" "Executing interactive command: $cmd"
-                if timeout --kill-after=30s "${cmd_timeout}s" eval "${cmd}" 2>&1 | tee -a "$target_log_file"; then
+                local temp_output
+                temp_output=$(mktemp)
+                if timeout --kill-after=30s "${cmd_timeout}s" bash -c "${cmd}" 2>&1 | tee "$temp_output"; then
                     local exit_code=${PIPESTATUS[0]}
                     set +o pipefail
+                    # Append temp output to log
+                    cat "$temp_output" >> "$target_log_file"
+                    rm -f "$temp_output"
                     
                     if [ "$exit_code" -eq 0 ]; then
                         log "INFO" "SUCCESS: ${description}"
@@ -408,6 +413,8 @@ run_command() {
                 else
                     local exit_code=${PIPESTATUS[0]}
                     set +o pipefail
+                    cat "$temp_output" >> "$target_log_file" 2>/dev/null
+                    rm -f "$temp_output"
                     retry_count=$((retry_count + 1))
                     
                     if [ $retry_count -lt "$max_retries" ]; then
