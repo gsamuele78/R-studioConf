@@ -225,6 +225,12 @@ perform_realm_join() {
     # === AUTOMATIC REALM LEAVE & CLEANUP BEFORE JOIN ===
     # Force leave any existing realm and clean up corrupted realm configurations
     log "DEBUG" "Checking for and cleaning up any existing realm configurations..."
+
+    # Clear realmd cache so it re-probes fresh (avoids stale SSSD vs Winbind mismatch)
+    if [[ -d "/var/lib/realmd" ]]; then
+        log "DEBUG" "Clearing realmd cache to force fresh realm discovery..."
+        rm -rf /var/lib/realmd 2>&1 || log "WARN" "Could not clear /var/lib/realmd cache"
+    fi
     
     # First, try direct realm leave (handles normally joined realms)
     local leave_attempt_output
@@ -305,6 +311,31 @@ perform_realm_join() {
         return 0
     else
         log "ERROR: realm join failed. Command: $realm_join_cmd"
+        
+        # Collect detailed diagnostics when join fails
+        log "INFO" "Collecting diagnostics for failed realm join..."
+        
+        # Check realmd service status and recent logs
+        log "INFO" "Realmd service status:"
+        run_command "systemctl status realmd --no-pager" || true
+        
+        # Show recent realmd journal
+        log "INFO" "Recent realmd journal (last 50 lines):"
+        run_command "journalctl -u realmd -n 50 --no-pager" || true
+        
+        # Check for keytab file (should not exist if join failed)
+        if [[ -f "/etc/krb5.keytab" ]]; then
+            log "INFO" "Keytab file exists (join may have partially succeeded):"
+            run_command "klist -kte" || true
+        else
+            log "INFO" "Keytab file does not exist (join failed before keytab creation)"
+        fi
+        
+        # Show net ads join command for manual debugging
+        log "INFO" "For manual debugging, try:"
+        log "INFO" "  kinit ${admin_user}"
+        log "INFO" "  net ads join -U ${admin_user} -c /var/cache/realmd/realmd-smb-conf.XXXXX createcomputer=Dsa.Auto/Dip-BIGEA/Servizi_Informatici/ServerFarm_Navile osName=Linux"
+        
         return 1
     fi
 }
