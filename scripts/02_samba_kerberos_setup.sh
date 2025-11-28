@@ -159,15 +159,15 @@ perform_realm_join() {
     read -r -s -p "Enter password for ${admin_user}: " admin_password
     echo  # New line after password prompt
     
-    # Build realmd command
-    local cmd="realm join --verbose -U '${admin_user}' --computer-ou='${ou_full}' --os-name='${DEFAULT_OS_NAME:-Linux}' ${AD_DOMAIN_LOWER} --membership-software=${DEFAULT_MEMBERSHIP_SOFTWARE:-samba} --client-software=${DEFAULT_CLIENT_SOFTWARE:-winbind}"
+    # Build realmd command (same format as 00_sssd_kerberos_setup.sh for consistency)
+    local realm_join_cmd="realm join --verbose -U \"${admin_user}\" --computer-ou=\"${ou_full}\" --os-name=\"${DEFAULT_OS_NAME:-Linux}\" ${AD_DOMAIN_LOWER} --membership-software=${DEFAULT_MEMBERSHIP_SOFTWARE:-samba} --client-software=${DEFAULT_CLIENT_SOFTWARE:-winbind}"
     
-    # Run with password passed via stdin (same method as 00_sssd_kerberos_setup.sh)
-    if printf "%s\n" "$admin_password" | run_command "Join realm ${AD_DOMAIN_LOWER}" "$cmd"; then
+    # Run with password passed via stdin (using single-argument format like 00_sssd_kerberos_setup.sh)
+    if printf "%s\n" "$admin_password" | run_command "$realm_join_cmd"; then
         log "Successfully joined realm ${AD_DOMAIN_LOWER}"
         return 0
     else
-        log "realm join failed"
+        log "ERROR: realm join failed. Command: $realm_join_cmd"
         return 1
     fi
 }
