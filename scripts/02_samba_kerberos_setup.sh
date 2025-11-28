@@ -76,6 +76,49 @@ install_prereqs() {
     return 0
 }
 
+prejoin_checks() {
+    log "INFO" "Running pre-join checks: time sync and DNS discovery"
+
+    # Ensure time sync using the unified NTP/chrony setup script if present
+    local ntp_script_path="${SCRIPT_DIR}/08_ntp_chrony_setup.sh"
+    if [[ -x "$ntp_script_path" ]]; then
+        log "DEBUG" "Invoking NTP/chrony setup script: $ntp_script_path"
+        "$ntp_script_path"
+    else
+        log "DEBUG" "NTP/chrony setup script not found or not executable: $ntp_script_path"
+    fi
+
+    # Verify timedatectl reports synchronized clock
+    local sync_status
+    sync_status=$(timedatectl status 2>/dev/null | grep -i "System clock synchronized:" | awk '{print $NF}') || sync_status="no"
+    if [[ "$sync_status" != "yes" ]]; then
+        log "WARN" "System time may not be synchronized. timedatectl status:"
+        timedatectl status | tee -a "$LOG_FILE"
+        local cont
+        read -r -p "Continue despite potential time sync issues? (y/n): " cont
+        if [[ "$cont" != "y" && "$cont" != "Y" ]]; then
+            log "ERROR" "Aborting due to time synchronization concerns."
+            return 1
+        fi
+    else
+        log "DEBUG" "System clock synchronized: yes"
+    fi
+
+    # Check that the domain is discoverable via realmd (DNS/SRV checks)
+    if ! run_command "realm discover \"${AD_DOMAIN_LOWER}\""; then
+        log "WARN" "Domain ${AD_DOMAIN_LOWER} not discoverable via DNS/SRV (realm discover failed)."
+        local cont2
+        read -r -p "Continue despite realm discovery failure? (y/n): " cont2
+        if [[ "$cont2" != "y" && "$cont2" != "Y" ]]; then
+            log "ERROR" "Aborting due to failed domain discovery."
+            return 1
+        fi
+    fi
+
+    log "INFO" "Pre-join checks completed"
+    return 0
+}
+
 generate_smb_conf() {
     local out_var="$1"; shift
     # Build helper lines from SIMPLE_ALLOW_GROUPS
@@ -190,7 +233,13 @@ perform_realm_join() {
     else
         log "WARN" "Some realm configuration still present, but proceeding with join attempt"
     fi
-    
+
+    # Run pre-join checks (time sync and DNS discovery)
+    if ! prejoin_checks; then
+        log "ERROR" "Pre-join checks failed or were aborted by user. Aborting realm join."
+        return 1
+    fi
+
     log "Joining realm ${AD_DOMAIN_LOWER} with admin ${admin_user} and OU '${ou_full}'"
     
     # Read password securely (hidden input)
