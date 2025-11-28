@@ -37,6 +37,8 @@ DEFAULT_AD_ADMIN_USER_EXAMPLE="${DEFAULT_AD_ADMIN_USER_EXAMPLE:-gianfranco.samue
 DEFAULT_SAMBA_LOG_LEVEL="${DEFAULT_SAMBA_LOG_LEVEL:-1}"
 DEFAULT_SAMBA_MAX_LOG_SIZE="${DEFAULT_SAMBA_MAX_LOG_SIZE:-50}"
 DEFAULT_SAMBA_SMB_CONF_PATH="${DEFAULT_SAMBA_SMB_CONF_PATH:-/etc/samba/smb.conf}"
+# If true, prefer Samba/winbind for membership (pre-install samba & winbind)
+USE_WINBIND="${USE_WINBIND:-false}"
 
 # === SOURCE CONFIG FILE (overlays defaults) ===
 if [[ -f "$CONF_VARS_FILE" ]]; then
@@ -61,14 +63,23 @@ log "DEBUG" "Loaded configuration: AD_DOMAIN_LOWER=$AD_DOMAIN_LOWER, COMPUTER_OU
 ensure_executable() { command -v "$1" &>/dev/null || return 1; }
 
 install_prereqs() {
-    log "Ensuring required packages are installed: samba, winbind, krb5-user, realmd"
-    local pkgs=(samba winbind krb5-user realmd sssd-ad adcli samba-common-bin)
+    log "Ensuring required packages are installed"
+    local pkgs=()
+    # If configured to prefer winbind, install samba/winbind stacks; otherwise install SSSD stack
+    if [[ "${USE_WINBIND,,}" == "true" ]]; then
+        log "DEBUG" "USE_WINBIND=true: preferring Samba/winbind packages"
+        pkgs=(samba winbind krb5-user realmd adcli samba-common-bin libnss-winbind libpam-winbind)
+    else
+        log "DEBUG" "USE_WINBIND=false: preferring SSSD/adcli packages"
+        pkgs=(krb5-user realmd sssd-ad adcli samba-common-bin libnss-sss libpam-sss)
+    fi
     # Update package cache once at the start
     if ! run_command "Update package cache" "apt-get update"; then
         log "Warning: apt-get update failed, but continuing with install attempts"
     fi
     for p in "${pkgs[@]}"; do
-        if ! command -v "$p" &>/dev/null && ! dpkg -s "$p" &>/dev/null; then
+        # For packages that are binaries, `command -v` works; otherwise fall back to dpkg check
+        if ! dpkg -s "$p" &>/dev/null; then
             log "Package $p not present. Installing..."
             run_command "Install package $p" "apt-get install -y $p" || { log "Failed to install $p"; return 1; }
         fi
