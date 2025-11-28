@@ -128,11 +128,32 @@ perform_realm_join() {
     if [[ -z "$ou_full" ]]; then
         ou_full="${COMPUTER_OU_CUSTOM_PART},${COMPUTER_OU_BASE}"
     fi
+    
+    # Check if already joined to a realm
+    if realm list --name-only --configured=yes &>/dev/null; then
+        local current_realm
+        current_realm=$(realm list --name-only --configured=yes | head -n 1)
+        log "WARN" "System is already joined to realm: $current_realm"
+        local leave_choice
+        read -r -p "Leave the current realm before joining ${AD_DOMAIN_LOWER}? (y/n): " leave_choice
+        if [[ "$leave_choice" == "y" || "$leave_choice" == "Y" ]]; then
+            log "Attempting to leave realm: $current_realm"
+            if realm leave "$current_realm"; then
+                log "Successfully left realm $current_realm"
+            else
+                log "WARN" "Failed to leave realm, attempting join anyway"
+            fi
+        else
+            log "ERROR" "Cannot join while already in a realm. Please leave the current realm first."
+            return 1
+        fi
+    fi
+    
     log "Joining realm ${AD_DOMAIN_LOWER} with admin ${admin_user} and OU '${ou_full}'"
     # Build realmd command
     local cmd="realm join --verbose -U '${admin_user}' --computer-ou='${ou_full}' --os-name='${DEFAULT_OS_NAME:-Linux}' ${AD_DOMAIN_LOWER} --membership-software=${DEFAULT_MEMBERSHIP_SOFTWARE:-samba} --client-software=${DEFAULT_CLIENT_SOFTWARE:-winbind}"
-    # Run interactively with run_command wrapper so logs capture output
-    run_command "$cmd" || { log "realm join failed"; return 1; }
+    # Run interactively (INTERACTIVE=true so stdin is not redirected to /dev/null)
+    INTERACTIVE=true run_command "Join realm ${AD_DOMAIN_LOWER}" "$cmd" || { log "realm join failed"; return 1; }
     return 0
 }
 

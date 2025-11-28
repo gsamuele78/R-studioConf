@@ -314,7 +314,15 @@ run_command() {
             
             log "DEBUG" "Command array: ${cmd_array[*]}"
             
-            # Execute with stdin from /dev/null (critical for non-interactive)
+            # Determine stdin handling: redirect to /dev/null for non-interactive apt,
+            # but allow stdin for interactive commands (INTERACTIVE=true)
+            local stdin_source="/dev/null"
+            if [[ "${INTERACTIVE:-false}" == "true" ]]; then
+                stdin_source="/dev/stdin"
+                log "DEBUG" "Running in interactive mode (stdin will be available)"
+            fi
+            
+            # Execute with stdin handling based on INTERACTIVE flag
             set -o pipefail
             
             if env \
@@ -327,7 +335,7 @@ run_command() {
                 MANDB_DONT_UPDATE=1 \
                 MANPAGER=/bin/true \
                 MAN_DB_IGNORE_UPDATES=1 \
-                "${cmd_array[@]}" < /dev/null 2>&1 | tee -a "$target_log_file"; then
+                "${cmd_array[@]}" < "$stdin_source" 2>&1 | tee -a "$target_log_file"; then
                 local exit_code=${PIPESTATUS[0]}
                 set +o pipefail
                 
@@ -362,9 +370,17 @@ run_command() {
         else
             # Non-apt commands
             local cmd_timeout="${timeout_seconds}"
+            
+            # Determine stdin handling for non-apt commands too
+            local stdin_source="/dev/null"
+            if [[ "${INTERACTIVE:-false}" == "true" ]]; then
+                stdin_source="/dev/stdin"
+                log "DEBUG" "Running non-apt command in interactive mode (stdin will be available)"
+            fi
+            
             set -o pipefail
             
-            if timeout --kill-after=30s "${cmd_timeout}s" bash -c "${cmd}" < /dev/null 2>&1 | tee -a "$target_log_file"; then
+            if timeout --kill-after=30s "${cmd_timeout}s" bash -c "${cmd}" < "$stdin_source" 2>&1 | tee -a "$target_log_file"; then
                 local exit_code=${PIPESTATUS[0]}
                 set +o pipefail
                 
