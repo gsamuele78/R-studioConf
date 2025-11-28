@@ -43,10 +43,14 @@ ensure_executable() { command -v "$1" &>/dev/null || return 1; }
 install_prereqs() {
     log "Ensuring required packages are installed: samba, winbind, krb5-user, realmd"
     local pkgs=(samba winbind krb5-user realmd sssd-ad adcli samba-common-bin)
+    # Update package cache once at the start
+    if ! run_command "Update package cache" "apt-get update"; then
+        log "Warning: apt-get update failed, but continuing with install attempts"
+    fi
     for p in "${pkgs[@]}"; do
         if ! command -v "$p" &>/dev/null && ! dpkg -s "$p" &>/dev/null; then
             log "Package $p not present. Installing..."
-            run_command "apt-get update -y && apt-get install -y $p" || { log "Failed to install $p"; return 1; }
+            run_command "Install package $p" "apt-get install -y $p" || { log "Failed to install $p"; return 1; }
         fi
     done
     return 0

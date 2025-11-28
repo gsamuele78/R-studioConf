@@ -224,6 +224,27 @@ run_command() {
             fi
         fi
 
+        # Detect and handle composite apt commands (e.g., "apt-get update && apt-get install -y pkg")
+        # Split on && and run each apt command separately so each gets proper wrapper treatment
+        if [[ "${first_word}" == "apt-get" || "${first_word}" == "apt" ]] && [[ "${cmd}" == *"&&"* ]]; then
+            log "DEBUG" "Detected composite apt command; splitting and running sequentially..."
+            local -a parts
+            IFS='&&' read -ra parts <<<"${cmd}"
+            for part in "${parts[@]}"; do
+                part="${part#"${part%%[![:space:]]*}"}"  # Left trim
+                part="${part%"${part##*[![:space:]]}"}"  # Right trim
+                if [[ -z "$part" ]]; then
+                    continue
+                fi
+                log "DEBUG" "Running composite part: $part"
+                if ! run_command "${description}" "$part"; then
+                    return $?
+                fi
+            done
+            log "INFO" "SUCCESS: ${description}"
+            return 0
+        fi
+
         # Check if this is an apt/apt-get command
         if [[ "${first_word}" == "apt-get" || "${first_word}" == "apt" ]]; then
             setup_noninteractive_mode
