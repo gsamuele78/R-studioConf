@@ -130,40 +130,65 @@ perform_realm_join() {
     fi
     
     # === AUTOMATIC REALM LEAVE BEFORE JOIN ===
-    # Check if already joined to any realm and force leave it for clean join
-    log "DEBUG" "Checking if system is already joined to a realm..."
+    # === AUTOMATIC REALM LEAVE & CLEANUP BEFORE JOIN ===
+    # Force leave any existing realm and clean up corrupted realm configurations
+    log "DEBUG" "Checking for and cleaning up any existing realm configurations..."
     
-    # Try to get all realms (both configured and joined) - use 'realm list' without filters
-    local realms_info
-    realms_info=$(realm list 2>/dev/null)
+    # First, try direct realm leave (handles normally joined realms)
+    local leave_attempt_output
+    leave_attempt_output=$(realm leave 2>&1)
+    local leave_exit_code=$?
     
-    if [[ -n "$realms_info" ]]; then
-        # Extract realm names from the output (lines starting with spaces are details, first word on non-indented lines is realm name)
-        local current_realm
-        current_realm=$(echo "$realms_info" | grep -v '^\s' | head -n 1)
+    if [[ $leave_exit_code -eq 0 ]]; then
+        log "INFO" "Successfully left existing realm"
+    fi
+    
+    # Second, check for corrupted/empty realm configurations and clean them up
+    # These show up in 'realm list' with empty realm-name and domain-name but configured status
+    log "DEBUG" "Scanning for corrupted realm configurations..."
+    local realm_list_output
+    realm_list_output=$(realm list 2>&1)
+    
+    # Check if there's a corrupted realm (configured: kerberos-member with empty names)
+    if echo "$realm_list_output" | grep -q "configured: kerberos-member" && \
+       echo "$realm_list_output" | grep -q "realm-name:" && \
+       ! echo "$realm_list_output" | grep "realm-name:" | grep -qE "[a-zA-Z0-9]"; then
+        log "WARN" "Detected corrupted realm configuration with empty realm-name/domain-name"
+        log "INFO" "Cleaning up corrupted realm configuration..."
         
-        if [[ -n "$current_realm" ]]; then
-            log "WARN" "System is currently joined to realm: $current_realm"
-            log "INFO" "Automatically leaving realm $current_realm for clean join..."
-            
-            # Try to leave the realm (may require admin credentials or work unauthenticated)
-            if realm leave "$current_realm" 2>&1; then
-                log "INFO" "Successfully left realm $current_realm"
-            else
-                # If leave fails, try with authentication
-                log "WARN" "Realm leave without auth failed, attempting with admin credentials..."
-                local leave_password
-                read -r -s -p "Enter password for ${admin_user} to leave realm: " leave_password
-                echo
-                if printf "%s\n" "$leave_password" | realm leave -U "$admin_user" "$current_realm" 2>&1; then
-                    log "INFO" "Successfully left realm $current_realm with authentication"
-                else
-                    log "WARN" "Failed to leave realm $current_realm, but attempting join anyway..."
-                fi
-            fi
+        # Remove the corrupted realm-related configuration files
+        # These are typically stored in /var/lib/realmd/ and /etc/realmd/
+        if [[ -d "/var/lib/realmd" ]]; then
+            log "DEBUG" "Removing /var/lib/realmd directory..."
+            rm -rf /var/lib/realmd 2>&1 || log "WARN" "Could not remove /var/lib/realmd"
         fi
+        
+        # Also check and clean /etc/realmd/ if it exists
+        if [[ -d "/etc/realmd" ]]; then
+            log "DEBUG" "Backing up and removing /etc/realmd..."
+            mkdir -p "$BACKUP_DIR/realmd_backup" 2>/dev/null
+            cp -r /etc/realmd/* "$BACKUP_DIR/realmd_backup/" 2>/dev/null || true
+            rm -rf /etc/realmd/* 2>&1 || log "WARN" "Could not clean /etc/realmd"
+        fi
+        
+        # Restart realmd daemon to clear the corrupted configuration from memory
+        log "INFO" "Restarting realmd daemon to clear corrupted configuration..."
+        systemctl restart realmd 2>&1 || log "WARN" "Could not restart realmd service"
+        
+        # Wait for realmd to restart
+        sleep 2
+        
+        log "INFO" "Corrupted realm configuration cleaned up"
+    fi
+    
+    # Final verification - realm list should be empty or show nothing configured now
+    log "DEBUG" "Final realm status check after cleanup..."
+    local final_realm_status
+    final_realm_status=$(realm list 2>&1)
+    if [[ -z "$final_realm_status" ]] || ! echo "$final_realm_status" | grep -q "configured"; then
+        log "INFO" "System ready for clean realm join (no active realm configurations)"
     else
-        log "DEBUG" "System is not joined to any realm, proceeding with join"
+        log "WARN" "Some realm configuration still present, but proceeding with join attempt"
     fi
     
     log "Joining realm ${AD_DOMAIN_LOWER} with admin ${admin_user} and OU '${ou_full}'"
