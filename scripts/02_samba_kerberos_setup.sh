@@ -328,6 +328,18 @@ perform_realm_join() {
     # Build realmd command (same format as 00_sssd_kerberos_setup.sh for consistency)
     local realm_join_cmd="realm join --verbose -U \"${admin_user}\" --computer-ou=\"${ou_full}\" --os-name=\"${DEFAULT_OS_NAME:-Linux}\" ${AD_DOMAIN_LOWER} --membership-software=${DEFAULT_MEMBERSHIP_SOFTWARE:-samba} --client-software=${DEFAULT_CLIENT_SOFTWARE:-winbind}"
     
+    # === PRE-JOIN SAMBA CONFIG ===
+    # Generate and deploy smb.conf BEFORE realm join to ensure Samba/Winbind is properly configured
+    # This helps avoid RPC lookup failures during net ads join
+    log "INFO" "Pre-deploying Samba configuration for realm join..."
+    local smb_conf_var
+    if generate_smb_conf smb_conf_var; then
+        deploy_smb_conf smb_conf_var
+        log "INFO" "Samba configuration pre-deployed successfully"
+    else
+        log "WARN" "Failed to generate/deploy smb.conf pre-join, but continuing (realmd may handle config)"
+    fi
+    
     # Run with password passed via stdin (using single-argument format like 00_sssd_kerberos_setup.sh)
     if printf "%s\n" "$admin_password" | run_command "$realm_join_cmd"; then
         log "Successfully joined realm ${AD_DOMAIN_LOWER}"
@@ -355,9 +367,20 @@ perform_realm_join() {
         fi
         
         # Show net ads join command for manual debugging
-        log "INFO" "For manual debugging, try:"
+        log "INFO" "For manual debugging with verbose output, try:"
         log "INFO" "  kinit ${admin_user}"
-        log "INFO" "  net ads join -U ${admin_user} -c /var/cache/realmd/realmd-smb-conf.XXXXX createcomputer=Dsa.Auto/Dip-BIGEA/Servizi_Informatici/ServerFarm_Navile osName=Linux"
+        log "INFO" "  net ads join -U ${admin_user} -c /var/cache/realmd/realmd-smb-conf.XXXXX createcomputer=Dsa.Auto/Dip-BIGEA/Servizi_Informatici/ServerFarm_Navile osName=Linux -d3"
+        
+        # Check if net command exists and try to run it directly with debug output
+        if command -v net &>/dev/null; then
+            log "INFO" "Attempting direct 'net ads info' to debug RPC connectivity:"
+            if printf "%s\n" "$admin_password" | net ads info -U "${admin_user}" 2>&1; then
+                log "INFO" "net ads info succeeded (domain is reachable via RPC)"
+            else
+                log "WARN" "net ads info failed (RPC connectivity issue):"
+                run_command "net ads -d3 info -U \"${admin_user}\" 2>&1 | head -100" || true
+            fi
+        fi
         
         # Additional Kerberos and LDAP diagnostics
         log "INFO" "Kerberos configuration (/etc/krb5.conf):"
@@ -589,15 +612,18 @@ main_menu() {
     local final_smb=""
     case "$choice" in
         1)
-            backup_config && install_prereqs && perform_realm_join
+            backup_config && install_prereqs && \
+            generate_smb_conf final_smb && deploy_smb_conf final_smb && \
+            perform_realm_join
             ;;
         2)
             generate_smb_conf final_smb || exit 1
             deploy_smb_conf final_smb
             ;;
         3)
-            backup_config && install_prereqs && perform_realm_join && \
-            generate_smb_conf final_smb && deploy_smb_conf final_smb
+            backup_config && install_prereqs && \
+            generate_smb_conf final_smb && deploy_smb_conf final_smb && \
+            perform_realm_join
             ;;
         T|t)
             test_samba_installation && test_user_lookup && test_kerberos_ticket
