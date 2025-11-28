@@ -234,7 +234,7 @@ run_command() {
             
             # Determine timeout based on operation
             local cmd_timeout=180
-            if [[ "${cmd}" =~ (install|upgrade|dist-upgrade) ]]; then
+                if [[ "${cmd}" =~ (install|upgrade|dist-upgrade) ]] && [[ "${rest}" != *"update"* ]]; then
                 cmd_timeout=300
             elif [[ "${cmd}" =~ update ]]; then
                 cmd_timeout=120

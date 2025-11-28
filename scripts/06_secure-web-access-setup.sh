@@ -1,4 +1,3 @@
-    setup_backup_dir # Initialize session backup directory
 #!/bin/bash
 # scripts/secure-web-access-setup.sh
 # VERSION 16.0: VICTORIOUS. Uses the definitive YAML structure.
@@ -19,6 +18,8 @@ FILEBROWSER_CACHE_DIR=""
 FILEBROWSER_LOG_DIR=""
 
 usage() { echo "Usage: $0 [install|uninstall|status]"; exit 1; }
+
+setup_backup_dir # Initialize session backup directory
 
 install_services() {
     log "INFO" "--- Starting Secure Web Access Installation ---"

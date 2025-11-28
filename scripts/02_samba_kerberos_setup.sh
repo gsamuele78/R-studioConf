@@ -200,56 +200,6 @@ uninstall_samba_kerberos() {
 
     log "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
 }
-
-main_menu() {
-    setup_backup_dir
-    printf "\n=== Samba + Kerberos Setup Menu ===\n"
-    printf "1) Install prereqs and join realm (interactive)\n"
-    printf "2) Generate and deploy smb.conf (from template)\n"
-    printf "3) Full: install, join, generate & deploy smb.conf\n"
-    printf "T) Test Samba/Kerberos installation and configuration\n"
-    printf "S) Service status checks\n"
-    printf "K) Keytab verification\n"
-    printf "U) Uninstall Samba/Winbind & leave domain\n"
-    printf "R) Restore configurations from most recent backup\n"
-    printf "L) View Samba/Winbind logs\n"
-    printf "4) Exit\n"
-    read -r -p "Choice: " choice
-    local final_smb=""
-    case "$choice" in
-        1)
-            backup_config && install_prereqs && perform_realm_join
-            ;;
-        2)
-            generate_smb_conf final_smb || exit 1
-            deploy_smb_conf final_smb
-            ;;
-        3)
-            backup_config && install_prereqs && perform_realm_join && \
-            generate_smb_conf final_smb && deploy_smb_conf final_smb
-            ;;
-        T|t)
-            test_samba_installation && test_user_lookup && test_kerberos_ticket
-            ;;
-        S|s)
-            check_samba_services_status
-            ;;
-        K|k)
-            test_machine_keytab
-            ;;
-        L|l)
-            view_samba_logs
-            ;;
-        U|u)
-            uninstall_samba_kerberos
-            ;;
-        R|r)
-            restore_config
-            ;;
-        *)
-            log "Exiting Samba Kerberos Setup."; return 0 ;;
-    esac
-
 # --- Verification and Testing Functions ---
 test_samba_installation() {
     log "Testing Samba installation..."
@@ -339,6 +289,59 @@ view_samba_logs() {
     log "Displaying last 50 lines of Winbind log (/var/log/samba/log.winbindd)..."
     run_command "tail -n 50 /var/log/samba/log.winbindd"
 }
+
+
+
+main_menu() {
+    setup_backup_dir
+    printf "\n=== Samba + Kerberos Setup Menu ===\n"
+    printf "1) Install prereqs and join realm (interactive)\n"
+    printf "2) Generate and deploy smb.conf (from template)\n"
+    printf "3) Full: install, join, generate & deploy smb.conf\n"
+    printf "T) Test Samba/Kerberos installation and configuration\n"
+    printf "S) Service status checks\n"
+    printf "K) Keytab verification\n"
+    printf "U) Uninstall Samba/Winbind & leave domain\n"
+    printf "R) Restore configurations from most recent backup\n"
+    printf "L) View Samba/Winbind logs\n"
+    printf "4) Exit\n"
+    read -r -p "Choice: " choice
+    local final_smb=""
+    case "$choice" in
+        1)
+            backup_config && install_prereqs && perform_realm_join
+            ;;
+        2)
+            generate_smb_conf final_smb || exit 1
+            deploy_smb_conf final_smb
+            ;;
+        3)
+            backup_config && install_prereqs && perform_realm_join && \
+            generate_smb_conf final_smb && deploy_smb_conf final_smb
+            ;;
+        T|t)
+            test_samba_installation && test_user_lookup && test_kerberos_ticket
+            ;;
+        S|s)
+            check_samba_services_status
+            ;;
+        K|k)
+            test_machine_keytab
+            ;;
+        L|l)
+            view_samba_logs
+            ;;
+        U|u)
+            uninstall_samba_kerberos
+            ;;
+        R|r)
+            restore_config
+            ;;
+        *)
+            log "Exiting Samba Kerberos Setup."; return 0 ;;
+    esac
+
+
 }
 
 # Script entry
