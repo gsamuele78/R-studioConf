@@ -302,6 +302,29 @@ perform_realm_join() {
     read -r -s -p "Enter password for ${admin_user}: " admin_password
     echo  # New line after password prompt
     
+    # === CREDENTIAL VALIDATION WITH KINIT ===
+    # Test credentials early using kinit to avoid wasting time on realm join if creds are bad
+    log "DEBUG" "Validating credentials via kinit before realm join..."
+    local kinit_output
+    kinit_output=$(printf "%s\n" "$admin_password" | kinit "${admin_user}" 2>&1)
+    local kinit_exit=$?
+    
+    if [[ $kinit_exit -eq 0 ]]; then
+        log "INFO" "Credential validation successful (kinit succeeded)"
+        # Clear the ticket for this test
+        kdestroy 2>/dev/null || true
+    else
+        log "WARN" "Credential validation FAILED (kinit exit code: $kinit_exit)"
+        log "WARN" "kinit output: $kinit_output"
+        log "WARN" "This usually means: invalid username format, wrong password, or AD account locked"
+        local cont_cred
+        read -r -p "Continue anyway? (y/n): " cont_cred
+        if [[ "$cont_cred" != "y" && "$cont_cred" != "Y" ]]; then
+            log "ERROR" "Aborting realm join due to credential validation failure."
+            return 1
+        fi
+    fi
+    
     # Build realmd command (same format as 00_sssd_kerberos_setup.sh for consistency)
     local realm_join_cmd="realm join --verbose -U \"${admin_user}\" --computer-ou=\"${ou_full}\" --os-name=\"${DEFAULT_OS_NAME:-Linux}\" ${AD_DOMAIN_LOWER} --membership-software=${DEFAULT_MEMBERSHIP_SOFTWARE:-samba} --client-software=${DEFAULT_CLIENT_SOFTWARE:-winbind}"
     
@@ -335,6 +358,35 @@ perform_realm_join() {
         log "INFO" "For manual debugging, try:"
         log "INFO" "  kinit ${admin_user}"
         log "INFO" "  net ads join -U ${admin_user} -c /var/cache/realmd/realmd-smb-conf.XXXXX createcomputer=Dsa.Auto/Dip-BIGEA/Servizi_Informatici/ServerFarm_Navile osName=Linux"
+        
+        # Additional Kerberos and LDAP diagnostics
+        log "INFO" "Kerberos configuration (/etc/krb5.conf):"
+        if [[ -f "/etc/krb5.conf" ]]; then
+            run_command "cat /etc/krb5.conf" || true
+        else
+            log "INFO" "/etc/krb5.conf does not exist (will be created by join)"
+        fi
+        
+        # Check LDAP connectivity using ldapsearch
+        log "INFO" "Testing LDAP connectivity to domain:"
+        if command -v ldapsearch &>/dev/null; then
+            run_command "ldapsearch -x -h ${AD_DOMAIN_LOWER} -b '' -s base '(objectclass=*)' 2>&1 | head -20" || log "WARN" "ldapsearch failed or timed out"
+        else
+            log "DEBUG" "ldapsearch not installed; skipping LDAP connectivity test"
+        fi
+        
+        # Check samba/winbind configuration
+        log "INFO" "Checking samba/winbind service status:"
+        run_command "systemctl status smbd nmbd winbind --no-pager" || true
+        
+        # Check for smb.conf
+        log "INFO" "Samba configuration status:"
+        if [[ -f "/etc/samba/smb.conf" ]]; then
+            log "INFO" "smb.conf exists (first 50 lines):"
+            run_command "head -50 /etc/samba/smb.conf" || true
+        else
+            log "INFO" "/etc/samba/smb.conf does not exist (should be deployed after join)"
+        fi
         
         return 1
     fi
