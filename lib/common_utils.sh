@@ -375,19 +375,22 @@ run_command() {
             local stdin_source="/dev/null"
             if [[ "${INTERACTIVE:-false}" == "true" ]]; then
                 stdin_source="/dev/stdin"
-                log "DEBUG" "Running non-apt command in interactive mode (stdin will be available)"
+                log "DEBUG" "Running non-apt command in interactive mode (stdin will be available, no tee)"
             fi
             
             set -o pipefail
             
-            if timeout --kill-after=30s "${cmd_timeout}s" bash -c "${cmd}" < "$stdin_source" 2>&1 | tee -a "$target_log_file"; then
-                local exit_code=${PIPESTATUS[0]}
-                set +o pipefail
-                
-                if [ "$exit_code" -eq 0 ]; then
+            # For interactive commands, do NOT pipe through tee (keeps prompts visible)
+            # For non-interactive, pipe through tee to capture output
+            if [[ "${INTERACTIVE:-false}" == "true" ]]; then
+                # Interactive mode: run directly without tee
+                if timeout --kill-after=30s "${cmd_timeout}s" bash -c "${cmd}" < "$stdin_source" >> "$target_log_file" 2>&1; then
+                    local exit_code=$?
+                    set +o pipefail
                     log "INFO" "SUCCESS: ${description}"
                     return 0
                 else
+                    local exit_code=$?
                     set +o pipefail
                     retry_count=$((retry_count + 1))
                     
@@ -400,16 +403,38 @@ run_command() {
                     fi
                 fi
             else
-                local exit_code=${PIPESTATUS[0]}
-                set +o pipefail
-                retry_count=$((retry_count + 1))
-                
-                if [ $retry_count -lt "$max_retries" ]; then
-                    log "WARN" "Task '${description}' failed (Exit Code: ${exit_code}). Retrying in 5 seconds..."
-                    sleep 5
+                # Non-interactive mode: pipe through tee for real-time logging
+                if timeout --kill-after=30s "${cmd_timeout}s" bash -c "${cmd}" < "$stdin_source" 2>&1 | tee -a "$target_log_file"; then
+                    local exit_code=${PIPESTATUS[0]}
+                    set +o pipefail
+                    
+                    if [ "$exit_code" -eq 0 ]; then
+                        log "INFO" "SUCCESS: ${description}"
+                        return 0
+                    else
+                        set +o pipefail
+                        retry_count=$((retry_count + 1))
+                        
+                        if [ $retry_count -lt "$max_retries" ]; then
+                            log "WARN" "Task '${description}' failed (Exit Code: ${exit_code}). Retrying in 5 seconds..."
+                            sleep 5
+                        else
+                            handle_error "${exit_code}" "Task '${description}' failed after ${max_retries} attempts. See log for details."
+                            return "${exit_code}"
+                        fi
+                    fi
                 else
-                    handle_error "${exit_code}" "Task '${description}' failed after ${max_retries} attempts. See log for details."
-                    return "${exit_code}"
+                    local exit_code=${PIPESTATUS[0]}
+                    set +o pipefail
+                    retry_count=$((retry_count + 1))
+                    
+                    if [ $retry_count -lt "$max_retries" ]; then
+                        log "WARN" "Task '${description}' failed (Exit Code: ${exit_code}). Retrying in 5 seconds..."
+                        sleep 5
+                    else
+                        handle_error "${exit_code}" "Task '${description}' failed after ${max_retries} attempts. See log for details."
+                        return "${exit_code}"
+                    fi
                 fi
             fi
         fi

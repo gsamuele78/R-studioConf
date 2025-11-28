@@ -130,7 +130,8 @@ perform_realm_join() {
     fi
     
     # Check if already joined to a realm
-    if realm list --name-only --configured=yes &>/dev/null; then
+    log "DEBUG" "Checking if system is already joined to a realm..."
+    if realm list --name-only --configured=yes >/dev/null 2>&1; then
         local current_realm
         current_realm=$(realm list --name-only --configured=yes | head -n 1)
         log "WARN" "System is already joined to realm: $current_realm"
@@ -147,6 +148,8 @@ perform_realm_join() {
             log "ERROR" "Cannot join while already in a realm. Please leave the current realm first."
             return 1
         fi
+    else
+        log "DEBUG" "System is not joined to any realm, proceeding with join"
     fi
     
     log "Joining realm ${AD_DOMAIN_LOWER} with admin ${admin_user} and OU '${ou_full}'"
