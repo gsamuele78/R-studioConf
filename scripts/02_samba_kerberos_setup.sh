@@ -68,22 +68,44 @@ install_prereqs() {
     # If configured to prefer winbind, install samba/winbind stacks; otherwise install SSSD stack
     if [[ "${USE_WINBIND,,}" == "true" ]]; then
         log "DEBUG" "USE_WINBIND=true: preferring Samba/winbind packages"
-        pkgs=(samba winbind krb5-user realmd adcli samba-common-bin libnss-winbind libpam-winbind)
+        pkgs=(samba samba-common-bin winbind libnss-winbind libpam-winbind adcli krb5-user realmd)
     else
         log "DEBUG" "USE_WINBIND=false: preferring SSSD/adcli packages"
         pkgs=(krb5-user realmd sssd-ad adcli samba-common-bin libnss-sss libpam-sss)
     fi
+
     # Update package cache once at the start
     if ! run_command "Update package cache" "apt-get update"; then
         log "Warning: apt-get update failed, but continuing with install attempts"
     fi
+
+    # Install all required packages in a single apt-get call to avoid partial/ordering issues
+    local to_install=()
     for p in "${pkgs[@]}"; do
-        # For packages that are binaries, `command -v` works; otherwise fall back to dpkg check
         if ! dpkg -s "$p" &>/dev/null; then
-            log "Package $p not present. Installing..."
-            run_command "Install package $p" "apt-get install -y $p" || { log "Failed to install $p"; return 1; }
+            to_install+=("$p")
         fi
     done
+
+    if [[ ${#to_install[@]} -gt 0 ]]; then
+        log "INFO" "Installing packages: ${to_install[*]}"
+        if ! run_command "Install packages" "apt-get install -y ${to_install[*]}"; then
+            log "ERROR" "Failed to install required packages: ${to_install[*]}"
+            return 1
+        fi
+    else
+        log "DEBUG" "All required packages already installed: ${pkgs[*]}"
+    fi
+
+    # If using winbind, ensure services exist and are enabled so systemctl can manage them
+    if [[ "${USE_WINBIND,,}" == "true" ]]; then
+        # Reload systemd to pick up new units
+        run_command "systemctl daemon-reload" || true
+        run_command "systemctl enable --now winbind" || true
+        # smbd and nmbd may be managed by samba.service on some distros; try enabling common units
+        run_command "systemctl enable --now smbd nmbd" || true
+    fi
+
     return 0
 }
 
@@ -441,7 +463,44 @@ deploy_smb_conf() {
     fi
     run_command "chown root:root ${dest_path}" || true
     run_command "chmod 644 ${dest_path}" || true
+
+    # Ensure global section contains ADS-specific settings required for net ads / winbind
+    # Remove any existing conflicting lines first to avoid duplicates
+    run_command "sed -i -r '/^[[:space:]]*(security|realm|workgroup|kerberos method)[[:space:]]*=/Id' ${dest_path}" || true
+
+    # Normalize idmap domain header to use WORKGROUP short name instead of FQDN if present
+    # e.g. convert 'idmap config PERSONALE.DIR.UNIBO.IT : backend' -> 'idmap config ${WORKGROUP} : backend'
+    run_command "sed -i -r 's/^idmap config[[:space:]]+[^[:space:]]+[[:space:]]*:/idmap config ${WORKGROUP} :/I' ${dest_path}" || true
+
+    # Insert required global options immediately after [global] if not present
+    run_command "awk -v realm='${REALM}' -v workgroup='${WORKGROUP}' '
+    { print $0; if(!inserted && $0 ~ /^\[global\]/){
+        print "   security = ads";
+        print "   realm = " realm;
+        print "   workgroup = " workgroup;
+        print "   kerberos method = secrets and keytab";
+        inserted=1 }
+    }' ${dest_path} > ${dest_path}.new && mv ${dest_path}.new ${dest_path}" || true
+
+    # Ensure idmap backend/range for the workgroup exists (append if missing)
+    if ! grep -q -i "^idmap config ${WORKGROUP} : backend" "${dest_path}"; then
+        {
+            printf "\n# ID mapping for AD domain ${WORKGROUP}\n" ;
+            printf "idmap config ${WORKGROUP} : backend = rid\n" ;
+            printf "idmap config ${WORKGROUP} : range = ${IDMAP_PERSONALE_RANGE_LOW}-${IDMAP_PERSONALE_RANGE_HIGH}\n" ;
+        } >> "${dest_path}"
+    fi
+
+    # Validate smb.conf with testparm to catch syntax errors before attempting join
+    if ! command -v testparm &>/dev/null || ! testparm -s "${dest_path}" &>/dev/null; then
+        log "WARN" "smb.conf validation failed or 'testparm' not available. Showing config for debugging:"
+        run_command "sed -n '1,200p' ${dest_path}" || true
+    else
+        log "DEBUG" "smb.conf validated with testparm"
+    fi
+
     log "Samba config deployed. Restarting related services..."
+    run_command "systemctl daemon-reload" || true
     run_command "systemctl restart smbd nmbd winbind" || log "Warning: restart may have failed; check service status"
 }
 
