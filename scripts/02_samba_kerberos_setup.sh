@@ -88,6 +88,25 @@ prejoin_checks() {
         log "DEBUG" "NTP/chrony setup script not found or not executable: $ntp_script_path"
     fi
 
+    # If chrony is installed, wait briefly for it to reach sync; otherwise try to force a step
+    if command -v chronyc &>/dev/null; then
+        log "DEBUG" "chronyc found: waiting up to 15s for chrony to synchronize"
+        if chronyc waitsync 15 2>/dev/null; then
+            log "DEBUG" "chrony reports synchronized"
+        else
+            log "WARN" "chrony did not synchronize within timeout; attempting immediate step (makestep)"
+            if chronyc -a makestep 2>/dev/null; then
+                log "DEBUG" "chrony makestep applied"
+            else
+                log "WARN" "chrony makestep failed or is not permitted"
+            fi
+            # short pause to let system adjust
+            sleep 2
+        fi
+    else
+        log "DEBUG" "chronyc not available; skipping chrony wait/makestep"
+    fi
+
     # Verify timedatectl reports synchronized clock
     local sync_status
     sync_status=$(timedatectl status 2>/dev/null | grep -i "System clock synchronized:" | awk '{print $NF}') || sync_status="no"
@@ -107,6 +126,36 @@ prejoin_checks() {
     # Check that the domain is discoverable via realmd (DNS/SRV checks)
     if ! run_command "realm discover \"${AD_DOMAIN_LOWER}\""; then
         log "WARN" "Domain ${AD_DOMAIN_LOWER} not discoverable via DNS/SRV (realm discover failed)."
+
+        # Provide diagnostics for time sync (chrony) to help debugging
+        if command -v chronyc &>/dev/null; then
+            log "INFO" "Collecting chrony status (chronyc sources -v) for debugging..."
+            run_command "chronyc sources -v" || true
+        else
+            log "DEBUG" "chronyc not installed; skipping chrony diagnostics"
+        fi
+
+        # Provide recent chrony logs to help root-cause discovery
+        log "INFO" "Collecting recent chrony journal logs (journalctl -u chrony -n 50)"
+        run_command "journalctl -u chrony -n 50 --no-pager" || true
+
+        # DNS SRV diagnostics for LDAP and Kerberos
+        log "INFO" "Collecting DNS SRV records for LDAP and Kerberos to help discovery issues"
+        if command -v dig &>/dev/null; then
+            run_command "dig +short SRV _ldap._tcp.${AD_DOMAIN_LOWER}" || true
+            run_command "dig +short SRV _kerberos._tcp.${AD_DOMAIN_LOWER}" || true
+        elif command -v host &>/dev/null; then
+            run_command "host -t SRV _ldap._tcp.${AD_DOMAIN_LOWER}" || true
+            run_command "host -t SRV _kerberos._tcp.${AD_DOMAIN_LOWER}" || true
+        else
+            log "DEBUG" "Neither 'dig' nor 'host' available for DNS SRV checks"
+        fi
+
+        # Resolver and hosts diagnostics
+        log "INFO" "Resolver configuration (/etc/resolv.conf) and host lookup for domain"
+        run_command "cat /etc/resolv.conf" || true
+        run_command "getent hosts ${AD_DOMAIN_LOWER} || true" || true
+
         local cont2
         read -r -p "Continue despite realm discovery failure? (y/n): " cont2
         if [[ "$cont2" != "y" && "$cont2" != "Y" ]]; then
