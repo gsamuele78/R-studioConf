@@ -60,7 +60,7 @@ WORKGROUP="${WORKGROUP:-PERSONALE}"
 
 log "DEBUG" "Loaded configuration: AD_DOMAIN_LOWER=$AD_DOMAIN_LOWER, COMPUTER_OU_BASE=$COMPUTER_OU_BASE, COMPUTER_OU_CUSTOM_PART=$COMPUTER_OU_CUSTOM_PART"
 
-ensure_executable() { command -v "$1" &>/dev/null || return 1; }
+
 
 install_prereqs() {
     log "Ensuring required packages are installed"
@@ -68,7 +68,7 @@ install_prereqs() {
     # If configured to prefer winbind, install samba/winbind stacks; otherwise install SSSD stack
     if [[ "${USE_WINBIND,,}" == "true" ]]; then
         log "DEBUG" "USE_WINBIND=true: preferring Samba/winbind packages"
-        pkgs=(samba samba-common-bin winbind libnss-winbind libpam-winbind adcli krb5-user realmd)
+        pkgs=(samba samba-common-bin winbind libnss-winbind libpam-winbind adcli krb5-user realmd ldb-tools)
     else
         log "DEBUG" "USE_WINBIND=false: preferring SSSD/adcli packages"
         pkgs=(krb5-user realmd sssd-ad adcli samba-common-bin libnss-sss libpam-sss)
@@ -78,6 +78,10 @@ install_prereqs() {
     if ! run_command "Update package cache" "apt-get update"; then
         log "Warning: apt-get update failed, but continuing with install attempts"
     fi
+
+    # Purge conflicting SSSD packages as requested
+    log "INFO" "Purging SSSD packages to prevent conflicts..."
+    run_command "apt-get purge -y '.*sss.*'" || log "WARN" "Failed to purge *sss* (commands return error if no match), continuing."
 
     # Install all required packages in a single apt-get call to avoid partial/ordering issues
     local to_install=()
@@ -236,7 +240,9 @@ generate_smb_conf() {
         SAMBA_MAX_LOG_SIZE="${DEFAULT_SAMBA_MAX_LOG_SIZE:-50}" \
         SIMPLE_ALLOW_GROUPS_LINE="${simple_allow_groups_line}" \
         VALID_USERS_LINE="${valid_users_line}" \
-        INVALID_USERS_LINE="${invalid_users_line}"; then
+        INVALID_USERS_LINE="${invalid_users_line}" \
+        IDMAP_BACKEND_DOMAIN="${DEFAULT_IDMAP_BACKEND_DOMAIN:-PERSONALE}" \
+        VALID_USERS_PATTERN="${DEFAULT_VALID_USERS_PATTERN:-%S}"; then
         log "ERROR: process_template failed for smb.conf"
         return 1
     fi
@@ -254,7 +260,6 @@ perform_realm_join() {
         ou_full="${COMPUTER_OU_CUSTOM_PART},${COMPUTER_OU_BASE}"
     fi
     
-    # === AUTOMATIC REALM LEAVE BEFORE JOIN ===
     # === AUTOMATIC REALM LEAVE & CLEANUP BEFORE JOIN ===
     # Force leave any existing realm and clean up corrupted realm configurations
     log "DEBUG" "Checking for and cleaning up any existing realm configurations..."
@@ -328,6 +333,9 @@ perform_realm_join() {
         return 1
     fi
 
+    # Initialize LDBs as per manual steps
+    initialize_samba_dbs
+
     log "Joining realm ${AD_DOMAIN_LOWER} with admin ${admin_user} and OU '${ou_full}'"
     
     # Read password securely (hidden input)
@@ -376,6 +384,13 @@ perform_realm_join() {
     # Run with password passed via stdin (using single-argument format like 00_sssd_kerberos_setup.sh)
     if printf "%s\n" "$admin_password" | run_command "$realm_join_cmd"; then
         log "Successfully joined realm ${AD_DOMAIN_LOWER}"
+        
+        # Post-join: Redeploy smb.conf (to ensure template integrity vs realm changes), deploy krb5.conf, and optimize
+        log "INFO" "Applying post-join configurations..."
+        deploy_smb_conf smb_conf_var
+        deploy_krb5_conf
+        post_join_opt
+        
         return 0
     else
         log "ERROR: realm join failed. Command: $realm_join_cmd"
@@ -502,6 +517,61 @@ deploy_smb_conf() {
     log "Samba config deployed. Restarting related services..."
     run_command "systemctl daemon-reload" || true
     run_command "systemctl restart smbd nmbd winbind" || log "Warning: restart may have failed; check service status"
+}
+
+deploy_krb5_conf() {
+    local krb5_template="${TEMPLATE_DIR}/krb5.conf.template"
+    local krb5_dest="/etc/krb5.conf"
+
+    if [[ ! -f "$krb5_template" ]]; then
+        log "WARN" "krb5.conf template not found at $krb5_template. Skipping."
+        return 1
+    fi
+
+    log "INFO" "Deploying krb5.conf from template..."
+    local krb5_content
+    if ! process_template "$krb5_template" krb5_content \
+        AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER}" \
+        KRB5_REALMS_BLOCK="${DEFAULT_KRB5_REALMS_BLOCK}" \
+        KRB5_DOMAIN_REALM_BLOCK="${DEFAULT_KRB5_DOMAIN_REALM_BLOCK}"; then
+        log "ERROR" "Failed to process krb5.conf template"
+        return 1
+    fi
+
+    if [[ -f "$krb5_dest" ]]; then
+        _backup_item "$krb5_dest" "$CURRENT_BACKUP_DIR/etc"
+    fi
+
+    if printf "%s" "$krb5_content" > "$krb5_dest"; then
+        log "INFO" "krb5.conf deployed successfully."
+        run_command "chmod 644 $krb5_dest"
+        run_command "chown root:root $krb5_dest"
+    else
+        log "ERROR" "Failed to write $krb5_dest"
+        return 1
+    fi
+    return 0
+}
+
+initialize_samba_dbs() {
+    log "INFO" "Initializing Samba LDB databases..."
+    # These commands are required by manual steps before join
+    # Using </dev/null to avoid hanging on any prompts (though ldbadd usually doesn't prompt)
+    if run_command "sudo ldbadd -H /var/lib/samba/private/secrets.ldb < /dev/null" && \
+       run_command "sudo ldbadd -H /var/lib/samba/private/sam.ldb < /dev/null"; then
+        log "INFO" "Samba LDBs initialized."
+    else
+        log "WARN" "Samba LDB initialization returned error (this might be normal if entries exist or file is new)"
+    fi
+}
+
+post_join_opt() {
+    log "INFO" "Running post-join optimization and cleanup..."
+    # Post-join fixup: flush cache and reload services
+    run_command "systemctl stop winbind" || true
+    run_command "net cache flush" || true
+    run_command "systemctl start winbind" || true
+    run_command "smbcontrol all reload-config" || true
 }
 
 uninstall_samba_kerberos() {
@@ -682,18 +752,20 @@ main_menu() {
     local final_smb=""
     case "$choice" in
         1)
+            read -r -p "Enter AD admin username (default: $DEFAULT_AD_ADMIN_USER_EXAMPLE): " admin_user
+            admin_user="${admin_user:-$DEFAULT_AD_ADMIN_USER_EXAMPLE}"
             backup_config && install_prereqs && \
-            generate_smb_conf final_smb && deploy_smb_conf final_smb && \
-            perform_realm_join
+            perform_realm_join "$admin_user"
             ;;
         2)
             generate_smb_conf final_smb || exit 1
             deploy_smb_conf final_smb
             ;;
         3)
+            read -r -p "Enter AD admin username (default: $DEFAULT_AD_ADMIN_USER_EXAMPLE): " admin_user
+            admin_user="${admin_user:-$DEFAULT_AD_ADMIN_USER_EXAMPLE}"
             backup_config && install_prereqs && \
-            generate_smb_conf final_smb && deploy_smb_conf final_smb && \
-            perform_realm_join
+            perform_realm_join "$admin_user"
             ;;
         T|t)
             test_samba_installation && test_user_lookup && test_kerberos_ticket

@@ -9,21 +9,8 @@
 # Start Configuration
 
 [libdefaults]
-    default_realm = {{default_realm}}
-    dns_lookup_realm = false
-    dns_lookup_kdc = false
-    kdc_timesync = 1
-    ccache_type = 4
-    forwardable = true
-    proxiable = true
-    rdns = false
-    fcc-mit-ticketflags = true
-    udp_preference_limit = 0
-    default_ccache_name = KEYRING:persistent:%{uid}
-    {{libdefaults_extra}}
-
 [realms]
-{{realms_block}}
+%%KRB5_REALMS_BLOCK%%
 
 [domain_realm]
-{{domain_realm_block}}
+%%KRB5_DOMAIN_REALM_BLOCK%%

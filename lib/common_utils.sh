@@ -376,6 +376,9 @@ run_command() {
             if [[ "${INTERACTIVE:-false}" == "true" ]]; then
                 stdin_source="/dev/stdin"
                 log "DEBUG" "Running non-apt command in interactive mode (stdin connected to terminal)"
+            elif [ ! -t 0 ]; then
+                stdin_source="/dev/stdin"
+                log "DEBUG" "Detected piped input; enabling stdin for non-apt command"
             fi
             
             set -o pipefail

@@ -15,8 +15,8 @@
    winbind normalize names = yes
 
 # ID mapping with RID backend matching your ranges
-idmap config %%AD_DOMAIN_UPPER%% : backend = rid
-idmap config %%AD_DOMAIN_UPPER%% : range = %%IDMAP_PERSONALE_RANGE_LOW%%-%%IDMAP_PERSONALE_RANGE_HIGH%%
+idmap config %%IDMAP_BACKEND_DOMAIN%% : backend = rid
+idmap config %%IDMAP_BACKEND_DOMAIN%% : range = %%IDMAP_PERSONALE_RANGE_LOW%%-%%IDMAP_PERSONALE_RANGE_HIGH%%
 # ID mapping for other domains
 idmap config * : backend = tdb
 idmap config * : range = %%IDMAP_STAR_RANGE_LOW%%-%%IDMAP_STAR_RANGE_HIGH%%
@@ -46,7 +46,7 @@ idmap config * : range = %%IDMAP_STAR_RANGE_LOW%%-%%IDMAP_STAR_RANGE_HIGH%%
    browseable = no
    read only = no
    #valid users = %S
-   valid users = %%VALID_USERS_LINE%%
+   valid users = %%VALID_USERS_PATTERN%%
    invalid users = %%INVALID_USERS_LINE%%
 
 [printers]
