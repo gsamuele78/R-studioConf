@@ -37,6 +37,7 @@ location ~ ^/terminal(.*)$ {
 }
 
 # --- Reverse Proxy for Nextcloud (External) ---
+# --- Reverse Proxy for Nextcloud (External) ---
 location /files/ {
     access_log %%LOG_DIR%%/nextcloud-access.log;
     error_log %%LOG_DIR%%/nextcloud-error.log;
@@ -49,9 +50,23 @@ location /files/ {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     
-    # Increase timeouts for large file uploads
-    proxy_read_timeout 86400;
+    # Security Headers for Nextcloud
+    add_header Strict-Transport-Security "max-age=15552000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-XSS-Protection "1; mode=block";
+    add_header X-Robots-Tag "none";
+    add_header X-Download-Options "noopen";
+    add_header X-Permitted-Cross-Domain-Policies "none";
+    add_header Referrer-Policy "no-referrer" always;
+
+    # Performance and Upload Optimizations
     client_max_body_size 10G;
+    client_body_buffer_size 512k;
+    proxy_read_timeout 3600;
+    proxy_connect_timeout 3600;
+    proxy_send_timeout 3600;
     
+    proxy_request_buffering off;
     proxy_buffering off;
 }

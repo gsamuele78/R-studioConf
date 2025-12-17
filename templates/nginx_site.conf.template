@@ -14,6 +14,12 @@ server {
         root /var/www/html;
     }
 
+    # Nextcloud Discovery Redirects
+    location ^~ /.well-known/carddav { return 301 /files/remote.php/dav; }
+    location ^~ /.well-known/caldav  { return 301 /files/remote.php/dav; }
+    location ^~ /.well-known/webfinger { return 301 /files/index.php/.well-known/webfinger; }
+    location ^~ /.well-known/nodeinfo { return 301 /files/index.php/.well-known/nodeinfo; }
+
     location / {
         return 301 https://$host$request_uri;
     }
