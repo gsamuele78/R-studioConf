@@ -535,7 +535,8 @@ install_and_configure_nginx() {
   
   prompt_for_value "R-Studio Port" "RSTUDIO_PORT"
   prompt_for_value "Web Terminal Port" "WEB_TERMINAL_PORT"
-  prompt_for_value "FileBrowser Port" "FILEBROWSER_PORT"
+  # prompt_for_value "FileBrowser Port" "FILEBROWSER_PORT"
+  prompt_for_value "Nextcloud Target URL" "NEXTCLOUD_TARGET_URL"
   
   prompt_for_value "Active Directory Domain (lowercase)" "AD_DOMAIN_LOWER"
   prompt_for_value "Active Directory Domain (UPPERCASE)" "AD_DOMAIN_UPPER"
@@ -641,7 +642,7 @@ install_and_configure_nginx() {
     
   local template_args=(
       "DOMAIN_OR_IP=${DOMAIN_OR_IP}" "RSTUDIO_PORT=${RSTUDIO_PORT}" "WEB_TERMINAL_PORT=${WEB_TERMINAL_PORT}"
-      "FILEBROWSER_PORT=${FILEBROWSER_PORT}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}"
+      "NEXTCLOUD_TARGET_URL=${NEXTCLOUD_TARGET_URL}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}"
       "CERT_FULLPATH=${cert_fullpath}" "KEY_FULLPATH=${key_fullpath}" "DHPARAM_FULLPATH=${DHPARAM_PATH}"
   )
   local processed_content
@@ -671,8 +672,7 @@ install_and_configure_nginx() {
   echo "Services are configured for: https://${DOMAIN_OR_IP}"
   echo "- R-Studio:       https://${DOMAIN_OR_IP}/"
   echo "- Web Terminal:   https://${DOMAIN_OR_IP}/terminal/"
-  echo "- FileBrowser:    https://${DOMAIN_OR_IP}/files/"
-  echo "- FileBrowser Api:    https://${DOMAIN_OR_IP}/files/api"
+  echo "- Nextcloud Proxy: https://${DOMAIN_OR_IP}/files/"
   echo -e "----------------------------------------"
 
 

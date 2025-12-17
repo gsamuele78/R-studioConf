@@ -9,13 +9,8 @@ DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/secure-web-access.conf"
 PAM_CONFIG_PATH="/etc/pam.d/nginx"
 TTYD_OVERRIDE_DIR="/etc/systemd/system/ttyd.service.d"
 #The File Browser variables will assigned after sourching conf file (see config/secure-web-access.conf)
-#FILEBROWSER_CONFIG_DIR="/etc/filebrowser"
-FILEBROWSER_CONFIG_DIR=""
-#FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_DIR}/filebrowser.yml"
-FILEBROWSER_CONFIG_FILE=""
-FILEBROWSER_DB_DIR=""
-FILEBROWSER_CACHE_DIR=""
-FILEBROWSER_LOG_DIR=""
+# Filebrowser variables removed in favor of Nextcloud Proxy
+# FILEBROWSER_* variables are deprecated.
 
 usage() { echo "Usage: $0 [install|uninstall|status]"; exit 1; }
 
@@ -32,40 +27,15 @@ install_services() {
         handle_error $? "Failed to install curl."; return 1
     fi
     log "INFO" "SUCCESS: Prerequisites are correctly installed."
-    
-    log "INFO" "Downloading gtsteffaniak/filebrowser fork..."; local LATEST_URL="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/linux-amd64-filebrowser"; local BINARY_PATH="/usr/local/bin/filebrowser"; run_command "Download filebrowser binary" "curl -L -o ${BINARY_PATH} \"${LATEST_URL}\""; run_command "Set executable permission for filebrowser" "chmod +x ${BINARY_PATH}";
-
-    log "INFO" "Creating directories and config for File Browser..."
-    #local fb_db_dir; fb_db_dir=$(dirname "${FILEBROWSER_DB_PATH}"); 
-    local fb_db_dir; fb_db_dir="${FILEBROWSER_DB_DIR}"; 
-    #local fb_cache_dir="/var/lib/filebrowser/cache"
-    #local fb_cache_dir; fb_cache_dir=$(dirname "${FILEBROWSER_CACHE_PATH}");
-    local fb_cache_dir; fb_cache_dir="${FILEBROWSER_CACHE_DIR}";
-    #local fb_log_dir; fb_log_dir=$(dirname "${FILEBROWSER_LOG_PATH}");
-    local fb_log_dir; fb_log_dir="${FILEBROWSER_LOG_DIR}";
-    ensure_dir_exists "${FILEBROWSER_CONFIG_DIR}"; ensure_dir_exists "$fb_db_dir"; ensure_dir_exists "$fb_cache_dir"; ensure_dir_exists "$fb_log_dir";
-    
-    log "INFO" "Generating YAML config from template..."
-    local processed_content; if ! process_template "${SCRIPT_DIR}/../templates/filebrowser.yml.template" "processed_content" "FILEBROWSER_PORT=${FILEBROWSER_PORT}" "FILEBROWSER_DB_PATH=${FILEBROWSER_DB_PATH}" "FILEBROWSER_CACHE_PATH=${FILEBROWSER_CACHE_PATH}" "FILEBROWSER_CONFIG_PATH=${FILEBROWSER_CONFIG_PATH}" "FILEBROWSER_ROOT_DIR=${FILEBROWSER_ROOT_DIR}" "FILEBROWSER_ADMIN_USER=${FILEBROWSER_ADMIN_USER}" "FILEBROWSER_ADMIN_PASSWORD=${FILEBROWSER_ADMIN_PASSWORD}" "FILEBROWSER_LOG_PATH=${FILEBROWSER_LOG_PATH}" "FILEBROWSER_LOG_LEVEL=${FILEBROWSER_LOG_LEVEL}"; then handle_error 1 "Failed to process filebrowser.yml.template."; return 1; fi
-    echo "$processed_content" | sudo tee "${FILEBROWSER_CONFIG_FILE}" > /dev/null
-    
-    log "INFO" "Setting permissions for File Browser directories..."
-    run_command "Set ownership for File Browser config" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_CONFIG_DIR}"
-    #run_command "Set ownership for File Browser library dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} /var/lib/filebrowser"
-    run_command "Set ownership for File Browser library dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_DB_DIR}"
-    #run_command "Set ownership for File Browser log dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} /var/log/filebrowser"
-    run_command "Set ownership for File Browser log dir" "chown -R ${FILEBROWSER_USER}:${FILEBROWSER_USER} ${FILEBROWSER_LOG_DIR}"
 
     log "INFO" "Creating and enabling service files..."; 
-    process_systemd_template "${SCRIPT_DIR}/../templates/filebrowser.service.template" "filebrowser.service"
     ensure_dir_exists "${TTYD_OVERRIDE_DIR}"; process_systemd_template "${SCRIPT_DIR}/../templates/ttyd.service.override.template" "ttyd.service.d/override.conf"
     if [ ! -f "${PAM_CONFIG_PATH}" ]; then echo "@include common-auth" | sudo tee "${PAM_CONFIG_PATH}" > /dev/null; fi
     
     log "INFO" "Reloading systemd and restarting services..."; 
     run_command "Reload systemd daemon" "systemctl daemon-reload"; 
     run_command "Enable ttyd service" "systemctl enable ttyd.service"; 
-    run_command "Enable filebrowser service" "systemctl enable filebrowser.service"; 
-    run_command "Restart services to apply all configs" "systemctl restart ttyd.service filebrowser.service"
+    run_command "Restart services to apply all configs" "systemctl restart ttyd.service"
 
     log "INFO" "--- Installation Complete! ---"; log "WARN" "You must now run the Nginx setup script."; check_status
 }
@@ -79,9 +49,18 @@ uninstall_services() {
         log "Uninstallation cancelled."
         return 0
     fi
-    run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service filebrowser.service" || log "WARN" "Services may not have been running."
-    log "INFO" "Removing systemd service files..."; sudo rm -f /etc/systemd/system/filebrowser.service; run_command "Remove ttyd override" "rm -rf ${TTYD_OVERRIDE_DIR}"; run_command "Reload systemd daemon" "systemctl daemon-reload";
-    log "INFO" "Removing binaries, configs, and data..."; run_command "Remove filebrowser binary" "rm -f /usr/local/bin/filebrowser"; run_command "Remove File Browser config dir" "rm -rf ${FILEBROWSER_CONFIG_DIR}"; run_command "Remove File Browser library dir" "rm -rf /var/lib/filebrowser"; 
+    run_command "Stop and disable systemd services" "systemctl disable --now ttyd.service" || log "WARN" "Services may not have been running."
+    
+    # Legacy removal for filebrowser if present
+    if systemctl is-active --quiet filebrowser.service || [[ -f /usr/local/bin/filebrowser ]]; then
+        log "INFO" "Removing legacy Filebrowser..."
+        systemctl disable --now filebrowser.service || true
+        rm -f /etc/systemd/system/filebrowser.service
+        rm -f /usr/local/bin/filebrowser
+        rm -rf /etc/filebrowser /var/lib/filebrowser
+    fi
+
+    log "INFO" "Removing systemd service files..."; run_command "Remove ttyd override" "rm -rf ${TTYD_OVERRIDE_DIR}"; run_command "Reload systemd daemon" "systemctl daemon-reload";
     log "INFO" "Removing ttyd package..."
     if ! run_command "Remove ttyd package" "apt-get remove --purge -y ttyd"; then
         handle_error $? "Failed to remove ttyd package.";
@@ -121,8 +100,10 @@ restore_config() {
 check_status() {
     log "INFO" "--- Checking Service Status ---"
     log "INFO" "Status for ttyd:"; systemctl --no-pager status ttyd.service || true
-    log "INFO" "Status for filebrowser:"; systemctl --no-pager status filebrowser.service || true
-    log "INFO" "Checking for detailed filebrowser errors..."; journalctl -u filebrowser.service --no-pager -n 20 || true
+    # Legacy check
+    if systemctl is-active --quiet filebrowser.service; then
+        log "INFO" "Status for filebrowser (legacy):"; systemctl --no-pager status filebrowser.service || true
+    fi
 }
 
 main() {
@@ -131,15 +112,8 @@ main() {
     if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then log "ERROR" "Configuration file not found at '$DEFAULT_CONFIG_FILE'."; exit 1; fi
     source "$DEFAULT_CONFIG_FILE"
     #echo "UTILS_SCRIPT_PATH: $UTILS_SCRIPT_PATH"
-    #FILEBROWSER_CONFIG_DIR="/etc/filebrowser"
-    FILEBROWSER_CONFIG_DIR="$(dirname "${FILEBROWSER_CONFIG_PATH}")"
-    #FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_DIR}/filebrowser.yml"
-    FILEBROWSER_CONFIG_FILE="${FILEBROWSER_CONFIG_PATH}"
-    FILEBROWSER_DB_DIR="$(dirname "${FILEBROWSER_DB_PATH}")"
-    FILEBROWSER_CACHE_DIR="${FILEBROWSER_CACHE_PATH}"
-    FILEBROWSER_LOG_DIR="$(dirname "${FILEBROWSER_LOG_PATH}")"
-
-    case "$1" in install) install_services ;; uninstall) uninstall_services ;; status) check_status ;; *) usage ;; esac
+    
+    # Deprecated variable assignment logic removed.
 }
 
 main "$@"
