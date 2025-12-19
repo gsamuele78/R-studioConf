@@ -187,6 +187,17 @@ prejoin_checks() {
         log "DEBUG" "chronyc not available; skipping chrony wait/makestep"
     fi
 
+    # Check local time against available time sources and domain KDC
+    check_time_drift || {
+        log "ERROR" "Local system clock appears to be significantly out of sync."
+        echo
+        echo "Your system time differs from authoritative time sources by more than the allowed threshold." >&2
+        echo "Please run the time synchronization setup before attempting to join the domain." >&2
+        echo "Suggested command: sudo ${SCRIPT_DIR}/08_ntp_chrony_setup.sh" >&2
+        echo
+        return 1
+    }
+
     # Verify timedatectl reports synchronized clock
     local sync_status
     sync_status=$(timedatectl status 2>/dev/null | grep -i "System clock synchronized:" | awk '{print $NF}') || sync_status="no"
@@ -714,6 +725,79 @@ post_join_opt() {
     run_command "net cache flush" || true
     run_command "systemctl start winbind" || true
     run_command "smbcontrol all reload-config" || true
+}
+
+
+# Check local time drift using available time tools (chrony/ntpq/timedatectl)
+# Returns 0 if within threshold, non-zero if drift detected or unsynchronized.
+check_time_drift() {
+    local max_allowed_seconds=5
+
+    # If chrony is available, parse chronyc tracking output
+    if command -v chronyc &>/dev/null; then
+        local tracking
+        tracking=$(chronyc tracking 2>/dev/null || true)
+        if [[ -n "$tracking" ]]; then
+            # Look for line like: "System time     : 0.012345 seconds slow"
+            local sysline
+            sysline=$(awk -F":" '/System time/ {print $2}' <<<"$tracking" | sed -e 's/^[[:space:]]*//' || true)
+            if [[ -n "$sysline" ]]; then
+                # Extract numeric portion
+                local num
+                num=$(awk '{print $1}' <<<"$sysline" 2>/dev/null || true)
+                if [[ -n "$num" ]]; then
+                    # absolute value
+                    local abs
+                    abs=$(awk -v v="$num" 'BEGIN{if(v<0) v=-v; print v}')
+                    # if abs > max_allowed_seconds -> fail
+                    if awk -v a="$abs" -v m="$max_allowed_seconds" 'BEGIN{ if (a > m) exit 1; else exit 0 }'; then
+                        log "DEBUG" "chrony reports system time offset ${abs} seconds (within ${max_allowed_seconds}s)"
+                        return 0
+                    else
+                        log "WARN" "chrony reports system time offset ${abs} seconds (exceeds ${max_allowed_seconds}s)"
+                        return 2
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    # If ntpq is available, use ntpq -pn offsets (offset in milliseconds)
+    if command -v ntpq &>/dev/null; then
+        local off
+        off=$(ntpq -pn 2>/dev/null | awk 'NR>2 {print $9}' | awk 'NF' | head -n1 || true)
+        if [[ -n "$off" ]]; then
+            # convert ms -> seconds
+            local offsec
+            offsec=$(awk -v o="$off" 'BEGIN{print (o/1000)}')
+            local abs
+            abs=$(awk -v v="$offsec" 'BEGIN{if(v<0) v=-v; print v}')
+            if awk -v a="$abs" -v m="$max_allowed_seconds" 'BEGIN{ if (a > m) exit 1; else exit 0 }'; then
+                log "DEBUG" "ntpd reports offset ${abs}s (within ${max_allowed_seconds}s)"
+                return 0
+            else
+                log "WARN" "ntpd reports offset ${abs}s (exceeds ${max_allowed_seconds}s)"
+                return 3
+            fi
+        fi
+    fi
+
+    # Fallback: check timedatectl NTP synchronization state
+    if command -v timedatectl &>/dev/null; then
+        local synced
+        synced=$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)
+        if [[ "$synced" == "yes" ]]; then
+            log "DEBUG" "timedatectl reports NTP synchronized"
+            return 0
+        else
+            log "WARN" "timedatectl reports NTP not synchronized"
+            return 4
+        fi
+    fi
+
+    # If none of the above worked, assume unknown state but allow user to proceed
+    log "DEBUG" "No time sync tools available to perform drift check; assuming OK"
+    return 0
 }
 
 uninstall_samba_kerberos() {
