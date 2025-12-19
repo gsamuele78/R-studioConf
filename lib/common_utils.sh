@@ -33,6 +33,36 @@ check_root() {
     fi
 }
 
+# Check for required dependencies/tools
+# Usage: check_dependencies "jq" "curl" "systemctl"
+check_dependencies() {
+    local missing=()
+    for dep in "$@"; do
+        if ! command -v "$dep" &>/dev/null; then
+            missing+=("$dep")
+        fi
+    done
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log "ERROR" "Missing required dependencies: ${missing[*]}"
+        log "INFO" "Install with: apt-get install ${missing[*]}"
+        return 1
+    fi
+    return 0
+}
+
+# Verify Bash version (4.0+ required for associative arrays)
+check_bash_version() {
+    local required_major="${1:-4}"
+    local current_major="${BASH_VERSINFO[0]}"
+    
+    if [[ "$current_major" -lt "$required_major" ]]; then
+        log "ERROR" "Bash version $required_major.0+ required (current: ${BASH_VERSION})"
+        return 1
+    fi
+    return 0
+}
+
 # --- CONFIGURATION VARIABLES (Internal to common_utils) ---
 if [[ -z "${LOG_FILE:-}" ]]; then
     mkdir -p "/var/log/r_env_manager"

@@ -2,7 +2,7 @@
 # scripts/secure-web-access-setup.sh
 # VERSION 16.0: VICTORIOUS. Uses the definitive YAML structure.
 
-set -e
+set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/install_secure_access.vars.conf"

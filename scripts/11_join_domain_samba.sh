@@ -2,6 +2,8 @@
 # samba_kerberos_setup.sh - Samba + Kerberos join and configuration helper
 # Uses common utilities (`process_template`, `run_command`, logging helpers)
 
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 CONF_VARS_FILE="${SCRIPT_DIR}/../config/join_domain_samba.vars.conf"

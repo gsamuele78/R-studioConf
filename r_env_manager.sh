@@ -21,6 +21,7 @@ SCRIPT_DIR_INIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR_INIT}/lib/common_utils.sh"
 
 # --- Global Constants and Configuration ---
+# shellcheck disable=SC2155
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="${SCRIPT_DIR_INIT}"
 readonly LOG_DIR="/var/log/r_env_manager"
@@ -272,7 +273,8 @@ backup_file() {
         log "WARN" "Cannot backup '${file_path}': file does not exist."
         return 1
     fi
-    local backup_target_dir="${BACKUP_DIR}/files/$(dirname "${file_path}")"
+    local backup_target_dir
+    backup_target_dir="${BACKUP_DIR}/files/$(dirname "${file_path}")"
     ensure_dir_exists "$backup_target_dir"
     local timestamp
     timestamp=$(date +"%Y%m%d_%H%M%S")
@@ -285,7 +287,8 @@ backup_file() {
 
 restore_latest_backup() {
     local file_path="$1"
-    local backup_search_dir="${BACKUP_DIR}/files/$(dirname "${file_path}")"
+    local backup_search_dir
+    backup_search_dir="${BACKUP_DIR}/files/$(dirname "${file_path}")"
     if [[ ! -d "$backup_search_dir" ]]; then
         log "ERROR" "Cannot restore '${file_path}': no backup directory found at '${backup_search_dir}'."
         return 1
@@ -382,7 +385,8 @@ is_vm_or_ci_env() {
 
 setup_cran_repo() {
     log "INFO" "Setting up CRAN repository..."
-    local ubuntu_codename=$(lsb_release -cs)
+    local ubuntu_codename
+    ubuntu_codename=$(lsb_release -cs)
     local cran_repo_line="deb [signed-by=/etc/apt/trusted.gpg.d/cran.gpg] ${CRAN_REPO_URL_BIN} ${ubuntu_codename}-cran40/"
     run_command "Add CRAN apt key" "wget -qO- \"${CRAN_APT_KEY_URL}\" | gpg --dearmor > \"/etc/apt/trusted.gpg.d/cran.gpg\""
     echo "$cran_repo_line" > /etc/apt/sources.list.d/cran.list
