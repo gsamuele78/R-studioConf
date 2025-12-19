@@ -296,19 +296,27 @@ perform_realm_join() {
     fi
     
     # First, try direct realm leave (handles normally joined realms)
+    log "DEBUG" "Attempting 'realm leave' (errors tolerated)"
     local leave_attempt_output
+    set +e
     leave_attempt_output=$(realm leave 2>&1)
     local leave_exit_code=$?
-    
+    set -e
     if [[ $leave_exit_code -eq 0 ]]; then
         log "INFO" "Successfully left existing realm"
+    else
+        log "DEBUG" "realm leave exit code: $leave_exit_code; output: $leave_attempt_output"
     fi
     
     # Second, check for corrupted/empty realm configurations and clean them up
     # These show up in 'realm list' with empty realm-name and domain-name but configured status
-    log "DEBUG" "Scanning for corrupted realm configurations..."
+    log "DEBUG" "Scanning for corrupted realm configurations... (realm list errors tolerated)"
     local realm_list_output
+    set +e
     realm_list_output=$(realm list 2>&1)
+    local realm_list_exit=$?
+    set -e
+    log "DEBUG" "realm list exit code: ${realm_list_exit}"
     
     # Check if there's a corrupted realm (configured: kerberos-member with empty names)
     if echo "$realm_list_output" | grep -q "configured: kerberos-member" && \
@@ -343,9 +351,13 @@ perform_realm_join() {
     fi
     
     # Final verification - realm list should be empty or show nothing configured now
-    log "DEBUG" "Final realm status check after cleanup..."
+    log "DEBUG" "Final realm status check after cleanup... (errors tolerated)"
+    set +e
     local final_realm_status
     final_realm_status=$(realm list 2>&1)
+    local final_realm_exit=$?
+    set -e
+    log "DEBUG" "final realm list exit: ${final_realm_exit}"
     if [[ -z "$final_realm_status" ]] || ! echo "$final_realm_status" | grep -q "configured"; then
         log "INFO" "System ready for clean realm join (no active realm configurations)"
     else
@@ -353,6 +365,7 @@ perform_realm_join() {
     fi
 
     # Run pre-join checks (time sync and DNS discovery)
+    log "DEBUG" "Invoking prejoin_checks()"
     if ! prejoin_checks; then
         log "ERROR" "Pre-join checks failed or were aborted by user. Aborting realm join."
         return 1
