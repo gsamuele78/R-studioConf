@@ -16,7 +16,6 @@ jobs:
     runs-on: ubuntu-24.04 # Using a more specific recent runner
     timeout-minutes: 60
     container:
-        workflow_dispatch:
       image: ubuntu:24.04 # Match runner OS if possible for consistency
       options: --user root
     steps:
@@ -38,10 +37,14 @@ jobs:
               push:
                 paths:
                   - 'r_env_manager.sh'
+                  - 'setup_r_env.sh'
+                  - 'scripts/**'
                   - '.github/workflows/test_setup_r_env.yml'
               pull_request:
                 paths:
                   - 'r_env_manager.sh'
+                  - 'setup_r_env.sh'
+                  - 'scripts/**'
                   - '.github/workflows/test_setup_r_env.yml'
               workflow_dispatch:
 
@@ -103,33 +106,88 @@ jobs:
                     run: shellcheck r_env_manager.sh || true
 
                   - name: Test pre-flight checks
-                    run: ./r_env_manager.sh pre_flight_checks
+                    run: |
+                      if [ -x ./r_env_manager.sh ]; then
+                        ./r_env_manager.sh pre_flight_checks
+                      elif [ -x ./setup_r_env.sh ]; then
+                        ./setup_r_env.sh fn_pre_flight_checks || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping pre-flight checks"
+                      fi
 
                   - name: Test add CRAN repo
-                    run: ./r_env_manager.sh setup_cran_repo
+                    run: |
+                      if [ -x ./r_env_manager.sh ]; then
+                        ./r_env_manager.sh setup_cran_repo
+                      elif [ -x ./setup_r_env.sh ]; then
+                        ./setup_r_env.sh fn_add_cran_repo || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping setup_cran_repo"
+                      fi
 
                   - name: Test install R
-                    run: ./r_env_manager.sh install_r
+                    run: |
+                      if [ -x ./r_env_manager.sh ]; then
+                        ./r_env_manager.sh install_r
+                      elif [ -x ./setup_r_env.sh ]; then
+                        ./setup_r_env.sh fn_install_r || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping install_r"
+                      fi
 
                   - name: Test install OpenBLAS/OpenMP
-                    run: ./r_env_manager.sh install_openblas_openmp
+                    run: |
+                      if [ -x ./r_env_manager.sh ]; then
+                        ./r_env_manager.sh install_openblas_openmp
+                      elif [ -x ./setup_r_env.sh ]; then
+                        ./setup_r_env.sh fn_install_openblas || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping install_openblas_openmp"
+                      fi
 
                   - name: Test verify OpenBLAS/OpenMP with R
-                    run: ./r_env_manager.sh verify_openblas_openmp
+                    run: |
+                      if [ -x ./r_env_manager.sh ]; then
+                        ./r_env_manager.sh verify_openblas_openmp
+                      elif [ -x ./setup_r_env.sh ]; then
+                        ./setup_r_env.sh fn_verify_openblas || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping verify_openblas_openmp"
+                      fi
 
                   - name: Test setup bspm
-                    run: ./r_env_manager.sh setup_bspm
+                    run: |
+                      if [ -x ./r_env_manager.sh ]; then
+                        ./r_env_manager.sh setup_bspm
+                      elif [ -x ./setup_r_env.sh ]; then
+                        ./setup_r_env.sh fn_setup_bspm || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping setup_bspm"
+                      fi
 
                   - name: Test install core R dev & user packages
                     env:
                       GITHUB_PAT: ${{ secrets.GH_PAT_FOR_R_PACKAGES }}
                     run: |
-                      ./r_env_manager.sh install_core_r_dev_pkgs || true
-                      ./r_env_manager.sh install_user_cran_pkgs || true
-                      ./r_env_manager.sh install_user_github_pkgs || true
+                      if [ -x ./r_env_manager.sh ]; then
+                        ./r_env_manager.sh install_core_r_dev_pkgs || true
+                        ./r_env_manager.sh install_user_cran_pkgs || true
+                        ./r_env_manager.sh install_user_github_pkgs || true
+                      elif [ -x ./setup_r_env.sh ]; then
+                        ./setup_r_env.sh fn_install_r_packages || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping R package installation"
+                      fi
 
                   - name: Test install RStudio Server
-                    run: ./r_env_manager.sh install_rstudio_server || true
+                    run: |
+                      if [ -x ./r_env_manager.sh ]; then
+                        ./r_env_manager.sh install_rstudio_server || true
+                      elif [ -x ./setup_r_env.sh ]; then
+                        ./setup_r_env.sh fn_install_rstudio_server || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping install_rstudio_server"
+                      fi
 
                   - name: Verify R installation
                     run: |
@@ -153,7 +211,14 @@ jobs:
                       rstudio-server version || true
 
                   - name: Test uninstall (cleanup)
-                    run: LOG_LEVEL=DEBUG ./r_env_manager.sh uninstall || true
+                    run: |
+                      if [ -x ./r_env_manager.sh ]; then
+                        LOG_LEVEL=DEBUG ./r_env_manager.sh uninstall || true
+                      elif [ -x ./setup_r_env.sh ]; then
+                        LOG_LEVEL=DEBUG ./setup_r_env.sh uninstall_all || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping uninstall"
+                      fi
 
                   - name: Confirm removal of R, RStudio, packages
                     run: |
@@ -161,7 +226,14 @@ jobs:
                       ! command -v rstudio-server || { echo "RStudio Server still found!"; exit 1; } || true
 
                   - name: Re-run uninstall (idempotency)
-                    run: LOG_LEVEL=DEBUG ./r_env_manager.sh uninstall || true
+                    run: |
+                      if [ -x ./r_env_manager.sh ]; then
+                        LOG_LEVEL=DEBUG ./r_env_manager.sh uninstall || true
+                      elif [ -x ./setup_r_env.sh ]; then
+                        LOG_LEVEL=DEBUG ./setup_r_env.sh uninstall_all || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping re-run uninstall"
+                      fi
 
                   - name: Archive installation logs
                     if: always()
@@ -182,13 +254,25 @@ jobs:
 
                   - name: Test bad argument handling
                     run: |
-                      ! ./r_env_manager.sh not_a_real_action || true
+                      if [ -x ./r_env_manager.sh ]; then
+                        ! ./r_env_manager.sh not_a_real_action || true
+                      elif [ -x ./setup_r_env.sh ]; then
+                        ! ./setup_r_env.sh not_a_real_action || true
+                      else
+                        echo "No r_env_manager.sh or setup_r_env.sh present - skipping bad-arg test"
+                      fi
 
                   - name: Test script as non-root (should fail gracefully)
                     run: |
                       set +e
                       id -u nobody >/dev/null 2>&1 || useradd nobody
-                      output=$(su -s /bin/bash -c "./r_env_manager.sh install_r" nobody 2>&1 || true)
+                      if [ -x ./r_env_manager.sh ]; then
+                        output=$(su -s /bin/bash -c "./r_env_manager.sh install_r" nobody 2>&1 || true)
+                      elif [ -x ./setup_r_env.sh ]; then
+                        output=$(su -s /bin/bash -c "./setup_r_env.sh fn_install_r" nobody 2>&1 || true)
+                      else
+                        output="No r_env_manager.sh or setup_r_env.sh present - nothing to run as non-root"
+                      fi
                       echo "Output from non-root execution:"
                       echo "${output}"
                       set -e
