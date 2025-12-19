@@ -594,9 +594,23 @@ deploy_smb_conf() {
         log "DEBUG" "smb.conf validated with testparm"
     fi
 
-    log "Samba config deployed. Restarting related services..."
+    log "Samba config deployed. Restarting related services and flushing cache..."
+
+    # Stop services first to ensure cache flush and clean state
+    run_command "systemctl stop winbind smbd nmbd" || true
+
+    # Flush Samba in-memory cache if 'net' is available
+    if command -v net &>/dev/null; then
+        run_command "net cache flush" || log "WARN" "net cache flush failed"
+    else
+        log "DEBUG" "'net' command not found; skipping cache flush"
+    fi
+
+    # Reload systemd units and start services
     run_command "systemctl daemon-reload" || true
-    run_command "systemctl restart smbd nmbd winbind" || log "Warning: restart may have failed; check service status"
+    run_command "systemctl start smbd nmbd winbind" || log "Warning: start may have failed; check service status"
+    # Ask Samba to reload configuration for running daemons
+    run_command "smbcontrol all reload-config" || true
 }
 
 # deploy_krb5_conf removed - replaced by generate_krb5_conf from 11_kerberos_setup.sh
@@ -643,14 +657,28 @@ uninstall_samba_kerberos() {
         local leave_user_upn
         log "Attempting to leave domain: $current_domain_to_leave"
         read -r -p "Enter AD admin UPN for domain leave (blank for unauthenticated leave): " leave_user_upn
-        local leave_cmd="realm leave \"$current_domain_to_leave\""
         if [[ -n "$leave_user_upn" ]]; then
-            leave_cmd="realm leave -U \"$leave_user_upn\" \"$current_domain_to_leave\""
-        fi
-        if run_command "$leave_cmd"; then
-            log "Successfully left domain $current_domain_to_leave."
+            # Prompt for password securely and pipe it to realm so the leave is authenticated
+            local leave_password
+            read -r -s -p "Enter password for ${leave_user_upn}: " leave_password
+            echo
+            if printf "%s\n" "$leave_password" | run_command "realm leave -U \"${leave_user_upn}\" \"${current_domain_to_leave}\""; then
+                log "Successfully left domain ${current_domain_to_leave} using provided credentials."
+            else
+                log "Warning: Authenticated realm leave failed for ${leave_user_upn}. Attempting unauthenticated leave as fallback."
+                if run_command "realm leave \"${current_domain_to_leave}\""; then
+                    log "Successfully left domain ${current_domain_to_leave} (unauthenticated fallback)."
+                else
+                    log "Warning: Unauthenticated realm leave also failed. Manual cleanup may be required."
+                fi
+            fi
         else
-            log "Warning: Failed to leave domain. CMD: $leave_cmd"
+            # No UPN provided - attempt unauthenticated leave and tolerate failures
+            if run_command "realm leave \"${current_domain_to_leave}\""; then
+                log "Successfully left domain ${current_domain_to_leave} (unauthenticated)."
+            else
+                log "Warning: Unauthenticated realm leave failed. Manual cleanup may be required."
+            fi
         fi
     else
         log "Could not determine domain to leave. Skipping 'realm leave'."
@@ -659,6 +687,11 @@ uninstall_samba_kerberos() {
     log "Stopping Samba/Winbind services..."
     run_command "systemctl stop smbd nmbd winbind" &>/dev/null || true
     run_command "systemctl disable smbd nmbd winbind" &>/dev/null || true
+    if command -v net &>/dev/null; then
+        run_command "net cache flush" &>/dev/null || true
+    else
+        log "DEBUG" "'net' command not present; skipping 'net cache flush' during uninstall"
+    fi
 
     log "Removing packages..."
     local -a packages_to_remove=( samba winbind krb5-user realmd adcli samba-common-bin )
