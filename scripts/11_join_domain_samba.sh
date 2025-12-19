@@ -188,15 +188,36 @@ prejoin_checks() {
     fi
 
     # Check local time against available time sources and domain KDC
-    check_time_drift || {
-        log "ERROR" "Local system clock appears to be significantly out of sync."
+    if ! check_time_drift; then
+        log "WARN" "Local system clock appears to be significantly out of sync."
         echo
         echo "Your system time differs from authoritative time sources by more than the allowed threshold." >&2
-        echo "Please run the time synchronization setup before attempting to join the domain." >&2
-        echo "Suggested command: sudo ${SCRIPT_DIR}/08_ntp_chrony_setup.sh" >&2
-        echo
-        return 1
-    }
+        local ntp_script_path="${SCRIPT_DIR}/08_ntp_chrony_setup.sh"
+        if [[ -x "${ntp_script_path}" ]]; then
+            read -r -p "Would you like to run the time synchronization setup now? (y/N): " run_sync
+            if [[ "${run_sync}" =~ ^[Yy]$ ]]; then
+                log "INFO" "Running time synchronization script: ${ntp_script_path}"
+                if "${ntp_script_path}"; then
+                    log "INFO" "Time synchronization script completed; re-checking time..."
+                    sleep 2
+                    if ! check_time_drift; then
+                        log "ERROR" "Time still out of sync after running time sync script. Aborting.">/dev/stderr
+                        return 1
+                    fi
+                else
+                    log "ERROR" "Time synchronization script failed. Aborting." >/dev/stderr
+                    return 1
+                fi
+            else
+                log "ERROR" "User declined to run time synchronization. Aborting." >/dev/stderr
+                return 1
+            fi
+        else
+            echo "Please run the time synchronization setup script: ${ntp_script_path}" >&2
+            log "ERROR" "Time sync script not found or not executable: ${ntp_script_path}" >/dev/stderr
+            return 1
+        fi
+    fi
 
     # Verify timedatectl reports synchronized clock
     local sync_status
