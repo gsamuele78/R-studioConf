@@ -34,7 +34,8 @@ readonly PID_FILE="/var/run/${SCRIPT_NAME}.pid"
 readonly CONFIG_FILE="${CONFIG_DIR}/r_env_manager.conf"
 
 # --- Use the standard, reliable system-wide path for R configuration ---
-readonly R_PROFILE_SITE_PATH="/etc/R/Rprofile.site"
+# Default Rprofile.site path. Not readonly so detection logic can override it at runtime.
+R_PROFILE_SITE_PATH="/etc/R/Rprofile.site"
 
 export MAIN_LOG_FILE="${LOG_FILE}"
 export MAX_RETRIES=3
