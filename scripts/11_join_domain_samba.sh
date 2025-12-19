@@ -10,7 +10,7 @@ CONF_VARS_FILE="${SCRIPT_DIR}/../config/join_domain_samba.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 SMB_CONF_PATH_DEFAULT="/etc/samba/smb.conf"
 
-KERBEROS_SETUP_SCRIPT="${SCRIPT_DIR}/11_kerberos_setup.sh"
+KERBEROS_SETUP_SCRIPT="${SCRIPT_DIR}/12_lib_kerberos_setup.sh"
 
 if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     printf "Error: common_utils.sh not found at %s\n" "$UTILS_SCRIPT_PATH" >&2
