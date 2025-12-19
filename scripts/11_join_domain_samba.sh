@@ -317,7 +317,8 @@ generate_smb_conf() {
         VALID_USERS_LINE="${valid_users_line}" \
         INVALID_USERS_LINE="${invalid_users_line}" \
         IDMAP_BACKEND_DOMAIN="${DEFAULT_IDMAP_BACKEND_DOMAIN:-PERSONALE}" \
-        VALID_USERS_PATTERN="${DEFAULT_VALID_USERS_PATTERN:-%S}"; then
+        VALID_USERS_PATTERN="${DEFAULT_VALID_USERS_PATTERN:-%S}" \
+        INVALID_USERS_PATTERN="${DEFAULT_INVALID_USERS_PATTERN:}"; then
         log "ERROR: process_template failed for smb.conf"
         return 1
     fi
