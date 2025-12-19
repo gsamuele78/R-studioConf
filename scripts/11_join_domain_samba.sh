@@ -94,9 +94,19 @@ install_prereqs() {
         log "Warning: apt-get update failed, but continuing with install attempts"
     fi
 
-    # Purge conflicting SSSD packages as requested
+    # Purge conflicting SSSD packages to prevent conflicts. Detect installed packages first
     log "INFO" "Purging SSSD packages to prevent conflicts..."
-    run_command "apt-get purge -y '.*sss.*'" || log "WARN" "Failed to purge *sss* (commands return error if no match), continuing."
+    local sssd_pkgs
+    # Look for installed packages with 'sss' in the package name (sssd, libnss-sss, libpam-sss, etc.)
+    sssd_pkgs=($(dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /sss/ {print $2}')) || sssd_pkgs=()
+    if [[ ${#sssd_pkgs[@]} -gt 0 ]]; then
+        log "DEBUG" "Detected SSSD-related packages to purge: ${sssd_pkgs[*]}"
+        if ! run_command "apt-get purge -y ${sssd_pkgs[*]}"; then
+            log "WARN" "Failed to purge SSSD packages ${sssd_pkgs[*]}. Continuing.";
+        fi
+    else
+        log "DEBUG" "No SSSD-related packages found; skipping purge"
+    fi
 
     # Install all required packages in a single apt-get call to avoid partial/ordering issues
     local to_install=()
@@ -385,15 +395,28 @@ perform_realm_join() {
     local realm_join_cmd="realm join --verbose -U \"${admin_user}\" --computer-ou=\"${ou_full}\" --os-name=\"${DEFAULT_OS_NAME:-Linux}\" ${AD_DOMAIN_LOWER} --membership-software=${DEFAULT_MEMBERSHIP_SOFTWARE:-samba} --client-software=${DEFAULT_CLIENT_SOFTWARE:-winbind}"
     
     # === PRE-JOIN SAMBA CONFIG ===
-    # Generate and deploy smb.conf BEFORE realm join to ensure Samba/Winbind is properly configured
-    # This helps avoid RPC lookup failures during net ads join
-    log "INFO" "Pre-deploying Samba configuration for realm join..."
-    local smb_conf_var
-    if generate_smb_conf smb_conf_var; then
-        deploy_smb_conf smb_conf_var
-        log "INFO" "Samba configuration pre-deployed successfully"
+    # For AD join it's safer to use the distro-provided default smb.conf as a starting point.
+    # Copy the initial file to /etc/samba/ before attempting realm join (user will reconfigure post-join).
+    log "INFO" "Pre-deploying initial Samba configuration for realm join..."
+    local default_smb_src="/usr/share/samba/smb.conf"
+    local dest_smb_path="${SMB_CONF_PATH:-/etc/samba/smb.conf}"
+    if [[ -f "${default_smb_src}" ]]; then
+        if run_command "cp ${default_smb_src} ${dest_smb_path}"; then
+            run_command "chown root:root ${dest_smb_path}" || true
+            run_command "chmod 644 ${dest_smb_path}" || true
+            log "INFO" "Copied distro default smb.conf to ${dest_smb_path}"
+        else
+            log "WARN" "Failed to copy default smb.conf; will attempt to continue"
+        fi
     else
-        log "WARN" "Failed to generate/deploy smb.conf pre-join, but continuing (realmd may handle config)"
+        log "DEBUG" "Distro default smb.conf not present at ${default_smb_src}; attempting template generation instead"
+        local smb_conf_var
+        if generate_smb_conf smb_conf_var; then
+            deploy_smb_conf smb_conf_var
+            log "INFO" "Samba configuration pre-deployed from template"
+        else
+            log "WARN" "Failed to generate/deploy smb.conf pre-join, but continuing (realmd may handle config)"
+        fi
     fi
     
     # Run with password passed via stdin (using single-argument format like 00_sssd_kerberos_setup.sh)
