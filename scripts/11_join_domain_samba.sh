@@ -438,7 +438,17 @@ perform_realm_join() {
         
         # Post-join: Redeploy smb.conf (to ensure template integrity vs realm changes), deploy krb5.conf, and optimize
         log "INFO" "Applying post-join configurations..."
-        deploy_smb_conf smb_conf_var
+        # If we have generated smb content earlier (`smb_conf_var`), deploy it; otherwise generate now and deploy.
+        if [[ -n "${smb_conf_var:-}" ]]; then
+            deploy_smb_conf smb_conf_var
+        else
+            log "DEBUG" "No pre-generated smb_conf_var found; generating smb.conf from template for post-join deployment"
+            if generate_smb_conf smb_conf_var; then
+                deploy_smb_conf smb_conf_var
+            else
+                log "WARN" "Failed to generate smb.conf post-join; leaving distro-provided smb.conf in place"
+            fi
+        fi
         generate_krb5_conf
         post_join_opt
         
