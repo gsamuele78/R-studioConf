@@ -271,8 +271,8 @@ get_state() {
 backup_file() {
     local file_path="$1"
     if [[ ! -e "$file_path" ]]; then
-        log "WARN" "Cannot backup '${file_path}': file does not exist."
-        return 1
+        log "INFO" "Skipping backup: '${file_path}' does not exist (first-run safe)."
+        return 0
     fi
     local backup_target_dir
     backup_target_dir="${BACKUP_DIR}/files/$(dirname "${file_path}")"
