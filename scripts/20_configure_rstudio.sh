@@ -91,6 +91,15 @@ configure_rstudio_server_conf() {
         run_command "sed -i 's|^www-port=.*$|www-port=${RSERVER_WWW_PORT}|' '${RSERVER_CONF_PATH}'"
     else add_line_if_not_present "www-port=${RSERVER_WWW_PORT}" "${RSERVER_CONF_PATH}"; fi
     
+    # Configure root path if RSTUDIO_ROOT_PATH is set (e.g. /rstudio)
+    if [[ -n "${RSTUDIO_ROOT_PATH}" ]]; then
+        if grep -q "^www-root-path=" "${RSERVER_CONF_PATH}"; then
+            run_command "sed -i 's|^www-root-path=.*$|www-root-path=${RSTUDIO_ROOT_PATH}|' '${RSERVER_CONF_PATH}'"
+        else
+            add_line_if_not_present "www-root-path=${RSTUDIO_ROOT_PATH}" "${RSERVER_CONF_PATH}"
+        fi
+    fi
+    
     # Remove server-user setting if present (idempotent)
     run_command "sed -i '/^server-user=/d' '${RSERVER_CONF_PATH}'"
 

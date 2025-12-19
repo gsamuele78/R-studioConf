@@ -8,11 +8,21 @@ CONF_VARS_FILE="${SCRIPT_DIR}/../config/samba_kerberos_setup.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 SMB_CONF_PATH_DEFAULT="/etc/samba/smb.conf"
 
+KERBEROS_SETUP_SCRIPT="${SCRIPT_DIR}/11_kerberos_setup.sh"
+
 if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     printf "Error: common_utils.sh not found at %s\n" "$UTILS_SCRIPT_PATH" >&2
     exit 1
 fi
 source "$UTILS_SCRIPT_PATH"
+
+# Source shared Kerberos setup script functions
+if [[ -f "$KERBEROS_SETUP_SCRIPT" ]]; then
+    source "$KERBEROS_SETUP_SCRIPT"
+else
+    log "ERROR: Kerberos setup script not found at $KERBEROS_SETUP_SCRIPT"
+    exit 1
+fi
 
 # === SET EMBEDDED DEFAULTS FIRST ===
 # These defaults are always set; config file can override them
@@ -71,8 +81,11 @@ install_prereqs() {
         pkgs=(samba samba-common-bin winbind libnss-winbind libpam-winbind adcli krb5-user realmd ldb-tools)
     else
         log "DEBUG" "USE_WINBIND=false: preferring SSSD/adcli packages"
-        pkgs=(krb5-user realmd sssd-ad adcli samba-common-bin libnss-sss libpam-sss)
+        pkgs=(realmd sssd-ad adcli samba-common-bin libnss-sss libpam-sss)
     fi
+
+    # Install common Kerberos packages via shared script
+    install_kerberos_packages
 
     # Update package cache once at the start
     if ! run_command "Update package cache" "apt-get update"; then
@@ -388,7 +401,7 @@ perform_realm_join() {
         # Post-join: Redeploy smb.conf (to ensure template integrity vs realm changes), deploy krb5.conf, and optimize
         log "INFO" "Applying post-join configurations..."
         deploy_smb_conf smb_conf_var
-        deploy_krb5_conf
+        generate_krb5_conf
         post_join_opt
         
         return 0
@@ -488,14 +501,33 @@ deploy_smb_conf() {
     run_command "sed -i -r 's/^idmap config[[:space:]]+[^[:space:]]+[[:space:]]*:/idmap config ${WORKGROUP} :/I' ${dest_path}" || true
 
     # Insert required global options immediately after [global] if not present
-    run_command "awk -v realm='${REALM}' -v workgroup='${WORKGROUP}' '
-    { print $0; if(!inserted && $0 ~ /^\[global\]/){
-        print "   security = ads";
-        print "   realm = " realm;
-        print "   workgroup = " workgroup;
-        print "   kerberos method = secrets and keytab";
-        inserted=1 }
-    }' ${dest_path} > ${dest_path}.new && mv ${dest_path}.new ${dest_path}" || true
+    # Insert required global options immediately after [global] if not present
+    # FIX: Using direct sed/printf instead of complex awk in run_command to avoid quoting hell
+    if ! grep -q "security = ads" "${dest_path}"; then
+         local tmp_smb
+         tmp_smb=$(mktemp)
+         # Find line number of [global]
+         local global_line
+         global_line=$(grep -n "^\[global\]" "${dest_path}" | head -1 | cut -d: -f1)
+         
+         if [[ -n "$global_line" ]]; then
+             # Print file up to [global]
+             sed -n "1,${global_line}p" "${dest_path}" > "${tmp_smb}"
+             # Inject lines
+             printf "   security = ads\n" >> "${tmp_smb}"
+             printf "   realm = %s\n" "${REALM}" >> "${tmp_smb}"
+             printf "   workgroup = %s\n" "${WORKGROUP}" >> "${tmp_smb}"
+             printf "   kerberos method = secrets and keytab\n" >> "${tmp_smb}"
+             # Print rest of file
+             sed -n "$((global_line + 1)),\$p" "${dest_path}" >> "${tmp_smb}"
+             
+             cat "${tmp_smb}" > "${dest_path}"
+             rm -f "${tmp_smb}"
+             log "INFO" "Injected ADS security settings into smb.conf"
+         else
+             log "WARN" "Could not find [global] section in smb.conf - skipping injection"
+         fi
+    fi
 
     # Ensure idmap backend/range for the workgroup exists (append if missing)
     if ! grep -q -i "^idmap config ${WORKGROUP} : backend" "${dest_path}"; then
@@ -519,39 +551,7 @@ deploy_smb_conf() {
     run_command "systemctl restart smbd nmbd winbind" || log "Warning: restart may have failed; check service status"
 }
 
-deploy_krb5_conf() {
-    local krb5_template="${TEMPLATE_DIR}/krb5.conf.template"
-    local krb5_dest="/etc/krb5.conf"
-
-    if [[ ! -f "$krb5_template" ]]; then
-        log "WARN" "krb5.conf template not found at $krb5_template. Skipping."
-        return 1
-    fi
-
-    log "INFO" "Deploying krb5.conf from template..."
-    local krb5_content
-    if ! process_template "$krb5_template" krb5_content \
-        AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER}" \
-        KRB5_REALMS_BLOCK="${DEFAULT_KRB5_REALMS_BLOCK}" \
-        KRB5_DOMAIN_REALM_BLOCK="${DEFAULT_KRB5_DOMAIN_REALM_BLOCK}"; then
-        log "ERROR" "Failed to process krb5.conf template"
-        return 1
-    fi
-
-    if [[ -f "$krb5_dest" ]]; then
-        _backup_item "$krb5_dest" "$CURRENT_BACKUP_DIR/etc"
-    fi
-
-    if printf "%s" "$krb5_content" > "$krb5_dest"; then
-        log "INFO" "krb5.conf deployed successfully."
-        run_command "chmod 644 $krb5_dest"
-        run_command "chown root:root $krb5_dest"
-    else
-        log "ERROR" "Failed to write $krb5_dest"
-        return 1
-    fi
-    return 0
-}
+# deploy_krb5_conf removed - replaced by generate_krb5_conf from 11_kerberos_setup.sh
 
 initialize_samba_dbs() {
     log "INFO" "Initializing Samba LDB databases..."

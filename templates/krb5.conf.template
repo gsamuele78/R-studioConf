@@ -9,6 +9,10 @@
 # Start Configuration
 
 [libdefaults]
+    default_realm = %%KRB5_DEFAULT_REALM%%
+    dns_lookup_realm = false
+    dns_lookup_kdc = true
+
 [realms]
 %%KRB5_REALMS_BLOCK%%
 

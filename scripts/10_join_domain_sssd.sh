@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 CONF_VARS_FILE="${SCRIPT_DIR}/../config/sssd_kerberos_setup.vars.conf"
 SSSD_CONF_TEMPLATE_PATH="${SCRIPT_DIR}/../templates/sssd.conf.template"
+KERBEROS_SETUP_SCRIPT="${SCRIPT_DIR}/11_kerberos_setup.sh"
 
 # Source common utilities
 if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
@@ -19,6 +20,14 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
 fi
 # shellcheck source=common_utils.sh
 source "$UTILS_SCRIPT_PATH"
+
+# Source shared Kerberos setup script functions
+if [[ -f "$KERBEROS_SETUP_SCRIPT" ]]; then
+    source "$KERBEROS_SETUP_SCRIPT"
+else
+    log "ERROR: Kerberos setup script not found at $KERBEROS_SETUP_SCRIPT"
+    exit 1
+fi
 
 # Source configuration variables if file exists
 if [[ -f "$CONF_VARS_FILE" ]]; then
@@ -75,11 +84,15 @@ ensure_time_sync() {
 }
 
 install_sssd_krb_packages() {
-    log "Installing SSSD, Kerberos, and related packages..."
+    log "Installing SSSD and related packages..."
     
+    # Install common Kerberos packages via shared script
+    install_kerberos_packages
+    
+    # SSSD-specific packages
     local -a packages_to_install_list=(
         sssd sssd-tools sssd-ad sssd-krb5 libsss-sudo
-        krb5-user libpam-sss libnss-sss realmd packagekit pamtester
+        libpam-sss libnss-sss realmd packagekit pamtester
     )
     
     local -a pkgs_actually_needed=()
@@ -97,7 +110,7 @@ install_sssd_krb_packages() {
         run_command "DEBIAN_FRONTEND=noninteractive apt-get install -y ${pkgs_actually_needed[*]}" || return 1
         log "Packages installed/verified: ${pkgs_actually_needed[*]}"
     else
-        log "All required SSSD/Kerberos packages are already installed."
+        log "All required SSSD specific packages are already installed."
     fi
     
     return 0
@@ -244,56 +257,8 @@ generate_sssd_conf_from_template() {
 configure_sssd_conf() { log "Configuring /etc/sssd/sssd.conf from template..."; if ! generate_sssd_conf_from_template; then log "ERROR: Failed to generate sssd.conf content. Aborting configuration."; return 1; fi; local sssd_conf_target="/etc/sssd/sssd.conf"; ensure_dir_exists "$(dirname "$sssd_conf_target")"; log "Writing generated configuration to $sssd_conf_target"; if [[ -f "$sssd_conf_target" ]]; then run_command "cp \"$sssd_conf_target\" \"${sssd_conf_target}.bak_pre_script_$(date +%Y%m%d_%H%M%S)\""; fi; if ! printf "%s\n" "$GENERATED_SSSD_CONF" > "$sssd_conf_target"; then log "ERROR: Failed to write to $sssd_conf_target"; return 1; fi; run_command "chmod 0600 $sssd_conf_target" || log "Warning: Failed to set permissions on $sssd_conf_target."; log "$sssd_conf_target configured successfully. Content:"; run_command "cat $sssd_conf_target"; return 0; }
 
 configure_krb5_conf() {
-    log "Configuring /etc/krb5.conf from template..."
-    local krb5_conf_template_path="${SCRIPT_DIR}/../templates/krb5.conf.template"
-    local krb5_conf_target="/etc/krb5.conf"
-    ensure_file_exists "$krb5_conf_template_path" || { log "ERROR: krb5.conf template not found at $krb5_conf_template_path"; return 1; }
-
-    # Build realms block
-    local realms_block=""
-    realms_block+="    ${DEFAULT_DIR_UNIBO_REALM} = {\n"
-    realms_block+="        kdc = ${DEFAULT_DIR_UNIBO_KDC}\n"
-    realms_block+="        admin_server = ${DEFAULT_DIR_UNIBO_ADMIN_SERVER}\n    }\n"
-    realms_block+="    ${DEFAULT_PERSONALE_UNIBO_REALM} = {\n"
-    realms_block+="        kdc = ${DEFAULT_PERSONALE_UNIBO_KDC}\n"
-    realms_block+="        admin_server = ${DEFAULT_PERSONALE_UNIBO_ADMIN_SERVER}\n    }\n"
-    realms_block+="    ${DEFAULT_STUDENTI_UNIBO_REALM} = {\n"
-    realms_block+="        kdc = ${DEFAULT_STUDENTI_UNIBO_KDC}\n"
-    realms_block+="        admin_server = ${DEFAULT_STUDENTI_UNIBO_ADMIN_SERVER}\n    }\n"
-
-    # Build domain_realm block
-    local domain_realm_block=""
-    for mapping in "${DEFAULT_DOMAIN_REALM_MAPPINGS[@]}"; do
-        local domain=${mapping%%=*}
-        local realm=${mapping##*=}
-        domain_realm_block+="    ${domain} = ${realm}\n"
-    done
-
-    # Fill template and write to /etc/krb5.conf
-    local default_realm="${DEFAULT_AD_DOMAIN_UPPER}"
-    local libdefaults_extra=""
-    local tmp_krb5_conf
-    tmp_krb5_conf=$(mktemp)
-    sed \
-        -e "s|{{default_realm}}|${default_realm}|g" \
-        -e "s|{{realms_block}}|${realms_block}|g" \
-        -e "s|{{domain_realm_block}}|${domain_realm_block}|g" \
-        -e "s|{{libdefaults_extra}}|${libdefaults_extra}|g" "$krb5_conf_template_path" > "$tmp_krb5_conf"
-
-    log "Writing Kerberos configuration to $krb5_conf_target"
-    if [[ -f "$krb5_conf_target" ]]; then
-        run_command "cp \"$krb5_conf_target\" \"${krb5_conf_target}.bak_pre_script_$(date +%Y%m%d_%H%M%S)\""
-    fi
-    if ! cp "$tmp_krb5_conf" "$krb5_conf_target"; then
-        log "ERROR: Failed to write to $krb5_conf_target"
-        rm -f "$tmp_krb5_conf"
-        return 1
-    fi
-    rm -f "$tmp_krb5_conf"
-    run_command "chmod 0644 $krb5_conf_target" || log "Warning: Failed to set permissions on $krb5_conf_target."
-    log "INFO" "Generated krb5.conf at $krb5_conf_target. Content:"
-    run_command "cat $krb5_conf_target"
-    return 0
+    # Wrapper to call the shared function
+    generate_krb5_conf
 }
 
 configure_nsswitch() {

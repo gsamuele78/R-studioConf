@@ -3,7 +3,7 @@
 # ----------------------------------------------------------------
 
 # --- Reverse Proxy for R-Studio Server ---
-location / {
+location /rstudio/ {
     access_log %%LOG_DIR%%/rstudio-access.log;
     error_log %%LOG_DIR%%/rstudio-error.log;
     proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%;
@@ -15,6 +15,13 @@ location / {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# --- Web Portal (Root) ---
+location / {
+    root /var/www/html;
+    index index.html;
+    try_files $uri $uri/ =404;
 }
 
 # ### DEFINITIVE FIX for ttyd ###
@@ -35,6 +42,36 @@ location ~ ^/terminal(.*)$ {
     proxy_read_timeout 86400;
     proxy_set_header X-Forwarded-User $remote_user;
 }
+
+# --- Telemetry & Monitoring ---
+# Secure metrics endpoint for Prometheus
+location /monitoring/ {
+    # Allow only local access or specific IPs (Modify allows as needed)
+    allow 127.0.0.1;
+    allow 192.168.0.0/16; # Default LAN
+    allow 10.0.0.0/8;     # VPN/Internal
+    deny all;
+    
+    # Custom API
+    proxy_pass http://127.0.0.1:8000/;
+}
+
+location /monitoring/node/ {
+    # Same restrictions
+    allow 127.0.0.1;
+    allow 192.168.0.0/16;
+    allow 10.0.0.0/8;
+    deny all;
+    
+    # Node Exporter
+    proxy_pass http://127.0.0.1:9100/;
+}
+
+# --- Nextcloud Service Discovery (HTTPS) ---
+location ^~ /.well-known/carddav { return 301 /files/remote.php/dav; }
+location ^~ /.well-known/caldav  { return 301 /files/remote.php/dav; }
+location ^~ /.well-known/webfinger { return 301 /files/index.php/.well-known/webfinger; }
+location ^~ /.well-known/nodeinfo { return 301 /files/index.php/.well-known/nodeinfo; }
 
 # --- Reverse Proxy for Nextcloud (External) ---
 # --- Reverse Proxy for Nextcloud (External) ---

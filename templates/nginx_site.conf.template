@@ -1,5 +1,3 @@
-# NGINX SITE CONFIGURATION
-
 # --- HTTP Server Block ---
 # Redirects all port 80 traffic to HTTPS.
 # Includes logic for Let's Encrypt ACME challenge.

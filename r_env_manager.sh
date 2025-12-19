@@ -1072,10 +1072,10 @@ launch_external_script() {
         # --- INTELLIGENT DISPATCHER ---
         # This case statement checks for scripts that need special handling.
         case "$script_name" in
-            *secure-web-access-setup.sh)
+            *install_secure_access.sh)
                 _handle_web_terminals "$selected_script"
                 ;;
-            *nginx_setup.sh)
+            *install_nginx.sh)
                 _handle_nginx_setup "$selected_script"
                 ;;
             *)
