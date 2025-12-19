@@ -280,4 +280,3 @@ jobs:
                   - name: Menu/help/usage output
                     run: ./r_env_manager.sh || true
           set +e 
-
