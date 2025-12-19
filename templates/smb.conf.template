@@ -47,7 +47,7 @@ idmap config * : range = %%IDMAP_STAR_RANGE_LOW%%-%%IDMAP_STAR_RANGE_HIGH%%
    read only = no
    #valid users = %S
    valid users = %%VALID_USERS_PATTERN%%
-   invalid users = %%INVALID_USERS_LINE%%
+   invalid users = %%INVALID_USERS_PATTERN%%
 
 [printers]
    comment = All Printers
