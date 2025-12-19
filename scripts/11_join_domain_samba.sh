@@ -61,6 +61,24 @@ else
     log "Warning: Samba Kerberos vars file not found; using embedded defaults."
 fi
 
+# Map DEFAULT_ config variables (from config file) into runtime IDMAP_ variables
+# This allows config files to set DEFAULT_IDMAP_* while the script uses IDMAP_* names
+if [[ -n "${DEFAULT_IDMAP_PERSONALE_RANGE_LOW:-}" ]]; then
+    IDMAP_PERSONALE_RANGE_LOW="${IDMAP_PERSONALE_RANGE_LOW:-${DEFAULT_IDMAP_PERSONALE_RANGE_LOW}}"
+fi
+if [[ -n "${DEFAULT_IDMAP_PERSONALE_RANGE_HIGH:-}" ]]; then
+    IDMAP_PERSONALE_RANGE_HIGH="${IDMAP_PERSONALE_RANGE_HIGH:-${DEFAULT_IDMAP_PERSONALE_RANGE_HIGH}}"
+fi
+if [[ -n "${DEFAULT_IDMAP_STAR_RANGE_LOW:-}" ]]; then
+    IDMAP_STAR_RANGE_LOW="${IDMAP_STAR_RANGE_LOW:-${DEFAULT_IDMAP_STAR_RANGE_LOW}}"
+fi
+if [[ -n "${DEFAULT_IDMAP_STAR_RANGE_HIGH:-}" ]]; then
+    IDMAP_STAR_RANGE_HIGH="${IDMAP_STAR_RANGE_HIGH:-${DEFAULT_IDMAP_STAR_RANGE_HIGH}}"
+fi
+if [[ -n "${DEFAULT_IDMAP_BACKEND_DOMAIN:-}" ]]; then
+    DEFAULT_IDMAP_BACKEND_DOMAIN="${DEFAULT_IDMAP_BACKEND_DOMAIN}"
+fi
+
 # === VERIFY ALL CRITICAL VARIABLES ARE SET ===
 # If config file didn't set them or they're empty, use defaults (second pass)
 COMPUTER_OU_BASE="${COMPUTER_OU_BASE:-OU=Servizi_Informatici,OU=Dip-BIGEA,OU=Dsa.Auto}"
@@ -544,9 +562,11 @@ deploy_smb_conf() {
     # Remove any existing conflicting lines first to avoid duplicates
     run_command "sed -i -r '/^[[:space:]]*(security|realm|workgroup|kerberos method)[[:space:]]*=/Id' ${dest_path}" || true
 
-    # Normalize idmap domain header to use WORKGROUP short name instead of FQDN if present
-    # e.g. convert 'idmap config PERSONALE.DIR.UNIBO.IT : backend' -> 'idmap config ${WORKGROUP} : backend'
-    run_command "sed -i -r 's/^idmap config[[:space:]]+[^[:space:]]+[[:space:]]*:/idmap config ${WORKGROUP} :/I' ${dest_path}" || true
+    # Normalize idmap domain header for FQDN entries to use WORKGROUP short name instead of FQDN
+    # Replace occurrences of the FQDN realms only (do not touch '*' entries)
+    if grep -qi "^idmap config .*${AD_DOMAIN_UPPER} *:" "${dest_path}" 2>/dev/null || grep -qi "^idmap config .*${AD_DOMAIN_LOWER} *:" "${dest_path}" 2>/dev/null; then
+        run_command "sed -i -r 's/^idmap config[[:space:]]+(${AD_DOMAIN_UPPER}|${AD_DOMAIN_LOWER})[[:space:]]*:/idmap config ${WORKGROUP} :/I' ${dest_path}" || true
+    fi
 
     # Insert required global options immediately after [global] if not present
     # Insert required global options immediately after [global] if not present
@@ -578,12 +598,22 @@ deploy_smb_conf() {
     fi
 
     # Ensure idmap backend/range for the workgroup exists (append if missing)
-    if ! grep -q -i "^idmap config ${WORKGROUP} : backend" "${dest_path}"; then
-        {
-            printf "\n# ID mapping for AD domain ${WORKGROUP}\n" ;
-            printf "idmap config ${WORKGROUP} : backend = rid\n" ;
-            printf "idmap config ${WORKGROUP} : range = ${IDMAP_PERSONALE_RANGE_LOW}-${IDMAP_PERSONALE_RANGE_HIGH}\n" ;
-        } >> "${dest_path}"
+    # Ensure correct idmap backend/range for the workgroup (overwrite or append)
+    if grep -q -i "^idmap config ${WORKGROUP} :" "${dest_path}"; then
+        # Replace backend line
+        run_command "sed -i -r 's|^idmap config ${WORKGROUP} : [[:space:]]*backend = .*|idmap config ${WORKGROUP} : backend = rid|I' ${dest_path}" || true
+        # Replace range line or append if missing
+        if grep -q -i "^idmap config ${WORKGROUP} :.*range" "${dest_path}"; then
+            run_command "sed -i -r 's|^idmap config ${WORKGROUP} : [[:space:]]*range = .*|idmap config ${WORKGROUP} : range = ${IDMAP_PERSONALE_RANGE_LOW}-${IDMAP_PERSONALE_RANGE_HIGH}|I' ${dest_path}" || true
+        else
+            printf "\n# ID mapping for AD domain ${WORKGROUP}\n" >> "${dest_path}"
+            printf "idmap config ${WORKGROUP} : backend = rid\n" >> "${dest_path}"
+            printf "idmap config ${WORKGROUP} : range = ${IDMAP_PERSONALE_RANGE_LOW}-${IDMAP_PERSONALE_RANGE_HIGH}\n" >> "${dest_path}"
+        fi
+    else
+        printf "\n# ID mapping for AD domain ${WORKGROUP}\n" >> "${dest_path}"
+        printf "idmap config ${WORKGROUP} : backend = rid\n" >> "${dest_path}"
+        printf "idmap config ${WORKGROUP} : range = ${IDMAP_PERSONALE_RANGE_LOW}-${IDMAP_PERSONALE_RANGE_HIGH}\n" >> "${dest_path}"
     fi
 
     # Ensure winbind nss info for RFC2307 attribute support and allow shortname/UPN logins
