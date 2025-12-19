@@ -532,8 +532,8 @@ deploy_smb_conf() {
         # Backup the current smb.conf into the session backup directory
         _backup_item "$dest_path" "$CURRENT_BACKUP_DIR/etc/samba" || log "Warning: failed to backup existing smb.conf"
     fi
-    # Use a safe write
-    if ! printf "%s" "${!content_var_name}" > "${dest_path}"; then
+    # Use a safe write (use empty default if indirect var unset)
+    if ! printf "%s" "${!content_var_name:-}" > "${dest_path}"; then
         log "ERROR: Failed to write ${dest_path}"
         return 1
     fi
@@ -586,6 +586,11 @@ deploy_smb_conf() {
         } >> "${dest_path}"
     fi
 
+    # Ensure winbind nss info for RFC2307 attribute support and allow shortname/UPN logins
+    #if ! grep -q -i "^winbind nss info" "${dest_path}" 2>/dev/null; then
+    #    printf "\n# Enable RFC2307 attribute support for winbind\nwinbind nss info = rfc2307\n" >> "${dest_path}"
+    #fi
+
     # Validate smb.conf with testparm to catch syntax errors before attempting join
     if ! command -v testparm &>/dev/null || ! testparm -s "${dest_path}" &>/dev/null; then
         log "WARN" "smb.conf validation failed or 'testparm' not available. Showing config for debugging:"
@@ -594,10 +599,10 @@ deploy_smb_conf() {
         log "DEBUG" "smb.conf validated with testparm"
     fi
 
-    log "Samba config deployed. Restarting related services and flushing cache..."
+log "Samba config deployed. Restarting related services and flushing cache..."
 
-    # Stop services first to ensure cache flush and clean state
-    run_command "systemctl stop winbind smbd nmbd" || true
+# Stop services first to ensure cache flush and clean state
+run_command "systemctl stop winbind smbd nmbd" || true
 
     # Flush Samba in-memory cache if 'net' is available
     if command -v net &>/dev/null; then
@@ -606,11 +611,56 @@ deploy_smb_conf() {
         log "DEBUG" "'net' command not found; skipping cache flush"
     fi
 
-    # Reload systemd units and start services
-    run_command "systemctl daemon-reload" || true
-    run_command "systemctl start smbd nmbd winbind" || log "Warning: start may have failed; check service status"
-    # Ask Samba to reload configuration for running daemons
-    run_command "smbcontrol all reload-config" || true
+# Reload systemd units and start services
+run_command "systemctl daemon-reload" || true
+run_command "systemctl start smbd nmbd winbind" || log "Warning: start may have failed; check service status"
+# Ask Samba to reload configuration for running daemons
+run_command "smbcontrol all reload-config" || true
+
+# Ensure idmapd (NFSv4 id mapping) is configured to use the AD domain and nsswitch
+# Only configure idmapd if winbind is used and NFS idmap service or package appears present
+if [[ "${USE_WINBIND,,}" == "true" ]] && ( command -v rpc.idmapd &>/dev/null || dpkg -s nfs-common &>/dev/null ); then
+    log "INFO" "Configuring /etc/idmapd.conf for domain mapping (required for NFS idmap compatibility)"
+    local idmapd_path="/etc/idmapd.conf"
+        # Backup existing
+        if [[ -f "${idmapd_path}" ]]; then
+            run_command "cp ${idmapd_path} ${idmapd_path}.bak_$(date +%s)" || true
+        fi
+        cat > "${idmapd_path}" <<-IDMAPD
+[General]
+Verbosity = 1
+Domain = ${AD_DOMAIN_LOWER}
+
+[Mapping]
+Nobody-User = nobody
+Nobody-Group = nogroup
+
+[Translation]
+Method = nsswitch
+IDMAPD
+        run_command "chown root:root ${idmapd_path}" || true
+        run_command "chmod 644 ${idmapd_path}" || true
+
+        # Ensure nsswitch.conf uses winbind for passwd and group lookups (add winbind if missing)
+        local nss_conf_target="/etc/nsswitch.conf"
+        if [[ -f "${nss_conf_target}" ]]; then
+            run_command "cp '${nss_conf_target}' '${nss_conf_target}.bak_pre_winbind_$(date +%s)'" || true
+
+            # Add winbind to passwd line if not present
+            if ! grep -qE '^passwd:.*\bwinbind\b' "${nss_conf_target}"; then
+                run_command "sed -i -E 's/^(passwd:[[:space:]]*)(.*)/\1\2 winbind/' '${nss_conf_target}'" || true
+            fi
+
+            # Add winbind to group line if not present
+            if ! grep -qE '^group:.*\bwinbind\b' "${nss_conf_target}"; then
+                run_command "sed -i -E 's/^(group:[[:space:]]*)(.*)/\1\2 winbind/' '${nss_conf_target}'" || true
+            fi
+
+            log "INFO" "/etc/nsswitch.conf updated to include winbind for passwd/group (if absent)"
+        else
+            log "WARN" "/etc/nsswitch.conf not found; cannot configure winbind entries"
+        fi
+    fi
 }
 
 # deploy_krb5_conf removed - replaced by generate_krb5_conf from 11_kerberos_setup.sh

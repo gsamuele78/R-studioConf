@@ -679,7 +679,8 @@ process_template() {
         placeholder="%%${original_placeholder}%%"
         
         local escaped_value
-        escaped_value=$(sed -e 's/\\/\\\\/g' -e 's/#/\\#/g' <<<"$value")
+        # Escape backslashes, hash (sed delimiter), and ampersand (sed replacement)
+        escaped_value=$(sed -e 's/\\/\\\\/g' -e 's/#/\\#/g' -e 's/&/\\&/g' <<<"$value")
         
         template_content=$(echo "$template_content" | sed "s#$placeholder#$escaped_value#g")
     done
