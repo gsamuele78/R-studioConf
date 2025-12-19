@@ -265,8 +265,8 @@ generate_smb_conf() {
 }
 
 perform_realm_join() {
-    local admin_user="$1"
-    local ou_full="$2"
+    local admin_user="${1:-}"
+    local ou_full="${2:-}"
     if [[ -z "$admin_user" ]]; then
         read -r -p "Enter AD admin username for realm join (example: ${DEFAULT_AD_ADMIN_USER_EXAMPLE}): " admin_user
         if [[ -z "$admin_user" ]]; then log "No admin username provided, aborting."; return 1; fi

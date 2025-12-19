@@ -28,7 +28,9 @@ fi
 
 install_kerberos_packages() {
     log "Installing Kerberos client packages..."
-    local -a pkgs=(krb5-user libpam-krb5 libpam-ccreds auth-client-config)
+    # 'auth-client-config' is obsolete/missing on newer Ubuntu releases (noble+).
+    # Exclude it to avoid apt errors; keep essential Kerberos client packages.
+    local -a pkgs=(krb5-user libpam-krb5 libpam-ccreds)
     
     # Check if packages are already installed to avoid unnecessary apt calls
     local missing_pkgs=()
