@@ -57,7 +57,7 @@ uninstall_vm_optimizations() {
     echo "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
 }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/../config/optimize_vm.conf"
+CONFIG_FILE="${SCRIPT_DIR}/../config/optimize_system.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 GUEST_SCRIPT_TEMPLATE="${TEMPLATE_DIR}/guest_optimizer.sh.tpl"
 

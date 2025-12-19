@@ -552,18 +552,70 @@ verify_bspm() {
 
 
 # --- RStudio Server Functions ---
+# Helper script path for RStudio version detection
+RSTUDIO_VERSION_HELPER="${SCRIPT_DIR}/scripts/21_helper_rstudio_version.sh"
+
 get_latest_rstudio_info() {
     log "INFO" "Detecting latest RStudio Server version..."
     
     # Fallback values from configuration
     local rstudio_version=${RSTUDIO_VERSION_FALLBACK:-"2023.06.0"}
     local rstudio_arch=${RSTUDIO_ARCH_FALLBACK:-"amd64"}
+    
+    # Determine distro codename
+    local ubuntu_codename
+    ubuntu_codename=$(lsb_release -cs 2>/dev/null || true)
+    if [[ -z "$ubuntu_codename" ]]; then
+        ubuntu_codename="jammy" # Default to Ubuntu 22.04
+    fi
+    
+    # Use helper script if available
+    if [[ -x "$RSTUDIO_VERSION_HELPER" ]]; then
+        log "INFO" "Using helper script: $RSTUDIO_VERSION_HELPER"
+        
+        # Run the helper script and capture output
+        local helper_output
+        if helper_output=$("$RSTUDIO_VERSION_HELPER" 2>/dev/null); then
+            # Parse helper output for version and URL based on codename
+            local detected_version
+            detected_version=$(echo "$helper_output" | grep -oP 'Latest RStudio Server version: \K[0-9.]+\+[0-9]+' || true)
+            
+            # Get the appropriate URL based on codename
+            local detected_url=""
+            case "$ubuntu_codename" in
+                jammy|bookworm|noble)
+                    detected_url=$(echo "$helper_output" | grep -oP 'Ubuntu 22.04 \(jammy\) download URL: \K\S+' || true)
+                    ;;
+                focal|bullseye)
+                    detected_url=$(echo "$helper_output" | grep -oP 'Ubuntu 20.04 \(focal\) download URL: \K\S+' || true)
+                    ;;
+                *)
+                    # Default to jammy URL
+                    detected_url=$(echo "$helper_output" | grep -oP 'Ubuntu 22.04 \(jammy\) download URL: \K\S+' || true)
+                    ;;
+            esac
+            
+            if [[ -n "$detected_url" ]]; then
+                RSTUDIO_DEB_URL="$detected_url"
+                RSTUDIO_DEB_FILENAME=$(basename "$RSTUDIO_DEB_URL")
+                rstudio_version=${detected_version:-$rstudio_version}
+                log "INFO" "Detected RStudio Server: ${RSTUDIO_DEB_FILENAME}"
+                log "INFO" "RStudio Server download URL: ${RSTUDIO_DEB_URL}"
+                return 0
+            fi
+        fi
+        log "WARN" "Helper script did not return valid info, falling back to direct detection..."
+    else
+        log "WARN" "Helper script not found or not executable: $RSTUDIO_VERSION_HELPER"
+        log "INFO" "Falling back to direct detection..."
+    fi
+    
+    # Fallback: Try direct detection with retries
     local max_retry_attempts=3
     local retry_delay=5
     local attempt=1
-    
-    # Try to get the download page with retries
     local html=""
+    
     while [[ $attempt -le $max_retry_attempts ]]; do
         log "INFO" "Attempt $attempt of $max_retry_attempts: Fetching RStudio Server version info..."
         if html=$(curl -m 30 -fsSL "https://posit.co/download/rstudio-server/" 2>/dev/null); then
@@ -583,55 +635,39 @@ get_latest_rstudio_info() {
     if [[ -z "$html" ]]; then
         log "WARN" "Could not fetch latest version info after $max_retry_attempts attempts."
         log "INFO" "Using fallback version: $rstudio_version ($rstudio_arch)"
-        echo "$rstudio_version $rstudio_arch"
+        RSTUDIO_DEB_FILENAME="rstudio-server-${rstudio_version}-${rstudio_arch}.deb"
+        RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${ubuntu_codename}/${rstudio_arch}/${RSTUDIO_DEB_FILENAME}"
         return 0
     fi
-    # Prefer a codename-specific path (e.g., jammy, focal). Determine distro codename.
-    local ubuntu_codename
-    ubuntu_codename=$(lsb_release -cs 2>/dev/null || true)
-    if [[ -z "$ubuntu_codename" ]]; then
-        ubuntu_codename="bionic" # safe default used historically by RStudio downloads
-    fi
 
-    # Try to find a codename-specific download first (download2.rstudio.org/server/<codename>/amd64/...)
+    # Try to find a codename-specific download first
     local match=""
-    if [[ -n "$html" ]]; then
-        # Find links pointing to download2.rstudio.org with the detected codename and amd64
-        # Use a portable extended regex and allow for different filename patterns
-        match=$(printf "%s" "$html" | grep -oE "https?://download2\.rstudio\.org/server/${ubuntu_codename}/amd64/rstudio-server-[^\"]+\.deb" | head -n1 || true)
-
-        # If no codename-specific match, try any amd64 server link
-        if [[ -z "$match" ]]; then
-            match=$(printf "%s" "$html" | grep -oE "https?://download2\.rstudio\.org/server/[^/]+/amd64/rstudio-server-[^\"]+\.deb" | head -n1 || true)
-        fi
+    match=$(printf "%s" "$html" | grep -oE "https?://download2\.rstudio\.org/server/${ubuntu_codename}/amd64/rstudio-server-[^\"]+\.deb" | head -n1 || true)
+    
+    # If no codename-specific match, try any amd64 server link
+    if [[ -z "$match" ]]; then
+        match=$(printf "%s" "$html" | grep -oE "https?://download2\.rstudio\.org/server/[^/]+/amd64/rstudio-server-[^\"]+\.deb" | head -n1 || true)
     fi
 
     if [[ -n "$match" ]]; then
-        # Extract filename and version safely
         RSTUDIO_DEB_URL="$match"
         RSTUDIO_DEB_FILENAME=$(basename "$RSTUDIO_DEB_URL")
-        # version is the part after 'rstudio-server-' and before '-amd64.deb'
         rstudio_version=${RSTUDIO_DEB_FILENAME#rstudio-server-}
         rstudio_version=${rstudio_version%-amd64.deb}
 
-        # Validate the URL is reachable before using it
         if curl -I --fail -m 10 -sS "$RSTUDIO_DEB_URL" >/dev/null 2>&1; then
             log "INFO" "Detected RStudio Server: ${RSTUDIO_DEB_FILENAME}"
             log "INFO" "RStudio Server download URL: ${RSTUDIO_DEB_URL}"
             return 0
         else
-            log "WARN" "Detected URL ${RSTUDIO_DEB_URL} is not reachable. Falling back to default behavior."
+            log "WARN" "Detected URL ${RSTUDIO_DEB_URL} is not reachable. Using fallback..."
         fi
-    else
-        log "DEBUG" "No RStudio .deb link found on page for codename '${ubuntu_codename}'."
     fi
 
-    # Fallback: construct the URL using fallback version and codename (try jammy then bionic)
+    # Final fallback
     RSTUDIO_DEB_FILENAME="rstudio-server-${rstudio_version}-${rstudio_arch}.deb"
-    # Try codename-specific first (jammy/focal/etc.), then bionic as legacy
     RSTUDIO_DEB_URL="https://download2.rstudio.org/server/${ubuntu_codename}/${rstudio_arch}/${RSTUDIO_DEB_FILENAME}"
     if ! curl -I --fail -m 10 -sS "$RSTUDIO_DEB_URL" >/dev/null 2>&1; then
-        # try bionic path as a last resort
         RSTUDIO_DEB_URL="https://download2.rstudio.org/server/bionic/${rstudio_arch}/${RSTUDIO_DEB_FILENAME}"
     fi
 

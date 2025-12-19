@@ -10,9 +10,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 # Define paths relative to SCRIPT_DIR
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 # Resolve SSSD/Kerberos script path (support numeric prefix like 00_...)
-SSSD_KERBEROS_SCRIPT_PATH="$(ls "${SCRIPT_DIR}"/*sssd_kerberos_setup.sh 2>/dev/null | head -n1 || true)"
-SSSD_KERBEROS_SCRIPT_PATH="${SSSD_KERBEROS_SCRIPT_PATH:-${SCRIPT_DIR}/00_sssd_kerberos_setup.sh}"
-CONF_VARS_FILE="${SCRIPT_DIR}/../config/rstudio_setup.vars.conf"
+SSSD_KERBEROS_SCRIPT_PATH="$(ls "${SCRIPT_DIR}"/*sssd*setup.sh 2>/dev/null | head -n1 || true)"
+SSSD_KERBEROS_SCRIPT_PATH="${SSSD_KERBEROS_SCRIPT_PATH:-${SCRIPT_DIR}/10_join_domain_sssd.sh}"
+# Resolve Samba/Winbind script path
+SAMBA_KERBEROS_SCRIPT_PATH="$(ls "${SCRIPT_DIR}"/*samba*setup.sh 2>/dev/null | head -n1 || true)"
+SAMBA_KERBEROS_SCRIPT_PATH="${SAMBA_KERBEROS_SCRIPT_PATH:-${SCRIPT_DIR}/11_join_domain_samba.sh}"
+# Configuration files
+CONF_VARS_FILE="${SCRIPT_DIR}/../config/configure_rstudio.vars.conf"
+SSSD_CONF_VARS_FILE="${SCRIPT_DIR}/../config/join_domain_sssd.vars.conf"
+SAMBA_CONF_VARS_FILE="${SCRIPT_DIR}/../config/join_domain_samba.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates" # Used by _get_template_content
 
 # Source common utilities
@@ -54,6 +60,83 @@ else
     TARGET_SHARED_DIR_GROUP_PRIMARY="domain^users"
     TARGET_SHARED_DIR_GROUP_SECONDARY="domain users"
 fi
+
+# Source SSSD config vars if available (for home template, groups, etc.)
+if [[ -f "$SSSD_CONF_VARS_FILE" ]]; then
+    log "Sourcing SSSD configuration variables from $SSSD_CONF_VARS_FILE"
+    source "$SSSD_CONF_VARS_FILE"
+fi
+
+# Source Samba config vars if available
+if [[ -f "$SAMBA_CONF_VARS_FILE" ]]; then
+    log "Sourcing Samba configuration variables from $SAMBA_CONF_VARS_FILE"
+    source "$SAMBA_CONF_VARS_FILE"
+fi
+
+# --- Authentication Backend Detection ---
+
+# Detects the active authentication backend (SSSD, Samba/Winbind, both, or none)
+detect_auth_backend() {
+    local sssd_active=false
+    local samba_active=false
+    
+    # Check for SSSD
+    if systemctl is-active --quiet sssd 2>/dev/null; then
+        sssd_active=true
+    fi
+    
+    # Check for Samba/Winbind
+    if systemctl is-active --quiet winbind 2>/dev/null || \
+       systemctl is-active --quiet smbd 2>/dev/null; then
+        samba_active=true
+    fi
+    
+    if $sssd_active && $samba_active; then
+        echo "both"
+    elif $sssd_active; then
+        echo "sssd"
+    elif $samba_active; then
+        echo "samba"
+    else
+        echo "none"
+    fi
+}
+
+# Returns the appropriate home directory template based on active backend
+get_ad_homedir_template() {
+    local backend
+    backend=$(detect_auth_backend)
+    
+    case "$backend" in
+        sssd)
+            echo "${DEFAULT_FALLBACK_HOMEDIR_TEMPLATE:-/home/%d/%u}"
+            ;;
+        samba)
+            echo "${DEFAULT_TEMPLATE_HOMEDIR:-/nfs/home/%U}"
+            ;;
+        both)
+            # Prefer SSSD template if both are active
+            echo "${DEFAULT_FALLBACK_HOMEDIR_TEMPLATE:-${DEFAULT_TEMPLATE_HOMEDIR:-/home/%d/%u}}"
+            ;;
+        *)
+            # No AD backend detected, use default RStudio projects root
+            echo "${R_PROJECTS_ROOT:-/media/r_projects}"
+            ;;
+    esac
+}
+
+# Returns a human-readable description of the active backend
+get_auth_backend_description() {
+    local backend
+    backend=$(detect_auth_backend)
+    
+    case "$backend" in
+        sssd)  echo "SSSD (Active Directory via SSSD)" ;;
+        samba) echo "Samba/Winbind (Active Directory via Samba)" ;;
+        both)  echo "Both SSSD and Samba/Winbind are active" ;;
+        *)     echo "No AD integration detected (local auth only)" ;;
+    esac
+}
 
 # --- RStudio Specific Functions ---
 
@@ -188,8 +271,14 @@ configure_rstudio_global_tmp() {
 # Tests RStudio PAM authentication using pamtester.
 test_rstudio_pam_auth() {
     log "Performing RStudio PAM authentication test with pamtester..."
+    
+    # Show detected authentication backend
+    local auth_backend
+    auth_backend=$(detect_auth_backend)
+    log "Detected authentication backend: $(get_auth_backend_description)"
+    
     if ! command -v pamtester &>/dev/null; then
-        log "pamtester not found. Run SSSD/Kerberos setup (Option S from main menu) to install or install manually."
+        log "pamtester not found. Run AD Integration setup (Option S from main menu) to install or install manually."
         return 1
     fi
 
@@ -207,7 +296,11 @@ test_rstudio_pam_auth() {
         log "RStudio PAM authentication test SUCCEEDED for $ad_user_id."
     else
         log "RStudio PAM authentication test FAILED for $ad_user_id."
-        log "Consult SSSD/Kerberos setup, /etc/pam.d/rstudio, and RStudio Server logs."
+        case "$auth_backend" in
+            sssd)  log "Consult SSSD setup, /etc/pam.d/rstudio, and RStudio Server logs." ;;
+            samba) log "Consult Samba/Winbind setup, /etc/pam.d/rstudio, and RStudio Server logs." ;;
+            *)     log "No AD backend detected. Ensure SSSD or Samba is configured (Option S)." ;;
+        esac
         return 1
     fi
 }
@@ -331,18 +424,24 @@ uninstall_rstudio_configs() {
 # Main menu function for RStudio setup operations.
 main_rstudio_menu() {
     while true; do
+        # Detect current home directory template for display
+        local current_homedir_template
+        current_homedir_template=$(get_ad_homedir_template)
+        
         # Using printf for menu for better formatting and portability
         printf "\n===== RStudio Configuration Menu =====\n"
+        printf "Auth Backend: %s\n" "$(get_auth_backend_description)"
+        printf "======================================\n"
         printf "1. Full RStudio Setup (Prerequisites, Server Conf, User Dirs, Temp, Session Env)\n"
         printf "2. Check RStudio Prerequisites & Configure rserver.conf (%s)\n" "${RSERVER_CONF_PATH}"
-    printf "3. Configure User Directories & Login Script\n"
-    printf "   [A] Use default directory (%s)\n" "${R_PROJECTS_ROOT}"
-    printf "   [B] Use SSSD/Kerberos home template (%s)\n" "${DEFAULT_FALLBACK_HOMEDIR_TEMPLATE:-/home/%d/%u}"
+        printf "3. Configure User Directories & Login Script\n"
+        printf "   [A] Use default directory (%s)\n" "${R_PROJECTS_ROOT}"
+        printf "   [B] Use AD home template (%s) [Auto-detected]\n" "$current_homedir_template"
         printf "4. Configure Global RStudio Temporary Directory (%s)\n" "${GLOBAL_RSTUDIO_TMP_DIR}"
         printf "5. Configure RStudio Session/Environment Settings & R Profile\n"
-        printf -- "--------------------------------------\n" # Using -- to indicate end of options for printf
-        printf "S. Configure SSSD/Kerberos for AD Integration (Launches separate script)\n"
-        printf "6. Test RStudio PAM Authentication (after SSSD/Kerberos setup)\n"
+        printf -- "--------------------------------------\n"
+        printf "S. Configure AD Integration (SSSD or Samba/Winbind)\n"
+        printf "6. Test RStudio PAM Authentication (after AD setup)\n"
         printf -- "--------------------------------------\n"
         printf "7. Uninstall RStudio Configurations (profile script, optional package removal)\n"
         printf "8. Restore All Configurations from Last Backup\n"
@@ -364,14 +463,16 @@ main_rstudio_menu() {
                 ;;
             2) backup_config && check_rstudio_prerequisites && configure_rstudio_server_conf ;;
             3)
+                local detected_template
+                detected_template=$(get_ad_homedir_template)
                 printf "\nChoose user directory and login script location:\n"
                 printf "A) Use default directory (%s)\n" "${R_PROJECTS_ROOT}"
-                printf "B) Use SSSD/Kerberos home template (%s)\n" "${DEFAULT_FALLBACK_HOMEDIR_TEMPLATE:-/home/%d/%u}"
+                printf "B) Use AD home template (%s) [Auto-detected based on %s]\n" "$detected_template" "$(detect_auth_backend)"
                 read -r -p "Select option [A/B]: " user_dir_choice
                 if [[ "$user_dir_choice" =~ ^[Bb]$ ]]; then
-                    # Use SSSD/Kerberos home template
-                    export RSTUDIO_USER_HOME_TEMPLATE="${DEFAULT_FALLBACK_HOMEDIR_TEMPLATE:-/home/%d/%u}"
-                    log "Using SSSD/Kerberos home template for user directories: $RSTUDIO_USER_HOME_TEMPLATE"
+                    # Use auto-detected home template based on active backend
+                    export RSTUDIO_USER_HOME_TEMPLATE="$detected_template"
+                    log "Using AD home template for user directories: $RSTUDIO_USER_HOME_TEMPLATE"
                 else
                     # Use default directory
                     unset RSTUDIO_USER_HOME_TEMPLATE
@@ -381,16 +482,34 @@ main_rstudio_menu() {
             4) backup_config && check_rstudio_prerequisites && configure_rstudio_global_tmp ;;
             5) backup_config && check_rstudio_prerequisites && configure_rstudio_session_env_settings ;;
             S|s)
-                if [[ -f "$SSSD_KERBEROS_SCRIPT_PATH" ]]; then
-                    log "Launching SSSD/Kerberos Setup Script..."
-                    # Execute in current shell to allow it to modify environment if needed,
-                    # or use bash explicitly if it's designed to be standalone.
-                    # Assuming it's designed to be run as a separate process:
-                    bash "$SSSD_KERBEROS_SCRIPT_PATH"
-                    log "Returned from SSSD/Kerberos Setup Script."
-                else
-                    log "ERROR: SSSD/Kerberos script ($SSSD_KERBEROS_SCRIPT_PATH) not found."
-                fi
+                printf "\n===== AD Integration Setup =====\n"
+                printf "Select authentication backend to configure:\n"
+                printf "1) SSSD/Kerberos (recommended for most AD environments)\n"
+                printf "2) Samba/Winbind (for Samba domain membership)\n"
+                printf "B) Back to main menu\n"
+                read -r -p "Choice: " auth_choice
+                case "$auth_choice" in
+                    1)
+                        if [[ -f "$SSSD_KERBEROS_SCRIPT_PATH" ]]; then
+                            log "Launching SSSD/Kerberos Setup Script..."
+                            bash "$SSSD_KERBEROS_SCRIPT_PATH"
+                            log "Returned from SSSD/Kerberos Setup Script."
+                        else
+                            log "ERROR: SSSD script ($SSSD_KERBEROS_SCRIPT_PATH) not found."
+                        fi
+                        ;;
+                    2)
+                        if [[ -f "$SAMBA_KERBEROS_SCRIPT_PATH" ]]; then
+                            log "Launching Samba/Winbind Setup Script..."
+                            bash "$SAMBA_KERBEROS_SCRIPT_PATH"
+                            log "Returned from Samba/Winbind Setup Script."
+                        else
+                            log "ERROR: Samba script ($SAMBA_KERBEROS_SCRIPT_PATH) not found."
+                        fi
+                        ;;
+                    [Bb]*) ;;
+                    *) printf "Invalid choice.\n" ;;
+                esac
                 ;;
             6) test_rstudio_pam_auth ;; 
             7) uninstall_rstudio_configs ;; # backup_config is called within this function

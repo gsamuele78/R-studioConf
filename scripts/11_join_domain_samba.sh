@@ -4,7 +4,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-CONF_VARS_FILE="${SCRIPT_DIR}/../config/samba_kerberos_setup.vars.conf"
+CONF_VARS_FILE="${SCRIPT_DIR}/../config/join_domain_samba.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 SMB_CONF_PATH_DEFAULT="/etc/samba/smb.conf"
 

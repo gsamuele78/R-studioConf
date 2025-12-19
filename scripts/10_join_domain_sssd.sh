@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 # Define paths relative to SCRIPT_DIR
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-CONF_VARS_FILE="${SCRIPT_DIR}/../config/sssd_kerberos_setup.vars.conf"
+CONF_VARS_FILE="${SCRIPT_DIR}/../config/join_domain_sssd.vars.conf"
 SSSD_CONF_TEMPLATE_PATH="${SCRIPT_DIR}/../templates/sssd.conf.template"
 KERBEROS_SETUP_SCRIPT="${SCRIPT_DIR}/11_kerberos_setup.sh"
 

@@ -5,7 +5,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/secure-web-access.conf"
+DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/install_secure_access.vars.conf"
 PAM_CONFIG_PATH="/etc/pam.d/nginx"
 TTYD_OVERRIDE_DIR="/etc/systemd/system/ttyd.service.d"
 #The File Browser variables will assigned after sourching conf file (see config/secure-web-access.conf)

@@ -8,7 +8,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-KERBEROS_VARS_FILE="${SCRIPT_DIR}/../config/kerberos_setup.vars.conf"
+KERBEROS_VARS_FILE="${SCRIPT_DIR}/../config/lib_kerberos_setup.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 
 # Source common utils

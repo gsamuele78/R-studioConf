@@ -18,7 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/nginx_setup.vars.conf"
+DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/install_nginx.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 
 # Validate and source common utilities
@@ -195,7 +195,7 @@ parse_samba_config_for_vars() {
 }
 
 load_sssd_kerberos_config_vars() {
-  local sssd_vars_file="${SCRIPT_DIR}/../config/sssd_kerberos_setup.vars.conf"
+  local sssd_vars_file="${SCRIPT_DIR}/../config/join_domain_sssd.vars.conf"
   if [[ -f "$sssd_vars_file" ]]; then
     # shellcheck source=/dev/null
     source "$sssd_vars_file" 2>/dev/null || true
@@ -209,7 +209,7 @@ load_sssd_kerberos_config_vars() {
 }
 
 load_samba_kerberos_config_vars() {
-  local samba_vars_file="${SCRIPT_DIR}/../config/samba_kerberos_setup.vars.conf"
+  local samba_vars_file="${SCRIPT_DIR}/../config/join_domain_samba.vars.conf"
   if [[ -f "$samba_vars_file" ]]; then
     # shellcheck source=/dev/null
     source "$samba_vars_file" 2>/dev/null || true
@@ -283,6 +283,73 @@ autofill_from_detected_backend() {
     parse_samba_config_for_vars
     load_samba_kerberos_config_vars
   fi
+}
+
+# Update AUTH_BACKEND in config file based on detected backend
+update_config_auth_backend() {
+  local config_path="$1"
+  local detected_backend
+  
+  detected_backend=$(intelligent_backend_detection 2>/dev/null) || detected_backend="NONE"
+  
+  if [[ "$detected_backend" != "NONE" && -f "$config_path" ]]; then
+    log INFO "Updating AUTH_BACKEND=$detected_backend in config file"
+    sed -i "s/^AUTH_BACKEND=.*/AUTH_BACKEND=\"$detected_backend\"/" "$config_path"
+    return 0
+  elif [[ "$detected_backend" == "NONE" ]]; then
+    log WARN "No auth backend detected - keeping config file default"
+    return 1
+  fi
+}
+
+# Auto-detect domain for Let's Encrypt certificate
+detect_domain_for_letsencrypt() {
+  local detected_domain=""
+  
+  # Priority 1: realm list (works for both SSSD and Samba)
+  if command -v realm &>/dev/null; then
+    detected_domain=$(realm list --name-only 2>/dev/null | head -1)
+    if [[ -n "$detected_domain" ]]; then
+      log INFO "Domain detected from realm: $detected_domain"
+      echo "$detected_domain"
+      return 0
+    fi
+  fi
+  
+  # Priority 2: SSSD config
+  if [[ -f /etc/sssd/sssd.conf ]]; then
+    detected_domain=$(grep -i "^\[domain/" /etc/sssd/sssd.conf 2>/dev/null | head -1 | sed 's/.*domain\/\([^]]*\).*/\1/')
+    if [[ -n "$detected_domain" ]]; then
+      log INFO "Domain detected from sssd.conf: $detected_domain"
+      echo "$detected_domain"
+      return 0
+    fi
+  fi
+  
+  # Priority 3: Samba config (realm)
+  if [[ -f /etc/samba/smb.conf ]]; then
+    detected_domain=$(grep -i "^[[:space:]]*realm" /etc/samba/smb.conf 2>/dev/null | head -1 | cut -d= -f2 | xargs | tr '[:upper:]' '[:lower:]')
+    if [[ -n "$detected_domain" ]]; then
+      log INFO "Domain detected from smb.conf: $detected_domain"
+      echo "$detected_domain"
+      return 0
+    fi
+  fi
+  
+  # Priority 4: hostname -f (FQDN)
+  detected_domain=$(hostname -f 2>/dev/null)
+  if [[ -n "$detected_domain" && "$detected_domain" == *.* ]]; then
+    # Extract domain part (remove hostname)
+    detected_domain="${detected_domain#*.}"
+    log INFO "Domain detected from hostname: $detected_domain"
+    echo "$detected_domain"
+    return 0
+  fi
+  
+  # Fallback: return empty (caller will prompt user)
+  log WARN "Could not auto-detect domain for Let's Encrypt"
+  echo ""
+  return 1
 }
 
 # =====================================================================

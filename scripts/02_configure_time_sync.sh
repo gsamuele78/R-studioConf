@@ -6,7 +6,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-CONF_VARS_FILE="${SCRIPT_DIR}/../config/ntp_chrony_setup.vars.conf"
+CONF_VARS_FILE="${SCRIPT_DIR}/../config/configure_time_sync.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 CHRONY_CONF_PATH="/etc/chrony/chrony.conf"
 
