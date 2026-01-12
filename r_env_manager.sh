@@ -27,7 +27,8 @@ readonly SCRIPT_DIR="${SCRIPT_DIR_INIT}"
 readonly LOG_DIR="/var/log/r_env_manager"
 readonly BACKUP_DIR="/var/backups/r_env_manager"
 readonly CONFIG_DIR="${SCRIPT_DIR}/config"
-readonly STATE_FILE="${SCRIPT_DIR}/.r_env_state"
+readonly STATE_DIR="/var/lib/r_env_manager"
+readonly STATE_FILE="${STATE_DIR}/r_env_state"
 readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}.log"
 readonly LOCK_FILE="/var/run/${SCRIPT_NAME}.lock"
 readonly PID_FILE="/var/run/${SCRIPT_NAME}.pid"
@@ -110,7 +111,30 @@ cleanup() {
 # Set up trap handlers
 trap cleanup EXIT
 trap 'log "FATAL" "Received signal to terminate."; exit 1' HUP INT QUIT TERM
-check_security_requirements() { if [[ $EUID -ne 0 ]]; then log "FATAL" "This script must be run as root."; exit 1; fi; local insecure_path_found=0; local old_ifs="$IFS"; IFS=':'; for dir in $PATH; do if [[ "$dir" == "." ]] || [[ -z "$dir" ]]; then insecure_path_found=1; break; fi; done; IFS="$old_ifs"; if [[ $insecure_path_found -eq 1 ]]; then log "FATAL" "Insecure PATH detected."; exit 1; fi; for dir in "$LOG_DIR" "$BACKUP_DIR"; do ensure_dir_exists "$dir"; chmod 750 "$dir"; done; }
+check_security_requirements() {
+    if [[ $EUID -ne 0 ]]; then
+        log "FATAL" "This script must be run as root."
+        exit 1
+    fi
+    local insecure_path_found=0
+    local old_ifs="$IFS"
+    IFS=':'
+    for dir in $PATH; do
+        if [[ "$dir" == "." ]] || [[ -z "$dir" ]]; then
+            insecure_path_found=1
+            break
+        fi
+    done
+    IFS="$old_ifs"
+    if [[ $insecure_path_found -eq 1 ]]; then
+        log "FATAL" "Insecure PATH detected."
+        exit 1
+    fi
+    for dir in "$LOG_DIR" "$BACKUP_DIR" "$STATE_DIR"; do
+        ensure_dir_exists "$dir"
+        chmod 750 "$dir"
+    done
+}
 # (Other core functions like config loading, state management, etc. are omitted for brevity but should be included from previous versions)
 
 rotate_logs() {
@@ -690,7 +714,8 @@ install_rstudio_server() {
     get_latest_rstudio_info
     
     log "INFO" "Installing RStudio Server..."
-    local rstudio_deb_path="/tmp/${RSTUDIO_DEB_FILENAME}"
+    local rstudio_deb_path
+    rstudio_deb_path=$(mktemp "/tmp/${RSTUDIO_DEB_FILENAME:-rstudio-server.deb}.XXXXXX") || { log "FATAL" "Could not create temp file"; return 1; }
     
     ## Downloading the file is fine with run_command
     #run_command "Download RStudio Server" "wget -O \"${rstudio_deb_path}\" \"${RSTUDIO_DEB_URL}\""
