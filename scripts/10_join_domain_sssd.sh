@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 CONF_VARS_FILE="${SCRIPT_DIR}/../config/join_domain_sssd.vars.conf"
 SSSD_CONF_TEMPLATE_PATH="${SCRIPT_DIR}/../templates/sssd.conf.template"
-KERBEROS_SETUP_SCRIPT="${SCRIPT_DIR}/11_kerberos_setup.sh"
+KERBEROS_SETUP_SCRIPT="${SCRIPT_DIR}/12_lib_kerberos_setup.sh"
 
 # Source common utilities
 if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then

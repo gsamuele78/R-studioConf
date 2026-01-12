@@ -1,5 +1,5 @@
 #!/bin/bash
-# scripts/11_kerberos_setup.sh
+# scripts/12_lib_kerberos_setup.sh
 # Centralized Kerberos Setup Script
 #
 # This script handles:

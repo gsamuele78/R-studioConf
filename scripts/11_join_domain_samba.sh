@@ -726,7 +726,7 @@ IDMAPD
     fi
 }
 
-# deploy_krb5_conf removed - replaced by generate_krb5_conf from 11_kerberos_setup.sh
+# deploy_krb5_conf removed - replaced by generate_krb5_conf from 12_lib_kerberos_setup.sh
 
 initialize_samba_dbs() {
     log "INFO" "Initializing Samba LDB databases..."
