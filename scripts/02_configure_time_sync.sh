@@ -1,5 +1,5 @@
 #!/bin/bash
-# 08_ntp_chrony_setup.sh - Unified NTP/chrony setup script
+# 02_configure_time_sync.sh - Unified NTP/chrony setup script
 # FIXED VERSION: Corrects newline handling in pool directive generation
 # Installs, configures, and restarts chrony/ntp/systemd-timesyncd as needed
 # Uses process_template and backup logic from common_utils.sh

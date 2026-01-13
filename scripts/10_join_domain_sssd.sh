@@ -61,7 +61,7 @@ GENERATED_SSSD_CONF=""
 
 ensure_time_sync() {
     log "Ensuring system time is synchronized using unified NTP/chrony setup script..."
-    local ntp_script_path="${SCRIPT_DIR}/08_ntp_chrony_setup.sh"
+    local ntp_script_path="${SCRIPT_DIR}/02_configure_time_sync.sh"
     if [[ ! -x "$ntp_script_path" ]]; then
         log "ERROR: $ntp_script_path not found or not executable. Please ensure the unified NTP/chrony setup script exists."
         return 1

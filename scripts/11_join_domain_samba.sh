@@ -160,7 +160,7 @@ prejoin_checks() {
     log "INFO" "Running pre-join checks: time sync and DNS discovery"
 
     # Ensure time sync using the unified NTP/chrony setup script if present
-    local ntp_script_path="${SCRIPT_DIR}/08_ntp_chrony_setup.sh"
+    local ntp_script_path="${SCRIPT_DIR}/02_configure_time_sync.sh"
     if [[ -x "$ntp_script_path" ]]; then
         log "DEBUG" "Invoking NTP/chrony setup script: $ntp_script_path"
         "$ntp_script_path"
@@ -192,7 +192,7 @@ prejoin_checks() {
         log "WARN" "Local system clock appears to be significantly out of sync."
         echo
         echo "Your system time differs from authoritative time sources by more than the allowed threshold." >&2
-        local ntp_script_path="${SCRIPT_DIR}/08_ntp_chrony_setup.sh"
+        local ntp_script_path="${SCRIPT_DIR}/02_configure_time_sync.sh"
         if [[ -x "${ntp_script_path}" ]]; then
             read -r -p "Would you like to run the time synchronization setup now? (y/N): " run_sync
             if [[ "${run_sync}" =~ ^[Yy]$ ]]; then
