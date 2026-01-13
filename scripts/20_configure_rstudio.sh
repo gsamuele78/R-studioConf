@@ -161,6 +161,39 @@ check_rstudio_prerequisites() {
     return 0
 }
 
+# Configures /etc/pam.d/rstudio to ensure it uses the system's PAM stack (common-*).
+# This is crucial for inheriting mkhomedir and the correct auth backend (SSSD or Winbind).
+configure_rstudio_pam() {
+    log "Configuring RStudio PAM service (/etc/pam.d/rstudio)..."
+    local pam_file="/etc/pam.d/rstudio"
+    
+    # Check if file exists. If it does, we backup.
+    if [[ -f "$pam_file" ]]; then
+        log "Backing up existing $pam_file..."
+        mkdir -p "${BACKUP_DIR:-/tmp}/pam_backup"
+        cp "$pam_file" "${BACKUP_DIR:-/tmp}/pam_backup/rstudio.pam.$(date +%s)"
+    fi
+
+    # Create the file with standard include directives
+    # This setup delegates to common-auth, common-account, common-password, and common-session.
+    # common-session is where pam_mkhomedir.so usually lives.
+    cat > "$pam_file" <<EOF
+#%PAM-1.0
+@include common-auth
+@include common-account
+@include common-password
+@include common-session
+EOF
+
+    if [[ -f "$pam_file" ]]; then
+        log "Successfully created $pam_file."
+    else
+        log "ERROR: Failed to create $pam_file."
+        return 1
+    fi
+    return 0
+}
+
 # Configures /etc/rstudio/rserver.conf based on variables.
 configure_rstudio_server_conf() {
     log "Configuring RStudio Server (${RSERVER_CONF_PATH:-/etc/rstudio/rserver.conf})..."
@@ -453,7 +486,9 @@ main_rstudio_menu() {
             1)
                 backup_config && \
                 check_rstudio_prerequisites && \
+                configure_rstudio_pam && \
                 configure_rstudio_server_conf && \
+
                 configure_rstudio_user_dirs_and_login_script && \
                 configure_rstudio_global_tmp && \
                 configure_rstudio_session_env_settings && \

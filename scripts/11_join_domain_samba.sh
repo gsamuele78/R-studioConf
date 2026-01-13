@@ -502,6 +502,8 @@ perform_realm_join() {
         fi
         generate_krb5_conf
         post_join_opt
+        configure_pam
+
         
         return 0
     else
@@ -727,6 +729,25 @@ IDMAPD
 }
 
 # deploy_krb5_conf removed - replaced by generate_krb5_conf from 12_lib_kerberos_setup.sh
+
+configure_pam() {
+    log "Checking and configuring PAM for Samba/Winbind..."
+    
+    # Configure PAM using pam-auth-update if available
+    if command -v pam-auth-update &>/dev/null; then
+        log "Running pam-auth-update to ensure winbind and mkhomedir modules are enabled..."
+        # We need both winbind (for auth) and mkhomedir (for home dir creation)
+        if ! run_command "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable winbind --enable mkhomedir"; then
+            log "Warning: pam-auth-update failed. Manual PAM configuration might be required."
+        else
+            log "PAM modules 'winbind' and 'mkhomedir' enabled."
+        fi
+    else
+        log "Warning: pam-auth-update not found. Manual PAM configuration required for auto-homedir creation."
+    fi
+    
+    return 0
+}
 
 initialize_samba_dbs() {
     log "INFO" "Initializing Samba LDB databases..."
