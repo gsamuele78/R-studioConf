@@ -440,6 +440,28 @@ install_openblas_openmp() {
     fi
 }
 
+configure_openblas_compatibility() {
+    log "INFO" "Configuring OpenBLAS compatibility settings..."
+    
+    # In QEMU/KVM environments, OpenBLAS often misdetects CPU capabilities (advertising AVX512 but crashing on use).
+    # We force 'Haswell' coretype which uses AVX2 but avoids the newer, often-flaky instruction sets in emulation.
+    local core_type="Haswell"
+    local renviron_site="/etc/R/Renviron.site"
+    
+    ensure_dir_exists "$(dirname "$renviron_site")"
+    
+    # Check if we already have this setting
+    if grep -q "OPENBLAS_CORETYPE" "$renviron_site" 2>/dev/null; then
+        log "INFO" "OPENBLAS_CORETYPE already set in $renviron_site."
+    else
+        log "INFO" "Forcing OPENBLAS_CORETYPE=$core_type to prevent SIGILL (Illegal Instruction) in VMs."
+        echo "OPENBLAS_CORETYPE=$core_type" >> "$renviron_site"
+    fi
+    
+    # Export for the current session so the immediate verification step works
+    export OPENBLAS_CORETYPE="$core_type"
+}
+
 
 verify_openblas_openmp() {
     log "INFO" "Verifying OpenBLAS and OpenMP integration with R..."
@@ -988,6 +1010,7 @@ full_install() {
     setup_cran_repo
     install_r
     install_openblas_openmp
+    configure_openblas_compatibility
     verify_openblas_openmp
     setup_bspm # Uncomment if you use it
     verify_bspm 
@@ -1196,7 +1219,7 @@ main_menu() {
         
         case $choice in
             1) full_install ;;
-            2) setup_cran_repo; install_r; install_openblas_openmp; verify_openblas_openmp; setup_bspm ;;
+            2) setup_cran_repo; install_r; install_openblas_openmp; configure_openblas_compatibility; verify_openblas_openmp; setup_bspm ;;
             3) verify_bspm ;;
             4) install_core_r_dev_pkgs; install_user_cran_pkgs; install_user_github_pkgs ;;
             5) install_rstudio_server ;;
