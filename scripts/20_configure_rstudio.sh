@@ -315,6 +315,12 @@ test_rstudio_pam_auth() {
         return 1
     fi
 
+    if [[ ! -f "/etc/pam.d/rstudio" ]]; then
+        log "WARNING: /etc/pam.d/rstudio does not exist."
+        log "RStudio likely falling back to default PAM ('other'), which often denies access."
+        log "Please run 'Configure RStudio PAM Service' (Option 6) first."
+    fi
+
     local ad_user_id
     read -r -p "Enter username for RStudio PAM test (e.g., user@domain.com or shortname): " ad_user_id
     if [[ -z "$ad_user_id" ]]; then
@@ -470,15 +476,17 @@ main_rstudio_menu() {
         printf "3. Configure User Directories & Login Script\n"
         printf "   [A] Use default directory (%s)\n" "${R_PROJECTS_ROOT}"
         printf "   [B] Use AD home template (%s) [Auto-detected]\n" "$current_homedir_template"
+        printf "   [B] Use AD home template (%s) [Auto-detected]\n" "$current_homedir_template"
         printf "4. Configure Global RStudio Temporary Directory (%s)\n" "${GLOBAL_RSTUDIO_TMP_DIR}"
         printf "5. Configure RStudio Session/Environment Settings & R Profile\n"
+        printf "6. Configure RStudio PAM Service (/etc/pam.d/rstudio)\n"
         printf -- "--------------------------------------\n"
         printf "S. Configure AD Integration (SSSD or Samba/Winbind)\n"
-        printf "6. Test RStudio PAM Authentication (after AD setup)\n"
+        printf "7. Test RStudio PAM Authentication (after AD setup)\n"
         printf -- "--------------------------------------\n"
-        printf "7. Uninstall RStudio Configurations (profile script, optional package removal)\n"
-        printf "8. Restore All Configurations from Last Backup\n"
-        printf "9. Exit\n"
+        printf "8. Uninstall RStudio Configurations (profile script, optional package removal)\n"
+        printf "9. Restore All Configurations from Last Backup\n"
+        printf "10. Exit\n"
         printf "======================================\n"
         read -r -p "Enter choice: " choice
 
@@ -488,7 +496,6 @@ main_rstudio_menu() {
                 check_rstudio_prerequisites && \
                 configure_rstudio_pam && \
                 configure_rstudio_server_conf && \
-
                 configure_rstudio_user_dirs_and_login_script && \
                 configure_rstudio_global_tmp && \
                 configure_rstudio_session_env_settings && \
@@ -516,6 +523,7 @@ main_rstudio_menu() {
                 backup_config && check_rstudio_prerequisites && configure_rstudio_user_dirs_and_login_script ;;
             4) backup_config && check_rstudio_prerequisites && configure_rstudio_global_tmp ;;
             5) backup_config && check_rstudio_prerequisites && configure_rstudio_session_env_settings ;;
+            6) backup_config && configure_rstudio_pam ;;
             S|s)
                 printf "\n===== AD Integration Setup =====\n"
                 printf "Select authentication backend to configure:\n"
@@ -546,14 +554,14 @@ main_rstudio_menu() {
                     *) printf "Invalid choice.\n" ;;
                 esac
                 ;;
-            6) test_rstudio_pam_auth ;; 
-            7) uninstall_rstudio_configs ;; # backup_config is called within this function
-            8) restore_config ;;
-            9) log "Exiting RStudio Setup."; break ;;
+            7) test_rstudio_pam_auth ;; 
+            8) uninstall_rstudio_configs ;; # backup_config is called within this function
+            9) restore_config ;;
+            10) log "Exiting RStudio Setup."; break ;;
             *) printf "Invalid choice. Please try again.\n" ;;
         esac
         # Pause for user to read output before showing menu again, unless exiting.
-        if [[ "$choice" != "9" ]]; then
+        if [[ "$choice" != "10" ]]; then
             read -r -p "Press Enter to continue..."
         fi
     done

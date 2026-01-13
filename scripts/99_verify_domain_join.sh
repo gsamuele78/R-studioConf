@@ -94,14 +94,38 @@ echo
 
 # 3. PAM configuration
 echo ">> Checking PAM configuration..."
-# We look for pam_sss.so OR pam_winbind.so
-PAM_FILES="/etc/pam.d/common-session /etc/pam.d/common-auth"
 
+# Auth files: Check for backend (winbind/sssd) only
+AUTH_PAM_FILES="/etc/pam.d/common-auth"
+for pamfile in $AUTH_PAM_FILES; do
+    echo "  Checking $pamfile ..."
+    if [ ! -f "$pamfile" ]; then
+        echo "    [WARN] $pamfile not found, skipping."
+        continue
+    fi
+    
+    FOUND_BACKEND=false
+    if sudo grep -q "pam_sss.so" "$pamfile"; then
+        echo "    [OK] pam_sss.so present"
+        FOUND_BACKEND=true
+    fi
+    if sudo grep -q "pam_winbind.so" "$pamfile"; then
+        echo "    [OK] pam_winbind.so present"
+        FOUND_BACKEND=true
+    fi
+    
+    if [ "$FOUND_BACKEND" = false ]; then
+        echo "    [WARN] Neither pam_sss.so nor pam_winbind.so found in $pamfile"
+    fi
+done
+
+# Session files: Check for backend AND mkhomedir
+SESSION_PAM_FILES="/etc/pam.d/common-session"
 if [ -f "/etc/pam.d/common-session-noninteractive" ]; then
-    PAM_FILES="$PAM_FILES /etc/pam.d/common-session-noninteractive"
+    SESSION_PAM_FILES="$SESSION_PAM_FILES /etc/pam.d/common-session-noninteractive"
 fi
 
-for pamfile in $PAM_FILES; do
+for pamfile in $SESSION_PAM_FILES; do
     echo "  Checking $pamfile ..."
     if [ ! -f "$pamfile" ]; then
         echo "    [WARN] $pamfile not found, skipping."
@@ -122,7 +146,7 @@ for pamfile in $PAM_FILES; do
         echo "    [WARN] Neither pam_sss.so nor pam_winbind.so found in $pamfile"
     fi
 
-    # mkhomedir check
+    # mkhomedir check (Session only)
     if sudo grep -q "pam_mkhomedir.so" "$pamfile"; then
         echo "    [OK] pam_mkhomedir.so present"
     else
