@@ -324,17 +324,21 @@ test_rstudio_pam_auth() {
     local ad_user_id
     read -r -p "Enter username for RStudio PAM test (e.g., user@domain.com or shortname): " ad_user_id
     if [[ -z "$ad_user_id" ]]; then
-        log "No user entered. Skipping PAM test."
+        log "Test cancelled."
         return 0
     fi
     
+    local ad_user_pass
+    read -r -s -p "Enter password for $ad_user_id: " ad_user_pass
+    echo "" # Newline after password prompt
+
     log "Testing PAM for service 'rstudio' with user '$ad_user_id'..."
-    local pam_output # To capture output if needed, though run_command logs it
-    # run_command will handle logging of the command and its output.
-    if run_command "pamtester --verbose rstudio \"$ad_user_id\" authenticate acct_mgmt"; then
-        log "RStudio PAM authentication test SUCCEEDED for $ad_user_id."
+    
+    # run_command automatically detects piped stdin and passes it through.
+    if printf "%s\n" "$ad_user_pass" | run_command "pamtester --verbose rstudio \"$ad_user_id\" authenticate acct_mgmt"; then
+        log "SUCCESS: RStudio PAM authentication passed for $ad_user_id."
     else
-        log "RStudio PAM authentication test FAILED for $ad_user_id."
+        log "ERROR: RStudio PAM authentication test FAILED for $ad_user_id."
         case "$auth_backend" in
             sssd)  log "Consult SSSD setup, /etc/pam.d/rstudio, and RStudio Server logs." ;;
             samba) log "Consult Samba/Winbind setup, /etc/pam.d/rstudio, and RStudio Server logs." ;;
