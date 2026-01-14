@@ -1003,7 +1003,7 @@ test_kerberos_ticket() {
         return 0
     fi
     log "Attempting kinit for $test_user (password prompt will follow)."
-    if run_command "kinit \"$test_user\""; then
+    if INTERACTIVE=true run_command "kinit \"$test_user\""; then
         log "kinit successful."
         run_command "klist"
         run_command "kdestroy"
