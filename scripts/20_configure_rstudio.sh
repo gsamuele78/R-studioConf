@@ -228,16 +228,39 @@ configure_rstudio_user_dirs_and_login_script() {
     log "Configuring RStudio user directories and login script..."
     # Determine which user directory template to use
     local user_dir_template
+    local is_ad_template=false
+    local actual_dir_to_configure
+
     if [[ -n "$RSTUDIO_USER_HOME_TEMPLATE" ]]; then
         user_dir_template="$RSTUDIO_USER_HOME_TEMPLATE"
         log "Using SSSD/Kerberos home template for user directories: $user_dir_template"
+        
+        # Check for template patterns %u or %U
+        if [[ "$user_dir_template" == *"%u"* ]] || [[ "$user_dir_template" == *"%U"* ]]; then
+             is_ad_template=true
+             # Strip /%u, /%U and everything after to get the base directory
+             # We assume the pattern is at the end or near it (e.g. /home/%U)
+             # Use bash parameter expansion to strip from the first occurrence of /%
+             local clean_template="${user_dir_template%\/%[uU]*}"
+             
+             # Fallback if the strip failed (e.g. if pattern was not /%U but something else, or no leading slash)
+             if [[ "$clean_template" == "$user_dir_template" ]]; then
+                 # Try stripping just %U without leading slash if weird config
+                 clean_template="${user_dir_template%\%[uU]*}"
+             fi
+             actual_dir_to_configure="$clean_template"
+             log "Detected AD template pattern. Configuring base directory: $actual_dir_to_configure"
+        else
+             actual_dir_to_configure="$user_dir_template"
+        fi
     else
         user_dir_template="$R_PROJECTS_ROOT"
+        actual_dir_to_configure="$user_dir_template"
         log "Using default RStudio user directory: $user_dir_template"
     fi
 
     # Ensure the chosen directory exists
-    ensure_dir_exists "$user_dir_template" || return 1
+    ensure_dir_exists "$actual_dir_to_configure" || return 1
     ensure_dir_exists "$USER_LOGIN_LOG_ROOT" || return 1
 
     local domain_group=""
@@ -249,11 +272,21 @@ configure_rstudio_user_dirs_and_login_script() {
     fi
 
     if [[ -n "$domain_group" ]]; then
-        run_command "chown -R root:\"$domain_group\" \"$user_dir_template\""
-        run_command "chmod -R g+rwx \"$user_dir_template\""; run_command "chmod g+s \"$user_dir_template\""
+        if [[ "$is_ad_template" == "true" ]]; then
+             # Non-recursive for shared AD roots to avoid messing up existing user homes
+             # Only fix the base directory permissions
+             run_command "chown root:\"$domain_group\" \"$actual_dir_to_configure\""
+             run_command "chmod g+rwx \"$actual_dir_to_configure\""; run_command "chmod g+s \"$actual_dir_to_configure\""
+             log "Set ownership/permissions for SHARED root $actual_dir_to_configure (NON-RECURSIVE) for group '$domain_group'."
+        else
+             # Recursive for dedicated single storage locations
+             run_command "chown -R root:\"$domain_group\" \"$actual_dir_to_configure\""
+             run_command "chmod -R g+rwx \"$actual_dir_to_configure\""; run_command "chmod g+s \"$actual_dir_to_configure\""
+             log "Set ownership/permissions for $actual_dir_to_configure (RECURSIVE) for group '$domain_group'."
+        fi
+
         run_command "chown -R root:\"$domain_group\" \"${USER_LOGIN_LOG_ROOT}\""
         run_command "chmod -R g+rwx \"${USER_LOGIN_LOG_ROOT}\""; run_command "chmod g+s \"${USER_LOGIN_LOG_ROOT}\""
-        log "Set ownership/permissions for $user_dir_template and ${USER_LOGIN_LOG_ROOT} for group '$domain_group'."
     else
         log "Warning: Target shared directory groups ('${TARGET_SHARED_DIR_GROUP_PRIMARY}' or '${TARGET_SHARED_DIR_GROUP_SECONDARY}') not found. Shared directory permissions not fully set."
     fi
@@ -266,7 +299,7 @@ configure_rstudio_user_dirs_and_login_script() {
     local final_script_content
     if ! process_template "${TEMPLATE_DIR}/rstudio_user_login_script.sh.template" final_script_content \
         RSTUDIO_PROFILE_SCRIPT_PATH="${RSTUDIO_PROFILE_SCRIPT_PATH}" \
-        R_PROJECTS_ROOT="$user_dir_template" \
+        R_PROJECTS_ROOT="$actual_dir_to_configure" \
         USER_LOGIN_LOG_ROOT="${USER_LOGIN_LOG_ROOT}" \
         DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT="${DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT}" \
         DEFAULT_PYTHON_PATH_LOGIN_SCRIPT="${DEFAULT_PYTHON_PATH_LOGIN_SCRIPT}"; then
