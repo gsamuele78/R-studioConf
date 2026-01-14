@@ -344,8 +344,14 @@ test_rstudio_pam_auth() {
     log "Detected authentication backend: $(get_auth_backend_description)"
     
     if ! command -v pamtester &>/dev/null; then
-        log "pamtester not found. Run AD Integration setup (Option S from main menu) to install or install manually."
-        return 1
+        log "pamtester not found. Attempting to install..."
+        if run_command "Install pamtester" "apt-get update -y && apt-get install -y pamtester"; then
+             log "pamtester installed successfully."
+        else
+             log "ERROR: Failed to install pamtester. Cannot proceed with test."
+             log "Run AD Integration setup (Option S) or install manually."
+             return 1
+        fi
     fi
 
     if [[ ! -f "/etc/pam.d/rstudio" ]]; then
