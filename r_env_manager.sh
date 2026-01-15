@@ -1107,7 +1107,7 @@ _handle_web_terminals() {
 _handle_nginx_setup() {
     local script_path="$1"
     # SCRIPT_DIR is from the parent r_env_manager.sh script
-    local config_file="${SCRIPT_DIR}/config/nginx_setup.vars.conf"
+    local config_file="${SCRIPT_DIR}/config/install_nginx.vars.conf"
 
     if [[ ! -f "$config_file" ]]; then
         log "ERROR" "Nginx config file not found at ${config_file}. Cannot run script."
