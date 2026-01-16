@@ -11,23 +11,22 @@
     echo "------------------------"
 
     if [ -z "$REMOTE_USER" ]; then
-        # Sometimes ttyd might set REMOTE_USER_VAR? Check specifically.
-        if [ -n "$X_FORWARDED_USER" ]; then
+        if [ -n "$TTYD_USER" ]; then
+             echo "Using TTYD_USER: $TTYD_USER"
+             REMOTE_USER="$TTYD_USER"
+        elif [ -n "$X_FORWARDED_USER" ]; then
+             echo "Using X_FORWARDED_USER: $X_FORWARDED_USER"
             REMOTE_USER="$X_FORWARDED_USER"
         else
-            echo "Error: REMOTE_USER is empty. Checking keys..."
-             # Fallback attempt: Look for any var with the email
-             DETECTED_USER=$(printenv | grep -E 'gianfranco|administrator' | head -n 1 | cut -d= -f2)
-             if [ -n "$DETECTED_USER" ]; then
-                 echo "WARN: Found user in other var, using: $DETECTED_USER"
-                 REMOTE_USER="$DETECTED_USER"
-             else
-                 echo "FATAL: Could not find username in environment."
-                 exit 1
-             fi
+            echo "Error: REMOTE_USER, TTYD_USER, and X_FORWARDED_USER are empty."
+            exit 1
         fi
     fi
 
+    # Fix unbound variable errors in user profile
+    export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+    export LC_BYOBU="${LC_BYOBU:-0}"
+    
     echo "Executing: /bin/login -f '$REMOTE_USER'"
 } >&2
 
