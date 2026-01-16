@@ -444,6 +444,15 @@ setup_auth_backend_samba() {
   log INFO "Setting www-data permissions for Samba..."
   run_command "Add www-data to sambashare group" "usermod -a -G sambashare www-data"
   
+  # START FIX: Grant access to privileged winbind pipe for PAM auth
+  if getent group winbindd_priv >/dev/null; then
+      log INFO "Adding www-data to winbindd_priv group for PAM authentication..."
+      run_command "Add www-data to winbindd_priv" "usermod -a -G winbindd_priv www-data"
+  else
+     log WARN "Group 'winbindd_priv' not found. PAM authentication might fail if strict permissions are set on /var/lib/samba/winbindd_privileged."
+  fi
+  # END FIX
+  
   log INFO "Samba + Kerberos setup complete."
   return 0
 }
