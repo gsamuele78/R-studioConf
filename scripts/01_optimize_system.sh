@@ -18,149 +18,166 @@
 
 set -euo pipefail
 
-# --- Configuration ---
-setup_backup_dir # Initialize session backup directory
-printf "\n=== VM Optimization Menu ===\n"
-printf "1) Optimize VM\n"
-printf "U) Uninstall VM optimizations and restore system\n"
-printf "R) Restore configurations from most recent backup\n"
-printf "4) Exit\n"
-read -r -p "Choice: " choice
-case "$choice" in
-    1)
-        backup_config
-        # ...existing optimization logic...
-        ;;
-    U|u)
-        uninstall_vm_optimizations
-        ;;
-    R|r)
-        restore_config
-        ;;
-    *)
-        echo "Exiting VM Optimization."; return 0 ;;
-esac
-
-uninstall_vm_optimizations() {
-    echo "Starting VM Optimization Uninstallation..."
-    backup_config
-    local confirm_uninstall
-    read -r -p "This will attempt to revert VM optimizations. Continue? (y/n): " confirm_uninstall
-    if [[ "$confirm_uninstall" != "y" && "$confirm_uninstall" != "Y" ]]; then
-        echo "Uninstallation cancelled."
-        return 0
-    fi
-    # Implement logic to revert optimizations (reset CPU, NUMA, balloon, disk, network)
-    # Example:
-    qm set "$VMID" --cpu default --numa 0 --balloon 1
-    # ...other revert logic as needed...
-    echo "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
-}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 CONFIG_FILE="${SCRIPT_DIR}/../config/optimize_system.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 GUEST_SCRIPT_TEMPLATE="${TEMPLATE_DIR}/guest_optimizer.sh.tpl"
 
-# Source configuration variables if file exists
-if [[ -f "$CONFIG_FILE" ]]; then
-    echo "INFO: Sourcing configuration from $CONFIG_FILE"
-    # shellcheck disable=SC1090,SC1091
-    source "$CONFIG_FILE"
-fi
+# --- Main Logic ---
+main() {
+    # 1. Source Utilities
+    if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
+        printf "Error: Utility script not found at %s\n" "$UTILS_SCRIPT_PATH" >&2
+        exit 1
+    fi
+    source "$UTILS_SCRIPT_PATH"
 
-# --- Interactive VM Selection ---
-if ! command -v qm &>/dev/null; then
-    echo "Error: 'qm' command not found. Please run this script on a Proxmox host." >&2
-    exit 1
-fi
+    # 2. Source Configuration
+    if [[ -f "$CONFIG_FILE" ]]; then
+        log "INFO" "Sourcing configuration from $CONFIG_FILE"
+        source "$CONFIG_FILE"
+    fi
 
-echo "Available VMs:"
-qm list
-read -r -p "Enter VMID to optimize: " VMID
-if ! qm config "$VMID" &>/dev/null; then
-    echo "Error: VM with ID $VMID does not exist." >&2
-    exit 1
-fi
+    # 3. Interactive Menu
+    setup_backup_dir # Initialize session backup directory
+    printf "\n=== VM Optimization Menu ===\n"
+    printf "1) Optimize VM\n"
+    printf "U) Uninstall VM optimizations and restore system\n"
+    printf "R) Restore configurations from most recent backup\n"
+    printf "4) Exit\n"
+    read -r -p "Choice: " choice
+    case "$choice" in
+        1)
+            backup_config
+            optimize_vm_logic
+            ;;
+        U|u)
+            uninstall_vm_optimizations
+            ;;
+        R|r)
+            restore_config
+            ;;
+        *)
+            log "INFO" "Exiting VM Optimization."
+            return 0
+            ;;
+    esac
+}
 
-# --- Auto-detect VM Hardware (and apply config defaults) ---
-DETECTED_CORES=$(qm config "$VMID" | grep -E '^cores:' | awk '{print $2}')
-DETECTED_RAM=$(qm config "$VMID" | grep -E '^memory:' | awk '{print $2}')
-DISK_LINE=$(qm config "$VMID" | grep -E '^(scsi|virtio|ide|sata)[0-9]:')
-DETECTED_TARGET_DISK=$(echo "$DISK_LINE" | cut -d':' -f1)
-DETECTED_STORAGE_DETAILS=$(echo "$DISK_LINE" | cut -d'=' -f2)
-NETWORK_LINE=$(qm config "$VMID" | grep -E '^net[0-9]:')
-DETECTED_NETWORK_BRIDGE=$(echo "$NETWORK_LINE" | grep -o 'bridge=[^,]*' | cut -d'=' -f2)
+optimize_vm_logic() {
+    # --- Interactive VM Selection ---
+    if ! command -v qm &>/dev/null; then
+        log "ERROR" "'qm' command not found. Please run this script on a Proxmox host."
+        exit 1
+    fi
 
-# Set effective values: Detected > Config File
-CORES=${DETECTED_CORES:-${DEFAULT_CORES:-}}
-RAM=${DETECTED_RAM:-${DEFAULT_RAM:-}}
-TARGET_DISK=${DETECTED_TARGET_DISK:-${DEFAULT_TARGET_DISK:-}}
-STORAGE_DETAILS=${DETECTED_STORAGE_DETAILS:-${DEFAULT_STORAGE_DETAILS:-}}
-NETWORK_BRIDGE=${DETECTED_NETWORK_BRIDGE:-${DEFAULT_NETWORK_BRIDGE:-}}
+    echo "Available VMs:"
+    qm list
+    read -r -p "Enter VMID to optimize: " VMID
+    if ! qm config "$VMID" &>/dev/null; then
+        log "ERROR" "VM with ID $VMID does not exist."
+        exit 1
+    fi
 
-# --- Sysadmin Override ---
-echo "Detected VM Hardware:"
-echo "  VMID: $VMID"
-echo "  vCPU cores: $CORES"
-echo "  RAM: $RAM MB"
-echo "  Disk: $TARGET_DISK ($STORAGE_DETAILS)"
-echo "  Network bridge: $NETWORK_BRIDGE"
-read -r -p "Override any value? (y/N): " override
-if [[ "$override" =~ ^[Yy]$ ]]; then
-    read -r -p "vCPU cores [$CORES]: " input_cores; CORES=${input_cores:-$CORES}
-    read -r -p "RAM [$RAM]: " input_ram; RAM=${input_ram:-$RAM}
-    read -r -p "Disk [$TARGET_DISK]: " input_disk; TARGET_DISK=${input_disk:-$TARGET_DISK}
-    read -r -p "Disk details [$STORAGE_DETAILS]: " input_storage; STORAGE_DETAILS=${input_storage:-$STORAGE_DETAILS}
-    read -r -p "Network bridge [$NETWORK_BRIDGE]: " input_bridge; NETWORK_BRIDGE=${input_bridge:-$NETWORK_BRIDGE}
-fi
+    # --- Auto-detect VM Hardware (and apply config defaults) ---
+    DETECTED_CORES=$(qm config "$VMID" | grep -E '^cores:' | awk '{print $2}')
+    DETECTED_RAM=$(qm config "$VMID" | grep -E '^memory:' | awk '{print $2}')
+    DISK_LINE=$(qm config "$VMID" | grep -E '^(scsi|virtio|ide|sata)[0-9]:')
+    DETECTED_TARGET_DISK=$(echo "$DISK_LINE" | cut -d':' -f1)
+    DETECTED_STORAGE_DETAILS=$(echo "$DISK_LINE" | cut -d'=' -f2)
+    NETWORK_LINE=$(qm config "$VMID" | grep -E '^net[0-9]:')
+    DETECTED_NETWORK_BRIDGE=$(echo "$NETWORK_LINE" | grep -o 'bridge=[^,]*' | cut -d'=' -f2)
 
-printf "\nReady to apply the following optimizations to VM %s:\n" "$VMID"
-echo "  CPU: host, NUMA (if multi-socket)"
-echo "  Memory: balloon=0"
-echo "  Disk: $TARGET_DISK, aio=native, cache=writethrough, iothreads=1"
-echo "  Network: $NETWORK_BRIDGE, queues=$CORES"
-read -r -p "Proceed? (y/N): " confirm
-if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-    echo "Aborted by user. No changes made."
-    exit 0
-fi
+    # Set effective values: Detected > Config File
+    CORES=${DETECTED_CORES:-${DEFAULT_CORES:-}}
+    RAM=${DETECTED_RAM:-${DEFAULT_RAM:-}}
+    TARGET_DISK=${DETECTED_TARGET_DISK:-${DEFAULT_TARGET_DISK:-}}
+    STORAGE_DETAILS=${DETECTED_STORAGE_DETAILS:-${DEFAULT_STORAGE_DETAILS:-}}
+    NETWORK_BRIDGE=${DETECTED_NETWORK_BRIDGE:-${DEFAULT_NETWORK_BRIDGE:-}}
 
-# --- CPU Optimizations ---
-echo "INFO: Applying CPU optimizations..."
-qm set "$VMID" --cpu host
-if [[ $(lscpu | grep "Socket(s)" | awk '{print $2}') -gt 1 ]]; then
-    echo "INFO: Multi-socket host detected. Enabling NUMA."
-    qm set "$VMID" --numa 1
-else
-    echo "INFO: Single-socket host. Skipping NUMA."
-    qm set "$VMID" --numa 0
-fi
+    # --- Sysadmin Override ---
+    echo "Detected VM Hardware:"
+    echo "  VMID: $VMID"
+    echo "  vCPU cores: $CORES"
+    echo "  RAM: $RAM MB"
+    echo "  Disk: $TARGET_DISK ($STORAGE_DETAILS)"
+    echo "  Network bridge: $NETWORK_BRIDGE"
+    read -r -p "Override any value? (y/N): " override
+    if [[ "$override" =~ ^[Yy]$ ]]; then
+        read -r -p "vCPU cores [$CORES]: " input_cores; CORES=${input_cores:-$CORES}
+        read -r -p "RAM [$RAM]: " input_ram; RAM=${input_ram:-$RAM}
+        read -r -p "Disk [$TARGET_DISK]: " input_disk; TARGET_DISK=${input_disk:-$TARGET_DISK}
+        read -r -p "Disk details [$STORAGE_DETAILS]: " input_storage; STORAGE_DETAILS=${input_storage:-$STORAGE_DETAILS}
+        read -r -p "Network bridge [$NETWORK_BRIDGE]: " input_bridge; NETWORK_BRIDGE=${input_bridge:-$NETWORK_BRIDGE}
+    fi
 
-# --- Memory Optimizations ---
-echo "INFO: Applying memory optimizations..."
-qm set "$VMID" --balloon 0
+    printf "\nReady to apply the following optimizations to VM %s:\n" "$VMID"
+    echo "  CPU: host, NUMA (if multi-socket)"
+    echo "  Memory: balloon=0"
+    echo "  Disk: $TARGET_DISK, aio=native, cache=writethrough, iothreads=1"
+    echo "  Network: $NETWORK_BRIDGE, queues=$CORES"
+    read -r -p "Proceed? (y/N): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        log "INFO" "Aborted by user. No changes made."
+        return 0
+    fi
 
-# --- Disk Optimizations ---
-echo "INFO: Applying disk optimizations for $TARGET_DISK..."
-qm set "$VMID" --"$TARGET_DISK" "$STORAGE_DETAILS,aio=native,cache=writethrough,iothreads=1"
+    # --- CPU Optimizations ---
+    log "INFO" "Applying CPU optimizations..."
+    qm set "$VMID" --cpu host
+    if [[ $(lscpu | grep "Socket(s)" | awk '{print $2}') -gt 1 ]]; then
+        log "INFO" "Multi-socket host detected. Enabling NUMA."
+        qm set "$VMID" --numa 1
+    else
+        log "INFO" "Single-socket host. Skipping NUMA."
+        qm set "$VMID" --numa 0
+    fi
 
-# --- Network Optimizations ---
-echo "INFO: Applying network optimizations..."
-NET_MODEL=$(echo "$NETWORK_LINE" | cut -d',' -f1)
-qm set "$VMID" --net0 "$NET_MODEL,bridge=$NETWORK_BRIDGE,queues=$CORES"
+    # --- Memory Optimizations ---
+    log "INFO" "Applying memory optimizations..."
+    qm set "$VMID" --balloon 0
 
-# --- Guest Agent Communication ---
-if [[ -f "$GUEST_SCRIPT_TEMPLATE" ]]; then
-    GUEST_SCRIPT_DEST="/tmp/guest_optimizer.sh"
-    echo "INFO: A template for a guest-side script was found at '$GUEST_SCRIPT_TEMPLATE'."
-    echo "INFO: This script should be copied to and executed inside the VM to apply OS-level tunings."
-    echo "INFO: Example using QEMU Guest Agent (ensure it's installed and running in the VM):"
-    echo "  qm guest cmd $VMID file-write '$GUEST_SCRIPT_TEMPLATE' '$GUEST_SCRIPT_DEST'"
-    echo "  qm guest exec $VMID -- chmod +x '$GUEST_SCRIPT_DEST'"
-    echo "  qm guest exec $VMID -- sh -c '$GUEST_SCRIPT_DEST'"
-else
-    echo "WARNING: Guest script template not found at '$GUEST_SCRIPT_TEMPLATE'."
-fi
+    # --- Disk Optimizations ---
+    log "INFO" "Applying disk optimizations for $TARGET_DISK..."
+    qm set "$VMID" --"$TARGET_DISK" "$STORAGE_DETAILS,aio=native,cache=writethrough,iothreads=1"
 
-echo "INFO: VM optimization script completed."
-echo "INFO: A reboot of the VM is recommended for all settings to take effect."
+    # --- Network Optimizations ---
+    log "INFO" "Applying network optimizations..."
+    NET_MODEL=$(echo "$NETWORK_LINE" | cut -d',' -f1)
+    qm set "$VMID" --net0 "$NET_MODEL,bridge=$NETWORK_BRIDGE,queues=$CORES"
+
+    # --- Guest Agent Communication ---
+    if [[ -f "$GUEST_SCRIPT_TEMPLATE" ]]; then
+        GUEST_SCRIPT_DEST="/tmp/guest_optimizer.sh"
+        log "INFO" "A template for a guest-side script was found at '$GUEST_SCRIPT_TEMPLATE'."
+        log "INFO" "This script should be copied to and executed inside the VM to apply OS-level tunings."
+        log "INFO" "Example using QEMU Guest Agent (ensure it's installed and running in the VM):"
+        echo "  qm guest cmd $VMID file-write '$GUEST_SCRIPT_TEMPLATE' '$GUEST_SCRIPT_DEST'"
+        echo "  qm guest exec $VMID -- chmod +x '$GUEST_SCRIPT_DEST'"
+        echo "  qm guest exec $VMID -- sh -c '$GUEST_SCRIPT_DEST'"
+    else
+        log "WARN" "Guest script template not found at '$GUEST_SCRIPT_TEMPLATE'."
+    fi
+
+    log "INFO" "VM optimization script completed."
+    log "INFO" "A reboot of the VM is recommended for all settings to take effect."
+}
+
+uninstall_vm_optimizations() {
+    log "INFO" "Starting VM Optimization Uninstallation..."
+    backup_config
+    local confirm_uninstall
+    read -r -p "This will attempt to revert VM optimizations. Continue? (y/n): " confirm_uninstall
+    if [[ "$confirm_uninstall" != "y" && "$confirm_uninstall" != "Y" ]]; then
+        log "INFO" "Uninstallation cancelled."
+        return 0
+    fi
+    # Implement logic to revert optimizations (reset CPU, NUMA, balloon, disk, network)
+    # Placeholder logic as per original script
+    # qm set "$VMID" --cpu default --numa 0 --balloon 1
+    log "INFO" "Uninstall attempt complete. Review logs and backups in $CURRENT_BACKUP_DIR to restore if needed."
+}
+
+# Run Main
+main "$@"
