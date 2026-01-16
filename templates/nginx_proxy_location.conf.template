@@ -43,17 +43,19 @@ location ~ ^/terminal(.*)$ {
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_read_timeout 86400;
-    proxy_set_header X-Forwarded-User $remote_user;
-    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
     # Inject Auto-Logout Script
-    # When ttyd disconnects (and shows "Connection Closed"), this script
-    # automatically redirects the user to the /logout endpoint.
+    # Disabling GZIP is critical for sub_filter to work!
+    proxy_set_header Accept-Encoding "";
+    sub_filter_types *;
+    
     sub_filter '</body>' '<script>
+        // Poll for "Connection Closed" overlay
         setInterval(function() {
-            if (document.body.textContent.includes("Connection Closed")) {
-                window.location.href = "/logout";
+            var bodyText = document.body.innerText || document.body.textContent;
+            if (bodyText && bodyText.match(/Connection Closed/i)) {
+                window.location.replace("/logout");
             }
         }, 1000);
     </script></body>';
