@@ -503,12 +503,8 @@ create_pam_service_nginx_sssd() {
   
   cat > "$pam_file" << 'SSSD_PAM_EOF'
 # PAM service file for Nginx (SSSD + Kerberos)
-auth    sufficient      pam_sss.so
-auth    required        pam_unix.so try_first_pass nullok
-account sufficient      pam_sss.so
-account required        pam_unix.so
-session optional        pam_sss.so
-session required        pam_unix.so
+@include common-auth
+@include common-account
 SSSD_PAM_EOF
 
   run_command "Set PAM file permissions (nginx-sssd)" "chmod 644 '$pam_file'"
@@ -523,13 +519,8 @@ create_pam_service_nginx_samba() {
   
   cat > "$pam_file" << 'SAMBA_PAM_EOF'
 # PAM service file for Nginx (Samba + Kerberos)
-auth    sufficient      pam_winbind.so use_first_pass try_first_pass
-auth    required        pam_unix.so try_first_pass nullok
-account sufficient      pam_winbind.so
-account required        pam_unix.so
-password        optional        pam_winbind.so
-session required        pam_unix.so
-session optional        pam_winbind.so
+@include common-auth
+@include common-account
 SAMBA_PAM_EOF
 
   run_command "Set PAM file permissions (nginx-samba)" "chmod 644 '$pam_file'"
