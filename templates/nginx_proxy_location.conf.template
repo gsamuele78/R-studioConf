@@ -1,4 +1,4 @@
-# ----------------------------------------------------------------
+q# ----------------------------------------------------------------
 # NGINX PROXY LOCATION CONFIGURATION (v3.1 - Victorious)
 # ----------------------------------------------------------------
 
@@ -52,21 +52,14 @@ location ~ ^/terminal(.*)$ {
     proxy_set_header Accept-Encoding "";
     sub_filter_types *;
     
-    sub_filter '</body>' '<script>
         // Poll for "Connection Closed" overlay
         setInterval(function() {
-            // Find all divs
-            var divs = document.getElementsByTagName("div");
-            for (var i = 0; i < divs.length; i++) {
-                var d = divs[i];
-                // ttyd overlay typically has inline style with position: absolute
-                // and contains the text "Connection Closed"
-                if (d.style.position === "absolute" && d.textContent.trim() === "Connection Closed") {
-                    window.location.replace("/logout");
-                    return;
-                }
+            var bodyText = document.body.innerText || document.body.textContent;
+            // Broader check for typical ttyd disconnect messages
+            if (bodyText && (bodyText.match(/Connection Closed/i) || bodyText.match(/Reconnect/i))) {
+                window.location.replace("/logout");
             }
-        }, 1000);
+        }, 2000);
     </script></body>';
     sub_filter_once on;
 }
