@@ -9,3 +9,7 @@ ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --check-origin -
 
 # Restart on failure
 Restart=on-failure
+
+# Logging Configuration (Systemd 236+)
+StandardOutput=append:/var/log/ttyd.log
+StandardError=append:/var/log/ttyd.error.log
