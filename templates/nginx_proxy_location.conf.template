@@ -61,9 +61,10 @@ location ~ ^/terminal(.*)$ {
                 for (var i = 0; i < divs.length; i++) {
                     var d = divs[i];
                     // The ttyd OverlayAddon creates a div with "font-size: xx-large"
-                    // We check for this specific style AND the text "Connection Closed"
-                    // to avoid false positives (like seeing the text in a log file).
-                    if (d.style.fontSize === "xx-large" && d.textContent.indexOf("Connection Closed") !== -1) {
+                    // We check for this specific style AND the text "Connection Closed" or "Reconnect"
+                    // to avoid false positives.
+                    if (d.style.fontSize === "xx-large" && 
+                       (d.textContent.indexOf("Connection Closed") !== -1 || d.textContent.indexOf("Reconnect") !== -1)) {
                          window.location.replace("/logout");
                          return;
                     }
