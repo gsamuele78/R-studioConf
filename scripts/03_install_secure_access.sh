@@ -24,6 +24,15 @@ install_services() {
     fi
     log "INFO" "SUCCESS: Prerequisites are correctly installed."
 
+    log "INFO" "Installing ttyd login wrapper..."
+    if [[ -f "${SCRIPT_DIR}/ttyd_login_wrapper.sh" ]]; then
+        run_command "Copy wrapper script" "cp \"${SCRIPT_DIR}/ttyd_login_wrapper.sh\" /usr/local/bin/ttyd_login_wrapper.sh"
+        run_command "Set executable permissions" "chmod +x /usr/local/bin/ttyd_login_wrapper.sh"
+    else
+         log "ERROR" "Wrapper script not found at ${SCRIPT_DIR}/ttyd_login_wrapper.sh"
+         return 1
+    fi
+
     log "INFO" "Creating and enabling service files..."; 
     ensure_dir_exists "${TTYD_OVERRIDE_DIR}"; process_systemd_template "${SCRIPT_DIR}/../templates/ttyd.service.override.template" "ttyd.service.d/override.conf"
     if [ ! -f "${PAM_CONFIG_PATH}" ]; then echo "@include common-auth" | sudo tee "${PAM_CONFIG_PATH}" > /dev/null; fi
