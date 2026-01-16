@@ -55,9 +55,16 @@ location ~ ^/terminal(.*)$ {
     sub_filter '</body>' '<script>
         // Poll for "Connection Closed" overlay
         setInterval(function() {
-            var bodyText = document.body.innerText || document.body.textContent;
-            if (bodyText && bodyText.match(/Connection Closed/i)) {
-                window.location.replace("/logout");
+            // Find all divs
+            var divs = document.getElementsByTagName("div");
+            for (var i = 0; i < divs.length; i++) {
+                var d = divs[i];
+                // ttyd overlay typically has inline style with position: absolute
+                // and contains the text "Connection Closed"
+                if (d.style.position === "absolute" && d.textContent.trim() === "Connection Closed") {
+                    window.location.replace("/logout");
+                    return;
+                }
             }
         }, 1000);
     </script></body>';
@@ -89,8 +96,7 @@ location /monitoring/node/ {
 }
 
 # --- Logout Mechanism ---
-# Simple endpoint to trigger a 401 Unauthorized, effectively "logging out" the user
-# from the browser's perspective (if they cancel the subsequent prompt).
+# Simple endpoint to trigger a 401 Unauthorized.
 location = /logout {
     return 401;
 }
@@ -99,6 +105,7 @@ location = /logout {
 error_page 401 @logged_out;
 location @logged_out {
     default_type text/html;
+    # Embed script to clear cached credentials by sending a bad request
     return 200 '
     <!DOCTYPE html>
     <html>
@@ -109,15 +116,26 @@ location @logged_out {
             .box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; }
             h1 { margin-top: 0; color: #333; }
             p { color: #666; margin-bottom: 20px; }
-            a { background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; }
+            a { background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; cursor: pointer; }
             a:hover { background: #0056b3; }
         </style>
+        <script>
+            // Attempt to clear browser authentication cache for /terminal/
+            // by sending a request with invalid credentials.
+            function clearAuth() {
+                var xhr = new XMLHttpRequest();
+                xhr.open("GET", "/terminal/", true, "logout", "logout");
+                xhr.send();
+            }
+            // Run on load
+            window.onload = clearAuth;
+        </script>
     </head>
     <body>
         <div class="box">
             <h1>Logged Out</h1>
             <p>You have successfully logged out.</p>
-            <a href="/terminal/">Log In Again</a>
+            <a href="/terminal/" onclick="clearAuth();">Log In Again</a>
         </div>
     </body>
     </html>
