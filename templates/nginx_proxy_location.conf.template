@@ -52,6 +52,7 @@ location ~ ^/terminal(.*)$ {
     proxy_set_header Accept-Encoding "";
     sub_filter_types *;
     
+    sub_filter '</body>' '<script>
         // Poll for "Connection Closed" overlay
         setInterval(function() {
             var bodyText = document.body.innerText || document.body.textContent;
