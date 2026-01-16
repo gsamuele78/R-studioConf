@@ -53,14 +53,23 @@ location ~ ^/terminal(.*)$ {
     sub_filter_types *;
     
     sub_filter '</body>' '<script>
-        // Poll for "Connection Closed" overlay
-        setInterval(function() {
-            var bodyText = document.body.innerText || document.body.textContent;
-            // Broader check for typical ttyd disconnect messages
-            if (bodyText && (bodyText.match(/Connection Closed/i) || bodyText.match(/Reconnect/i))) {
-                window.location.replace("/logout");
-            }
-        }, 2000);
+        // Wait 3 seconds for initial load to stabilize
+        setTimeout(function() {
+            // Poll for the specific "Connection Closed" overlay
+            setInterval(function() {
+                var divs = document.getElementsByTagName("div");
+                for (var i = 0; i < divs.length; i++) {
+                    var d = divs[i];
+                    // The ttyd OverlayAddon creates a div with "font-size: xx-large"
+                    // We check for this specific style AND the text "Connection Closed"
+                    // to avoid false positives (like seeing the text in a log file).
+                    if (d.style.fontSize === "xx-large" && d.textContent.indexOf("Connection Closed") !== -1) {
+                         window.location.replace("/logout");
+                         return;
+                    }
+                }
+            }, 1000);
+        }, 3000);
     </script></body>';
     sub_filter_once on;
 }
