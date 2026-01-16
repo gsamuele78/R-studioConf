@@ -25,6 +25,9 @@ location / {
 }
 
 # ### DEFINITIVE FIX for ttyd ###
+# Redirect /terminal to /terminal/ to ensure correct relative path handling
+location = /terminal { return 301 /terminal/; }
+
 # This block now uses a regular expression to correctly capture and forward
 # all sub-requests (like /ws) to the ttyd backend, as per the official documentation.
 location ~ ^/terminal(.*)$ {

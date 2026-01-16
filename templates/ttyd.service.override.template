@@ -5,7 +5,7 @@ ExecStart=
 # Define our own ExecStart using the --auth-header flag.
 # This is the developer-intended way to handle proxy SSO.
 # It tells ttyd to take the user from the X-Forwarded-User header and pass it to the 'login' command.
-ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --check-origin --interface 127.0.0.1 -t disableLeaveAlert=true --auth-header "X-Forwarded-User" /usr/local/bin/ttyd_login_wrapper.sh
+ExecStart=/usr/bin/ttyd --port {{WEB_TERMINAL_PORT}} --writable --check-origin --interface 127.0.0.1 -t disableLeaveAlert=true -t disableReconnect=true --auth-header "X-Forwarded-User" /usr/local/bin/ttyd_login_wrapper.sh
 
 # Restart on failure
 Restart=on-failure
