@@ -2,26 +2,34 @@
 # /usr/local/bin/ttyd_login_wrapper.sh
 # Wrapper to pass REMOTE_USER (set by ttyd from auth-header) to login -f
 
-LOG_FILE="/tmp/ttyd_debug.log"
-
+# Log everything to Standard Error (captured by systemd in /var/log/ttyd.error.log)
 {
     echo "--- New Connection $(date) ---"
     echo "Running as uid: $(id -u) user: $(whoami)"
-    echo "Environment REMOTE_USER: '${REMOTE_USER:-}'"
-    echo "Environment X_FORWARDED_USER: '${X_FORWARDED_USER:-}'"
+    echo "--- Environment Dump ---"
+    printenv
+    echo "------------------------"
 
     if [ -z "$REMOTE_USER" ]; then
+        # Sometimes ttyd might set REMOTE_USER_VAR? Check specifically.
         if [ -n "$X_FORWARDED_USER" ]; then
-             echo "REMOTE_USER empty, using X_FORWARDED_USER"
             REMOTE_USER="$X_FORWARDED_USER"
         else
-            echo "Error: REMOTE_USER and X_FORWARDED_USER are empty."
-            exit 1
+            echo "Error: REMOTE_USER is empty. Checking keys..."
+             # Fallback attempt: Look for any var with the email
+             DETECTED_USER=$(printenv | grep -E 'gianfranco|administrator' | head -n 1 | cut -d= -f2)
+             if [ -n "$DETECTED_USER" ]; then
+                 echo "WARN: Found user in other var, using: $DETECTED_USER"
+                 REMOTE_USER="$DETECTED_USER"
+             else
+                 echo "FATAL: Could not find username in environment."
+                 exit 1
+             fi
         fi
     fi
 
     echo "Executing: /bin/login -f '$REMOTE_USER'"
-} >> "$LOG_FILE" 2>&1
+} >&2
 
-# Execute login (stderr also to log for visibility of login errors)
-exec /bin/login -f "$REMOTE_USER" 2>>"$LOG_FILE"
+# Execute login
+exec /bin/login -f "$REMOTE_USER"
