@@ -21,7 +21,6 @@
                 <button onclick="showLoginModal()" class="secure-connect-btn">
                     <span class="lock-icon">🔒</span> Secure Access
                 </button>
-            </div>
         </header>
 
         <section id="serviceGrid" class="portal-grid blurred-locked">
