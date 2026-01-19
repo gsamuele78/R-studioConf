@@ -73,7 +73,8 @@
             <div class="login-form">
                 <h2>Secure Connect</h2>
                 <p style="text-align:center; color:#ccc; font-size:0.9rem; margin-bottom:1.5rem;">Enter your AD credentials to seed access for all services.</p>
-                <form id="connectForm" onsubmit="handleConnect(event)">
+                <!-- Added action and method to help browser password managers detect this as a login form -->
+                <form id="connectForm" action="#" method="POST" onsubmit="handleConnect(event)">
                     <div class="form-group">
                         <label for="username">Username</label>
                         <input type="text" id="username" name="username" required placeholder="user@domain.com" autocomplete="username">
