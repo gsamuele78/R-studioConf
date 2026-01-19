@@ -15,6 +15,11 @@ location /rstudio/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Inject 'Back to Portal' Button (Top-Left)
+    proxy_set_header Accept-Encoding ""; # Disable GZIP for sub_filter
+    sub_filter '</body>' '<a href="/" style="position:fixed; top:20px; left:20px; z-index:99999; background:#2c3e50; color:white; padding:8px 15px; border-radius:20px; text-decoration:none; box-shadow:0 2px 5px rgba(0,0,0,0.3); font-family:sans-serif; font-size:14px; border:2px solid white;">🏠 Portal</a></body>';
+    sub_filter_once on;
 }
 
 # --- Web Portal (Root) ---
@@ -52,7 +57,7 @@ location ~ ^/terminal(.*)$ {
     proxy_set_header Accept-Encoding "";
     sub_filter_types *;
     
-    sub_filter '</body>' '<script>
+    sub_filter '</body>' '<a href="/" style="position:fixed; top:20px; left:20px; z-index:99999; background:#2c3e50; color:white; padding:8px 15px; border-radius:20px; text-decoration:none; box-shadow:0 2px 5px rgba(0,0,0,0.3); font-family:sans-serif; font-size:14px; border:2px solid white;">🏠 Portal</a><script>
         // Wait 3 seconds for initial load to stabilize
         setTimeout(function() {
             // Poll for the specific "Connection Closed" overlay
@@ -183,6 +188,12 @@ location /files/ {
     proxy_connect_timeout 3600;
     proxy_send_timeout 3600;
     
+    
     proxy_request_buffering off;
     proxy_buffering off;
+
+    # Inject 'Back to Portal' Button (Top-Left)
+    proxy_set_header Accept-Encoding ""; # Disable GZIP for sub_filter
+    sub_filter '</body>' '<a href="/" style="position:fixed; top:20px; left:20px; z-index:99999; background:#2c3e50; color:white; padding:8px 15px; border-radius:20px; text-decoration:none; box-shadow:0 2px 5px rgba(0,0,0,0.3); font-family:sans-serif; font-size:14px; border:2px solid white;">🏠 Portal</a></body>';
+    sub_filter_once on;
 }
