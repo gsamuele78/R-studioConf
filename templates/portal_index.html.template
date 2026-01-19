@@ -18,9 +18,9 @@
                     <p class="subtitle">Research Group Portal</p>
                 </div>
             </div>
-            <div class="user-status">
-                <!-- Placeholder for dynamic user status if needed -->
-                <span class="secure-badge"><span class="lock-icon">🔒</span> Secure Access</span>
+                <button onclick="showLoginModal()" class="secure-connect-btn">
+                    <span class="lock-icon">🔒</span> Secure Access
+                </button>
             </div>
         </header>
 
@@ -66,5 +66,124 @@
             <p>&copy; %%CURRENT_YEAR%% Botanical Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
         </footer>
     </div>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeLoginModal()">&times;</span>
+            <div class="login-form">
+                <h2>Secure Connect</h2>
+                <p style="text-align:center; color:#ccc; font-size:0.9rem; margin-bottom:1.5rem;">Enter your AD credentials to seed access for all services.</p>
+                <form id="connectForm" onsubmit="handleConnect(event)">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" name="username" required placeholder="user@domain.com" autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" required placeholder="••••••••" autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="submit-btn" id="connectBtn">Connect & Save</button>
+                    <p id="loginStatus" style="text-align:center; margin-top:1rem; font-size:0.9rem;"></p>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Modal Logic
+        var modal = document.getElementById("loginModal");
+        
+        function showLoginModal() {
+            // Step 1: Clear existing sessions silently
+            clearAuthSessions();
+            modal.style.display = "block";
+            setTimeout(() => modal.classList.add("show"), 10);
+            document.getElementById("username").focus();
+        }
+
+        function closeLoginModal() {
+            modal.classList.remove("show");
+            setTimeout(() => modal.style.display = "none", 300);
+        }
+
+        window.onclick = function(event) {
+            if (event.target == modal) {
+                closeLoginModal();
+            }
+        }
+
+        // Clear Authentication Logic
+        function clearAuthSessions() {
+            console.log("Clearing sessions...");
+            // 1. Clear Basic Auth (Terminal) logic
+            var xhr = new XMLHttpRequest();
+            xhr.open("GET", "/terminal/", true, "logout", "logout");
+            xhr.send();
+            
+            // 2. Clear RStudio Session (if possible via logout endpoint)
+            // RStudio usually uses a cookie 'user-id' or 'session-user-id'.
+            // Accessing /auth-sign-out ensures the server kills it.
+            var img = new Image();
+            img.src = "/auth-sign-out"; // Fire and forget
+            
+            // 3. Optional: Clear Nextcloud (complex, but we can try hitting logout)
+            // var nc = new Image(); nc.src = "/files/logout"; 
+        }
+
+        // Handle Connect
+        function handleConnect(event) {
+            event.preventDefault();
+            var btn = document.getElementById("connectBtn");
+            var status = document.getElementById("loginStatus");
+            var user = document.getElementById("username").value;
+            var pass = document.getElementById("password").value;
+
+            btn.disabled = true;
+            btn.innerHTML = "Verifying...";
+            status.style.color = "#ccc";
+            status.innerHTML = "Checking credentials against Secure Terminal...";
+
+            // We validate credentials by attempting a fetch to the protected /terminal/ endpoint
+            // using the provided credentials as Basic Auth.
+            var authHeader = "Basic " + btoa(user + ":" + pass);
+
+            fetch("/terminal/", {
+                method: "GET",
+                headers: {
+                    "Authorization": authHeader
+                }
+            })
+            .then(response => {
+                if (response.status === 200 || response.status === 403) {
+                    // 200 = OK, 403 = Forbidden (but authenticated! 401 would be unauthenticated)
+                    // Note: Our Nginx blocks /terminal with 401 if auth fails.
+                    // If we get 200 (connected to ttyd) or 403 (Nginx explicitly forbidding but auth passed), it's a success.
+                    // Actually, ttyd returns 200.
+                    
+                    status.style.color = "#8FBC8F";
+                    status.innerHTML = "✅ Verified! Browser should save these credentials.";
+                    
+                    // Success!
+                    setTimeout(() => {
+                        closeLoginModal();
+                        alert("Secure Connection Established.\n\nYour browser has seeded these credentials.\nYou can now access RStudio, Terminal, and Files.");
+                        btn.disabled = false;
+                        btn.innerHTML = "Connect & Save";
+                        status.innerHTML = "";
+                    }, 1000);
+                } else {
+                    throw new Error("Authentication Failed (Status: " + response.status + ")");
+                }
+            })
+            .catch(error => {
+                console.error("Login Error:", error);
+                status.style.color = "#ff6b6b";
+                status.innerHTML = "❌ Login Failed. Please check AD credentials.";
+                btn.disabled = false;
+                btn.innerHTML = "Connect & Save";
+            });
+        }
+    </script>
 </body>
 </html>
