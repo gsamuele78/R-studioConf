@@ -162,24 +162,31 @@
                     // Actually, ttyd returns 200.
                     
                     status.style.color = "#8FBC8F";
-                    status.innerHTML = "✅ Verified! Browser should save these credentials.";
+                    status.innerHTML = "✅ Verified! Signing into services...";
                     
-                    // Success!
-                    setTimeout(() => {
-                        closeLoginModal();
-                        // Unlock the grid
-                        document.getElementById("serviceGrid").classList.remove("blurred-locked");
-                        
-                        // Change button to Logout
-                        var btnOps = document.querySelector(".secure-connect-btn");
-                        btnOps.innerHTML = '<span class="lock-icon">🔓</span> Logout / Reset';
-                        btnOps.onclick = handleLogout; // Switch to logout handler
-                        btnOps.classList.add("logout-mode"); // Optional styling hook
-                        
-                        btn.disabled = false;
-                        btn.innerHTML = "Connect & Save";
-                        status.innerHTML = "";
-                    }, 1000);
+                    // Attempt Direct Login to RStudio
+                    loginRStudio(user, pass)
+                        .then(() => {
+                            console.log("Direct Login Sequence Complete");
+                        })
+                        .finally(() => {
+                            // Success UI Transition
+                            setTimeout(() => {
+                                closeLoginModal();
+                                // Unlock the grid
+                                document.getElementById("serviceGrid").classList.remove("blurred-locked");
+                                
+                                // Change button to Logout
+                                var btnOps = document.querySelector(".secure-connect-btn");
+                                btnOps.innerHTML = '<span class="lock-icon">🔓</span> Logout / Reset';
+                                btnOps.onclick = handleLogout; 
+                                btnOps.classList.add("logout-mode"); 
+                                
+                                btn.disabled = false;
+                                btn.innerHTML = "Connect & Save";
+                                status.innerHTML = "";
+                            }, 1000);
+                        });
                 } else {
                     throw new Error("Authentication Failed (Status: " + response.status + ")");
                 }
