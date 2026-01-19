@@ -14,11 +14,43 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
 fi
 source "$UTILS_SCRIPT_PATH"
 
+LOG_FILE="/var/log/botanical/portal_setup.log"
+
+setup_logging() {
+    mkdir -p "$(dirname "$LOG_FILE")"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    log "INFO" "--- Setup Started: $(date) ---"
+}
+
+uninstall_portal() {
+    log "WARN" "Starting Portal Uninstallation..."
+    
+    # 1. Remove files
+    log "INFO" "Removing portal files..."
+    rm -f "${WEB_ROOT}/index.html" "${WEB_ROOT}/style.css" "${WEB_ROOT}/logo.png" "${WEB_ROOT}/background.png"
+    
+    # 2. Revert RStudio Config
+    local rserver_conf="/etc/rstudio/rserver.conf"
+    if [[ -f "$rserver_conf" ]]; then
+        if grep -q "^www-root-path=/rstudio" "$rserver_conf"; then
+            log "INFO" "Reverting RStudio www-root-path configuration..."
+            sed -i '/^www-root-path=\/rstudio/d' "$rserver_conf"
+            # If it was replaced from something else, we can't easily restore what it was "before",
+            # but typically we either added it or changed it. Removing it disables the subpath mapping.
+            run_command "Restart RStudio" "systemctl restart rstudio-server"
+        fi
+    fi
+    
+    log "INFO" "Uninstallation complete. Note: Nginx proxy config remains active (serving 404/403 on root)."
+    log "INFO" "To restore Nginx to default, verify /etc/nginx/sites-enabled configuration."
+}
+
 deploy_portal() {
     log "INFO" "Deploying Web Portal..."
     ensure_dir_exists "$WEB_ROOT"
     
     # Clean existing default nginx page if it exists (index.nginx-debian.html or simple index.html)
+    # Only remove if we are deploying, to avoid conflicts.
     if [[ -f "${WEB_ROOT}/index.nginx-debian.html" ]]; then rm -f "${WEB_ROOT}/index.nginx-debian.html"; fi
     
     local current_year; current_year=$(date +%Y)
@@ -58,20 +90,7 @@ deploy_portal() {
 
 configure_rstudio_subpath() {
     log "INFO" "Reconfiguring RStudio for subpath /rstudio..."
-    # Set the environment variable expected by the modified 03 script
     export RSTUDIO_ROOT_PATH="/rstudio"
-    
-    # Call the RStudio setup script function to update rserver.conf
-    # We can source it or run it. Running it fully might be too much, but let's see.
-    # Ideally we'd just call the specific function, but the script structure (main menu) makes that tricky unless we source it.
-    
-    # Alternative: Just modify the file directly here if we want to be independent.
-    # But sticking to "Modify scripts/03..." plan implies utilizing that script.
-    # Let's Modify 03 first to expose a non-interactive mode or function we can call?
-    # Or just use sed here for simplicity if 03 isn't easily module-loadable?
-    # The plan says "Modify scripts/03... to support www-root-path".
-    # So I will assume I can run `scripts/03_rstudio_configuration_setup.sh --update-conf-only` or similar if I implement it,
-    # OR, since I am writing this script now, I can just modify rserver.conf directly here as a "portal integration" step.
     
     local rserver_conf="/etc/rstudio/rserver.conf"
     if [[ -f "$rserver_conf" ]]; then
@@ -87,14 +106,35 @@ configure_rstudio_subpath() {
     fi
 }
 
+show_help() {
+    echo "Usage: $0 [--uninstall]"
+    echo "  --uninstall   Remove the portal files and revert RStudio configuration."
+    echo "  (No arguments) Deploys the portal and configures RStudio."
+}
+
 main() {
+    setup_logging
+    
+    if [[ "$1" == "--uninstall" ]]; then
+        uninstall_portal
+        exit 0
+    elif [[ "$1" == "--help" || "$1" == "-h" ]]; then
+        show_help
+        exit 0
+    fi
+
     log "INFO" "--- Starting Botanical Web Portal Setup ---"
     
     deploy_portal
     configure_rstudio_subpath
     
     log "INFO" "--- Web Portal Setup Complete ---"
-    log "INFO" "Ensure Nginx is reloaded with the new proxy location config (run 05 scripts or verify nginx config)."
+    log "INFO" "Logs saved to: $LOG_FILE"
+    log "INFO" "Ensure Nginx is reloaded with the new proxy location config (run 05/30 scripts or verify nginx config)."
+    
+    # PHP/Nextcloud Note
+    log "INFO" "NOTE: This script configures the Static Portal."
+    log "INFO" "If debugging Nextcloud (PHP) interactions, refer to /var/log/nginx/access.log and /var/log/php*-fpm.log (if installed)."
 }
 
 main "$@"
