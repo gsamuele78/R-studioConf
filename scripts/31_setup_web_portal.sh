@@ -112,6 +112,40 @@ show_help() {
     echo "  (No arguments) Deploys the portal and configures RStudio."
 }
 
+show_menu() {
+    echo ""
+    printf "\n=== Botanical Web Portal Setup ===\n"
+    printf "1) Deploy Web Portal (Install/Update)\n"
+    printf "2) Uninstall Web Portal\n"
+    printf "3) Exit\n"
+    read -r -p "Choice: " choice
+    
+    case "$choice" in
+        1)
+            log "INFO" "--- Starting Botanical Web Portal Setup ---"
+            deploy_portal
+            configure_rstudio_subpath
+            log "INFO" "--- Web Portal Setup Complete ---"
+            log "INFO" "Logs saved to: $LOG_FILE"
+            log "INFO" "Ensure Nginx is reloaded (run scripts/30_install_nginx.sh or 'systemctl restart nginx')."
+            
+            # PHP/Nextcloud Note
+            log "INFO" "NOTE: Static Portal configured."
+            ;;
+        2)
+            uninstall_portal
+            ;;
+        3)
+            log "INFO" "Exiting."
+            exit 0
+            ;;
+        *)
+            echo "Invalid option."
+            show_menu
+            ;;
+    esac
+}
+
 main() {
     setup_logging
     
@@ -121,20 +155,9 @@ main() {
     elif [[ "$1" == "--help" || "$1" == "-h" ]]; then
         show_help
         exit 0
+    else
+        show_menu
     fi
-
-    log "INFO" "--- Starting Botanical Web Portal Setup ---"
-    
-    deploy_portal
-    configure_rstudio_subpath
-    
-    log "INFO" "--- Web Portal Setup Complete ---"
-    log "INFO" "Logs saved to: $LOG_FILE"
-    log "INFO" "Ensure Nginx is reloaded with the new proxy location config (run 05/30 scripts or verify nginx config)."
-    
-    # PHP/Nextcloud Note
-    log "INFO" "NOTE: This script configures the Static Portal."
-    log "INFO" "If debugging Nextcloud (PHP) interactions, refer to /var/log/nginx/access.log and /var/log/php*-fpm.log (if installed)."
 }
 
 main "$@"
