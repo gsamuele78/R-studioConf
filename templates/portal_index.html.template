@@ -24,7 +24,7 @@
             </div>
         </header>
 
-        <section class="portal-grid">
+        <section id="serviceGrid" class="portal-grid blurred-locked">
             <a href="/rstudio/" class="portal-card">
                 <div class="card-icon">📊</div>
                 <div class="card-content">
@@ -167,7 +167,11 @@
                     // Success!
                     setTimeout(() => {
                         closeLoginModal();
-                        alert("Secure Connection Established.\n\nYour browser has seeded these credentials.\nYou can now access RStudio, Terminal, and Files.");
+                        // Unlock the grid
+                        document.getElementById("serviceGrid").classList.remove("blurred-locked");
+                        // Change button text to indicate logged in
+                        document.querySelector(".secure-connect-btn").innerHTML = '<span class="lock-icon">🔓</span> Connected';
+                        
                         btn.disabled = false;
                         btn.innerHTML = "Connect & Save";
                         status.innerHTML = "";
