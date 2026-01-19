@@ -745,6 +745,8 @@ install_and_configure_nginx() {
 
 
   
+  configure_rstudio_integration
+  
   log INFO "Setup complete!"
 }
 
@@ -752,12 +754,34 @@ install_and_configure_nginx() {
 # UNINSTALL FUNCTION
 # =====================================================================
 
+configure_rstudio_integration() {
+  log INFO "Configuring RStudio for subpath integration (/rstudio)..."
+  local rserver_conf="/etc/rstudio/rserver.conf"
+  
+  # Allow override via env var if needed, but default to /rstudio as per architecture
+  local rstudio_path="${RSTUDIO_ROOT_PATH:-/rstudio}"
+  
+  if [[ -f "$rserver_conf" ]]; then
+    if grep -q "^www-root-path=" "$rserver_conf"; then
+      log INFO "Updating www-root-path in $rserver_conf..."
+      sed -i "s|^www-root-path=.*$|www-root-path=$rstudio_path|" "$rserver_conf"
+    else
+      log INFO "Adding www-root-path to $rserver_conf..."
+      echo "www-root-path=$rstudio_path" >> "$rserver_conf"
+    fi
+    log INFO "RStudio configured for path $rstudio_path. Restarting service..."
+    run_command "Restart RStudio" "systemctl restart rstudio-server" || log WARN "Failed to restart RStudio."
+  else
+    log WARN "RStudio config not found at $rserver_conf. Skipping RStudio integration."
+  fi
+}
+
 uninstall_nginx() {
   log INFO "Starting Nginx Uninstallation..."
   backup_config
   
   local confirm_uninstall
-  read -r -p "This will remove Nginx packages and clean configs. Continue? (y/n): " confirm_uninstall
+  read -r -p "This will remove Nginx packages, clean configs, and REVERT RStudio integration. Continue? (y/n): " confirm_uninstall
   
   if [[ "$confirm_uninstall" != "y" && "$confirm_uninstall" != "Y" ]]; then
     log INFO "Uninstallation cancelled."
@@ -775,6 +799,17 @@ uninstall_nginx() {
   log INFO "Cleaning Nginx configurations..."
   run_command "Remove nginx directory" "rm -rf /etc/nginx" || true
   run_command "Remove PAM nginx service file" "rm -f /etc/pam.d/nginx" || true
+  
+  # Revert RStudio Configuration
+  local rserver_conf="/etc/rstudio/rserver.conf"
+  if [[ -f "$rserver_conf" ]]; then
+      log INFO "Reverting RStudio configuration..."
+      if grep -q "^www-root-path=/rstudio" "$rserver_conf"; then
+          sed -i '/^www-root-path=\/rstudio/d' "$rserver_conf"
+          run_command "Restart RStudio" "systemctl restart rstudio-server" || log WARN "Failed to restart RStudio."
+          log INFO "RStudio www-root-path configuration configuration removed."
+      fi
+  fi
   
   log INFO "Uninstall attempt complete."
 }

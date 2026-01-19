@@ -29,18 +29,7 @@ uninstall_portal() {
     log "INFO" "Removing portal files..."
     rm -f "${WEB_ROOT}/index.html" "${WEB_ROOT}/style.css" "${WEB_ROOT}/logo.png" "${WEB_ROOT}/background.png"
     
-    # 2. Revert RStudio Config
-    local rserver_conf="/etc/rstudio/rserver.conf"
-    if [[ -f "$rserver_conf" ]]; then
-        if grep -q "^www-root-path=/rstudio" "$rserver_conf"; then
-            log "INFO" "Reverting RStudio www-root-path configuration..."
-            sed -i '/^www-root-path=\/rstudio/d' "$rserver_conf"
-            # If it was replaced from something else, we can't easily restore what it was "before",
-            # but typically we either added it or changed it. Removing it disables the subpath mapping.
-            run_command "Restart RStudio" "systemctl restart rstudio-server"
-        fi
-    fi
-    
+
     log "INFO" "Uninstallation complete. Note: Nginx proxy config remains active (serving 404/403 on root)."
     log "INFO" "To restore Nginx to default, verify /etc/nginx/sites-enabled configuration."
 }
@@ -88,28 +77,11 @@ deploy_portal() {
     log "INFO" "Portal deployed successfully to ${WEB_ROOT}."
 }
 
-configure_rstudio_subpath() {
-    log "INFO" "Reconfiguring RStudio for subpath /rstudio..."
-    export RSTUDIO_ROOT_PATH="/rstudio"
-    
-    local rserver_conf="/etc/rstudio/rserver.conf"
-    if [[ -f "$rserver_conf" ]]; then
-        if grep -q "^www-root-path=" "$rserver_conf"; then
-            run_command "sed -i 's|^www-root-path=.*$|www-root-path=/rstudio|' '$rserver_conf'"
-        else
-            echo "www-root-path=/rstudio" >> "$rserver_conf"
-        fi
-        log "INFO" "RStudio configured for path /rstudio."
-        run_command "Restart RStudio" "systemctl restart rstudio-server"
-    else
-        log "WARN" "RStudio config not found at $rserver_conf. Is RStudio installed?"
-    fi
-}
 
 show_help() {
     echo "Usage: $0 [--uninstall]"
-    echo "  --uninstall   Remove the portal files and revert RStudio configuration."
-    echo "  (No arguments) Deploys the portal and configures RStudio."
+    echo "  --uninstall   Remove the portal files (HTML/CSS/Images)."
+    echo "  (No arguments) Deploys the web portal files to $WEB_ROOT."
 }
 
 show_menu() {
@@ -124,7 +96,6 @@ show_menu() {
         1)
             log "INFO" "--- Starting Botanical Web Portal Setup ---"
             deploy_portal
-            configure_rstudio_subpath
             log "INFO" "--- Web Portal Setup Complete ---"
             log "INFO" "Logs saved to: $LOG_FILE"
             log "INFO" "Ensure Nginx is reloaded (run scripts/30_install_nginx.sh or 'systemctl restart nginx')."
