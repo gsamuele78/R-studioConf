@@ -168,8 +168,12 @@
                         closeLoginModal();
                         // Unlock the grid
                         document.getElementById("serviceGrid").classList.remove("blurred-locked");
-                        // Change button text to indicate logged in
-                        document.querySelector(".secure-connect-btn").innerHTML = '<span class="lock-icon">🔓</span> Connected';
+                        
+                        // Change button to Logout
+                        var btnOps = document.querySelector(".secure-connect-btn");
+                        btnOps.innerHTML = '<span class="lock-icon">🔓</span> Logout / Reset';
+                        btnOps.onclick = handleLogout; // Switch to logout handler
+                        btnOps.classList.add("logout-mode"); // Optional styling hook
                         
                         btn.disabled = false;
                         btn.innerHTML = "Connect & Save";
@@ -186,6 +190,26 @@
                 btn.disabled = false;
                 btn.innerHTML = "Connect & Save";
             });
+            });
+        }
+
+        // Handle Logout
+        function handleLogout() {
+            if(!confirm("Are you sure you want to logout and lock the portal?")) return;
+            
+            // 1. Clear Sessions
+            clearAuthSessions();
+            
+            // 2. Re-lock the Grid
+            document.getElementById("serviceGrid").classList.add("blurred-locked");
+            
+            // 3. Reset Button
+            var btnOps = document.querySelector(".secure-connect-btn");
+            btnOps.innerHTML = '<span class="lock-icon">🔒</span> Secure Access';
+            btnOps.onclick = showLoginModal;
+            btnOps.classList.remove("logout-mode");
+            
+            alert("You have been logged out.\nServices are now locked.");
         }
     </script>
 </body>
