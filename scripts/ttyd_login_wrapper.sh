@@ -6,9 +6,9 @@
 {
     echo "--- New Connection $(date) ---"
     echo "Running as uid: $(id -u) user: $(whoami)"
-    echo "--- Environment Dump ---"
-    printenv
-    echo "------------------------"
+    #echo "--- Environment Dump ---"
+    #printenv
+    #echo "------------------------"
 
     if [ -z "$REMOTE_USER" ]; then
         if [ -n "$TTYD_USER" ]; then
