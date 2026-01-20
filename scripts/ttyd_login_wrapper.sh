@@ -5,17 +5,18 @@
 # Log everything to Standard Error (captured by systemd in /var/log/ttyd.error.log)
 {
     echo "--- New Connection $(date) ---"
-    echo "Running as uid: $(id -u) user: $(whoami)"
+    #Enable to Debug Problems
+    #echo "Running as uid: $(id -u) user: $(whoami)"
     #echo "--- Environment Dump ---"
     #printenv
     #echo "------------------------"
 
     if [ -z "$REMOTE_USER" ]; then
         if [ -n "$TTYD_USER" ]; then
-             echo "Using TTYD_USER: $TTYD_USER"
+    #         echo "Using TTYD_USER: $TTYD_USER"
              REMOTE_USER="$TTYD_USER"
         elif [ -n "$X_FORWARDED_USER" ]; then
-             echo "Using X_FORWARDED_USER: $X_FORWARDED_USER"
+    #         echo "Using X_FORWARDED_USER: $X_FORWARDED_USER"
             REMOTE_USER="$X_FORWARDED_USER"
         else
             echo "Error: REMOTE_USER, TTYD_USER, and X_FORWARDED_USER are empty."
@@ -27,7 +28,7 @@
     export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
     export LC_BYOBU="${LC_BYOBU:-0}"
     
-    echo "Executing: /bin/login -f '$REMOTE_USER'"
+    #echo "Executing: /bin/login -f '$REMOTE_USER'"
 } >&2
 
 # Execute login
