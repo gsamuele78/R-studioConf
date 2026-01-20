@@ -103,11 +103,26 @@ _setup_user_r_environment() {
 
     for key in "${!renviron_settings[@]}"; do
         entry="${key}=${renviron_settings[$key]}"
-        if ! grep -qxF "${entry}" "${r_environ_file}"; then
+        # Check if key is already in the file
+        if grep -q "^${key}=" "${r_environ_file}"; then
+             # Key exists. Check if value matches.
+             current_line=$(grep "^${key}=" "${r_environ_file}")
+             if [[ "$current_line" != "$entry" ]]; then
+                 # Value is different (stale or changed). Update it in place.
+                 # Escape for sed: we escape forward slashes.
+                 # This assumes keys don't contain special sed regex chars, which is true for these ENV vars.
+                 escaped_entry=$(printf '%s\n' "$entry" | sed 's/[\/&]/\\&/g')
+                 sed -i "s|^${key}=.*$|${escaped_entry}|" "${r_environ_file}"
+                 _log_user_setup "Updated stale .Renviron entry: $key"
+             fi
+             # If equal, do nothing (preserve mtime/speedup)
+        else
+             # Key missing, append
              printf "%s\n" "${entry}" >> "${r_environ_file}"
+             _log_user_setup "Appended new .Renviron entry: $key"
         fi
     done
-    _log_user_setup ".Renviron configured at ${r_environ_file}."
+    _log_user_setup ".Renviron configuration check complete."
     return 0
 }
 
@@ -167,17 +182,38 @@ PREFS_EOF
         "${user_specific_projects_dir}" "${user_specific_projects_dir}"
 
     temp_prefs_file=$(mktemp) || { _log_user_setup "Failed to create temp file for prefs."; return 1; }
-    if [[ ! -s "$rstudio_prefs_file" ]] || ! jq -e . "$rstudio_prefs_file" >/dev/null 2>&1; then
+    
+    if [[ ! -s "$rstudio_prefs_file" ]]; then
+        # File doesn't exist or is empty, write fresh
         printf "%s\n" "$prefs_json" > "$rstudio_prefs_file"
+        _try_chmod 600 "$rstudio_prefs_file"
         _log_user_setup "Initialized RStudio preferences at ${rstudio_prefs_file}."
     else
-        # Merge existing with new, new overwrites common keys
-        jq -s '.[0] * .[1]' "$rstudio_prefs_file" <(printf "%s\n" "$prefs_json") > "$temp_prefs_file" && \
-        mv "$temp_prefs_file" "$rstudio_prefs_file"
-        _log_user_setup "Merged RStudio preferences into ${rstudio_prefs_file}."
+        # File exists. Check if we actually need to update.
+        # Logic: 
+        # 1. 'prefs_json' contains our MANDATED settings.
+        # 2. We want to see if the EXISTING file ALREADY contains these settings with the same values.
+        # 3. If yes, we touch nothing.
+        # 4. If no (or parse error), we merge mandated settings ON TOP of existing ones and write.
+        
+        # JQ Verification:
+        # We assume flat keys for simplicity as per template.
+        # We construct a jq filter that checks if the input object contains our mandated object.
+        # 'contains' in jq checks if B is contained in A. A contains B.
+        # Input to JQ will be the FILE content. Argument will be our prefs_json.
+        
+        if jq -e --argjson wanted "$prefs_json" 'contains($wanted)' "$rstudio_prefs_file" >/dev/null 2>&1; then
+             _log_user_setup "RStudio preferences already up-to-date. Skipping write."
+        else
+             # Merge existing with new, new overwrites common keys
+             # We put 'prefs_json' second to ensure it overrides (enforces) our settings
+             jq -s '.[0] * .[1]' "$rstudio_prefs_file" <(printf "%s\n" "$prefs_json") > "$temp_prefs_file" && \
+             mv "$temp_prefs_file" "$rstudio_prefs_file" && \
+             _try_chmod 600 "$rstudio_prefs_file"
+             _log_user_setup "Merged/Updated RStudio preferences in ${rstudio_prefs_file}."
+        fi
     fi
     rm -f "$temp_prefs_file"
-    _try_chmod 600 "$rstudio_prefs_file" # Ensure permissions
     return 0
 }
 
