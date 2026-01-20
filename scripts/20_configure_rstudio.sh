@@ -64,12 +64,14 @@ fi
 # Source SSSD config vars if available (for home template, groups, etc.)
 if [[ -f "$SSSD_CONF_VARS_FILE" ]]; then
     log "Sourcing SSSD configuration variables from $SSSD_CONF_VARS_FILE"
+    # shellcheck source=/dev/null
     source "$SSSD_CONF_VARS_FILE"
 fi
 
 # Source Samba config vars if available
 if [[ -f "$SAMBA_CONF_VARS_FILE" ]]; then
     log "Sourcing Samba configuration variables from $SAMBA_CONF_VARS_FILE"
+    # shellcheck source=/dev/null
     source "$SAMBA_CONF_VARS_FILE"
 fi
 
