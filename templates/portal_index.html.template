@@ -134,10 +134,15 @@
         // Handle Connect
         function handleConnect(event) {
             event.preventDefault();
+            console.group("🔐 Botanical Portal Auth Debug");
+            console.time("Auth Sequence");
+            
             var btn = document.getElementById("connectBtn");
             var status = document.getElementById("loginStatus");
             var user = document.getElementById("username").value;
             var pass = document.getElementById("password").value;
+
+            console.log("1. Initiating connection for user:", user);
 
             btn.disabled = true;
             btn.innerHTML = "Verifying...";
@@ -155,19 +160,21 @@
                 }
             })
             .then(response => {
+                console.log("2. Terminal Auth Response:", response.status, response.statusText);
+                
                 if (response.status === 200 || response.status === 403) {
                     // 200 = OK, 403 = Forbidden (but authenticated! 401 would be unauthenticated)
-                    // Note: Our Nginx blocks /terminal with 401 if auth fails.
-                    // If we get 200 (connected to ttyd) or 403 (Nginx explicitly forbidding but auth passed), it's a success.
-                    // Actually, ttyd returns 200.
                     
                     status.style.color = "#8FBC8F";
                     status.innerHTML = "✅ Verified! Signing into services...";
+                    console.log("3. Credentials Validated. Proceeding to Service Sign-in...");
                     
                     // Attempt Direct Login to RStudio
                     loginRStudio(user, pass)
                         .then(() => {
-                            console.log("Direct Login Sequence Complete");
+                            console.log("5. Direct Login Sequence Complete");
+                            console.timeEnd("Auth Sequence");
+                            console.groupEnd();
                         })
                         .finally(() => {
                             // Success UI Transition
@@ -188,11 +195,14 @@
                             }, 1000);
                         });
                 } else {
+                    console.error("2. Authentication Failed. Status:", response.status);
                     throw new Error("Authentication Failed (Status: " + response.status + ")");
                 }
             })
             .catch(error => {
-                console.error("Login Error:", error);
+                console.error("❌ Login Critical Error:", error);
+                console.groupEnd();
+                
                 status.style.color = "#ff6b6b";
                 status.innerHTML = "❌ Login Failed. Please check AD credentials.";
                 btn.disabled = false;
@@ -202,6 +212,7 @@
 
         // RStudio Direct Login
         function loginRStudio(username, password) {
+            console.log("4. Attempting RStudio Background Login...");
             // RStudio expects application/x-www-form-urlencoded
             var data = new URLSearchParams();
             data.append('username', username);
@@ -219,11 +230,11 @@
             .then(response => {
                 // RStudio redirects on success, or returns 200. 
                 // We just need the cookie to be set.
-                console.log("RStudio Auth Response:", response.status);
+                console.log("4a. RStudio Response Status:", response.status);
                 return response;
             })
             .catch(err => {
-                console.warn("RStudio Background Login Failed:", err);
+                console.warn("4b. RStudio Background Login Failed:", err);
                 // Non-fatal, user just has to log in manually
             });
         }

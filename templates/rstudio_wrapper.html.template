@@ -51,5 +51,19 @@
         <a href="/">🏠 Botanical Portal</a>
     </div>
     <iframe id="app-frame" src="/rstudio-inner/" title="RStudio"></iframe>
+    <script>
+        document.getElementById("app-frame").addEventListener("load", function() {
+            console.log("ℹ️ [RStudio Wrapper] Iframe Loaded");
+            try {
+                // Check if we are still on the inner proxy or sent to login
+                console.log("   Location:", this.contentWindow.location.href);
+                if (this.contentWindow.location.href.includes("auth-sign-in")) {
+                    console.warn("⚠️ [RStudio Wrapper] Redirected to Login Page (Auth cookie missing?)");
+                }
+            } catch (e) {
+                console.log("   (Cross-origin restricted or not ready)");
+            }
+        });
+    </script>
 </body>
 </html>

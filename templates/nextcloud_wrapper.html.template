@@ -51,5 +51,16 @@
         <a href="/">🏠 Botanical Portal</a>
     </div>
     <iframe id="app-frame" src="/files-inner/" title="Nextcloud Files"></iframe>
+    <script>
+        document.getElementById("app-frame").addEventListener("load", function() {
+            console.log("ℹ️ [Nextcloud Wrapper] Iframe Loaded");
+            try {
+                console.log("   Location:", this.contentWindow.location.href);
+            } catch (e) {
+                // Nextcloud might redirect to a different domain in some setups
+                console.log("   (Cross-origin restricted or not ready)");
+            }
+        });
+    </script>
 </body>
 </html>
