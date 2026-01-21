@@ -665,6 +665,37 @@ install_and_configure_nginx() {
   ensure_dir_exists "$NGINX_TEMPLATE_DIR"
   ensure_dir_exists "$SSL_CERT_DIR"
   ensure_dir_exists "/var/www/html"
+
+  # Deploy Application Wrappers (Unified Iframe Architecture)
+  log INFO "Deploying application wrappers..."
+  local wrapper_dir="/var/www/html"
+  
+  # Terminal Wrapper
+  if [[ -f "${SCRIPT_DIR}/../templates/terminal_wrapper.html.template" ]]; then
+      ensure_dir_exists "$wrapper_dir/terminal"
+      run_command "Deploy Terminal Wrapper" "cp \"${SCRIPT_DIR}/../templates/terminal_wrapper.html.template\" \"$wrapper_dir/terminal/index.html\""
+      run_command "Set Permissions" "chown www-data:www-data \"$wrapper_dir/terminal/index.html\""
+  else
+      log WARN "Terminal wrapper template not found."
+  fi
+
+  # RStudio Wrapper
+  if [[ -f "${SCRIPT_DIR}/../templates/rstudio_wrapper.html.template" ]]; then
+      ensure_dir_exists "$wrapper_dir/rstudio"
+      run_command "Deploy RStudio Wrapper" "cp \"${SCRIPT_DIR}/../templates/rstudio_wrapper.html.template\" \"$wrapper_dir/rstudio/index.html\""
+      run_command "Set Permissions" "chown www-data:www-data \"$wrapper_dir/rstudio/index.html\""
+  else
+      log WARN "RStudio wrapper template not found."
+  fi
+
+  # Nextcloud Wrapper
+  if [[ -f "${SCRIPT_DIR}/../templates/nextcloud_wrapper.html.template" ]]; then
+      ensure_dir_exists "$wrapper_dir/files"
+      run_command "Deploy Nextcloud Wrapper" "cp \"${SCRIPT_DIR}/../templates/nextcloud_wrapper.html.template\" \"$wrapper_dir/files/index.html\""
+      run_command "Set Permissions" "chown www-data:www-data \"$wrapper_dir/files/index.html\""
+  else
+      log WARN "Nextcloud wrapper template not found."
+  fi
   
   log INFO "Nginx setup process continuing... (additional steps would follow)"
   # Step 4: Generate Diffie-Hellman Parameters
@@ -758,8 +789,8 @@ configure_rstudio_integration() {
   log INFO "Configuring RStudio for subpath integration (/rstudio)..."
   local rserver_conf="/etc/rstudio/rserver.conf"
   
-  # Allow override via env var if needed, but default to /rstudio as per architecture
-  local rstudio_path="${RSTUDIO_ROOT_PATH:-/rstudio}"
+  # Allow override via env var if needed, but default to /rstudio-inner as per unified iframe architecture
+  local rstudio_path="${RSTUDIO_ROOT_PATH:-/rstudio-inner}"
   
   if [[ -f "$rserver_conf" ]]; then
     if grep -q "^www-root-path=" "$rserver_conf"; then

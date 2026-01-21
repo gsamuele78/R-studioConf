@@ -3,10 +3,22 @@
 # ----------------------------------------------------------------
 
 # --- Reverse Proxy for R-Studio Server ---
+# --- Reverse Proxy for R-Studio Server (Unified Iframe) ---
+# 1. /rstudio/ serves the static wrapper
 location /rstudio/ {
+    alias /var/www/html/rstudio/;
+    index index.html;
+    try_files $uri $uri/ =404;
+}
+
+# 2. /rstudio-inner/ proxies to the RStudio backend
+location ^~ /rstudio-inner/ {
     access_log %%LOG_DIR%%/rstudio-access.log;
     error_log %%LOG_DIR%%/rstudio-error.log;
-    proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/;
+    
+    # Note: RStudio must be configured with www-root-path=/rstudio-inner
+    proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/rstudio-inner/;
+    
     proxy_redirect off;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -15,11 +27,8 @@ location /rstudio/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-
-    # Inject 'Back to Portal' Top Bar with Layout Shift
-    proxy_set_header Accept-Encoding ""; # Disable GZIP
-    sub_filter '</body>' '<div id="portal-top-bar" style="position:fixed; top:0; left:0; width:100%; height:32px; background:#2c3e50; z-index:2147483647; display:flex; align-items:center; padding:0 20px; box-shadow:0 2px 4px rgba(0,0,0,0.2);"><a href="/" style="color:white; text-decoration:none; font-family:sans-serif; font-weight:bold; font-size:14px; display:flex; align-items:center;">🏠 Botanical Portal</a></div><style>body { margin-top: 32px !important; height: calc(100% - 32px) !important; } .rstudio-full-window { top: 32px !important; height: calc(100% - 32px) !important; }</style><script>(function(){var h=32;function f(){document.body.style.marginTop=h+"px";document.body.style.height="calc(100% - "+h+"px)";var c=document.body.children;for(var i=0;i<c.length;i++){var e=c[i];if(e.id==="portal-top-bar"||e.tagName==="SCRIPT"||e.tagName==="STYLE")continue;var s=window.getComputedStyle(e);if(s.position==="absolute"||s.position==="fixed"){if(parseInt(s.top)<h){e.style.top=h+"px";if(s.height==="100%"||parseInt(s.height)>=(window.innerHeight-h))e.style.height="calc(100% - "+h+"px)";}}}}setInterval(f,1000);window.addEventListener("resize",f);f();})();</script></body>';
-    sub_filter_once on;
+    
+    # No sub_filter needed (Wrapper handles UI)
 }
 
 # --- Web Portal (Root) ---
@@ -166,11 +175,21 @@ location ^~ /.well-known/nodeinfo { return 301 /files/index.php/.well-known/node
 
 # --- Reverse Proxy for Nextcloud (External) ---
 # --- Reverse Proxy for Nextcloud (External) ---
+# --- Reverse Proxy for Nextcloud (Unified Iframe) ---
+# 1. /files/ serves the static wrapper
 location /files/ {
+    alias /var/www/html/files/;
+    index index.html;
+    try_files $uri $uri/ =404;
+}
+
+# 2. /files-inner/ proxies to the Nextcloud backend
+location ^~ /files-inner/ {
     access_log %%LOG_DIR%%/nextcloud-access.log;
     error_log %%LOG_DIR%%/nextcloud-error.log;
     
     # Proxy to external Nextcloud instance
+    # Note: If target does not handle /files-inner prefix, this might need URL rewriting
     proxy_pass %%NEXTCLOUD_TARGET_URL%%;
     
     proxy_set_header Host $host;
@@ -195,12 +214,8 @@ location /files/ {
     proxy_connect_timeout 3600;
     proxy_send_timeout 3600;
     
-    
     proxy_request_buffering off;
     proxy_buffering off;
 
-    # Inject 'Back to Portal' Top Bar with Layout Shift
-    proxy_set_header Accept-Encoding ""; # Disable GZIP
-    sub_filter '</body>' '<div id="portal-top-bar" style="position:fixed; top:0; left:0; width:100%; height:32px; background:#2c3e50; z-index:2147483647; display:flex; align-items:center; padding:0 20px; box-shadow:0 2px 4px rgba(0,0,0,0.2);"><a href="/" style="color:white; text-decoration:none; font-family:sans-serif; font-weight:bold; font-size:14px; display:flex; align-items:center;">🏠 Botanical Portal</a></div><style>body { margin-top: 32px !important; height: calc(100% - 32px) !important; } #header { top: 32px !important; } #content { margin-top: 32px !important; }</style><script>(function(){var h=32;function f(){document.body.style.marginTop=h+"px";document.body.style.height="calc(100% - "+h+"px)";var c=document.body.children;for(var i=0;i<c.length;i++){var e=c[i];if(e.id==="portal-top-bar"||e.tagName==="SCRIPT"||e.tagName==="STYLE")continue;var s=window.getComputedStyle(e);if(s.position==="absolute"||s.position==="fixed"){if(parseInt(s.top)<h){e.style.top=h+"px";if(s.height==="100%"||parseInt(s.height)>=(window.innerHeight-h))e.style.height="calc(100% - "+h+"px)";}}}}setInterval(f,1000);window.addEventListener("resize",f);f();})();</script></body>';
-    sub_filter_once on;
+    # No sub_filter needed (Wrapper handles UI)
 }

@@ -37,14 +37,7 @@ install_services() {
          return 1
     fi
 
-    log "INFO" "Deploying terminal wrapper..."
-    if [[ -f "${SCRIPT_DIR}/../templates/terminal_wrapper.html.template" ]]; then
-        run_command "Ensure terminal directory" "mkdir -p /var/www/html/terminal"
-        run_command "Copy terminal wrapper" "cp \"${SCRIPT_DIR}/../templates/terminal_wrapper.html.template\" /var/www/html/terminal/index.html"
-        run_command "Set permissions" "chown www-data:www-data /var/www/html/terminal/index.html"
-    else
-        log "WARN" "Terminal wrapper template not found."
-    fi
+    logit "INFO" "Terminal wrapper deployment is now handled by 30_install_nginx.sh in the unified architecture."
 
     log "INFO" "Creating and enabling service files..."; 
     ensure_dir_exists "${TTYD_OVERRIDE_DIR}"; process_systemd_template "${SCRIPT_DIR}/../templates/ttyd.service.override.template" "ttyd.service.d/override.conf"
