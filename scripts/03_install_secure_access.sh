@@ -18,6 +18,10 @@ install_services() {
     log "INFO" "Attempting to repair any broken package dependencies..."; run_command "Force configure all pending packages" "dpkg --configure -a"; run_command "Fix broken dependencies" "apt-get -f install -y";
     log "INFO" "Installing prerequisite packages..."; run_command "Update package lists" "apt-get -y update";
         log "INFO" "Installing ttyd..."; if ! run_command "Install ttyd" "apt-get -y install ttyd"; then handle_error $? "Failed to install ttyd."; return 1; fi;
+    log "INFO" "Installing xterm (for resize utility)..."
+    if ! run_command "Install xterm" "apt-get -y install xterm"; then
+        handle_error $? "Failed to install xterm."; return 1
+    fi
     log "INFO" "Installing curl..."
     if ! run_command "Install curl" "apt-get -y install curl"; then
         handle_error $? "Failed to install curl."; return 1
@@ -31,6 +35,15 @@ install_services() {
     else
          log "ERROR" "Wrapper script not found at ${SCRIPT_DIR}/ttyd_login_wrapper.sh"
          return 1
+    fi
+
+    log "INFO" "Deploying terminal wrapper..."
+    if [[ -f "${SCRIPT_DIR}/../templates/terminal_wrapper.html.template" ]]; then
+        run_command "Ensure terminal directory" "mkdir -p /var/www/html/terminal"
+        run_command "Copy terminal wrapper" "cp \"${SCRIPT_DIR}/../templates/terminal_wrapper.html.template\" /var/www/html/terminal/index.html"
+        run_command "Set permissions" "chown www-data:www-data /var/www/html/terminal/index.html"
+    else
+        log "WARN" "Terminal wrapper template not found."
     fi
 
     log "INFO" "Creating and enabling service files..."; 

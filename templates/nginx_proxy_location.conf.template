@@ -30,19 +30,26 @@ location / {
 }
 
 # ### DEFINITIVE FIX for ttyd ###
-# Redirect /terminal to /terminal/ to ensure correct relative path handling
+# 1. /terminal/ serves the static wrapper with the iframe
 location = /terminal { return 301 /terminal/; }
+location /terminal/ {
+    alias /var/www/html/terminal/;
+    index index.html;
+    try_files $uri $uri/ =404;
+    
+    auth_pam "Secure Terminal - AD Credentials Required";
+    auth_pam_service_name "nginx";
+}
 
-# This block now uses a regular expression to correctly capture and forward
-# all sub-requests (like /ws) to the ttyd backend, as per the official documentation.
-location ~ ^/terminal(.*)$ {
+# 2. /terminal-inner/ proxies to the actual ttyd instance
+location ^~ /terminal-inner/ {
     access_log %%LOG_DIR%%/terminal-access.log;
     error_log %%LOG_DIR%%/terminal-error.log;
     
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
     
-    proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%$1;
+    proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/terminal-inner/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -52,12 +59,13 @@ location ~ ^/terminal(.*)$ {
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
-    # Inject Auto-Logout Script
-    # Disabling GZIP is critical for sub_filter to work!
+    # Inject Auto-Logout Script (Simplified for Wrapper)
+    # We kept the logout logic but removed the layout shift/header injection
+    # because the wrapper now handles the UI.
     proxy_set_header Accept-Encoding "";
     sub_filter_types *;
     
-    sub_filter '</body>' '<div id="portal-top-bar" style="position:fixed; top:0; left:0; width:100%; height:32px; background:#2c3e50; z-index:2147483647; display:flex; align-items:center; padding:0 20px; box-shadow:0 2px 4px rgba(0,0,0,0.2);"><a href="/" style="color:white; text-decoration:none; font-family:sans-serif; font-weight:bold; font-size:14px; display:flex; align-items:center;">🏠 Botanical Portal</a></div><style>#portal-top-bar { box-sizing: border-box; } body { margin: 0 !important; padding: 0 !important; background: #000 !important; overflow: hidden !important; } .terminal { position: absolute !important; top: 32px !important; bottom: 0 !important; left: 0 !important; right: 0 !important; height: auto !important; width: auto !important; }</style><script>(function(){function resizeTerm(){if(window.term && window.term.fit){window.term.fit();}else if(window.fitAddon && window.fitAddon.fit){window.fitAddon.fit();}else{window.dispatchEvent(new Event("resize"));}}window.addEventListener("load",resizeTerm);window.addEventListener("resize",resizeTerm);setInterval(resizeTerm,1000);})();</script><script>
+    sub_filter '</body>' '<script>
         // Wait 3 seconds for initial load to stabilize
         setTimeout(function() {
             // Poll for the specific "Connection Closed" overlay
@@ -66,11 +74,10 @@ location ~ ^/terminal(.*)$ {
                 for (var i = 0; i < divs.length; i++) {
                     var d = divs[i];
                     // The ttyd OverlayAddon creates a div with "font-size: xx-large"
-                    // We check for this specific style AND the text "Connection Closed" or "Reconnect"
-                    // to avoid false positives.
                     if (d.style.fontSize === "xx-large" && 
                        (d.textContent.indexOf("Connection Closed") !== -1 || d.textContent.indexOf("Reconnect") !== -1)) {
-                         window.location.replace("/logout");
+                         // Redirect the TOP window to logout, not just the iframe
+                         window.top.location.replace("/logout");
                          return;
                     }
                 }

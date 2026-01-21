@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Botanical Terminal</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: sans-serif;
+            background-color: #000;
+        }
+        #portal-top-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 32px;
+            background: #2c3e50;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-sizing: border-box;
+        }
+        #portal-top-bar a {
+            color: white;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+        }
+        #terminal-frame {
+            position: absolute;
+            top: 32px;
+            left: 0;
+            width: 100%;
+            height: calc(100% - 32px);
+            border: none;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="portal-top-bar">
+        <a href="/">🏠 Botanical Portal</a>
+    </div>
+    <iframe id="terminal-frame" src="/terminal-inner/" title="Web Terminal"></iframe>
+</body>
+</html>
