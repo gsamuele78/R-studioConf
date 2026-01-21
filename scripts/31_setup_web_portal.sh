@@ -75,6 +75,38 @@ deploy_portal() {
     run_command "Set permissions for web root" "chown -R www-data:www-data ${WEB_ROOT} && chmod -R 755 ${WEB_ROOT}"
     
     log "INFO" "Portal deployed successfully to ${WEB_ROOT}."
+
+    log "INFO" "Deploying Application Wrappers (Iframe Architecture)..."
+    
+    # Terminal Wrapper
+    if [[ -f "${TEMPLATE_DIR}/terminal_wrapper.html.template" ]]; then
+        ensure_dir_exists "${WEB_ROOT}/terminal"
+        cp "${TEMPLATE_DIR}/terminal_wrapper.html.template" "${WEB_ROOT}/terminal/index.html"
+        log "INFO" "Deployed Terminal Wrapper."
+    else
+        log "WARN" "Terminal wrapper template not found."
+    fi
+
+    # RStudio Wrapper
+    if [[ -f "${TEMPLATE_DIR}/rstudio_wrapper.html.template" ]]; then
+        ensure_dir_exists "${WEB_ROOT}/rstudio"
+        cp "${TEMPLATE_DIR}/rstudio_wrapper.html.template" "${WEB_ROOT}/rstudio/index.html"
+        log "INFO" "Deployed RStudio Wrapper."
+    else
+        log "WARN" "RStudio wrapper template not found."
+    fi
+
+    # Nextcloud Wrapper
+    if [[ -f "${TEMPLATE_DIR}/nextcloud_wrapper.html.template" ]]; then
+        ensure_dir_exists "${WEB_ROOT}/files"
+        cp "${TEMPLATE_DIR}/nextcloud_wrapper.html.template" "${WEB_ROOT}/files/index.html"
+        log "INFO" "Deployed Nextcloud Wrapper."
+    else
+        log "WARN" "Nextcloud wrapper template not found."
+    fi
+
+    # Set permissions for all wrappers
+    run_command "Set permissions for web root" "chown -R www-data:www-data ${WEB_ROOT} && chmod -R 755 ${WEB_ROOT}"
 }
 
 

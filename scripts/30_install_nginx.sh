@@ -666,36 +666,7 @@ install_and_configure_nginx() {
   ensure_dir_exists "$SSL_CERT_DIR"
   ensure_dir_exists "/var/www/html"
 
-  # Deploy Application Wrappers (Unified Iframe Architecture)
-  log INFO "Deploying application wrappers..."
-  local wrapper_dir="/var/www/html"
-  
-  # Terminal Wrapper
-  if [[ -f "${SCRIPT_DIR}/../templates/terminal_wrapper.html.template" ]]; then
-      ensure_dir_exists "$wrapper_dir/terminal"
-      run_command "Deploy Terminal Wrapper" "cp \"${SCRIPT_DIR}/../templates/terminal_wrapper.html.template\" \"$wrapper_dir/terminal/index.html\""
-      run_command "Set Permissions" "chown www-data:www-data \"$wrapper_dir/terminal/index.html\""
-  else
-      log WARN "Terminal wrapper template not found."
-  fi
-
-  # RStudio Wrapper
-  if [[ -f "${SCRIPT_DIR}/../templates/rstudio_wrapper.html.template" ]]; then
-      ensure_dir_exists "$wrapper_dir/rstudio"
-      run_command "Deploy RStudio Wrapper" "cp \"${SCRIPT_DIR}/../templates/rstudio_wrapper.html.template\" \"$wrapper_dir/rstudio/index.html\""
-      run_command "Set Permissions" "chown www-data:www-data \"$wrapper_dir/rstudio/index.html\""
-  else
-      log WARN "RStudio wrapper template not found."
-  fi
-
-  # Nextcloud Wrapper
-  if [[ -f "${SCRIPT_DIR}/../templates/nextcloud_wrapper.html.template" ]]; then
-      ensure_dir_exists "$wrapper_dir/files"
-      run_command "Deploy Nextcloud Wrapper" "cp \"${SCRIPT_DIR}/../templates/nextcloud_wrapper.html.template\" \"$wrapper_dir/files/index.html\""
-      run_command "Set Permissions" "chown www-data:www-data \"$wrapper_dir/files/index.html\""
-  else
-      log WARN "Nextcloud wrapper template not found."
-  fi
+  log "INFO" "Application Wrappers are now deployed by 31_setup_web_portal.sh."
   
   log INFO "Nginx setup process continuing... (additional steps would follow)"
   # Step 4: Generate Diffie-Hellman Parameters
