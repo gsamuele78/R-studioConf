@@ -20,7 +20,12 @@ location ^~ /rstudio-inner/ {
     # We strip the prefix because RStudio listens on / but generates links with the prefix
     proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/;
     
-    proxy_redirect off;
+    # Fix Cookie Path: Map cookies from / (backend) to /rstudio-inner/ (frontend)
+    proxy_cookie_path / /rstudio-inner/;
+    
+    # Fix Redirects: Map redirects from backend root to frontend subpath
+    proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+    
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
