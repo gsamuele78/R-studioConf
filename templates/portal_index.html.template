@@ -123,12 +123,12 @@
             
             // 2. Clear RStudio Session (if possible via logout endpoint)
             // RStudio usually uses a cookie 'user-id' or 'session-user-id'.
-            // Accessing /auth-sign-out ensures the server kills it.
+            // Accessing /rstudio-inner/auth-sign-out ensures the server kills it.
             var img = new Image();
-            img.src = "/auth-sign-out"; // Fire and forget
+            img.src = "/rstudio-inner/auth-sign-out"; // Fire and forget
             
-            // 3. Optional: Clear Nextcloud (complex, but we can try hitting logout)
-            // var nc = new Image(); nc.src = "/files/logout"; 
+            // 3. Optional: Clear Nextcloud
+            // var nc = new Image(); nc.src = "/files-inner/logout"; 
         }
 
         // Handle Connect
@@ -219,7 +219,8 @@
             data.append('password', password);
             data.append('staySignedIn', '1');
 
-            return fetch("/rstudio/auth-do-sign-in", {
+            // NOTE: Must post to the INNER proxy path where RStudio backend lives
+            return fetch("/rstudio-inner/auth-do-sign-in", {
                 method: "POST",
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
