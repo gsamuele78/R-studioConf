@@ -37,7 +37,7 @@ install_services() {
          return 1
     fi
 
-    logit "INFO" "Terminal wrapper deployment is now handled by 30_install_nginx.sh in the unified architecture."
+    log "INFO" "Terminal wrapper deployment is now handled by 30_install_nginx.sh in the unified architecture."
 
     log "INFO" "Creating and enabling service files..."; 
     ensure_dir_exists "${TTYD_OVERRIDE_DIR}"; process_systemd_template "${SCRIPT_DIR}/../templates/ttyd.service.override.template" "ttyd.service.d/override.conf"
