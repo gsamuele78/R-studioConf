@@ -17,7 +17,8 @@ location ^~ /rstudio-inner/ {
     error_log %%LOG_DIR%%/rstudio-error.log;
     
     # Note: RStudio must be configured with www-root-path=/rstudio-inner
-    proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/rstudio-inner/;
+    # We strip the prefix because RStudio listens on / but generates links with the prefix
+    proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/;
     
     proxy_redirect off;
     proxy_http_version 1.1;
