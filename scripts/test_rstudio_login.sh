@@ -56,6 +56,10 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     "$URL_BASE/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
+
+# Test 1 doesn't need sleep as it's the first one
+
+sleep 5
 echo ""
 echo "=========================================="
 echo "TEST 2: Plaintext WITH v=1"
@@ -74,6 +78,7 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     "$URL_BASE/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
+sleep 5
 echo ""
 echo "=========================================="
 echo "TEST 3: Plaintext Package in 'v' (v=user\npwd)"
@@ -92,6 +97,7 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     "$URL_BASE/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
+sleep 5
 echo ""
 echo "=========================================="
 echo "TEST 6: Plaintext with EMPTY Referer"
@@ -109,6 +115,7 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     "$URL_BASE/rstudio-inner/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
+sleep 5
 echo ""
 echo "=========================================="
 echo "TEST 7: Plaintext with PORTAL Referer (simulating browser)"
@@ -126,6 +133,7 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -d "rs-csrf-token=$CSRF" \
     "$URL_BASE/rstudio-inner/auth-do-sign-in")
 
+sleep 5
 echo ""
 echo "=========================================="
 echo "TEST 8: Referer with EXTERNAL IP (Simulating Nginx current spoof)"
@@ -144,6 +152,7 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     "$URL_BASE/rstudio-inner/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
+sleep 5
 echo ""
 echo "=========================================="
 echo "TEST 9: Referer with LOCALHOST (Simulating proposed spoof)"
@@ -162,6 +171,7 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     "$URL_BASE/rstudio-inner/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
+sleep 5
 echo ""
 echo "=========================================="
 echo "TEST 10: Login THROUGH NGINX (http://137.204.119.225/rstudio-inner/)"
