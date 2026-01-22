@@ -35,7 +35,12 @@ uninstall_portal() {
 }
 
 deploy_portal() {
-    log "INFO" "Deploying Web Portal..."
+    local template_name="$1" # e.g., portal_index.html.template or portal_index_simple.html.template
+    if [[ -z "$template_name" ]]; then
+        template_name="portal_index.html.template"
+    fi
+
+    log "INFO" "Deploying Web Portal using template: $template_name..."
     ensure_dir_exists "$WEB_ROOT"
     
     # Clean existing default nginx page if it exists (index.nginx-debian.html or simple index.html)
@@ -46,8 +51,8 @@ deploy_portal() {
     
     log "INFO" "Processing templates..."
     local html_content
-    if ! process_template "${TEMPLATE_DIR}/portal_index.html.template" html_content "CURRENT_YEAR=${current_year}"; then
-        handle_error 1 "Failed to process portal_index.html.template"
+    if ! process_template "${TEMPLATE_DIR}/${template_name}" html_content "CURRENT_YEAR=${current_year}"; then
+        handle_error 1 "Failed to process ${template_name}"
         return 1
     fi
     echo "$html_content" > "${WEB_ROOT}/index.html"
@@ -119,26 +124,27 @@ show_help() {
 show_menu() {
     echo ""
     printf "\n=== Botanical Web Portal Setup ===\n"
-    printf "1) Deploy Web Portal (Install/Update)\n"
-    printf "2) Uninstall Web Portal\n"
-    printf "3) Exit\n"
+    printf "1) Deploy Secure Web Portal (Front-end Auth Lock)\n"
+    printf "2) Deploy Simple Web Portal (Direct Links, No Lock)\n"
+    printf "3) Uninstall Web Portal\n"
+    printf "4) Exit\n"
     read -r -p "Choice: " choice
     
     case "$choice" in
         1)
-            log "INFO" "--- Starting Botanical Web Portal Setup ---"
-            deploy_portal
+            log "INFO" "--- Starting Secure Web Portal Setup ---"
+            deploy_portal "portal_index.html.template"
             log "INFO" "--- Web Portal Setup Complete ---"
-            log "INFO" "Logs saved to: $LOG_FILE"
-            log "INFO" "Ensure Nginx is reloaded (run scripts/30_install_nginx.sh or 'systemctl restart nginx')."
-            
-            # PHP/Nextcloud Note
-            log "INFO" "NOTE: Static Portal configured."
             ;;
         2)
-            uninstall_portal
+            log "INFO" "--- Starting Simple Web Portal Setup ---"
+            deploy_portal "portal_index_simple.html.template"
+            log "INFO" "--- Web Portal Setup Complete ---"
             ;;
         3)
+            uninstall_portal
+            ;;
+        4)
             log "INFO" "Exiting."
             exit 0
             ;;
@@ -147,6 +153,12 @@ show_menu() {
             show_menu
             ;;
     esac
+    
+    if [[ "$choice" == "1" || "$choice" == "2" ]]; then
+        log "INFO" "Logs saved to: $LOG_FILE"
+        log "INFO" "Ensure Nginx is reloaded (run scripts/30_install_nginx.sh or 'systemctl restart nginx')."
+        log "INFO" "NOTE: Static Portal configured."
+    fi
 }
 
 main() {
