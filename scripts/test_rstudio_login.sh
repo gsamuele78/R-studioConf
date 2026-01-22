@@ -25,6 +25,7 @@ if [ -z "$CSRF" ]; then
     exit 1
 fi
 
+echo
 echo "=========================================="
 echo "TEST 1: Standard Plaintext (persist=1, NO v)"
 echo "Payload: username, password, persist, clientPath, appUri, rs-csrf-token"
