@@ -27,15 +27,36 @@ if [ -z "$CSRF" ]; then
     exit 1
 fi
 
-echo "2. Attempting Plaintext Login..."
+echo "2. Attempting Plaintext Login (No 'v', using 'persist')..."
 # Send POST
+# Hypothesis: Sending 'v' triggers encrypted auth mode. Removing it to force plaintext check.
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -d "username=$USERNAME" \
     -d "password=$PASSWORD" \
     -d "persist=1" \
-    -d "clientPath=/" \
+    -d "clientPath=/rstudio-inner/" \
     -d "appUri=" \
-    -d "v=1" \
+    -d "rs-csrf-token=$CSRF" \
+    "$URL_BASE/rstudio-inner/auth-do-sign-in")
+
+# Note: Changed URL to include /rstudio-inner/ prefix to match Nginx proxy path validation if needed
+# But tested directly against 8787, so maybe path doesn't matter as much, but let's be safe.
+# Actually, if testing against 127.0.0.1:8787 directly, the path is likely just /auth-do-sign-in
+# UNLESS www-root-path is set (which it is: /rstudio-inner).
+# So request should probably go to $URL_BASE/auth-do-sign-in but with Referer?
+# Wait, rserver.conf has www-root-path=/rstudio-inner
+# So the server LISTENS on /, but expects the path to be /rstudio-inner/auth-do-sign-in?
+# Or does it rewrite?
+# Nginx does `proxy_pass http://127.0.0.1:8787/;` (stripping prefix).
+# So physically on port 8787, the endpoint is likely `/auth-do-sign-in`.
+# Let's revert to $URL_BASE/auth-do-sign-in first.
+
+response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -d "username=$USERNAME" \
+    -d "password=$PASSWORD" \
+    -d "persist=1" \
+    -d "clientPath=/rstudio-inner/" \
+    -d "appUri=" \
     -d "rs-csrf-token=$CSRF" \
     "$URL_BASE/auth-do-sign-in")
 
