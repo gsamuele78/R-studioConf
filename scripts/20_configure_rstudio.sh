@@ -236,6 +236,12 @@ configure_rstudio_server_conf() {
         run_command "sed -i 's|^auth-encrypt-password=.*$|auth-encrypt-password=0|' '${RSERVER_CONF_PATH}'"
     else add_line_if_not_present "auth-encrypt-password=0" "${RSERVER_CONF_PATH}"; fi
 
+    # Force Secure cookies (Native fix)
+    # Required for SameSite=None to work in modern browsers
+    if grep -q "^auth-cookies-force-secure=" "${RSERVER_CONF_PATH}"; then
+        run_command "sed -i 's|^auth-cookies-force-secure=.*$|auth-cookies-force-secure=1|' '${RSERVER_CONF_PATH}'"
+    else add_line_if_not_present "auth-cookies-force-secure=1" "${RSERVER_CONF_PATH}"; fi
+
     log "${RSERVER_CONF_PATH} configured. Restarting RStudio Server..."
     run_command "systemctl restart rstudio-server"
 }
