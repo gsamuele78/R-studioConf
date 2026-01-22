@@ -213,30 +213,47 @@
         // RStudio Direct Login
         function loginRStudio(username, password) {
             console.log("4. Attempting RStudio Background Login...");
-            // RStudio expects application/x-www-form-urlencoded
-            var data = new URLSearchParams();
-            data.append('username', username);
-            data.append('password', password);
-            data.append('staySignedIn', '1');
+            
+            // Step 1: parse the login page to get the CSRF token
+            return fetch("/rstudio-inner/auth-sign-in")
+            .then(response => response.text())
+            .then(html => {
+                var parser = new DOMParser();
+                var doc = parser.parseFromString(html, "text/html");
+                var csrfToken = doc.querySelector('input[name="rs-csrf-token"]')?.value;
+                
+                if (!csrfToken) {
+                    console.warn("4b. Could not find RStudio CSRF token. Login may fail.");
+                    // Try to proceed anyway? Or fail? Let's proceed, maybe it's an older version.
+                } else {
+                    console.log("4b. Found CSRF Token:", csrfToken);
+                }
 
-            // NOTE: Must post to the INNER proxy path where RStudio backend lives
-            return fetch("/rstudio-inner/auth-do-sign-in", {
-                method: "POST",
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-                },
-                body: data,
-                credentials: 'include' // Important for saving the cookie
+                // Step 2: Post credentials + token
+                var data = new URLSearchParams();
+                data.append('username', username);
+                data.append('password', password);
+                data.append('staySignedIn', '1');
+                data.append('appUri', '');
+                if (csrfToken) {
+                    data.append('rs-csrf-token', csrfToken);
+                }
+
+                return fetch("/rstudio-inner/auth-do-sign-in", {
+                    method: "POST",
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+                    },
+                    body: data,
+                    credentials: 'include' 
+                });
             })
             .then(response => {
-                // RStudio redirects on success, or returns 200. 
-                // We just need the cookie to be set.
-                console.log("4a. RStudio Response Status:", response.status);
+                console.log("4c. RStudio Response Status:", response.status);
                 return response;
             })
             .catch(err => {
-                console.warn("4b. RStudio Background Login Failed:", err);
-                // Non-fatal, user just has to log in manually
+                console.warn("4d. RStudio Background Login Failed:", err);
             });
         }
 
