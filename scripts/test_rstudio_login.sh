@@ -28,8 +28,14 @@ fi
 echo "=========================================="
 echo "TEST 1: Standard Plaintext (persist=1, NO v)"
 echo "Payload: username, password, persist, clientPath, appUri, rs-csrf-token"
+echo "Headers: Origin, Referer, Content-Type"
 echo "=========================================="
+# Logic: RStudio might require Referer/Origin to validate the request is "legit" before parsing body? 
+# or maybe it's just strict about Content-Type.
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Origin: $URL_BASE" \
+    -H "Referer: $URL_BASE/auth-sign-in" \
     -d "username=$USERNAME" \
     -d "password=$PASSWORD" \
     -d "persist=1" \
@@ -42,9 +48,11 @@ echo "$response" | grep -E "HTTP/|Location"
 echo ""
 echo "=========================================="
 echo "TEST 2: Plaintext WITH v=1"
-echo "Payload: username, password, persist, v=1..."
 echo "=========================================="
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Origin: $URL_BASE" \
+    -H "Referer: $URL_BASE/auth-sign-in" \
     -d "username=$USERNAME" \
     -d "password=$PASSWORD" \
     -d "persist=1" \
