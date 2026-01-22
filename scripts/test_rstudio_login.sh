@@ -176,7 +176,8 @@ CSRF_NGINX=$(grep "rs-csrf-token" /tmp/login_page_nginx.html | sed -n 's/.*value
 echo "Nginx CSRF: $CSRF_NGINX"
 
 if [ -z "$CSRF_NGINX" ]; then
-    echo "Failed to get CSRF via Nginx"
+    echo "Failed to get CSRF via Nginx. Response body:"
+    head -n 20 /tmp/login_page_nginx.html
 else
     # 2. Post via Nginx (This hits the location block we just edited)
     # We send standard browser headers (Referer=Portal) to test the spoofing
