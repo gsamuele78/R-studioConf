@@ -46,9 +46,11 @@ location ^~ /rstudio-inner/ {
     # Referer Spoofing for Login:
     # RStudio strictly checks Referer. When logging in from the portal (Referer: /), it fails.
     # We intercept the auth endpoint and rewrite the Referer to look like it came from the internal login page.
+    # CRITICAL: RStudio expects the Referer to match the INTERNAL listening address (localhost) and path (no /rstudio-inner/ prefix)
     location = /rstudio-inner/auth-do-sign-in {
         proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/auth-do-sign-in;
-        proxy_set_header Referer $scheme://$host/rstudio-inner/auth-sign-in;
+        proxy_set_header Referer http://127.0.0.1:%%RSTUDIO_PORT%%/auth-sign-in;
+        proxy_set_header Origin http://127.0.0.1:%%RSTUDIO_PORT%%;
         
         # Standard proxy headers (must repeat since this is a new block)
         proxy_http_version 1.1;
