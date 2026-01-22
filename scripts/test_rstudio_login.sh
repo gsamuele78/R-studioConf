@@ -20,7 +20,15 @@ curl -s -L -c "$COOKIE_JAR" "$URL_BASE/auth-sign-in" > /tmp/login_page.html
 CSRF=$(grep "rs-csrf-token" /tmp/login_page.html | sed -n 's/.*value="\([^"]*\)".*/\1/p')
 echo "CSRF Token: $CSRF"
 
-echo "--- Cookie Jar Content ---"
+echo "--- Cookie Jar Content (Original) ---"
+cat "$COOKIE_JAR"
+echo "--------------------------"
+
+# FIX: RStudio set cookies for /rstudio-inner, but we are posting to / (physically).
+# Curl won't send cookies if path doesn't match. We must hack the jar.
+sed -i 's|/rstudio-inner|/|g' "$COOKIE_JAR"
+
+echo "--- Cookie Jar Content (Patched) ---"
 cat "$COOKIE_JAR"
 echo "--------------------------"
 
@@ -33,20 +41,19 @@ echo
 echo "=========================================="
 echo "TEST 1: Standard Plaintext (persist=1, NO v)"
 echo "Payload: username, password, persist, clientPath, appUri, rs-csrf-token"
-echo "URL: $URL_BASE/rstudio-inner/auth-do-sign-in (Matching cookie path?)"
+echo "URL: $URL_BASE/auth-do-sign-in (Patched cookies)"
 echo "=========================================="
-# Important: If cookie path is /rstudio-inner, we MUST post to that path!
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -H "Origin: $URL_BASE" \
-    -H "Referer: $URL_BASE/rstudio-inner/auth-sign-in" \
+    -H "Referer: $URL_BASE/auth-sign-in" \
     -d "username=$USERNAME" \
     -d "password=$PASSWORD" \
     -d "persist=1" \
     -d "clientPath=/rstudio-inner/" \
     -d "appUri=" \
     -d "rs-csrf-token=$CSRF" \
-    "$URL_BASE/rstudio-inner/auth-do-sign-in")
+    "$URL_BASE/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
 echo ""
