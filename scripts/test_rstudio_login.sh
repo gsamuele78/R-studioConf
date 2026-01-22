@@ -162,3 +162,35 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     "$URL_BASE/rstudio-inner/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
+echo ""
+echo "=========================================="
+echo "TEST 10: Login THROUGH NGINX (http://137.204.119.225/rstudio-inner/)"
+echo "=========================================="
+NGINX_BASE="http://137.204.119.225"
+COOKIE_JAR_NGINX="/tmp/rstudio_cookies_nginx.txt"
+rm -f "$COOKIE_JAR_NGINX"
+
+# 1. Fetch CSRF via Nginx
+curl -s -L -c "$COOKIE_JAR_NGINX" "$NGINX_BASE/rstudio-inner/auth-sign-in" > /tmp/login_page_nginx.html
+CSRF_NGINX=$(grep "rs-csrf-token" /tmp/login_page_nginx.html | sed -n 's/.*value="\([^"]*\)".*/\1/p')
+echo "Nginx CSRF: $CSRF_NGINX"
+
+if [ -z "$CSRF_NGINX" ]; then
+    echo "Failed to get CSRF via Nginx"
+else
+    # 2. Post via Nginx (This hits the location block we just edited)
+    # We send standard browser headers (Referer=Portal) to test the spoofing
+    response=$(curl -s -i -b "$COOKIE_JAR_NGINX" -c "$COOKIE_JAR_NGINX" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -H "Origin: $NGINX_BASE" \
+        -H "Referer: $NGINX_BASE/" \
+        -d "username=$USERNAME" \
+        -d "password=$PASSWORD" \
+        -d "persist=1" \
+        -d "clientPath=/rstudio-inner/" \
+        -d "appUri=" \
+        -d "rs-csrf-token=$CSRF_NGINX" \
+        "$NGINX_BASE/rstudio-inner/auth-do-sign-in")
+    echo "$response" | grep -E "HTTP/|Location"
+fi
+
