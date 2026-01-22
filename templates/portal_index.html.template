@@ -251,13 +251,17 @@
                 return fetch("/rstudio-inner/auth-public-key")
                 .then(res => res.text())
                 .then(pubKeyString => {
+                    console.log("4a. Raw Public Key:", pubKeyString);
                     // Key format: "exponent:modulus"
-                    const chunks = pubKeyString.split(':', 2);
+                    // IMPORTANT: Trim whitespace/newlines!
+                    const chunks = pubKeyString.trim().split(':', 2);
                     if (chunks.length !== 2) {
                         throw new Error("Invalid public key format from RStudio: " + pubKeyString);
                     }
                     const exp = chunks[0];
                     const mod = chunks[1];
+                    console.log("4a. Key Chunks - Exp:", exp, "Mod length:", mod.length);
+
                     const payload = user + "\n" + pwd;
 
                     if (typeof encrypt !== 'function') {
@@ -268,12 +272,16 @@
                     return encrypt(payload, exp, mod);
                 })
                 .then(result => {
+                    console.log("4a. Encryption Result:", result);
                     // Result object has { ct: "ciphertext", alg: "algo" }? 
                     // Based on signin.js:
                     // if (result.alg)Val = '$' + result.alg + '$' + result.ct; else Val = result.ct;
                     let packageVal = result.ct;
                     if (result.alg) {
                         packageVal = '$' + result.alg + '$' + result.ct;
+                    }
+                    if (!packageVal) {
+                        console.error("4a. Encrypted Package is EMPTY!");
                     }
                     return packageVal;
                 });
@@ -283,6 +291,7 @@
             .then(() => Promise.all([getCsrfToken(), getEncryptedPackage(username, password)]))
             .then(([csrfToken, encryptedPackage]) => {
                 console.log("4b. Prepared Login Payload. CSRF Found:", !!csrfToken);
+                console.log("4b. Encrypted Package Length:", encryptedPackage ? encryptedPackage.length : 0);
 
                 var data = new URLSearchParams();
                 // When sending 'package', we do NOT send 'username'/'password' in cleartext
