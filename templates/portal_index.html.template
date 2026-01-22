@@ -232,16 +232,17 @@
                 var data = new URLSearchParams();
                 data.append('username', username);
                 data.append('password', password);
-                data.append('staySignedIn', '1');
-                data.append('appUri', '');
+                // Backend expects 'persist', not 'staySignedIn' (which is just the UI checkbox name)
+                data.append('persist', '1');
                 data.append('clientPath', '/rstudio-inner/'); 
-                data.append('v', '1'); // protocol version? matches standard form
+                data.append('appUri', '');
                 
                 if (csrfToken) {
                     data.append('rs-csrf-token', csrfToken);
                 }
-
-                console.log("4b. Sending Payload:", data.toString());
+                
+                // Debug the payload
+                console.log("4b. Sending Plaintext Payload:", data.toString());
 
                 return fetch("/rstudio-inner/auth-do-sign-in", {
                     method: "POST",
