@@ -32,13 +32,16 @@ echo "2. Attempting Plaintext Login..."
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -d "username=$USERNAME" \
     -d "password=$PASSWORD" \
-    -d "staySignedIn=1" \
+    -d "persist=1" \
     -d "clientPath=/" \
+    -d "appUri=" \
     -d "v=1" \
     -d "rs-csrf-token=$CSRF" \
     "$URL_BASE/auth-do-sign-in")
 
-echo "$response"
+echo "--- Response Headers ---"
+echo "$response" | head -n 20
+echo "--- End Headers ---"
 
 if echo "$response" | grep -q "302 Found"; then
     echo "SUCCESS: Login Redirected (302)"
