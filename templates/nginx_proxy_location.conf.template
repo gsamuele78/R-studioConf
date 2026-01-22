@@ -29,12 +29,17 @@ location ^~ /rstudio-inner/ {
     proxy_cookie_path /rstudio-inner/ /;
     
     # Fix Redirects: Map redirects from backend root to frontend subpath
+    # We must handle both HTTP (standard) and HTTPS (triggered by X-Forwarded-Proto)
     proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+    proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
     
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
+    
+    # Spoof Host GLOBAL for consistency. RStudio sees requests as coming from localhost.
+    proxy_set_header Host 127.0.0.1:%%RSTUDIO_PORT%%; 
+    
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -56,8 +61,10 @@ location ^~ /rstudio-inner/ {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        # Spoof Host to match Referer/Origin (Internal RStudio address)
+        
+        # Host Spoofing (Inherited/Explicit)
         proxy_set_header Host 127.0.0.1:%%RSTUDIO_PORT%%; 
+        
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -65,6 +72,7 @@ location ^~ /rstudio-inner/ {
         
         # Rewrite Redirects (Fix for Host spoofing causing 127.0.0.1 redirects)
         proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
         
     # Cookie Path Fix (same as parent)
         proxy_cookie_path /rstudio-inner/ /;
