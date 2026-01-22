@@ -63,6 +63,9 @@ location ^~ /rstudio-inner/ {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_hide_header X-Frame-Options;
         
+        # Rewrite Redirects (Fix for Host spoofing causing 127.0.0.1 redirects)
+        proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        
     # Cookie Path Fix (same as parent)
         proxy_cookie_path /rstudio-inner/ /;
         
