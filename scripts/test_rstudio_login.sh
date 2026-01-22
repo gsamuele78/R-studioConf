@@ -94,17 +94,36 @@ echo "$response" | grep -E "HTTP/|Location"
 
 echo ""
 echo "=========================================="
-echo "TEST 5: Standard Login Form Params (username/password/staySignedIn)"
+echo "TEST 6: Plaintext with EMPTY Referer"
 echo "=========================================="
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -H "Origin: $URL_BASE" \
-    -H "Referer: $URL_BASE/auth-sign-in" \
+    -H "Referer: " \
     -d "username=$USERNAME" \
     -d "password=$PASSWORD" \
-    -d "staySignedIn=1" \
+    -d "persist=1" \
+    -d "clientPath=/rstudio-inner/" \
     -d "appUri=" \
     -d "rs-csrf-token=$CSRF" \
-    "$URL_BASE/auth-do-sign-in")
+    "$URL_BASE/rstudio-inner/auth-do-sign-in")
+echo "$response" | grep -E "HTTP/|Location"
+
+echo ""
+echo "=========================================="
+echo "TEST 7: Plaintext with PORTAL Referer (simulating browser)"
+echo "Referer: $URL_BASE/"
+echo "=========================================="
+response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Origin: $URL_BASE" \
+    -H "Referer: $URL_BASE/" \
+    -d "username=$USERNAME" \
+    -d "password=$PASSWORD" \
+    -d "persist=1" \
+    -d "clientPath=/rstudio-inner/" \
+    -d "appUri=" \
+    -d "rs-csrf-token=$CSRF" \
+    "$URL_BASE/rstudio-inner/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
