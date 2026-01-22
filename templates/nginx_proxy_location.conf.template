@@ -24,6 +24,10 @@ location ^~ /rstudio-inner/ {
     # DISABLED: RStudio handles this via www-root-path in rserver.conf
     # proxy_cookie_path / /rstudio-inner/;
     
+    # Fix Cookie Path: Broaden scope to root to ensure browser acceptance in all modes
+    # Rewrite cookie path from /rstudio-inner/ (backend default) to / (frontend root)
+    proxy_cookie_path /rstudio-inner/ /;
+    
     # Fix Redirects: Map redirects from backend root to frontend subpath
     proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
     
