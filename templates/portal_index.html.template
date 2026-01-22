@@ -232,11 +232,14 @@
                 var data = new URLSearchParams();
                 data.append('username', username);
                 data.append('password', password);
-                // Backend expects 'persist', not 'staySignedIn' (which is just the UI checkbox name)
+                // Backend expects 'persist', not 'staySignedIn'
                 data.append('persist', '1');
                 data.append('clientPath', '/rstudio-inner/'); 
                 data.append('appUri', '');
                 
+                // IMPORTANT: Do NOT send 'v' parameter for plaintext login!
+                // Sending 'v' triggers encrypted auth mode -> fails with plaintext.
+
                 if (csrfToken) {
                     data.append('rs-csrf-token', csrfToken);
                 }
