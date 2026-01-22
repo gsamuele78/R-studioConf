@@ -125,5 +125,40 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -d "appUri=" \
     -d "rs-csrf-token=$CSRF" \
     "$URL_BASE/rstudio-inner/auth-do-sign-in")
+
+echo ""
+echo "=========================================="
+echo "TEST 8: Referer with EXTERNAL IP (Simulating Nginx current spoof)"
+echo "Referer: http://137.204.119.225/rstudio-inner/auth-sign-in"
+echo "=========================================="
+response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Origin: $URL_BASE" \
+    -H "Referer: http://137.204.119.225/rstudio-inner/auth-sign-in" \
+    -d "username=$USERNAME" \
+    -d "password=$PASSWORD" \
+    -d "persist=1" \
+    -d "clientPath=/rstudio-inner/" \
+    -d "appUri=" \
+    -d "rs-csrf-token=$CSRF" \
+    "$URL_BASE/rstudio-inner/auth-do-sign-in")
+echo "$response" | grep -E "HTTP/|Location"
+
+echo ""
+echo "=========================================="
+echo "TEST 9: Referer with LOCALHOST (Simulating proposed spoof)"
+echo "Referer: http://127.0.0.1:8787/rstudio-inner/auth-sign-in"
+echo "=========================================="
+response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Origin: $URL_BASE" \
+    -H "Referer: http://127.0.0.1:8787/rstudio-inner/auth-sign-in" \
+    -d "username=$USERNAME" \
+    -d "password=$PASSWORD" \
+    -d "persist=1" \
+    -d "clientPath=/rstudio-inner/" \
+    -d "appUri=" \
+    -d "rs-csrf-token=$CSRF" \
+    "$URL_BASE/rstudio-inner/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
 
