@@ -221,6 +221,15 @@ configure_rstudio_server_conf() {
     # Remove server-user setting if present (idempotent)
     run_command "sed -i '/^server-user=/d' '${RSERVER_CONF_PATH}'"
 
+    # Optimize for Iframe/Proxy usage
+    if grep -q "^www-frame-origin=" "${RSERVER_CONF_PATH}"; then
+        run_command "sed -i 's|^www-frame-origin=.*$|www-frame-origin=same|' '${RSERVER_CONF_PATH}'"
+    else add_line_if_not_present "www-frame-origin=same" "${RSERVER_CONF_PATH}"; fi
+
+    if grep -q "^www-same-site=" "${RSERVER_CONF_PATH}"; then
+        run_command "sed -i 's|^www-same-site=.*$|www-same-site=none|' '${RSERVER_CONF_PATH}'"
+    else add_line_if_not_present "www-same-site=none" "${RSERVER_CONF_PATH}"; fi
+
     log "${RSERVER_CONF_PATH} configured. Restarting RStudio Server..."
     run_command "systemctl restart rstudio-server"
 }
