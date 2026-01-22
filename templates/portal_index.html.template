@@ -210,96 +210,30 @@
             });
         }
 
-        // RStudio Direct Login with Client-Side Encryption
+        // RStudio Direct Login (Plaintext - requires auth-encrypt-password=0 on server)
         function loginRStudio(username, password) {
-            console.log("4. Attempting RStudio Background Login (Encrypted)...");
-
-            // Helper: Load the RStudio encryption library dynamically
-            const loadEncryptionLib = () => {
-                return new Promise((resolve, reject) => {
-                    const src = "/rstudio-inner/js/encrypt.min.js";
-                    if (document.querySelector(`script[src="${src}"]`)) {
-                        resolve();
-                        return;
-                    }
-                    var script = document.createElement('script');
-                    script.src = src;
-                    script.onload = () => {
-                        console.log("4a. RStudio Encryption Library Loaded.");
-                        resolve();
-                    };
-                    script.onerror = () => reject(new Error("Failed to load /rstudio-inner/js/encrypt.min.js"));
-                    document.head.appendChild(script);
-                });
-            };
-
-            // Helper: Get CSRF Token
-            const getCsrfToken = () => {
-                return fetch("/rstudio-inner/auth-sign-in")
-                .then(res => res.text())
-                .then(html => {
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(html, "text/html");
-                    const token = doc.querySelector('input[name="rs-csrf-token"]')?.value;
-                    return token || null;
-                });
-            };
-
-            // Helper: Public Key Fetch & Encrypt
-            // Matches logic from RStudio's signin.js: encrypt(payload, exp, mod)
-            const getEncryptedPackage = (user, pwd) => {
-                return fetch("/rstudio-inner/auth-public-key")
-                .then(res => res.text())
-                .then(pubKeyString => {
-                    console.log("4a. Raw Public Key:", pubKeyString);
-                    // Key format: "exponent:modulus"
-                    // IMPORTANT: Trim whitespace/newlines!
-                    const chunks = pubKeyString.trim().split(':', 2);
-                    if (chunks.length !== 2) {
-                        throw new Error("Invalid public key format from RStudio: " + pubKeyString);
-                    }
-                    const exp = chunks[0];
-                    const mod = chunks[1];
-                    console.log("4a. Key Chunks - Exp:", exp, "Mod length:", mod.length);
-
-                    const payload = user + "\n" + pwd;
-
-                    if (typeof encrypt !== 'function') {
-                        throw new Error("encrypt() function not found after loading library");
-                    }
-                    
-                    // Call RStudio's encrypt function
-                    return encrypt(payload, exp, mod);
-                })
-                .then(result => {
-                    console.log("4a. Encryption Result:", result);
-                    // Result object has { ct: "ciphertext", alg: "algo" }? 
-                    // Based on signin.js:
-                    // if (result.alg)Val = '$' + result.alg + '$' + result.ct; else Val = result.ct;
-                    let packageVal = result.ct;
-                    if (result.alg) {
-                        packageVal = '$' + result.alg + '$' + result.ct;
-                    }
-                    if (!packageVal) {
-                        console.error("4a. Encrypted Package is EMPTY!");
-                    }
-                    return packageVal;
-                });
-            };
-
-            return loadEncryptionLib()
-            .then(() => Promise.all([getCsrfToken(), getEncryptedPackage(username, password)]))
-            .then(([csrfToken, encryptedPackage]) => {
-                console.log("4b. Prepared Login Payload. CSRF Found:", !!csrfToken);
-                console.log("4b. Encrypted Package Length:", encryptedPackage ? encryptedPackage.length : 0);
-
-                var data = new URLSearchParams();
-                // When sending 'package', we do NOT send 'username'/'password' in cleartext
-                data.append('package', encryptedPackage); 
-                data.append('staySignedIn', '1');
-                data.append('clientPath', '/rstudio-inner/'); // usually window.location.pathname
-                data.append('appUri', '');
+            console.log("4. Attempting RStudio Background Login...");
+            
+            // Step 1: parse the login page to get the CSRF token
+            return fetch("/rstudio-inner/auth-sign-in")
+            .then(response => response.text())
+            .then(html => {
+                var parser = new DOMParser();
+                var doc = parser.parseFromString(html, "text/html");
+                var csrfToken = doc.querySelector('input[name="rs-csrf-token"]')?.value;
                 
+                if (!csrfToken) {
+                    console.warn("4b. Could not find RStudio CSRF token. Login may fail.");
+                } else {
+                    console.log("4b. Found CSRF Token:", csrfToken);
+                }
+
+                // Step 2: Post credentials + token
+                var data = new URLSearchParams();
+                data.append('username', username);
+                data.append('password', password);
+                data.append('staySignedIn', '1');
+                data.append('appUri', '');
                 if (csrfToken) {
                     data.append('rs-csrf-token', csrfToken);
                 }
@@ -315,13 +249,10 @@
             })
             .then(response => {
                 console.log("4c. RStudio Response Status:", response.status);
-                // Status 200 or 302 usually means success (RStudio often redirects or returns 200)
                 return response;
             })
             .catch(err => {
                 console.warn("4d. RStudio Background Login Failed:", err);
-                // Propagate error so caller can handle UI feedback if needed
-                throw err;
             });
         }
 
