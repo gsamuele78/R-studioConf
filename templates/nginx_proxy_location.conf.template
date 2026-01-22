@@ -43,6 +43,26 @@ location ^~ /rstudio-inner/ {
     proxy_hide_header X-Frame-Options;
     
     # No sub_filter needed (Wrapper handles UI)
+    # Referer Spoofing for Login:
+    # RStudio strictly checks Referer. When logging in from the portal (Referer: /), it fails.
+    # We intercept the auth endpoint and rewrite the Referer to look like it came from the internal login page.
+    location = /rstudio-inner/auth-do-sign-in {
+        proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/auth-do-sign-in;
+        proxy_set_header Referer $scheme://$host/rstudio-inner/auth-sign-in;
+        
+        # Standard proxy headers (must repeat since this is a new block)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host; # RStudio uses this for redirects
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header X-Frame-Options;
+        
+        # Cookie Path Fix (same as parent)
+        proxy_cookie_path /rstudio-inner/ /;
+    }
 }
 
 # --- Web Portal (Root) ---
