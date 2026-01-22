@@ -234,9 +234,14 @@
                 data.append('password', password);
                 data.append('staySignedIn', '1');
                 data.append('appUri', '');
+                data.append('clientPath', '/rstudio-inner/'); 
+                data.append('v', '1'); // protocol version? matches standard form
+                
                 if (csrfToken) {
                     data.append('rs-csrf-token', csrfToken);
                 }
+
+                console.log("4b. Sending Payload:", data.toString());
 
                 return fetch("/rstudio-inner/auth-do-sign-in", {
                     method: "POST",
