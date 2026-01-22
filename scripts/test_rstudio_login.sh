@@ -1,6 +1,6 @@
 #!/bin/bash
 # test_rstudio_login.sh
-# Tests RStudio plaintext login using curl
+# Tests RStudio plaintext login using curl with multiple variations
 
 USERNAME="gianfranco.samuele2"
 # Ask for password safely
@@ -11,8 +11,6 @@ COOKIE_JAR="/tmp/rstudio_cookies.txt"
 rm -f "$COOKIE_JAR"
 
 echo "1. Fetching Login Page (for CSRF token)..."
-# Using 127.0.0.1:8787 directly to bypass Nginx for raw server check
-# Note: RStudio might expect /rstudio-inner/ path if www-root-path is set
 URL_BASE="http://127.0.0.1:8787"
 
 # Fetch page and headers
@@ -27,7 +25,10 @@ if [ -z "$CSRF" ]; then
     exit 1
 fi
 
-echo "=== TEST 1: Standard Plaintext (persit=1, no v) ==="
+echo "=========================================="
+echo "TEST 1: Standard Plaintext (persist=1, NO v)"
+echo "Payload: username, password, persist, clientPath, appUri, rs-csrf-token"
+echo "=========================================="
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -d "username=$USERNAME" \
     -d "password=$PASSWORD" \
@@ -36,28 +37,50 @@ response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -d "appUri=" \
     -d "rs-csrf-token=$CSRF" \
     "$URL_BASE/auth-do-sign-in")
-echo "$response" | grep -E "HTTP|Location"
+echo "$response" | grep -E "HTTP/|Location"
 
-echo "=== TEST 2: Plaintext in 'package' field ==="
-# Maybe it still expects 'package' but unencrypted?
-PAYLOAD="$USERNAME\n$PASSWORD"
-# Encode newlines?
-response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
-    --data-urlencode "package=$PAYLOAD" \
-    -d "persist=1" \
-    -d "clientPath=/rstudio-inner/" \
-    -d "rs-csrf-token=$CSRF" \
-    "$URL_BASE/auth-do-sign-in")
-echo "$response" | grep -E "HTTP|Location"
-
-echo "=== TEST 3: Plaintext with 'v=1' ==="
+echo ""
+echo "=========================================="
+echo "TEST 2: Plaintext WITH v=1"
+echo "Payload: username, password, persist, v=1..."
+echo "=========================================="
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -d "username=$USERNAME" \
     -d "password=$PASSWORD" \
     -d "persist=1" \
     -d "v=1" \
     -d "clientPath=/rstudio-inner/" \
+    -d "appUri=" \
     -d "rs-csrf-token=$CSRF" \
     "$URL_BASE/auth-do-sign-in")
-echo "$response" | grep -E "HTTP|Location"
+echo "$response" | grep -E "HTTP/|Location"
 
+echo ""
+echo "=========================================="
+echo "TEST 3: Plaintext Package (package=user\npwd)"
+echo "Payload: package, persist..."
+echo "=========================================="
+PAYLOAD="$(printf '%s\n%s' "$USERNAME" "$PASSWORD")"
+response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    --data-urlencode "package=$PAYLOAD" \
+    -d "persist=1" \
+    -d "clientPath=/rstudio-inner/" \
+    -d "appUri=" \
+    -d "rs-csrf-token=$CSRF" \
+    "$URL_BASE/auth-do-sign-in")
+echo "$response" | grep -E "HTTP/|Location"
+
+echo ""
+echo "=========================================="
+echo "TEST 4: Plaintext Package WITH v=1"
+echo "Payload: package, persist, v=1..."
+echo "=========================================="
+response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    --data-urlencode "package=$PAYLOAD" \
+    -d "persist=1" \
+    -d "v=1" \
+    -d "clientPath=/rstudio-inner/" \
+    -d "appUri=" \
+    -d "rs-csrf-token=$CSRF" \
+    "$URL_BASE/auth-do-sign-in")
+echo "$response" | grep -E "HTTP/|Location"
