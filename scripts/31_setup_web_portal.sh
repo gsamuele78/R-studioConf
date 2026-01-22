@@ -154,10 +154,18 @@ show_menu() {
             ;;
     esac
     
-    if [[ "$choice" == "1" || "$choice" == "2" ]]; then
+    if [[ "$choice" == "1" || "$choice" == "2" || "$choice" == "3" ]]; then
+        log "INFO" "Restarting Nginx to apply changes..."
+        if run_command "Restart Nginx" "systemctl restart nginx"; then
+            log "INFO" "Nginx restarted successfully."
+        else
+            log "ERROR" "Failed to restart Nginx. Please check 'systemctl status nginx'."
+        fi
+        
         log "INFO" "Logs saved to: $LOG_FILE"
-        log "INFO" "Ensure Nginx is reloaded (run scripts/30_install_nginx.sh or 'systemctl restart nginx')."
-        log "INFO" "NOTE: Static Portal configured."
+        if [[ "$choice" != "3" ]]; then
+             log "INFO" "NOTE: Static Portal configured."
+        fi
     fi
 }
 
