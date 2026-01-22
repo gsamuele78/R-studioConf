@@ -62,9 +62,15 @@ location ^~ /rstudio-inner/ {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_hide_header X-Frame-Options;
         
-        # Cookie Path Fix (same as parent)
+    # Cookie Path Fix (same as parent)
         proxy_cookie_path /rstudio-inner/ /;
+        
+        # Enforce Secure Cookies (Critical for iframe SameSite=None)
+        proxy_cookie_flags ~ secure samesite=none;
     }
+    
+    # Enforce Secure Cookies on all other RStudio responses
+    proxy_cookie_flags ~ secure samesite=none;
 }
 
 # --- Web Portal (Root) ---
