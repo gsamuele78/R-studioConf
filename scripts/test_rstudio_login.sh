@@ -66,12 +66,15 @@ echo "$response" | grep -E "HTTP/|Location"
 
 echo ""
 echo "=========================================="
-echo "TEST 3: Plaintext Package (package=user\npwd)"
-echo "Payload: package, persist..."
+echo "TEST 3: Plaintext Package in 'v' (v=user\npwd)"
+echo "Payload: v=username\npassword, persist=1..."
 echo "=========================================="
 PAYLOAD="$(printf '%s\n%s' "$USERNAME" "$PASSWORD")"
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
-    --data-urlencode "package=$PAYLOAD" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Origin: $URL_BASE" \
+    -H "Referer: $URL_BASE/auth-sign-in" \
+    --data-urlencode "v=$PAYLOAD" \
     -d "persist=1" \
     -d "clientPath=/rstudio-inner/" \
     -d "appUri=" \
@@ -81,15 +84,17 @@ echo "$response" | grep -E "HTTP/|Location"
 
 echo ""
 echo "=========================================="
-echo "TEST 4: Plaintext Package WITH v=1"
-echo "Payload: package, persist, v=1..."
+echo "TEST 5: Standard Login Form Params (username/password/staySignedIn)"
 echo "=========================================="
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
-    --data-urlencode "package=$PAYLOAD" \
-    -d "persist=1" \
-    -d "v=1" \
-    -d "clientPath=/rstudio-inner/" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "Origin: $URL_BASE" \
+    -H "Referer: $URL_BASE/auth-sign-in" \
+    -d "username=$USERNAME" \
+    -d "password=$PASSWORD" \
+    -d "staySignedIn=1" \
     -d "appUri=" \
     -d "rs-csrf-token=$CSRF" \
     "$URL_BASE/auth-do-sign-in")
 echo "$response" | grep -E "HTTP/|Location"
+
