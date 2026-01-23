@@ -18,7 +18,7 @@ location ^~ /rstudio-inner/ {
     
     # Note: RStudio must be configured with www-root-path=/rstudio-inner
     # We strip the prefix because RStudio listens on / but generates links with the prefix
-    proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%;
+    proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/;
     
     # Fix Cookie Path: Map cookies from / (backend) to /rstudio-inner/ (frontend)
     # DISABLED: RStudio handles this via www-root-path in rserver.conf
@@ -53,7 +53,7 @@ location ^~ /rstudio-inner/ {
     # We intercept the auth endpoint and rewrite the Referer to look like it came from the internal login page.
     # CRITICAL: RStudio expects the Referer to match the INTERNAL listening address (localhost) and path (no /rstudio-inner/ prefix)
     location = /rstudio-inner/auth-do-sign-in {
-        proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%;
+        proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/auth-do-sign-in;
         proxy_set_header Referer http://127.0.0.1:%%RSTUDIO_PORT%%/rstudio-inner/auth-sign-in;
         proxy_set_header Origin http://127.0.0.1:%%RSTUDIO_PORT%%;
         
