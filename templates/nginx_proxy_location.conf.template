@@ -17,62 +17,50 @@ location ^~ /rstudio-inner/ {
     error_log %%LOG_DIR%%/rstudio-error.log;
     
     # Note: RStudio must be configured with www-root-path=/rstudio-inner
-    # We strip the prefix because RStudio listens on / but generates links with the prefix
+    # Standard proxy configuration for subpath
     proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/;
     
-    # Fix Cookie Path: Map cookies from / (backend) to /rstudio-inner/ (frontend)
-    # DISABLED: RStudio handles this via www-root-path in rserver.conf
-    # proxy_cookie_path / /rstudio-inner/;
-    
     # Fix Cookie Path: Broaden scope to root to ensure browser acceptance in all modes
-    # Rewrite cookie path from /rstudio-inner/ (backend default) to / (frontend root)
     proxy_cookie_path /rstudio-inner/ /;
     
-    # Fix Redirects: Map redirects from backend root to frontend subpath
-    # We must handle both HTTP (standard) and HTTPS (triggered by X-Forwarded-Proto)
-    proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/;
-    proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/;
+    # Standard Redirect Mapping: Backend Root -> Frontend Subpath
+    proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+    proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
     
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     
-    # Spoof Host GLOBAL for consistency. RStudio sees requests as coming from localhost.
-    proxy_set_header Host 127.0.0.1:%%RSTUDIO_PORT%%; 
+    # Pass real Host to RStudio so it knows the external domain
+    proxy_set_header Host $host;
     
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     
+    # Explicitly tell RStudio its root path (redundant with www-root-path but safe)
+    proxy_set_header X-RStudio-Root-Path /rstudio-inner;
+
     # Hide X-Frame-Options to allow framing in our wrapper
     proxy_hide_header X-Frame-Options;
     
-    # No sub_filter needed (Wrapper handles UI)
-    # Referer Spoofing for Login:
-    # RStudio strictly checks Referer. When logging in from the portal (Referer: /), it fails.
-    # We intercept the auth endpoint and rewrite the Referer to look like it came from the internal login page.
-    # CRITICAL: RStudio expects the Referer to match the INTERNAL listening address (localhost) and path (no /rstudio-inner/ prefix)
+    # Login Block - Keep Referer spoofing if necessary, but align Host
     location = /rstudio-inner/auth-do-sign-in {
         proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/auth-do-sign-in;
-        proxy_set_header Referer http://127.0.0.1:%%RSTUDIO_PORT%%/rstudio-inner/auth-sign-in;
+        proxy_set_header Referer http://127.0.0.1:%%RSTUDIO_PORT%%/auth-sign-in;
         proxy_set_header Origin http://127.0.0.1:%%RSTUDIO_PORT%%;
         
-        # Standard proxy headers (must repeat since this is a new block)
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        
-        # Host Spoofing (Inherited/Explicit)
-        proxy_set_header Host 127.0.0.1:%%RSTUDIO_PORT%%; 
-        
+        proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_hide_header X-Frame-Options;
         
-        # Rewrite Redirects (Fix for Host spoofing causing 127.0.0.1 redirects)
-        proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/;
-        proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/;
+        proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        
+        proxy_cookie_path /rstudio-inner/ /;
         
     # Cookie Path Fix (same as parent)
         proxy_cookie_path /rstudio-inner/ /;
