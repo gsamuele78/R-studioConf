@@ -53,7 +53,7 @@
     <iframe id="terminal-frame" 
             src="/terminal-inner/" 
             title="Web Terminal"
-            allow="clipboard-read; clipboard-write; clipboard-rw"
+            allow="clipboard-read; clipboard-write"
             referrerpolicy="strict-origin-when-cross-origin"
             sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals"
     ></iframe>
