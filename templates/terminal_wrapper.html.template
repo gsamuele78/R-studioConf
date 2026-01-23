@@ -50,7 +50,13 @@
     <div id="portal-top-bar">
         <a href="/">🏠 Botanical Portal</a>
     </div>
-    <iframe id="terminal-frame" src="/terminal-inner/" title="Web Terminal"></iframe>
+    <iframe id="terminal-frame" 
+            src="/terminal-inner/" 
+            title="Web Terminal"
+            allow="clipboard-read; clipboard-write; clipboard-rw"
+            referrerpolicy="strict-origin-when-cross-origin"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals"
+    ></iframe>
     <script>
         document.getElementById("terminal-frame").addEventListener("load", function() {
             console.log("ℹ️ [Terminal Wrapper] Iframe Loaded");

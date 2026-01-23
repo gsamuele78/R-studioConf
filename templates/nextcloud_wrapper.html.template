@@ -50,7 +50,13 @@
     <div id="portal-top-bar">
         <a href="/">🏠 Botanical Portal</a>
     </div>
-    <iframe id="app-frame" src="/files-inner/" title="Nextcloud Files"></iframe>
+    <iframe id="app-frame" 
+            src="/files-inner/" 
+            title="Nextcloud Files"
+            allow="clipboard-read; clipboard-write; clipboard-rw"
+            referrerpolicy="strict-origin-when-cross-origin"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals"
+    ></iframe>
     <script>
         document.getElementById("app-frame").addEventListener("load", function() {
             console.log("ℹ️ [Nextcloud Wrapper] Iframe Loaded");
