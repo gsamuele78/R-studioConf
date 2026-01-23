@@ -20,26 +20,28 @@ location ^~ /rstudio-inner/ {
     # Standard proxy configuration for subpath
     proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/;
     
-    # Fix Cookie Path: Broaden scope to root to ensure browser acceptance in all modes
-    proxy_cookie_path /rstudio-inner/ /;
+    # Fix Cookie Path: Rewrite backend root cookies to frontend subpath
+    proxy_cookie_path / /rstudio-inner/;
     
-    # Standard Redirect Mapping: Backend Root -> Frontend Subpath
-    proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
-    proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+    # DISABLE Nginx automatic redirects. RStudio knows its own path via www-root-path.
+    proxy_redirect off;
     
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     
-    # Pass real Host to RStudio so it knows the external domain
+    # Pass real Host and standardized Forwarded headers
     proxy_set_header Host $host;
-    
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Port 443;
     
     # Explicitly tell RStudio its root path (redundant with www-root-path but safe)
     proxy_set_header X-RStudio-Root-Path /rstudio-inner;
+    
+    # Extended timeout for long-running R sessions
+    proxy_read_timeout 20d;
 
     # Hide X-Frame-Options to allow framing in our wrapper
     proxy_hide_header X-Frame-Options;
@@ -52,15 +54,17 @@ location ^~ /rstudio-inner/ {
         
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+        
         proxy_hide_header X-Frame-Options;
         
-        proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
-        proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        # Disable redirects here too
+        proxy_redirect off;
         
-        proxy_cookie_path /rstudio-inner/ /;
+        proxy_cookie_path / /rstudio-inner/;
         
     # Cookie Path Fix (same as parent)
         proxy_cookie_path /rstudio-inner/ /;
