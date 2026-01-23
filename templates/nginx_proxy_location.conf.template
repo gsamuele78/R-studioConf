@@ -55,6 +55,35 @@ location ^~ /rstudio-inner/ {
     proxy_hide_header X-Frame-Options;
     
 
+    # Login Block - Keep Referer spoofing required for Portal Auto-Login (CSRF)
+    location = /rstudio-inner/auth-do-sign-in {
+        proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/auth-do-sign-in;
+        
+        # Spoof Referer/Origin to satisfy RStudio's strict CSRF checks
+        proxy_set_header Referer http://127.0.0.1:%%RSTUDIO_PORT%%/auth-sign-in;
+        proxy_set_header Origin http://127.0.0.1:%%RSTUDIO_PORT%%;
+        
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+        
+        # Pass CSRF Token
+        proxy_set_header X-CSRF-Token $http_x_csrf_token;
+        
+        proxy_hide_header X-Frame-Options;
+        
+        # Explicitly rewrite redirects
+        proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        proxy_redirect / /rstudio-inner/;
+        
+        # CRITICAL: NO proxy_cookie_path overrides here.
+        # Inherit samesite=none from parent or enforce it again
+        proxy_cookie_flags ~ secure samesite=none;
+    }
     
     # Enforce Secure Cookies on all other RStudio responses
     proxy_cookie_flags ~ secure samesite=none;
