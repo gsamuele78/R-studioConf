@@ -230,6 +230,11 @@ configure_rstudio_server_conf() {
         run_command "sed -i 's|^www-same-site=.*$|www-same-site=none|' '${RSERVER_CONF_PATH}'"
     else add_line_if_not_present "www-same-site=none" "${RSERVER_CONF_PATH}"; fi
 
+    # Secure Cookie Key (Explicitly set path)
+    if grep -q "^secure-cookie-key=" "${RSERVER_CONF_PATH}"; then
+        run_command "sed -i 's|^secure-cookie-key=.*$|secure-cookie-key=/var/lib/rstudio-server/secure-cookie-key|' '${RSERVER_CONF_PATH}'"
+    else add_line_if_not_present "secure-cookie-key=/var/lib/rstudio-server/secure-cookie-key" "${RSERVER_CONF_PATH}"; fi
+
     # Disable internal password encryption (rely on Nginx SSL)
     # This resolves 'system error 74' when login scripts send plaintext
     if grep -q "^auth-encrypt-password=" "${RSERVER_CONF_PATH}"; then

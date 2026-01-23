@@ -86,6 +86,10 @@ if run_command "nginx -t" "nginx -t"; then
     log INFO "Configuration valid. Restarting Nginx..."
     run_command "Restart Nginx" "systemctl restart nginx"
     log INFO "SUCCESS: Nginx configuration updated and service restarted."
+    
+    # Restart RStudio to ensure rserver.conf changes (like www-same-site) are active
+    log INFO "Restarting RStudio Server..."
+    run_command "Restart RStudio Server" "systemctl restart rstudio-server"
 else
     log ERROR "Nginx configuration test failed. Changes applied but service NOT restarted. Please check 'nginx -t' output."
     exit 1
