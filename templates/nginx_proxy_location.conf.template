@@ -23,8 +23,13 @@ location ^~ /rstudio-inner/ {
     # Fix Cookie Path: Rewrite backend root cookies to frontend subpath
     proxy_cookie_path / /rstudio-inner/;
     
-    # DISABLE Nginx automatic redirects. RStudio knows its own path via www-root-path.
-    proxy_redirect off;
+    # FIX: Explicitly rewrite backend redirects (Location: /) to frontend subpath
+    # RStudio often redirects to / after login, even with www-root-path set
+    proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+    # Also catch https just in case
+    proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+    # And catch generic root redirects
+    proxy_redirect / /rstudio-inner/;
     
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -36,6 +41,9 @@ location ^~ /rstudio-inner/ {
     proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Port 443;
+    
+    # Pass CSRF Token (prevent login loops)
+    proxy_set_header X-CSRF-Token $http_x_csrf_token;
     
     # Explicitly tell RStudio its root path (redundant with www-root-path but safe)
     proxy_set_header X-RStudio-Root-Path /rstudio-inner;
@@ -59,10 +67,15 @@ location ^~ /rstudio-inner/ {
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port 443;
         
+        # Pass CSRF Token
+        proxy_set_header X-CSRF-Token $http_x_csrf_token;
+        
         proxy_hide_header X-Frame-Options;
         
-        # Disable redirects here too
-        proxy_redirect off;
+        # Explicitly rewrite redirects here too
+        proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        proxy_redirect / /rstudio-inner/;
         
         proxy_cookie_path / /rstudio-inner/;
         
