@@ -81,8 +81,16 @@ location ^~ /rstudio-inner/ {
         proxy_cookie_flags ~ secure samesite=none;
     }
     
+    # Intercept 404s from backend (often caused by RStudio redirecting to /)
+    proxy_intercept_errors on;
+    error_page 404 = @rstudio_root_redirect;
+    
     # Enforce Secure Cookies on all other RStudio responses
     proxy_cookie_flags ~ secure samesite=none;
+}
+
+location @rstudio_root_redirect {
+    return 302 /rstudio-inner/;
 }
 
 # --- Web Portal (Root) ---
