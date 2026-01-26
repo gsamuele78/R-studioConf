@@ -254,6 +254,7 @@ location ^~ /files-inner/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
     
     # Security Headers for Nextcloud
     add_header Strict-Transport-Security "max-age=15552000; includeSubDomains" always;
