@@ -248,7 +248,7 @@ location ^~ /files-inner/ {
     
     # Proxy to external Nextcloud instance
     # Note: If target does not handle /files-inner prefix, this might need URL rewriting
-    proxy_pass %%NEXTCLOUD_TARGET_URL%%;
+    proxy_pass %%NEXTCLOUD_TARGET_URL%%/;
     
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
