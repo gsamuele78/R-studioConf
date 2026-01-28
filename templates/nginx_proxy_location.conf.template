@@ -250,9 +250,12 @@ location ^~ /files-inner/ {
     # Note: If target does not handle /files-inner prefix, this might need URL rewriting
     proxy_pass %%NEXTCLOUD_TARGET_URL%%/;
     
-    # Force HTTPS for any redirects coming from backend
-    proxy_redirect http:// https://;
+    # Force HTTPS and rewrite redirects to subpath
+    proxy_redirect default; 
+    proxy_redirect https://172.30.192.166/ /files-inner/;
+    proxy_redirect http://172.30.192.166/ /files-inner/;
     proxy_redirect / /files-inner/;
+    proxy_redirect http:// https://;
     
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
