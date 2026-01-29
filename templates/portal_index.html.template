@@ -255,8 +255,7 @@
             var data = new URLSearchParams();
             data.append('username', username);
             data.append('password', password);
-            data.append('persist', '1');
-            data.append('clientPath', '/rstudio-inner/'); 
+            data.append('staySignedIn', '1'); // Changed from 'persist' to match OOD
             data.append('appUri', '');
             
             // The body token must match the cookie token we just set
@@ -264,13 +263,19 @@
             // Also send legacy name just in case
             data.append('rs-csrf-token', csrfToken); 
 
+            // Explicitly convert to string to control Content-Type exactly
+            var payload = data.toString();
+
             // Debug the payload
-            console.log("4b. Sending Client-Seeded Payload:", data.toString());
+            console.log("4b. Sending Client-Seeded Payload:", payload);
 
             return fetch("/rstudio-inner/auth-do-sign-in", {
                 method: "POST",
-                // Fix: Remove manual Content-Type. fetch() sets it automatically for URLSearchParams
-                body: data,
+                // Fix: Explicitly set Content-Type without charset to avoid 400 on strict parsers
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: payload,
                 credentials: 'include' // Sends the cookie we just set
             })
             .then(response => {
