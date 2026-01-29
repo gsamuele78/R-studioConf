@@ -257,6 +257,9 @@ location ^~ /files-inner/ {
     proxy_redirect / /files-inner/;
     proxy_redirect http:// https://;
     
+    # Fix Cookie Path so sessions work in subpath
+    proxy_cookie_path / /files-inner;
+    
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
