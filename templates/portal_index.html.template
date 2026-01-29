@@ -266,6 +266,8 @@
             .catch(err => {
                 console.warn("4d. RStudio Background Login Failed:", err);
             });
+        }
+
         // Nextcloud Auto-Login
         function loginNextcloud(username, password) {
             console.log("4nc. Attempting Nextcloud Background Login...");
