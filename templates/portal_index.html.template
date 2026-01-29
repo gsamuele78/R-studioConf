@@ -293,7 +293,9 @@
                 // Depending on Nextcloud version/theme, input names might differ slightly, usually 'user' and 'password'
                 
                 if (!requesttoken) {
-                    console.warn("4nc. Could not find Nextcloud CSRF token. Login may fail.");
+                    console.warn("4nc. Could not find Nextcloud CSRF token.");
+                    console.log("4nc. Debug - Page Title:", doc.title);
+                    console.log("4nc. Debug - HTML Snippet:", html.substring(0, 500));
                 } else {
                     console.log("4nc. Found CSRF Token.");
                 }
