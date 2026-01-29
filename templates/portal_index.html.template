@@ -249,7 +249,9 @@
             // Step 2: Set the Cookie (Critical for Double Submit Check)
             // Path must match the RStudio proxy path (/rstudio-inner/)
             // Secure flag is mandatory for SameSite configuration
-            document.cookie = "csrf-token=" + csrfToken + "; path=/rstudio-inner/; secure";
+            // Set BOTH legacy and new cookie names (Research Fix)
+            document.cookie = "csrf-token=" + csrfToken + "; path=/rstudio-inner/; secure; SameSite=Strict";
+            document.cookie = "rs-csrf-token=" + csrfToken + "; path=/rstudio-inner/; secure; SameSite=Strict";
             
             // Step 3: Post credentials + token
             var data = new URLSearchParams();
