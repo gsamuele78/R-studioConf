@@ -169,11 +169,8 @@
                     status.innerHTML = "✅ Verified! Signing into services...";
                     console.log("3. Credentials Validated. Proceeding to Service Sign-in...");
                     
-                    // Attempt Direct Login to RStudio and Nextcloud concurrently
-                    Promise.all([
-                        loginRStudio(user, pass),
-                        loginNextcloud(user, pass)
-                    ])
+                    // Attempt Direct Login to RStudio
+                    loginRStudio(user, pass)
                         .then(() => {
                             console.log("5. Direct Login Sequence Complete");
                             console.timeEnd("Auth Sequence");
@@ -265,54 +262,6 @@
             })
             .catch(err => {
                 console.warn("4d. RStudio Background Login Failed:", err);
-            });
-        // Nextcloud Auto-Login
-        function loginNextcloud(username, password) {
-            console.log("4nc. Attempting Nextcloud Background Login...");
-            
-            // Step 1: Fetch login page to get requesttoken (CSRF)
-            return fetch("/files-inner/login")
-            .then(response => response.text())
-            .then(html => {
-                var parser = new DOMParser();
-                var doc = parser.parseFromString(html, "text/html");
-                
-                // Nextcloud inputs
-                var requesttoken = doc.querySelector('head > meta[name="csrf-token"]')?.content 
-                                   || doc.querySelector('input[name="requesttoken"]')?.value;
-                
-                // Depending on Nextcloud version/theme, input names might differ slightly, usually 'user' and 'password'
-                
-                if (!requesttoken) {
-                    console.warn("4nc. Could not find Nextcloud CSRF token. Login may fail.");
-                } else {
-                    console.log("4nc. Found CSRF Token.");
-                }
-
-                var data = new URLSearchParams();
-                data.append('user', username);
-                data.append('password', password);
-                if(requesttoken) data.append('requesttoken', requesttoken);
-                data.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
-                data.append('timezone_offset', -(new Date().getTimezoneOffset() / 60));
-
-                return fetch("/files-inner/login", {
-                    method: "POST",
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    body: data,
-                    credentials: 'include' 
-                });
-            })
-            .then(response => {
-                // Nextcloud redirects to dashboard on success (status 302/303 -> 200)
-                console.log("4nc. Nextcloud Response Status:", response.status);
-                // We consume the body to ensure completion
-                return response.text();
-            })
-            .catch(err => {
-                 console.warn("4nc. Nextcloud Background Login Failed:", err);
             });
         }
 
