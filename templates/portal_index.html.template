@@ -279,9 +279,16 @@
                 var parser = new DOMParser();
                 var doc = parser.parseFromString(html, "text/html");
                 
-                // Nextcloud inputs
+                // Nextcloud inputs extraction (Robust)
                 var requesttoken = doc.querySelector('head > meta[name="csrf-token"]')?.content 
-                                   || doc.querySelector('input[name="requesttoken"]')?.value;
+                                   || doc.querySelector('input[name="requesttoken"]')?.value
+                                   || doc.body.getAttribute('data-requesttoken');
+                
+                // Fallback: Regex scan (in case it's in a JS variable like OC.requestToken)
+                if (!requesttoken) {
+                    var match = html.match(/"requesttoken":"([^"]+)"/) || html.match(/requesttoken\s*=\s*'([^']+)'/);
+                    if (match) requesttoken = match[1];
+                }
                 
                 // Depending on Nextcloud version/theme, input names might differ slightly, usually 'user' and 'password'
                 
