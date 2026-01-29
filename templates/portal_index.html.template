@@ -268,63 +268,83 @@
             });
         }
 
-        // Nextcloud Auto-Login
+        // Nextcloud Auto-Login (API Mode)
         function loginNextcloud(username, password) {
-            console.log("4nc. Attempting Nextcloud Background Login...");
+            console.log("4nc. Attempting Nextcloud Background Login via API...");
             
-            // Step 1: Fetch login page to get requesttoken (CSRF)
-            return fetch("/files-inner/login")
-            .then(response => response.text())
-            .then(html => {
-                var parser = new DOMParser();
-                var doc = parser.parseFromString(html, "text/html");
-                
-                // Nextcloud inputs extraction (Robust)
-                var requesttoken = doc.querySelector('head > meta[name="csrf-token"]')?.content 
-                                   || doc.querySelector('input[name="requesttoken"]')?.value
-                                   || doc.body.getAttribute('data-requesttoken');
-                
-                // Fallback: Regex scan (in case it's in a JS variable like OC.requestToken)
-                if (!requesttoken) {
-                    var match = html.match(/"requesttoken":"([^"]+)"/) || html.match(/requesttoken\s*=\s*'([^']+)'/);
-                    if (match) requesttoken = match[1];
-                }
-                
-                // Depending on Nextcloud version/theme, input names might differ slightly, usually 'user' and 'password'
+            // Step 1: Fetch session token from supported endpoint
+            // Try explicit index.php path which is most reliable
+            return fetch("/files-inner/index.php/csrftoken") 
+            .then(response => {
+                if (!response.ok) throw new Error("CSRF Endpoint returned " + response.status);
+                return response.json();
+            })
+            .then(data => {
+                var requesttoken = data.token;
                 
                 if (!requesttoken) {
-                    console.warn("4nc. Could not find Nextcloud CSRF token.");
-                    console.log("4nc. Debug - Page Title:", doc.title);
-                    console.log("4nc. Debug - HTML Snippet:", html.substring(0, 500));
-                } else {
-                    console.log("4nc. Found CSRF Token.");
+                    throw new Error("API returned empty token");
                 }
+                console.log("4nc. Found CSRF Token via API.");
 
-                var data = new URLSearchParams();
-                data.append('user', username);
-                data.append('password', password);
-                if(requesttoken) data.append('requesttoken', requesttoken);
-                data.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
-                data.append('timezone_offset', -(new Date().getTimezoneOffset() / 60));
+                var payload = new URLSearchParams();
+                payload.append('user', username);
+                payload.append('password', password);
+                payload.append('requesttoken', requesttoken);
+                payload.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
+                payload.append('timezone_offset', -(new Date().getTimezoneOffset() / 60));
 
                 return fetch("/files-inner/login", {
                     method: "POST",
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded'
                     },
-                    body: data,
+                    body: payload,
                     credentials: 'include' 
                 });
             })
             .then(response => {
-                // Nextcloud redirects to dashboard on success (status 302/303 -> 200)
                 console.log("4nc. Nextcloud Response Status:", response.status);
-                // We consume the body to ensure completion
                 return response.text();
             })
             .catch(err => {
                  console.warn("4nc. Nextcloud Background Login Failed:", err);
+                 // Fallback: Try classic scraping if API failed (Just in case)
+                 console.log("4nc. Attempting fallback scraping...");
+                 return loginNextcloudFallback(username, password);
             });
+        }
+
+        // Fallback for older Nextcloud versions or if API route is blocked
+        function loginNextcloudFallback(username, password) {
+             return fetch("/files-inner/login")
+            .then(response => response.text())
+            .then(html => {
+                var match = html.match(/requesttoken\s*=\s*'([^']+)'/) || html.match(/"requesttoken":"([^"]+)"/);
+                var requesttoken = match ? match[1] : null;
+                
+                if (!requesttoken) { 
+                    try {
+                        var doc = new DOMParser().parseFromString(html, "text/html");
+                        requesttoken = doc.querySelector('head > meta[name="csrf-token"]')?.content 
+                                       || doc.querySelector('input[name="requesttoken"]')?.value;
+                    } catch(e){}
+                }
+
+                if(!requesttoken) return; // Give up
+
+                var data = new URLSearchParams();
+                data.append('user', username);
+                data.append('password', password);
+                data.append('requesttoken', requesttoken);
+                
+                return fetch("/files-inner/login", {
+                    method: "POST",
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: data,
+                    credentials: 'include'
+                });
+            }).catch(e => console.warn("Fallback failed", e));
         }
 
         // Handle Logout
