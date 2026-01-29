@@ -253,8 +253,8 @@ location ^~ /files-inner/ {
     # Force HTTPS only (Nextcloud handles path generation via overwritewebroot)
     proxy_redirect http:// https://;
     
-    # Fix Cookie Path so sessions work in subpath
-    proxy_cookie_path / /files-inner;
+    # CRITICAL: Do NOT set proxy_cookie_path here.
+    # Nextcloud sets 'Path=/files-inner' correctly now. Nginx rewriting it would break it.
     
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
