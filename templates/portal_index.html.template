@@ -269,9 +269,7 @@
 
             return fetch("/rstudio-inner/auth-do-sign-in", {
                 method: "POST",
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-                },
+                // Fix: Remove manual Content-Type. fetch() sets it automatically for URLSearchParams
                 body: data,
                 credentials: 'include' // Sends the cookie we just set
             })
