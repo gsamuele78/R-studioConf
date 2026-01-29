@@ -11,7 +11,7 @@
     <div class="background-overlay"></div>
     <div class="main-container">
         <header class="glass-header">
-            <div class="logo-container">
+            <div class="logo-container" onclick="handleHeaderLogout()" style="cursor: pointer;" title="Click to Logout">
                 <img src="logo.png" alt="Botanical Big Data Calculus Logo" class="logo">
                 <div class="site-title">
                     <h1>Botanical Big Data Calculus</h1>
@@ -122,13 +122,25 @@
             xhr.send();
             
             // 2. Clear RStudio Session (if possible via logout endpoint)
-            // RStudio usually uses a cookie 'user-id' or 'session-user-id'.
             // Accessing /rstudio-inner/auth-sign-out ensures the server kills it.
-            var img = new Image();
-            img.src = "/rstudio-inner/auth-sign-out"; // Fire and forget
+            fetch("/rstudio-inner/auth-sign-out", { method: "GET", credentials: "include" })
+                .catch(e => console.warn("RStudio logout warning", e));
             
-            // 3. Optional: Clear Nextcloud
-            // var nc = new Image(); nc.src = "/files-inner/logout"; 
+            // 3. Clear Nextcloud Session
+            // We attempt a fetch to the logout endpoint. 
+            // Even if it fails due to missing token, often the cookie is cleared or invalid.
+            fetch("/files-inner/logout", { method: "GET", credentials: "include" })
+                .catch(e => console.warn("Nextcloud logout warning", e));
+        }
+
+        function handleHeaderLogout() {
+            // Only trigger logout if the user is currently unlocked (logged in)
+            var grid = document.getElementById("serviceGrid");
+            if (grid.classList.contains("blurred-locked")) {
+                 // Already locked, do nothing (or maybe show login modal?)
+                 return; 
+            }
+            handleLogout();
         }
 
         // Handle Connect
