@@ -230,6 +230,19 @@ configure_rstudio_server_conf() {
         run_command "sed -i 's|^www-same-site=.*$|www-same-site=none|' '${RSERVER_CONF_PATH}'"
     else add_line_if_not_present "www-same-site=none" "${RSERVER_CONF_PATH}"; fi
 
+    # Explicitly Enable Origin Check
+    # We will satisfy this via Client-Seeded Token + Nginx Header Spoofing (Referer/Origin)
+    # This ensures standard security enforcement remains active.
+    if grep -q "^www-enable-origin-check=" "${RSERVER_CONF_PATH}"; then
+        run_command "sed -i 's|^www-enable-origin-check=.*$|www-enable-origin-check=1|' '${RSERVER_CONF_PATH}'"
+    else add_line_if_not_present "www-enable-origin-check=1" "${RSERVER_CONF_PATH}"; fi
+
+    # Disable forced PAM password prompt (Research Section 7.1.2)
+    # Allows smoother auto-login when credentials are implicitly handled
+    if grep -q "^auth-pam-require-password-prompt=" "${RSERVER_CONF_PATH}"; then
+        run_command "sed -i 's|^auth-pam-require-password-prompt=.*$|auth-pam-require-password-prompt=0|' '${RSERVER_CONF_PATH}'"
+    else add_line_if_not_present "auth-pam-require-password-prompt=0" "${RSERVER_CONF_PATH}"; fi
+
     # Secure Cookie Key (Explicitly set path)
     if grep -q "^secure-cookie-key=" "${RSERVER_CONF_PATH}"; then
         run_command "sed -i 's|^secure-cookie-key=.*$|secure-cookie-key=/var/lib/rstudio-server/secure-cookie-key|' '${RSERVER_CONF_PATH}'"

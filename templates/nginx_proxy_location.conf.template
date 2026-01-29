@@ -54,6 +54,11 @@ location ^~ /rstudio-inner/ {
     # Hide X-Frame-Options to allow framing in our wrapper
     proxy_hide_header X-Frame-Options;
     
+    # CRITICAL: Pass Cookies for Client-Seeded Auth
+    # Ensure the 'csrf-token' cookie set by JS reaches the backend
+    proxy_set_header Cookie $http_cookie;
+    # Ensure the session cookie returned by RStudio reaches the browser
+    proxy_pass_header Set-Cookie;
 
     # Login Block - Keep Referer spoofing required for Portal Auto-Login (CSRF)
     location = /rstudio-inner/auth-do-sign-in {
@@ -72,6 +77,10 @@ location ^~ /rstudio-inner/ {
         
         # Pass CSRF Token
         proxy_set_header X-CSRF-Token $http_x_csrf_token;
+        
+        # CRITICAL: Pass Cookies for POST login
+        proxy_set_header Cookie $http_cookie;
+        proxy_pass_header Set-Cookie;
         
         proxy_hide_header X-Frame-Options;
         

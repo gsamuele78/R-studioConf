@@ -225,51 +225,55 @@
             });
         }
 
-        // RStudio Direct Login (Plaintext - requires auth-encrypt-password=0 on server)
+        // Generate UUID for Client-Seeded CSRF (Standard v4 UUID with CSPRNG)
+        // See Research Report Section 7.3: Security Implications (Entropy)
+        function generateUUID() {
+            if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                return crypto.randomUUID();
+            }
+            // Fallback for older browsers (but still CSPRNG)
+            return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+                (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+            );
+        }
+
+        // RStudio Direct Login (Client-Seeded CSRF Mode)
+        // See Research Report Section 5: The "Supported" Integration Mode
         function loginRStudio(username, password) {
-            console.log("4. Attempting RStudio Background Login...");
+            console.log("4. Attempting RStudio Background Login (Client-Seeded)...");
             
-            // Step 1: parse the login page to get the CSRF token
-            return fetch("/rstudio-inner/auth-sign-in")
-            .then(response => response.text())
-            .then(html => {
-                var parser = new DOMParser();
-                var doc = parser.parseFromString(html, "text/html");
-                var csrfToken = doc.querySelector('input[name="rs-csrf-token"]')?.value;
-                
-                if (!csrfToken) {
-                    console.warn("4b. Could not find RStudio CSRF token. Login may fail.");
-                } else {
-                    console.log("4b. Found CSRF Token:", csrfToken);
-                }
+            // Step 1: Generate Client-Side Token
+            var csrfToken = generateUUID();
+            console.log("4a. Generated Client-Seeded Token:", csrfToken);
 
-                // Step 2: Post credentials + token
-                var data = new URLSearchParams();
-                data.append('username', username);
-                data.append('password', password);
-                // Backend expects 'persist', not 'staySignedIn'
-                data.append('persist', '1');
-                data.append('clientPath', '/rstudio-inner/'); 
-                data.append('appUri', '');
-                
-                // IMPORTANT: Do NOT send 'v' parameter for plaintext login!
-                // Sending 'v' triggers encrypted auth mode -> fails with plaintext.
+            // Step 2: Set the Cookie (Critical for Double Submit Check)
+            // Path must match the RStudio proxy path (/rstudio-inner/)
+            // Secure flag is mandatory for SameSite configuration
+            document.cookie = "csrf-token=" + csrfToken + "; path=/rstudio-inner/; secure";
+            
+            // Step 3: Post credentials + token
+            var data = new URLSearchParams();
+            data.append('username', username);
+            data.append('password', password);
+            data.append('persist', '1');
+            data.append('clientPath', '/rstudio-inner/'); 
+            data.append('appUri', '');
+            
+            // The body token must match the cookie token we just set
+            data.append('csrf-token', csrfToken); 
+            // Also send legacy name just in case
+            data.append('rs-csrf-token', csrfToken); 
 
-                if (csrfToken) {
-                    data.append('rs-csrf-token', csrfToken);
-                }
-                
-                // Debug the payload
-                console.log("4b. Sending Plaintext Payload:", data.toString());
+            // Debug the payload
+            console.log("4b. Sending Client-Seeded Payload:", data.toString());
 
-                return fetch("/rstudio-inner/auth-do-sign-in", {
-                    method: "POST",
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-                    },
-                    body: data,
-                    credentials: 'include' 
-                });
+            return fetch("/rstudio-inner/auth-do-sign-in", {
+                method: "POST",
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+                },
+                body: data,
+                credentials: 'include' // Sends the cookie we just set
             })
             .then(response => {
                 console.log("4c. RStudio Response Status:", response.status);
