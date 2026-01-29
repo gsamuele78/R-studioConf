@@ -250,11 +250,7 @@ location ^~ /files-inner/ {
     # Note: If target does not handle /files-inner prefix, this might need URL rewriting
     proxy_pass %%NEXTCLOUD_TARGET_URL%%/;
     
-    # Force HTTPS and rewrite redirects to subpath
-    proxy_redirect default; 
-    proxy_redirect https://172.30.192.166/ /files-inner/;
-    proxy_redirect http://172.30.192.166/ /files-inner/;
-    proxy_redirect / /files-inner/;
+    # Force HTTPS only (Nextcloud handles path generation via overwritewebroot)
     proxy_redirect http:// https://;
     
     # Fix Cookie Path so sessions work in subpath
