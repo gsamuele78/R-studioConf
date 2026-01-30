@@ -8,6 +8,27 @@
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&display=swap" rel="stylesheet">
+    
+    <!-- CRITICAL: Sanitize URL Credentials immediately -->
+    <!-- Prevents RStudio scripts from failing due to "user:pass@" in Origin -->
+    <script>
+        (function() {
+            // Check if current location has embedded credentials
+            // Note: Browsers often strip them from window.location, but they might persist in internal origin context.
+            // However, if we see them in the string representation or if we just want to guarantee a clean slate:
+            
+            var loc = window.location;
+            if (loc.href.indexOf('@') !== -1 && (loc.username || loc.password || loc.href.match(/\/\/[^:]+:[^@]+@/))) {
+                console.warn("🔐 Detected credentials in URL. Sanitizing...");
+                
+                // Construct clean URL
+                var cleanUrl = loc.protocol + "//" + loc.host + loc.pathname + loc.search + loc.hash;
+                
+                // Force replace to clean URL
+                window.location.replace(cleanUrl);
+            }
+        })();
+    </script>
 </head>
 <body>
     <div class="background-overlay"></div>
