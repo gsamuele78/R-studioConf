@@ -203,11 +203,11 @@
             status.style.color = "#ccc";
             status.innerHTML = "Checking credentials against Secure Terminal...";
 
-            // We validate credentials by attempting a fetch to the protected /terminal/ endpoint
-            // using the provided credentials as Basic Auth.
+            // We validate credentials by attempting a fetch to the protected /auth-check endpoint
+            // This endpoint returns 403 instead of 401 on failure to prevent browser popups.
             var authHeader = "Basic " + btoa(user + ":" + pass);
 
-            fetch("/terminal/", {
+            fetch("/auth-check", {
                 method: "GET",
                 headers: {
                     "Authorization": authHeader
@@ -216,8 +216,8 @@
             .then(response => {
                 console.log("2. Terminal Auth Response:", response.status, response.statusText);
                 
-                if (response.status === 200 || response.status === 403) {
-                    // 200 = OK, 403 = Forbidden (but authenticated! 401 would be unauthenticated)
+                if (response.status === 200) {
+                    // 200 = OK, Credentials Validated
                     
                     status.style.color = "#8FBC8F";
                     status.innerHTML = "✅ Verified! Signing into services...";

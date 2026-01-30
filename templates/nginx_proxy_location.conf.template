@@ -135,7 +135,27 @@ location ^~ /rstudio-inner/ {
 location / {
     root /var/www/html;
     index index.html;
+    index index.html;
     try_files $uri $uri/ =404;
+}
+
+# --- Auth Verification Helper ---
+# Suppresses browser popup on failed login check
+location = /auth-check {
+    # Match Realm exactly to share potential cache scope
+    auth_pam "Secure Terminal - AD Credentials Required";
+    auth_pam_service_name "nginx";
+
+    # Success: Return 200
+    return 200 "Authenticated";
+
+    # Failure: Intercept 401 to suppress WWW-Authenticate header
+    error_page 401 = @suppress_popup;
+}
+
+location @suppress_popup {
+    # Return 403 Forbidden to prevent browser credential prompt
+    return 403 "Authentication Failed";
 }
 
 # ### DEFINITIVE FIX for ttyd ###
