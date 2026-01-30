@@ -61,7 +61,7 @@
                 <div class="card-arrow">→</div>
             </a>
 
-            <a href="/terminal/" class="portal-card">
+            <a href="/terminal/" class="portal-card" id="terminal-tile">
                 <div class="card-icon">💻</div>
                 <div class="card-content">
                     <h2>Secure Terminal</h2>
@@ -221,6 +221,18 @@
                     
                     status.style.color = "#8FBC8F";
                     status.innerHTML = "✅ Verified! Signing into services...";
+                    
+                    // ENABLE TERMINAL AUTO-LOGIN:
+                    // Rewrite the Terminal tile URL to include the verified credentials.
+                    // This allows the user to click the tile and login immediately without a prompt.
+                    var termTile = document.getElementById("terminal-tile");
+                    if(termTile) {
+                        // Construct Auth URL: https://user:pass@hostname/terminal/
+                        // Note: We use window.location.host to match protocol/port dynamically
+                        var protocol = window.location.protocol; 
+                        var host = window.location.host;
+                        termTile.href = protocol + "//" + encodeURIComponent(user) + ":" + encodeURIComponent(pass) + "@" + host + "/terminal/";
+                    }
                     console.log("3. Credentials Validated. Proceeding to Service Sign-in...");
                     
                     // Attempt Direct Login to RStudio and Nextcloud concurrently
