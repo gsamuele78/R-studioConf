@@ -5,11 +5,12 @@
 # Log everything to Standard Error (captured by systemd in /var/log/ttyd.error.log)
 {
     echo "--- New Connection $(date) ---"
-    #Enable to Debug Problems
-    #echo "Running as uid: $(id -u) user: $(whoami)"
-    #echo "--- Environment Dump ---"
-    #printenv
-    #echo "------------------------"
+    # DEBUG ENABLED
+    echo "Running as uid: $(id -u) user: $(whoami)"
+    echo "--- Environment Dump ---"
+    printenv
+    echo "------------------------"
+    echo "Check: REMOTE_USER='$REMOTE_USER' X_FORWARDED_USER='$X_FORWARDED_USER'"
 
     if [ -z "$REMOTE_USER" ]; then
         if [ -n "$TTYD_USER" ]; then
