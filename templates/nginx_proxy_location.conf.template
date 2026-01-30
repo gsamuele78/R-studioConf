@@ -110,6 +110,9 @@ location ^~ /rstudio-inner/ {
         proxy_set_header Referer $scheme://$host:443/;
         proxy_set_header Origin $scheme://$host:443;
         
+        # FIX: Pass CSRF Token for Logout too (prevents "invalid CSRF form")
+        proxy_set_header X-CSRF-Token $http_x_csrf_token;
+        
         proxy_set_header Cookie $http_cookie;
         proxy_pass_header Set-Cookie;
     }

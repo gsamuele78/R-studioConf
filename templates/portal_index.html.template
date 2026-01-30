@@ -121,10 +121,22 @@
             xhr.open("GET", "/terminal/", true, "logout", "logout");
             xhr.send();
             
-            // 2. Clear RStudio Session (if possible via logout endpoint)
-            // Accessing /rstudio-inner/auth-sign-out ensures the server kills it.
-            fetch("/rstudio-inner/auth-sign-out", { method: "GET", credentials: "include" })
-                .catch(e => console.warn("RStudio logout warning", e));
+            // 2. Clear RStudio Session
+            // RStudio requires X-CSRF-Token (or valid Origin) for sign-out too.
+            // Extract token from cookie if available
+            var match = document.cookie.match(/csrf-token=([^;]+)/);
+            var csrfToken = match ? match[1] : "";
+            
+            // Try POST first (more correct for state change), fallback to GET
+            fetch("/rstudio-inner/auth-sign-out", { 
+                method: "POST", 
+                headers: { "X-CSRF-Token": csrfToken },
+                credentials: "include" 
+            })
+            .catch(() => {
+                // Fallback to GET
+                fetch("/rstudio-inner/auth-sign-out", { method: "GET", credentials: "include" });
+            });
             
             // 3. Clear Nextcloud Session
             // We attempt a fetch to the logout endpoint. 
