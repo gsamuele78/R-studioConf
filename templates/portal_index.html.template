@@ -42,12 +42,12 @@
                     Refined allow attribute:
                     - Used semicolons (;) which is standard for Permission Policy
                     - explicit clipboard-read/write for modern browsers
+                    - Removed 'sandbox' to prevent "can escape sandboxing" warning (We trust this internal app)
                 -->
                 <iframe 
                     id="rstudio-frame" 
                     src="/rstudio-inner/" 
                     allow="clipboard-read; clipboard-write"
-                    sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-modals allow-downloads"
                     referrerpolicy="no-referrer-when-downgrade">
                 </iframe>
             </div>
