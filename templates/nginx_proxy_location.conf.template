@@ -146,8 +146,10 @@ location = /auth-check {
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
 
-    # Success: Return 200
-    return 200 "Authenticated";
+    # FIXED: Do NOT use 'return 200' here, as it runs before auth_pam (Rewrite Phase vs Access Phase).
+    # Instead, use try_files to serve a dummy static file, forcing the Access Phase (Auth) to run first.
+    root /var/www/html;
+    try_files /index.html =500;
 
     # Failure: Intercept 401 to suppress WWW-Authenticate header
     error_page 401 = @suppress_popup;
