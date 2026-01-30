@@ -35,8 +35,9 @@
                 <div class="card-arrow">→</div>
             </a>
             
-            <!-- RStudio Iframe Container (Hidden - for Background Connectivity Only) -->
-            <div id="rstudio-container" class="service-container" style="display: none;">
+            <!-- RStudio Iframe Container (Hidden Off-screen for Background Connectivity) -->
+            <!-- Note: Cannot use display:none because RStudio layout engine fails (Invalid splitter position) -->
+            <div id="rstudio-container" class="service-container" style="position: absolute; left: -9999px; top: -9999px; width: 10px; height: 10px; overflow: hidden; opacity: 0;">
                 <!-- 
                     Refined allow attribute:
                     - Used semicolons (;) which is standard for Permission Policy
