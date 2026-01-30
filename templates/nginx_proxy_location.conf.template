@@ -79,6 +79,9 @@ location ^~ /rstudio-inner/ {
         # Pass CSRF Token
         proxy_set_header X-CSRF-Token $http_x_csrf_token;
         
+        # Explicitly tell RStudio its root path during login (Consistency)
+        proxy_set_header X-RStudio-Root-Path /rstudio-inner;
+        
         # CRITICAL: Pass Cookies for POST login
         proxy_set_header Cookie $http_cookie;
         proxy_pass_header Set-Cookie;
@@ -112,6 +115,9 @@ location ^~ /rstudio-inner/ {
         
         # FIX: Pass CSRF Token for Logout too (prevents "invalid CSRF form")
         proxy_set_header X-CSRF-Token $http_x_csrf_token;
+
+        # Explicitly tell RStudio its root path during logout
+        proxy_set_header X-RStudio-Root-Path /rstudio-inner;
         
         proxy_set_header Cookie $http_cookie;
         proxy_pass_header Set-Cookie;
