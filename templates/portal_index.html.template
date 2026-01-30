@@ -26,7 +26,7 @@
         </header>
 
         <section id="serviceGrid" class="portal-grid blurred-locked">
-            <a href="/rstudio/" class="portal-card">
+            <a href="/rstudio/" class="portal-card" target="_blank">
                 <div class="card-icon">📊</div>
                 <div class="card-content">
                     <h2>RStudio Server</h2>
@@ -52,7 +52,7 @@
                 </iframe>
             </div>
 
-            <a href="/files/" class="portal-card">
+            <a href="/files/" class="portal-card" target="_blank">
                 <div class="card-icon">☁️</div>
                 <div class="card-content">
                     <h2>Research Data</h2>
