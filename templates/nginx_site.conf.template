@@ -1,6 +1,13 @@
 # --- HTTP Server Block ---
 # Redirects all port 80 traffic to HTTPS.
 # Includes logic for Let's Encrypt ACME challenge.
+
+# MAP: Extract short username (before @) to bypass TTYD 32-char limit
+map $remote_user $short_remote_user {
+    ~^(?P<user>[^@]+)@.*$ $user;
+    default $remote_user;
+}
+
 server {
     # Listen on all IPv4 addresses
     listen 80;

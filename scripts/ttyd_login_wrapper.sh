@@ -32,6 +32,15 @@ fi
 
 echo "Attempting login for: '$REMOTE_USER'" >> "$LOG_FILE"
 
+# WORKAROUND: TTYD 32-char limit bypass.
+# Nginx strips the domain. We re-append it here.
+if [[ "$REMOTE_USER" != *"@"* ]]; then
+    # Default domain fallback
+    DOMAIN_SUFFIX="@unibo.it"
+    echo "Appending domain suffix: $DOMAIN_SUFFIX" >> "$LOG_FILE"
+    REMOTE_USER="${REMOTE_USER}${DOMAIN_SUFFIX}"
+fi
+
 # Fix unbound variable errors
 export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 export LC_BYOBU="${LC_BYOBU:-0}"
