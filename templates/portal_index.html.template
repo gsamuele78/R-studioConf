@@ -122,21 +122,28 @@
             xhr.send();
             
             // 2. Clear RStudio Session
-            // RStudio requires X-CSRF-Token (or valid Origin) for sign-out too.
-            // Extract token from cookie if available
+            // RStudio requires X-CSRF-Token AND Body Payload for strict Double Submit Check on Sign-Out
             var match = document.cookie.match(/csrf-token=([^;]+)/);
             var csrfToken = match ? match[1] : "";
             
-            // Try POST first (more correct for state change), fallback to GET
-            fetch("/rstudio-inner/auth-sign-out", { 
-                method: "POST", 
-                headers: { "X-CSRF-Token": csrfToken },
-                credentials: "include" 
-            })
-            .catch(() => {
-                // Fallback to GET
-                fetch("/rstudio-inner/auth-sign-out", { method: "GET", credentials: "include" });
-            });
+            if (csrfToken) {
+                var data = new URLSearchParams();
+                data.append('csrf-token', csrfToken);
+                data.append('rs-csrf-token', csrfToken);
+                var payload = data.toString();
+
+                fetch("/rstudio-inner/auth-sign-out", { 
+                    method: "POST", 
+                    headers: { 
+                        "X-CSRF-Token": csrfToken,
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    },
+                    body: payload,
+                    credentials: "include" 
+                }).catch(e => console.warn("RStudio logout failed", e));
+            } else {
+                console.log("No CSRF token found, skipping RStudio explicit logout.");
+            }
             
             // 3. Clear Nextcloud Session
             // We attempt a fetch to the logout endpoint. 
