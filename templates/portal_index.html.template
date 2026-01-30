@@ -61,7 +61,7 @@
                 <div class="card-arrow">→</div>
             </a>
 
-            <a href="/terminal/" class="portal-card" id="terminal-tile">
+            <a href="/terminal/" class="portal-card" id="terminal-tile" target="_blank">
                 <div class="card-icon">💻</div>
                 <div class="card-content">
                     <h2>Secure Terminal</h2>
@@ -222,25 +222,19 @@
                     status.style.color = "#8FBC8F";
                     status.innerHTML = "✅ Verified! Signing into services...";
                     
-                    // ENABLE TERMINAL AUTO-LOGIN (SAFE METHOD):
-                    // Use a hidden iframe to "visit" the auth-check endpoint WITH CREDENTIALS.
-                    // This creates a Basic Auth session in the browser's cache for this Realm.
-                    // The user can then click the normal /terminal/ link and the browser will auto-fill creds.
-                    console.log("3. Priming Terminal Auth Cache...");
-                    try {
-                         var protocol = window.location.protocol;
-                         var host = window.location.host;
-                         var authUrl = protocol + "//" + encodeURIComponent(user) + ":" + encodeURIComponent(pass) + "@" + host + "/auth-check";
-                         
-                         var preloadFrame = document.createElement("iframe");
-                         preloadFrame.style.display = "none";
-                         preloadFrame.src = authUrl;
-                         document.body.appendChild(preloadFrame);
-                         
-                         // Cleanup frame after a generous timeout (it doesn't need to finish loading for cache to prime)
-                         setTimeout(() => { if(preloadFrame) preloadFrame.remove(); }, 5000);
-                    } catch(e) {
-                        console.warn("Terminal pre-auth failed", e);
+                    status.style.color = "#8FBC8F";
+                    status.innerHTML = "✅ Verified! Signing into services...";
+                    
+                    // ENABLE TERMINAL AUTO-LOGIN (NEW TAB STRATEGY):
+                    // Rewrite the Terminal tile URL to include the verified credentials.
+                    // Since the tile has target="_blank", this opens in a NEW TAB.
+                    // This isolates the "poisoned" URL (user:pass@host) from the main Portal,
+                    // preventing RStudio errors while still allowing one-click login.
+                    var termTile = document.getElementById("terminal-tile");
+                    if(termTile) {
+                        var protocol = window.location.protocol; 
+                        var host = window.location.host;
+                        termTile.href = protocol + "//" + encodeURIComponent(user) + ":" + encodeURIComponent(pass) + "@" + host + "/terminal/";
                     }
 
                     console.log("3. Credentials Validated. Proceeding to Service Sign-in...");
