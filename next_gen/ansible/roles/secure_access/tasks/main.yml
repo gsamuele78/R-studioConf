@@ -1,0 +1,32 @@
+---
+- name: Install Secure Access Tools
+  apt:
+    name:
+      - ttyd
+      - xterm
+      - curl
+    state: present
+
+- name: Configure PAM for Nginx (if needed)
+  shell: |
+    echo "@include common-auth" | tee /etc/pam.d/nginx
+  args:
+    creates: /etc/pam.d/nginx
+
+- name: Create ttyd service override directory
+  file:
+    path: /etc/systemd/system/ttyd.service.d
+    state: directory
+
+- name: Deploy ttyd service override
+  template:
+    src: ttyd.override.conf.j2
+    dest: /etc/systemd/system/ttyd.service.d/override.conf
+  notify: Restart TTYD
+
+- name: Ensure ttyd service is enabled
+  service:
+    name: ttyd
+    state: started
+    enabled: yes
+    daemon_reload: yes

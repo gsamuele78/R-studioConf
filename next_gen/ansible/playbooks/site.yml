@@ -1,0 +1,38 @@
+---
+- name: Next-Gen R-Studio Configuration
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+  
+  # Load Consolidated Variables
+  vars_files:
+    - group_vars/all.yml
+
+  tasks:
+    # Python Detection Step (The "Bridge" between Python Logic and Ansible)
+    - name: Run Python Backend Detector
+      command: "python3 {{ project_root }}/next_gen/main.py --detect-backend"
+      register: backend_result
+      changed_when: false
+      
+    - name: Set Auth Backend Fact
+      set_fact:
+        detected_backend: "{{ (backend_result.stdout | from_json).backend }}"
+
+    - name: Display Detected Backend
+      debug:
+        msg: "Active Backend: {{ detected_backend }}"
+
+  # Execute Roles
+  roles:
+    - common
+    - system_optimizer
+    - time_sync
+    - secure_access
+    - rstudio
+    - nginx
+    - telemetry
+    # - letsencrypt # Optional, uncomment to run

@@ -1,0 +1,9 @@
+---
+- name: Restart Samba
+  service:
+    name: "{{ item }}"
+    state: restarted
+  loop:
+    - smbd
+    - nmbd
+    - winbind

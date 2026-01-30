@@ -1,0 +1,16 @@
+---
+- name: Set Swappiness
+  sysctl:
+    name: vm.swappiness
+    value: '10'
+    state: present
+
+- name: Disable CPU Overcommit
+  sysctl:
+    name: vm.overcommit_memory
+    value: '0'
+    state: present
+
+- name: Add noatime to root mount (Stub)
+  debug:
+    msg: "Root mount optimization would go here (requires careful fstab edit)."

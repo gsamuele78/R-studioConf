@@ -1,0 +1,65 @@
+---
+- name: Install Nginx
+  apt:
+    name: nginx
+    state: present
+
+- name: Remove default Nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload Nginx
+
+- name: Deploy Portal HTML
+  template:
+    src: portal.html.j2
+    dest: /var/www/html/index.html
+    mode: '0644'
+
+- name: Deploy Portal CSS
+  template:
+    src: portal_style.css.j2
+    dest: /var/www/html/style.css
+    mode: '0644'
+
+- name: Deploy Portal Images
+  copy:
+    src: "{{ item }}"
+    dest: /var/www/html/
+    mode: '0644'
+  loop:
+    - logo.png
+    - background.png
+
+- name: Ensure Wrapper Directories Exist
+  file:
+    path: "/var/www/html/{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - rstudio
+    - terminal
+    - files
+
+- name: Deploy Application Wrappers
+  template:
+    src: "{{ item.src }}"
+    dest: "/var/www/html/{{ item.dest }}"
+    mode: '0644'
+  loop:
+    - { src: 'rstudio_wrapper.html.j2', dest: 'rstudio/index.html' }
+    - { src: 'terminal_wrapper.html.j2', dest: 'terminal/index.html' }
+    - { src: 'nextcloud_wrapper.html.j2', dest: 'files/index.html' }
+
+- name: Configure Nginx Site
+  template:
+    src: nginx_site.conf.j2
+    dest: /etc/nginx/sites-available/rstudio_portal
+  notify: Reload Nginx
+
+- name: Enable Nginx Site
+  file:
+    src: /etc/nginx/sites-available/rstudio_portal
+    dest: /etc/nginx/sites-enabled/rstudio_portal
+    state: link
+  notify: Reload Nginx

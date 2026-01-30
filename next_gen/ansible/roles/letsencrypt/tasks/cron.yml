@@ -1,0 +1,7 @@
+- name: Create Certbot Renewal Cron Job
+  cron:
+    name: "Certbot Renewal"
+    minute: "0"
+    hour: "3"
+    job: "certbot renew --quiet --post-hook 'systemctl reload nginx'"
+    user: root

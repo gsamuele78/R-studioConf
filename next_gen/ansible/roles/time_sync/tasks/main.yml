@@ -1,0 +1,17 @@
+---
+- name: Install Chrony
+  apt:
+    name: chrony
+    state: present
+
+- name: Deploy Chrony Config
+  template:
+    src: chrony.conf.j2
+    dest: /etc/chrony/chrony.conf
+  notify: Restart Chrony
+
+- name: Ensure Chrony is running
+  service:
+    name: chrony
+    state: started
+    enabled: yes

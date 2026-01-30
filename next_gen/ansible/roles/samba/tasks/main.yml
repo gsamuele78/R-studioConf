@@ -1,0 +1,27 @@
+---
+- name: Install Samba and Winbind
+  apt:
+    name:
+      - samba
+      - winbind
+      - libnss-winbind
+      - libpam-winbind
+    state: present
+
+- name: Deploy smb.conf
+  template:
+    src: smb.conf.j2
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart Samba
+
+- name: Join Domain (net ads join)
+  shell: |
+    echo "{{ ad_admin_password }}" | kinit {{ ad_admin_user }}
+    net ads join -k
+  args:
+    creates: /etc/krb5.keytab
+  when: ad_admin_password is defined
+  ignore_errors: yes # Don't fail if already joined or password missing

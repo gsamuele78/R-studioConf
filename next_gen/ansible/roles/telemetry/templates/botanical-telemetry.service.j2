@@ -1,0 +1,13 @@
+[Unit]
+Description=Botanical Big Data Telemetry API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+# Adjust path to where we install the python script in the role
+ExecStart=/usr/bin/python3 /usr/local/bin/telemetry_api.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Botanical RStudio</title>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background-color: #f0f0f0; }
+        #portal-top-bar { position: fixed; top: 0; left: 0; width: 100%; height: 32px; background: #2c3e50; z-index: 1000; display: flex; align-items: center; padding: 0 20px; box-sizing: border-box; }
+        #portal-top-bar a { color: white; text-decoration: none; font-weight: bold; font-size: 14px; }
+        #app-frame { position: absolute; top: 32px; left: 0; width: 100%; height: calc(100% - 32px); border: none; display: block; }
+    </style>
+</head>
+<body>
+    <div id="portal-top-bar"><a href="/">🏠 Botanical Portal</a></div>
+    <iframe id="app-frame" src="/rstudio-inner/" title="RStudio" allow="clipboard-read; clipboard-write"></iframe>
+</body>
+</html>

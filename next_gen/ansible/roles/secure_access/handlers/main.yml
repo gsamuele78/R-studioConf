@@ -1,0 +1,6 @@
+---
+- name: Restart TTYD
+  service:
+    name: ttyd
+    state: restarted
+    daemon_reload: yes

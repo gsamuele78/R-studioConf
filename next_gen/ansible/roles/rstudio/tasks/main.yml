@@ -1,0 +1,74 @@
+---
+- name: Add CRAN apt key
+  apt_key:
+    url: "https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc"
+    state: present
+
+- name: Add CRAN repository
+  apt_repository:
+    repo: "deb https://cloud.r-project.org/bin/linux/ubuntu {{ ansible_distribution_release }}-cran40/"
+    state: present
+
+- name: Install R Base
+  apt:
+    name: r-base
+    state: present
+
+- name: Download RStudio Server
+  get_url:
+    url: "https://download2.rstudio.org/server/{{ ansible_distribution_release }}/amd64/rstudio-server-{{ rstudio_version }}-amd64.deb"
+    dest: /tmp/rstudio-server.deb
+
+- name: Install RStudio Server
+  apt:
+    deb: /tmp/rstudio-server.deb
+    state: present
+  notify: Restart RStudio
+
+- name: Configure RStudio Server (rserver.conf)
+  template:
+    src: rserver.conf.j2
+    dest: /etc/rstudio/rserver.conf
+  notify: Restart RStudio
+
+# --- R2U / BSPM Setup ---
+
+- name: Add R2U GPG Key
+  apt_key:
+    url: "{{ r2u_key_url }}"
+    state: present
+
+- name: Add R2U Repository
+  apt_repository:
+    repo: "deb [arch=amd64] {{ r2u_repo_url }}/ubuntu {{ ansible_distribution_release }} main"
+    state: present
+
+- name: Install BSPM and System Dependencies
+  apt:
+    name:
+      - r-cran-bspm
+      - python3-dbus
+      - python3-gi
+      - python3-apt
+    state: present
+
+- name: Enable BSPM in Rprofile.site
+  blockinfile:
+    path: /etc/R/Rprofile.site
+    block: |
+      suppressMessages(bspm::enable())
+      options(bspm.sudo = TRUE)
+      options(bspm.allow.sysreqs = TRUE)
+
+# --- R Package Installation ---
+
+- name: Install CRAN Packages (via BSPM)
+  command: "Rscript -e 'install.packages(\"{{ item }}\", repos=\"{{ r_cran_repo }}\")'"
+  loop: "{{ r_user_packages_cran }}"
+  register: r_install_result
+  changed_when: "'DONE' in r_install_result.stdout"
+
+- name: Install GitHub Packages (via remotes)
+  command: "Rscript -e 'if (!requireNamespace(\"remotes\")) install.packages(\"remotes\"); remotes::install_github(\"{{ item }}\")'"
+  loop: "{{ r_user_packages_github }}"
+

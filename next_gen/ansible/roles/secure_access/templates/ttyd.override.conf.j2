@@ -1,0 +1,6 @@
+[Service]
+ExecStart=
+ExecStart=/usr/bin/ttyd -p {{ web_terminal_port }} -W -t rendererType=canvaslogin /bin/bash
+User=root
+Group=root
+WorkingDirectory=/root

@@ -1,0 +1,5 @@
+---
+- name: Restart SSSD
+  service:
+    name: sssd
+    state: restarted

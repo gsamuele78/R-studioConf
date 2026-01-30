@@ -1,0 +1,26 @@
+---
+- name: Install SSSD and Realmd
+  apt:
+    name:
+      - sssd
+      - realmd
+      - adcli
+      - packagekit
+    state: present
+
+- name: Join Domain (realm join)
+  shell: |
+    echo "{{ ad_admin_password }}" | realm join --user={{ ad_admin_user }} {{ ad_domain }}
+  args:
+    creates: /etc/sssd/sssd.conf
+  when: ad_admin_password is defined
+  ignore_errors: yes
+
+- name: Deploy sssd.conf (Override)
+  template:
+    src: sssd.conf.j2
+    dest: /etc/sssd/sssd.conf
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart SSSD

@@ -1,0 +1,103 @@
+---
+# Group Variables (Derived from Legacy .vars.conf)
+
+# Common
+timezone: "Etc/UTC"
+sys_packages:
+  - curl
+  - wget
+  - software-properties-common
+  - jq
+  - git
+
+# RStudio
+rstudio_version: "2023.06.0"
+rstudio_port: 8787
+r_cran_repo: "https://cloud.r-project.org/bin/linux/ubuntu"
+
+# Active Directory / Kerberos
+ad_domain: "EXAMPLE.COM"
+ad_workgroup: "EXAMPLE"
+ad_kdc_server: "kdc.example.com"
+ad_admin_user: "Administrator"
+# ad_admin_password: "{{ lookup('env', 'AD_ADMIN_PASSWORD') }}" # Securely injected
+
+
+# R Packages
+r_user_packages_cran:
+  - terra
+  - raster
+  - sf
+  - enmSdmX
+  - dismo
+  - spThin
+  - rnaturalearth
+  - furrr
+  - future
+  - doParallel
+  - caret
+  - CoordinateCleaner
+  - tictoc
+  - devtools
+  - nimbleHMC
+  - tidyverse
+  - dplyr
+  - spatstat
+  - ggplot2
+  - iNEXT
+  - DHARMa
+  - lme4
+  - TMB
+  - glmmTMB
+  - geodata
+  - osmdata
+  - parallel
+  - doSNOW
+  - progress
+  - nngeo
+  - wdpar
+  - igraph
+  - rgee
+  - tidyrgee
+  - data.table
+  - jsonlite
+  - httr
+  - prioritizr
+  - prioritizrdata
+  - highs
+  - MASS
+  - MCMCvis
+  - scoringRules
+
+r_user_packages_github:
+  # - SantanderMetGroup/climate4R
+  - SantanderMetGroup/loadeR.java
+  - SantanderMetGroup/climate4R.UDG
+  - SantanderMetGroup/loadeR
+  - SantanderMetGroup/transformeR
+  - SantanderMetGroup/visualizeR
+  - SantanderMetGroup/downscaleR
+  - SantanderMetGroup/climate4R.datasets
+  - SantanderMetGroup/mopa
+  - HelgeJentsch/ClimDatDownloadR
+  - rstudio/renv
+  - r-lib/cli
+
+# R2U / BSPM Settings
+r2u_repo_url: "https://r2u.stat.illinois.edu"
+r2u_key_url: "https://eddelbuettel.github.io/r2u/assets/dirk_eddelbuettel_key.asc"
+
+
+# Nginx / Portal
+nginx_http_port: 80
+nginx_https_port: 443
+portal_title: "RStudio Portal"
+portal_theme: "default"
+
+# Secure Access
+web_terminal_port: 2222
+nextcloud_target_url: "https://192.168.1.100"
+
+# Auth / Backend (For detection logic)
+# This variable can be overridden by the Python detector at runtime
+auth_backend: "{{ lookup('env', 'AUTH_BACKEND') | default('NONE', true) }}"
