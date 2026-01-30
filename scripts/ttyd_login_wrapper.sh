@@ -5,12 +5,16 @@
 # Log everything to Standard Error (captured by systemd in /var/log/ttyd.error.log)
 {
     echo "--- New Connection $(date) ---"
-    # DEBUG ENABLED
+    
+    # DEBUG ENABLED - Force log to external file
     echo "Running as uid: $(id -u) user: $(whoami)"
     echo "--- Environment Dump ---"
     printenv
     echo "------------------------"
-    echo "Check: REMOTE_USER='$REMOTE_USER' X_FORWARDED_USER='$X_FORWARDED_USER'"
+    echo "Check output: REMOTE_USER='${REMOTE_USER:-}' X_FORWARDED_USER='${X_FORWARDED_USER:-}'"
+    # printenv
+ 
+
 
     if [ -z "$REMOTE_USER" ]; then
         if [ -n "$TTYD_USER" ]; then
@@ -30,7 +34,11 @@
     export LC_BYOBU="${LC_BYOBU:-0}"
     
     #echo "Executing: /bin/login -f '$REMOTE_USER'"
-} >&2
+#} >&2
+# Ensure the log file is writable if it exists, or created
+touch /var/log/ttyd_wrapper.debug
+chmod 666 /var/log/ttyd_wrapper.debug
 
+} >> /var/log/ttyd_wrapper.debug 2>&1
 # Execute login
 exec /bin/login -f "$REMOTE_USER"
