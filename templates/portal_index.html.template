@@ -149,7 +149,10 @@
             }
             
             if (csrfToken) {
-                // ... (rest of logic)
+                var data = new URLSearchParams();
+                data.append('csrf-token', csrfToken);
+                data.append('rs-csrf-token', csrfToken);
+                var payload = data.toString();
 
                 fetch("/rstudio-inner/auth-sign-out", { 
                     method: "POST", 
