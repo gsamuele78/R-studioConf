@@ -18,14 +18,30 @@
             // However, if we see them in the string representation or if we just want to guarantee a clean slate:
             
             var loc = window.location;
-            if (loc.href.indexOf('@') !== -1 && (loc.username || loc.password || loc.href.match(/\/\/[^:]+:[^@]+@/))) {
-                console.warn("🔐 Detected credentials in URL. Sanitizing...");
+            // Check for credentials in URL (User reported issues with RStudio finding them)
+            if (loc.href.indexOf('@') !== -1 && (loc.href.match(/\/\/[^:]+:[^@]+@/) || loc.username || loc.password)) {
+                console.warn("🔐 Detected credentials in URL. Sanitizing aggressively...");
                 
-                // Construct clean URL
-                var cleanUrl = loc.protocol + "//" + loc.host + loc.pathname + loc.search + loc.hash;
-                
-                // Force replace to clean URL
-                window.location.replace(cleanUrl);
+                // 1. Calculate clean URL immediately
+                try {
+                    var cleanUrl = loc.protocol + "//" + loc.host + loc.pathname + loc.search + loc.hash;
+                    
+                    // 2. STOP everything. Prevent Body from parsing.
+                    if (window.stop) window.stop();
+                    
+                    // 3. Nuke the document so no iframes can load
+                    // Note: In strict mode or some browsers execution order varies, but this is best effort to kill the DOM.
+                    document.documentElement.innerHTML = '<head><title>Redirecting...</title></head><body>Sanitizing URL security context...</body>';
+                    
+                    // 4. Force Redirect
+                    window.location.replace(cleanUrl);
+                } catch(e) {
+                    console.error("Sanitizer failed", e);
+                    // Fallback
+                    window.location.href = "/";
+                }
+                // Throw error to stop this script too
+                throw new Error("Security Redirect");
             }
         })();
     </script>
