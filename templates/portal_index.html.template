@@ -45,7 +45,7 @@
                 <iframe 
                     id="rstudio-frame" 
                     src="/rstudio-inner/" 
-                    allow="clipboard-read; clipboard-write; window-management; self"
+                    allow="clipboard-read; clipboard-write"
                     sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-modals allow-downloads"
                     referrerpolicy="no-referrer-when-downgrade">
                 </iframe>
@@ -226,6 +226,13 @@
                     ])
                         .then(() => {
                             console.log("5. Direct Login Sequence Complete");
+                            
+                            // FORCE RELOAD of RStudio Iframe to display the new session
+                            // Otherwise it might still show "Signed Out" or the login page
+                            console.log("6. Refreshing RStudio Iframe...");
+                            var rFrame = document.getElementById("rstudio-frame");
+                            if(rFrame) rFrame.src = rFrame.src;
+
                             console.timeEnd("Auth Sequence");
                             console.groupEnd();
                         })
