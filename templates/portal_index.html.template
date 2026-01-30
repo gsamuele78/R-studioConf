@@ -139,14 +139,17 @@
             
             // 2. Clear RStudio Session
             // RStudio requires X-CSRF-Token AND Body Payload for strict Double Submit Check on Sign-Out
-            var match = document.cookie.match(/csrf-token=([^;]+)/);
-            var csrfToken = match ? match[1] : "";
+            
+            // Try getting from LocalStorage first (reliable), then cookie (fallback)
+            var csrfToken = localStorage.getItem('rstudio_csrf_token');
+            
+            if (!csrfToken) {
+                 var match = document.cookie.match(/csrf-token=([^;]+)/);
+                 csrfToken = match ? match[1] : "";
+            }
             
             if (csrfToken) {
-                var data = new URLSearchParams();
-                data.append('csrf-token', csrfToken);
-                data.append('rs-csrf-token', csrfToken);
-                var payload = data.toString();
+                // ... (rest of logic)
 
                 fetch("/rstudio-inner/auth-sign-out", { 
                     method: "POST", 
@@ -280,6 +283,9 @@
             // Step 1: Generate Client-Side Token
             var csrfToken = generateUUID();
             console.log("4a. Generated Client-Seeded Token:", csrfToken);
+            
+            // SAVE TOKEN locally because document.cookie cannot read path=/rstudio-inner/ from root /
+            localStorage.setItem('rstudio_csrf_token', csrfToken);
 
             // Step 2: Set the Cookie (Critical for Double Submit Check)
             // Path must match the RStudio proxy path (/rstudio-inner/)
