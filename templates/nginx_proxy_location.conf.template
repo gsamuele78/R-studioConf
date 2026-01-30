@@ -64,9 +64,10 @@ location ^~ /rstudio-inner/ {
     location = /rstudio-inner/auth-do-sign-in {
         proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/auth-do-sign-in;
         
-        # Spoof Referer/Origin to satisfy RStudio's strict CSRF checks
-        proxy_set_header Referer http://127.0.0.1:%%RSTUDIO_PORT%%/auth-sign-in;
-        proxy_set_header Origin http://127.0.0.1:%%RSTUDIO_PORT%%;
+        # FIX: Set Origin/Referer to match the Public Host (what RStudio expects)
+        # RStudio logs showed: expected 137.204.119.225, received 127.0.0.1
+        proxy_set_header Referer $scheme://$http_host/auth-sign-in;
+        proxy_set_header Origin $scheme://$http_host;
         
         proxy_http_version 1.1;
         proxy_set_header Host $host;
