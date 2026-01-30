@@ -13,8 +13,8 @@ body {
     padding: 0;
     font-family: 'Outfit', sans-serif;
     color: var(--text-light);
-    height: 100vh;
-    overflow: hidden;
+    min-height: 100vh;
+    overflow-y: auto;
     background-color: #0f1f1f; /* Fallback */
     background-image: url('background.png');
     background-size: cover;
@@ -36,7 +36,7 @@ body {
 .main-container {
     max-width: 1200px;
     margin: 0 auto;
-    height: 100%;
+    min-height: 100vh;
     display: flex;
     flex-direction: column;
     justify-content: center;
