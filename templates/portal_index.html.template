@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Botanical Big Data Calculus - Research Portal</title>
+    <!-- Prevent Favicon 404 -->
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&display=swap" rel="stylesheet">
 </head>
@@ -32,6 +34,22 @@
                 </div>
                 <div class="card-arrow">→</div>
             </a>
+            
+            <!-- RStudio Iframe Container -->
+            <div id="rstudio-container" class="service-container">
+                <!-- 
+                    Refined allow attribute:
+                    - Used semicolons (;) which is standard for Permission Policy
+                    - explicit clipboard-read/write for modern browsers
+                -->
+                <iframe 
+                    id="rstudio-frame" 
+                    src="/rstudio-inner/" 
+                    allow="clipboard-read; clipboard-write; window-management; self"
+                    sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-modals allow-downloads"
+                    referrerpolicy="no-referrer-when-downgrade">
+                </iframe>
+            </div>
 
             <a href="/files/" class="portal-card">
                 <div class="card-icon">☁️</div>
@@ -59,8 +77,6 @@
                 </div>
                 <div class="card-arrow">↗</div>
             </a>
-        </section>
-
         <footer class="glass-footer">
             <p>&copy; %%CURRENT_YEAR%% Botanical Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
         </footer>
