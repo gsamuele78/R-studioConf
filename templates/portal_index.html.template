@@ -35,8 +35,8 @@
                 <div class="card-arrow">→</div>
             </a>
             
-            <!-- RStudio Iframe Container -->
-            <div id="rstudio-container" class="service-container">
+            <!-- RStudio Iframe Container (Hidden - for Background Connectivity Only) -->
+            <div id="rstudio-container" class="service-container" style="display: none;">
                 <!-- 
                     Refined allow attribute:
                     - Used semicolons (;) which is standard for Permission Policy
