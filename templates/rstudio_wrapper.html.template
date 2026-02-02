@@ -48,7 +48,7 @@
 </head>
 <body>
     <div id="portal-top-bar">
-        <a href="/">🏠 Botanical Portal</a>
+        <a href="javascript:void(0)" onclick="window.location.href = window.location.origin + '/';">🏠 Botanical Portal</a>
     </div>
     <iframe id="app-frame" 
             src="/rstudio-inner/" 

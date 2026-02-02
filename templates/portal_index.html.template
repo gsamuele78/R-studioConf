@@ -37,20 +37,15 @@
             
             <!-- RStudio Iframe Container (Hidden Off-screen for Background Connectivity) -->
             <!-- Note: Cannot use display:none because RStudio layout engine fails. Using typical desktop size to ensure valid splitter math. -->
-            <div id="rstudio-container" class="service-container" style="position: absolute; left: -9999px; top: -9999px; width: 1200px; height: 800px; overflow: hidden; opacity: 0;">
-                <!-- 
-                    Refined allow attribute:
-                    - Used semicolons (;) which is standard for Permission Policy
-                    - explicit clipboard-read/write for modern browsers
-                    - Removed 'sandbox' to prevent "can escape sandboxing" warning (We trust this internal app)
-                -->
+            <!-- RStudio Iframe Container Removed to prevent multi-session conflicts -->
+            <!-- <div id="rstudio-container" class="service-container" style="position: absolute; left: -9999px; top: -9999px; width: 1200px; height: 800px; overflow: hidden; opacity: 0;">
                 <iframe 
                     id="rstudio-frame" 
                     src="/rstudio-inner/" 
                     allow="clipboard-read; clipboard-write"
                     referrerpolicy="no-referrer-when-downgrade">
                 </iframe>
-            </div>
+            </div> -->
 
             <a href="/files/" class="portal-card" target="_blank">
                 <div class="card-icon">☁️</div>
