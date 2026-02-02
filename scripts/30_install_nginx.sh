@@ -713,6 +713,7 @@ install_and_configure_nginx() {
       "DOMAIN_OR_IP=${DOMAIN_OR_IP}" "RSTUDIO_PORT=${RSTUDIO_PORT}" "WEB_TERMINAL_PORT=${WEB_TERMINAL_PORT}"
       "NEXTCLOUD_TARGET_URL=${NEXTCLOUD_TARGET_URL}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}"
       "CERT_FULLPATH=${cert_fullpath}" "KEY_FULLPATH=${key_fullpath}" "DHPARAM_FULLPATH=${DHPARAM_PATH}"
+      "TIMEOUT_STANDARD=600"
   )
   local processed_content
     
@@ -721,6 +722,9 @@ install_and_configure_nginx() {
     
   process_template "${TEMPLATE_DIR}/nginx_ssl_certificate.conf.template" "processed_content" "${template_args[@]}"
   echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_ssl_certificate.conf" > /dev/null
+
+  process_template "${TEMPLATE_DIR}/nginx_performance.conf.template" "processed_content" "${template_args[@]}"
+  echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_performance.conf" > /dev/null
 
   process_template "${TEMPLATE_DIR}/nginx_proxy_location.conf.template" "processed_content" "${template_args[@]}"
   echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_proxy_location.conf" > /dev/null

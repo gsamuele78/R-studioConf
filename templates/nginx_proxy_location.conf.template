@@ -49,7 +49,13 @@ location ^~ /rstudio-inner/ {
     proxy_set_header X-RStudio-Root-Path /rstudio-inner;
     
     # Extended timeout for long-running R sessions
-    proxy_read_timeout 20d;
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+    
+    # Performance & Persistence
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_socket_keepalive on;
 
     # Hide X-Frame-Options to allow framing in our wrapper
     proxy_hide_header X-Frame-Options;
@@ -185,7 +191,13 @@ location ^~ /terminal-inner/ {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
-    proxy_read_timeout 86400;
+    
+    # Performance & Persistence
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_read_timeout 86400s;
+    proxy_socket_keepalive on;
+    
     proxy_set_header X-Forwarded-User $short_remote_user;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

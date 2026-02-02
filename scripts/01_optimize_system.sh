@@ -20,7 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-CONFIG_FILE="${SCRIPT_DIR}/../config/optimize_system.vars.conf"
+CONFIG_FILE="${SCRIPT_DIR}/../config/optimize_system_proxmox.vm.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 GUEST_SCRIPT_TEMPLATE="${TEMPLATE_DIR}/guest_optimizer.sh.tpl"
 

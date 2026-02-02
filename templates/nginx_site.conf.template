@@ -47,6 +47,9 @@ server {
     # Includes the hardened SSL/TLS parameters
     include %%NGINX_TEMPLATE_DIR%%/nginx_ssl_params.conf;
 
+    # Includes the performance optimization configuration
+    include %%NGINX_TEMPLATE_DIR%%/nginx_performance.conf;
+
     # Includes the reverse proxy definitions for all services
     include %%NGINX_TEMPLATE_DIR%%/nginx_proxy_location.conf;
 }
