@@ -15,7 +15,7 @@ client_max_body_size 10G;
 client_body_buffer_size 512k;
 
 # Dedicated temp path (ensured by cleanup script)
-client_body_temp_path /var/lib/nginx/body 1 2;
+client_body_temp_path /var/lib/nginx/upload_temp 1 2;
 
 # --- Timeouts (Variables from config) ---
 client_header_timeout %%TIMEOUT_STANDARD%%s;

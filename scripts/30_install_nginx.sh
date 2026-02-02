@@ -661,10 +661,14 @@ install_and_configure_nginx() {
     setup_auth_backend_samba || return 1
   fi
   
-  # Create required directories
   ensure_dir_exists "$NGINX_TEMPLATE_DIR"
   ensure_dir_exists "$SSL_CERT_DIR"
   ensure_dir_exists "/var/www/html"
+
+  # Create optimized upload directory
+  local upload_temp_dir="/var/lib/nginx/upload_temp"
+  ensure_dir_exists "$upload_temp_dir"
+  run_command "Set upload permissions" "chown -R www-data:www-data $upload_temp_dir"
 
   log "INFO" "Application Wrappers are now deployed by 31_setup_web_portal.sh."
   

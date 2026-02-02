@@ -34,7 +34,7 @@ cron_script_content='#!/bin/bash
 # Deletes stale client body temp files to prevent disk exhaustion.
 
 LOG_FILE="/var/log/nginx/cleanup.log"
-target_dir="/var/lib/nginx/body"
+target_dir="/var/lib/nginx/upload_temp"
 
 log() {
     echo "[$(date +'\''%Y-%m-%d %H:%M:%S'\'')] $1" >> "$LOG_FILE"
