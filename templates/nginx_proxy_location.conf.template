@@ -269,32 +269,40 @@ location @logged_out {
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Logged Out</title>
+        <title>Logging Out...</title>
         <style>
             body { font-family: sans-serif; text-align: center; padding-top: 50px; background: #f0f2f5; }
-            .box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; }
-            h1 { margin-top: 0; color: #333; }
-            p { color: #666; margin-bottom: 20px; }
-            a { background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; cursor: pointer; }
-            a:hover { background: #0056b3; }
+            .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 20px auto; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         </style>
         <script>
             // Attempt to clear browser authentication cache for /terminal/
-            // by sending a request with invalid credentials.
-            function clearAuth() {
+            function clearAuthAndRedirect() {
                 var xhr = new XMLHttpRequest();
+                // Send invalid credentials to overwrite browser cache
                 xhr.open("GET", "/terminal/", true, "logout", "logout");
+                
+                xhr.onreadystatechange = function() {
+                    if (xhr.readyState == 4) {
+                        // After attempt, redirect to portal
+                        window.location.replace("/");
+                    }
+                };
+                
                 xhr.send();
+                
+                // Safety fallback: Redirect anyway after 1s
+                setTimeout(function() { window.location.replace("/"); }, 1000);
             }
             // Run on load
-            window.onload = clearAuth;
+            window.onload = clearAuthAndRedirect;
         </script>
     </head>
     <body>
         <div class="box">
-            <h1>Logged Out</h1>
-            <p>You have successfully logged out.</p>
-            <a href="/terminal/" onclick="clearAuth();">Log In Again</a>
+            <h1>Logging Out...</h1>
+            <div class="spinner"></div>
+            <p>Cleaning session and returning to portal.</p>
         </div>
     </body>
     </html>
