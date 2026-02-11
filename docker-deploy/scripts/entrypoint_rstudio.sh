@@ -25,6 +25,20 @@ fi
 log "INFO" "Starting RStudio Container Entrypoint..."
 log "INFO" "Auth Backend: ${AUTH_BACKEND}"
 
+# 0. PKI Trust Setup (Step-CA)
+if [ -n "${STEP_CA_URL:-}" ]; then
+    log "INFO" "STEP_CA_URL detected. Configuring PKI Trust..."
+    
+    # 1. Fetch Root CA (Trust)
+    # The script uses step-cli to fetch and install the root securely
+    if [ -f "/scripts/pki/fetch_root.sh" ]; then
+        /scripts/pki/fetch_root.sh || log "WARN" "Failed to fetch Root CA (using fetch_root.sh)."
+    elif [ -x "/usr/local/bin/manage_pki_trust.sh" ]; then
+        # Fallback to simple curl method if step script missing
+        /usr/local/bin/manage_pki_trust.sh "${STEP_CA_URL}" "${STEP_FINGERPRINT:-}" || log "WARN" "PKI Trust Setup Failed."
+    fi
+fi
+
 # 1. Template Processing (Config Generation)
 # We use envsubst to process templates from /etc/docker-templates into /etc/rstudio
 if [ -d "/etc/docker-templates" ]; then

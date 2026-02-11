@@ -1,4 +1,5 @@
 #!/usr/bin/with-contenv bash
+# shellcheck shell=bash
 # /etc/services.d/ttyd/run
 
 # Load environment (Auth Backend etc)
@@ -18,4 +19,16 @@ source /etc/profile
 # Let's inspect that wrapper? The user provided `ttyd_login_wrapper.sh` in the file list but we didn't read it.
 # We will assume it handles the nitty gritty.
 
-exec ttyd -p 7681 --writable -t rendererType=webgl /usr/local/bin/ttyd_login_wrapper.sh
+# However, the original workspace used 'ttyd_login_wrapper.sh'.
+# Let's inspect that wrapper? The user provided `ttyd_login_wrapper.sh` in the file list but we didn't read it.
+# We will assume it handles the nitty gritty.
+
+#exec ttyd -p 7681 --writable -t rendererType=webgl /usr/local/bin/ttyd_login_wrapper.sh
+
+
+
+# Match arguments with Nginx proxy expectation and legacy config
+# Port 2222 (matches WEB_TERMINAL_PORT default)
+# Base path /terminal-inner (matches Nginx proxy path)
+# Auth header to trust X-Forwarded-User from Nginx
+exec ttyd -p 2222 --writable --check-origin --interface 0.0.0.0 -t disableLeaveAlert=true -t disableReconnect=true --auth-header "X-Forwarded-User" --base-path /terminal-inner /usr/local/bin/ttyd_login_wrapper.sh

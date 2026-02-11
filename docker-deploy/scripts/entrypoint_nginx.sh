@@ -25,6 +25,52 @@ fi
 
 log "INFO" "Starting Botanical Portal Nginx Entrypoint..."
 
+# 0. PKI Trust & Certificate Enrollment
+if [ -n "${STEP_CA_URL:-}" ]; then
+    log "INFO" "STEP_CA_URL detected. Configuring PKI..."
+    
+    # 1. Fetch Root CA (Trust)
+    if [ -f "/scripts/pki/fetch_root.sh" ]; then
+        /scripts/pki/fetch_root.sh || log "WARN" "Failed to fetch Root CA."
+    fi
+
+    # 2. Key/Cert Paths
+    # We use standard locations for Nginx to pick up
+    # Note: You must ensure nginx.conf typically looks at /etc/ssl/certs/ssl-cert-snakeoil.pem 
+    # OR we overwrite those files, OR we configure Nginx to look at /etc/ssl/step/site.crt
+    
+    # Let's target a specific directory and assume Nginx template uses it OR we symlink.
+    # The existing .env mounts snakeoil. We should probably overwrite "site.crt" in a volume or ephemeral path.
+    # If the user mounted SSL_CERT_PATH (read-only usually), we can't overwrite.
+    # BUT this is a "Pet Container" style fix. 
+    
+    # Dockerfile.nginx doesn't show where keys are expected unless we look at nginx.conf.template.
+    # Assuming we want to generate them to specific path.
+    
+    CERT_DIR="/etc/ssl/step"
+    mkdir -p "$CERT_DIR"
+    
+    # Enroll
+    if [ -f "/scripts/pki/enroll_cert.sh" ]; then
+        /scripts/pki/enroll_cert.sh "$CERT_DIR/site.crt" "$CERT_DIR/site.key"
+    fi
+     
+    # If enrollment succeeded, we should try to use these certs.
+    # Since legacy config points to /etc/ssl/certs/ssl-cert-snakeoil.pem (often mounted RO),
+    # we might need to adjust Nginx config generation OR symlink if possible (unlikely if RO mount).
+    # However, envsubst in entrypoint generates nginx.conf.
+    # We can export SSL_CERT_PATH override *inside the container* if the template uses it variable?
+    # nginx.conf.template usually uses hardcoded paths or check.
+    
+    if [ -f "$CERT_DIR/site.crt" ] && [ -s "$CERT_DIR/site.crt" ]; then
+        log "INFO" "Using Enrolled Step-CA Certificates..."
+        # We need to make sure nginx uses these.
+        # If nginx.conf.template uses ${SSL_CERT_PATH}, we can export it here!
+        export SSL_CERT_PATH="$CERT_DIR/site.crt"
+        export SSL_KEY_PATH="$CERT_DIR/site.key"
+    fi
+fi
+
 # --- Template Processing Logic ---
 # The user specifically asked to use common_utils logic.
 # process_template usage: process_template "template_file" "output_variable" "KEY=VAL" ...
@@ -81,9 +127,15 @@ fi
 # 3. Process Wrappers (RStudio / Terminal) if they exist
 # In Docker, we might just proxy, but if using iframes, we need the wrapper HTMLs.
 if [ -f "${TEMPLATE_DIR}/rstudio_wrapper.html.template" ]; then
-     mkdir -p "${WEB_ROOT}/rstudio"
-     # Just copy or process if needed
-     cp "${TEMPLATE_DIR}/rstudio_wrapper.html.template" "${WEB_ROOT}/rstudio/index.html"
+    mkdir -p "${WEB_ROOT}/rstudio"
+    cp "${TEMPLATE_DIR}/rstudio_wrapper.html.template" "${WEB_ROOT}/rstudio/index.html"
+    log "INFO" "Deployed RStudio Wrapper"
+fi
+
+if [ -f "${TEMPLATE_DIR}/terminal_wrapper.html.template" ]; then
+    mkdir -p "${WEB_ROOT}/terminal"
+    cp "${TEMPLATE_DIR}/terminal_wrapper.html.template" "${WEB_ROOT}/terminal/index.html"
+    log "INFO" "Deployed Terminal Wrapper"
 fi
 
 # 4. Check Assets

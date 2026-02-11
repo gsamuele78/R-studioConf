@@ -16,21 +16,28 @@ NC='\033[0m'
 log() { echo -e "[DEPLOY] $1"; }
 error() { echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
 
-# 1. Validation
-if [ ! -f "$ENV_FILE" ]; then
-    error ".env file not found at $ENV_FILE. Please create it."
+# 1. Pre-Flight Validation
+log "Running Pre-flight Validation..."
+if [ -f "${SCRIPT_DIR}/scripts/validate_deployment.sh" ]; then
+    "${SCRIPT_DIR}/scripts/validate_deployment.sh" || {
+        error "Validation failed. Please fix the reported errors."
+    }
+else
+    log "${RED}WARNING: Validation script not found. Skipping.${NC}"
+fi
+
+# 1b. Check PKI Trust (Optional but recommended)
+if [ -f "${SCRIPT_DIR}/scripts/manage_pki_trust.sh" ]; then
+    # We can perform a quiet check or just remind the user
+    # For now, let's just log a reminder if not trusted?
+    # Or simplified: checks are done manually.
+    log "Tip: Run 'scripts/manage_pki_trust.sh' to install internal CA certificates if needed."
 fi
 
 log "Loading Configuration from .env..."
 set -a
 source "$ENV_FILE"
 set +a
-
-# Validate Critical Vars
-if [ -z "$AUTH_BACKEND" ]; then error "AUTH_BACKEND is not set in .env"; fi
-if [[ "$AUTH_BACKEND" != "sssd" && "$AUTH_BACKEND" != "samba" ]]; then 
-    error "AUTH_BACKEND must be 'sssd' or 'samba'."; 
-fi
 
 log "Target Backend: ${GREEN}${AUTH_BACKEND}${NC}"
 log "Domain: ${HOST_DOMAIN}"

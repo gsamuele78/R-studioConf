@@ -55,5 +55,5 @@ fi
 # 3. Handle Docker Socket for TTYD? (Optional)
 
 # 4. Exec the CMD (usually /init for S6)
-log "Handing off to command: $@"
+log "Handing off to command: $*"
 exec "$@"

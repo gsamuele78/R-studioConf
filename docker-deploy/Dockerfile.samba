@@ -25,7 +25,22 @@ RUN Rscript /rocker_scripts/install_botanical_packages.R
 # 4. Copy Templates
 COPY templates /etc/docker-templates
 
-# 5. TTYD Setup (Secure Access)
+# 5. TTYD Setup & PKI Trust (Step-CLI)
+# Install dependencies for step-cli installation (wget, tar are usually present but ensure)
+RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
+
+# Install Step CLI
+RUN wget -q -O step.tar.gz https://github.com/smallstep/cli/releases/download/v0.24.4/step_linux_0.24.4_amd64.tar.gz && \
+    tar -xf step.tar.gz && \
+    mv step_0.24.4/bin/step /usr/local/bin/ && \
+    rm -rf step.tar.gz step_0.24.4
+
+COPY scripts/pki /scripts/pki
+RUN chmod +x /scripts/pki/*.sh
+
+COPY scripts/manage_pki_trust.sh /usr/local/bin/manage_pki_trust.sh
+RUN chmod +x /usr/local/bin/manage_pki_trust.sh
+
 COPY scripts/ttyd_login_wrapper.sh /usr/local/bin/ttyd_login_wrapper.sh
 RUN chmod +x /usr/local/bin/ttyd_login_wrapper.sh
 # Configure S6 service for TTYD

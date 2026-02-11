@@ -18,6 +18,20 @@ RUN mkdir -p /etc/nginx/templates \
 # Copy mirrored scripts/libs (User requested project logic usage)
 COPY lib/common_utils.sh /scripts/lib/common_utils.sh
 COPY scripts/entrypoint_nginx.sh /docker-entrypoint.sh
+COPY scripts/manage_pki_trust.sh /usr/local/bin/manage_pki_trust.sh
+
+# Ensure executable
+RUN chmod +x /docker-entrypoint.sh /usr/local/bin/manage_pki_trust.sh
+
+# Install specific deps for PKI trust script (curl, openssl, ca-certificates) & Step-CLI
+RUN apk add --no-cache openssl ca-certificates wget tar && \
+    wget -q -O step.tar.gz https://github.com/smallstep/cli/releases/download/v0.24.4/step_linux_0.24.4_amd64.tar.gz && \
+    tar -xf step.tar.gz && \
+    mv step_0.24.4/bin/step /usr/local/bin/ && \
+    rm -rf step.tar.gz step_0.24.4
+
+COPY scripts/pki /scripts/pki
+RUN chmod +x /scripts/pki/*.sh
 
 # Make entrypoint executable
 RUN chmod +x /docker-entrypoint.sh
