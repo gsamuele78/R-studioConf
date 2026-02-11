@@ -1,0 +1,21 @@
+# templates/rstudio_logging.conf.template
+# This is a template for RStudio's logging.conf file.
+# Placeholders like %%PLACEHOLDER%% are filled by the setup script.
+
+[*]
+log-level=info
+#logger-type=syslog # Uncomment to use syslog instead of file
+logger-type=file
+max-size-mb=20
+rotate=yes
+
+[@rserver]
+log-level=debug
+log-dir=%%RSTUDIO_SERVER_LOG_DIR%%
+logger-type=file
+max-size-mb=10
+rotate=yes
+
+[file-locking]
+log-dir=%%RSTUDIO_FILE_LOCKING_LOG_DIR%%
+log-file-mode=600

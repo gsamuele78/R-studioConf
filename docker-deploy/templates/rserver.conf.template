@@ -1,0 +1,24 @@
+# RStudio Server Configuration
+# Generated from docker-deploy/templates/rserver.conf.template
+
+# Server Limits
+www-limit-file-upload=30000000000
+rsession-memory-limit-mb=16000
+
+# Network
+www-address=${RSERVER_WWW_ADDRESS}
+www-port=${RSERVER_WWW_PORT}
+
+# Security & Proxy Support
+www-frame-origin=same
+www-same-site=none
+www-enable-origin-check=1
+auth-cookies-force-secure=1
+auth-encrypt-password=0
+
+# Authentication
+# In Pet Container (SSSD/Samba mount), we use PAM.
+auth-pam-require-password-prompt=0
+
+# Session
+session-timeout-minutes=${RSESSION_TIMEOUT_MINUTES}

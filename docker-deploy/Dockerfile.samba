@@ -1,0 +1,44 @@
+# Dockerfile.samba - RStudio with Samba/Winbind Passthrough
+FROM rocker/geospatial:latest
+
+LABEL maintainer="docker-deploy-botanical-samba"
+
+# 1. Install System Dependencies & Winbind Client & TTYD
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    python3-launchpadlib \
+    samba winbind libpam-winbind libnss-winbind krb5-user \
+    nano iputils-ping \
+    gettext-base \
+    ttyd xterm curl \
+    && add-apt-repository -y ppa:c2d4u.team/c2d4u4.0+ \
+    && apt-get update \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 2. Configure BSPM
+RUN echo "bspm::enable()" >> /usr/local/lib/R/etc/Rprofile.site
+
+# 3. Install Botanical Packages
+COPY scripts/install_botanical_packages.R /rocker_scripts/install_botanical_packages.R
+RUN Rscript /rocker_scripts/install_botanical_packages.R
+
+# 4. Copy Templates
+COPY templates /etc/docker-templates
+
+# 5. TTYD Setup (Secure Access)
+COPY scripts/ttyd_login_wrapper.sh /usr/local/bin/ttyd_login_wrapper.sh
+RUN chmod +x /usr/local/bin/ttyd_login_wrapper.sh
+# Configure S6 service for TTYD
+RUN mkdir -p /etc/services.d/ttyd
+COPY templates/ttyd_run.template /etc/services.d/ttyd/run
+RUN chmod +x /etc/services.d/ttyd/run
+
+# 6. Entrypoint
+COPY scripts/entrypoint_rstudio.sh /usr/local/bin/entrypoint_rstudio.sh
+RUN chmod +x /usr/local/bin/entrypoint_rstudio.sh
+
+# Environment settings
+ENV AUTH_BACKEND=samba
+
+ENTRYPOINT ["/usr/local/bin/entrypoint_rstudio.sh"]
+CMD ["/init"]

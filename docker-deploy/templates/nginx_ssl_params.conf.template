@@ -1,0 +1,40 @@
+# ----------------------------------------------------------------
+# NGINX SSL PARAMETERS
+#
+# This file contains recommended security settings for SSL/TLS.
+# ----------------------------------------------------------------
+
+# --- Protocols and Ciphers ---
+# Use modern TLS protocols only.
+ssl_protocols TLSv1.2 TLSv1.3;
+# A strong cipher suite that balances security and compatibility.
+ssl_ciphers 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384';
+# Prefer server ciphers over client ciphers.
+ssl_prefer_server_ciphers on;
+
+# --- Session Management ---
+# Enable a shared SSL session cache for performance.
+ssl_session_cache shared:SSL:10m;
+# Set a longer session timeout.
+ssl_session_timeout 1d;
+# Disable session tickets to enhance forward secrecy.
+ssl_session_tickets off;
+
+# Path to Diffie-Hellman parameter file for enhanced security.
+ssl_dhparam %%DHPARAM_FULLPATH%%;
+
+# --- OCSP Stapling (for trusted certificates) ---
+# Uncomment these lines if you are using a trusted CA like Let's Encrypt.
+# ssl_stapling on;
+# ssl_stapling_verify on;
+# resolver 8.8.8.8 8.8.4.4 valid=300s;
+# resolver_timeout 5s;
+
+# --- Security Headers ---
+# Add HTTP Strict Transport Security (HSTS) header.
+add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+# Prevent clickjacking attacks.
+add_header X-Frame-Options "SAMEORIGIN" always;
+# Prevent MIME-type sniffing.
+add_header X-Content-Type-Options "nosniff" always;
+

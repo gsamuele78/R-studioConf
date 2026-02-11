@@ -1,0 +1,93 @@
+# sssd.conf.template
+# Template for SSSD configuration. Placeholders like %%PLACEHOLDER%% will be replaced by the script.
+
+[sssd]
+domains = %%AD_DOMAIN_LOWER%%
+config_file_version = 2
+services = nss, pam
+#debug_level = 0x0070 # Basic debug for troubleshooting: config parsing, service startup, etc.
+
+[nss]
+# To enable verbose NSSD logging, uncomment the following line and adjust level
+# debug_level = 0x0FF0 # Logs all NSS provider operations.
+# Define a fallback home directory template for users who don't have one defined in AD
+fallback_homedir = %%FALLBACK_HOMEDIR_TEMPLATE%%
+
+[pam]
+# To enable verbose PAM logging, uncomment the following line and adjust level
+# debug_level = 0x0FF0 # Logs all PAM provider operations.
+# Disable FIDO2 passkey authentication through SSSD PAM module if not used or causing issues
+pam_passkey_auth = False
+
+
+[domain/%%AD_DOMAIN_LOWER%%]
+# To enable verbose AD provider logging, uncomment the following line and adjust level
+# debug_level = 0x1FF0 # Logs AD provider specific operations, including LDAP queries and Kerberos.
+
+id_provider = ad
+auth_provider = ad
+access_provider = ad
+# chpass_provider = ad # Uncomment if you want SSSD to handle AD password changes (requires kpasswd server)
+
+# Kerberos realm should be uppercase
+krb5_realm = %%AD_DOMAIN_UPPER%%
+realmd_tags = manages-system joined-with-adcli # This tag is typically added by realmd
+krb5_ccname_template = KEYRING:persistent:%U
+
+# SSSD will discover AD servers using DNS SRV records.
+# Explicitly listing ad_server and ad_backup_server is generally not needed and less flexible.
+# ad_server = dc1.%%AD_DOMAIN_LOWER%%
+# ad_backup_server = dc2.%%AD_DOMAIN_LOWER%%
+
+# Home directory configuration
+# fallback_homedir is already in [nss] but can be domain-specific too.
+# override_homedir forces this path, ignoring AD attributes.
+# Use the same template as fallback_homedir if you want consistency.
+override_homedir = %%FALLBACK_HOMEDIR_TEMPLATE%%
+
+# Naming and ID mapping
+# 'false' means users log in with shortname (e.g., 'user')
+# 'true' means users log in with UPN (e.g., 'user@domain')
+use_fully_qualified_names = %%USE_FQNS%%
+ldap_id_mapping = true
+
+# Enumeration can be very slow on large ADs. 'false' is recommended.
+enumerate = false
+
+ad_domain = %%AD_DOMAIN_LOWER%%
+# This should be the FQDN of this client machine as registered in AD
+ad_hostname = %%CLIENT_HOSTNAME%%
+
+# Credentials and Kerberos
+cache_credentials = true
+krb5_store_password_if_offline = true
+
+# DNS and referrals
+# Dynamic DNS updates from Linux clients to AD DNS can be problematic. 'false' is safer.
+dyndns_update = false
+# LDAP referrals usually not needed for single-domain setups.
+ldap_referrals = false
+
+default_shell = /bin/bash
+
+# ldap_use_tokengroups: For AD provider, the default is TRUE and highly recommended.
+# Setting this to False is STRONGLY DISCOURAGED for AD as it breaks group memberships.
+# Omitting this line uses the correct AD provider default (which is TRUE).
+# ldap_use_tokengroups = True # Explicitly if desired, but default is fine.
+
+# ignore_group_members: Improves performance by not resolving all group members on lookups.
+# Access control (like simple_allow_groups) still works correctly because the AD provider
+# handles nested groups internally for authorization checks.
+ignore_group_members = True
+
+# ldap_group_nesting_level: When ignore_group_members is true, SSSD's AD provider
+# handles nesting for access control. For enumeration (if enabled), this would apply.
+# 0 or 1 is generally fine with ignore_group_members = true.
+ldap_group_nesting_level = 0
+
+# Access control: Restrict login to members of these AD groups (comma-separated)
+%%SIMPLE_ALLOW_GROUPS_LINE%%
+
+# GPO Mapping for RStudio (allows applying specific settings via GPO)
+# The '+' means to add to any existing mappings.
+%%AD_GPO_MAP_SERVICE_LINE%%

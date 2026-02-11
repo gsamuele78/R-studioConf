@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # --- RStudio Service (SSSD Backend) ---
+  # Profile: Enable via 'AUTH_BACKEND=sssd' logic or explicit profile
+  # We use the generic name 'rstudio' but conditional build context is hard in standard Compose v1.
+  # So we define two services and user starts one.
+
+  rstudio-sssd:
+    profiles: [ "sssd" ]
+    build:
+      context: .
+      dockerfile: Dockerfile.sssd
+    image: rstudio-botanical-sssd:latest
+    container_name: rstudio_pet
+    restart: unless-stopped
+    network_mode: "host" # Crucial for SSSD/Kerberos
+    environment:
+      - AUTH_BACKEND=sssd
+      - USERID=1000
+      - GROUPID=1000
+    volumes:
+      - ${HOST_HOME_DIR}:/home
+      - ${HOST_PROJECT_ROOT}:/nfs/home
+      # SSSD Mounts
+      - /var/lib/sss/pipes:/var/lib/sss/pipes:rw
+      - /var/lib/sss/mc:/var/lib/sss/mc:ro
+      - /etc/sssd/sssd.conf:/etc/sssd/sssd.conf:ro
+      - /etc/krb5.conf:/etc/krb5.conf:ro
+      - /etc/nsswitch.conf:/etc/nsswitch.conf:ro
+
+  # --- RStudio Service (Samba Backend) ---
+  rstudio-samba:
+    profiles: [ "samba" ]
+    build:
+      context: .
+      dockerfile: Dockerfile.samba
+    image: rstudio-botanical-samba:latest
+    container_name: rstudio_pet
+    restart: unless-stopped
+    network_mode: "host"
+    environment:
+      - AUTH_BACKEND=samba
+    volumes:
+      - ${HOST_HOME_DIR}:/home
+      - ${HOST_PROJECT_ROOT}:/nfs/home
+      # Samba Mounts
+      - /var/run/samba/winbindd:/var/run/samba/winbindd:rw
+      - /var/lib/samba:/var/lib/samba:rw
+      - /etc/samba/smb.conf:/etc/samba/smb.conf:ro
+      - /etc/krb5.conf:/etc/krb5.conf:ro
+      - /etc/nsswitch.conf:/etc/nsswitch.conf:ro
+
+  # --- Nginx Portal Service ---
+  # Only needed if you want the Web Portal Wrapper.
+  # If using network_mode: host for RStudio, Nginx typically should also be on host 
+  # OR use host networking.
+  nginx-portal:
+    profiles: [ "portal" ]
+    image: nginx:alpine
+    container_name: nginx_portal
+    network_mode: "host"
+    volumes:
+      - ./assets:/usr/share/nginx/html/assets
+      - ./templates:/etc/nginx/templates
+      - ${SSL_CERT_PATH}:/etc/ssl/certs/server.crt:ro
+      - ${SSL_KEY_PATH}:/etc/ssl/private/server.key:ro
+    environment:
+      - NGINX_HOST=${HOST_DOMAIN}
+      - NGINX_PORT=${HTTPS_PORT}

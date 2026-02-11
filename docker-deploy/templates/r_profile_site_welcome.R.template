@@ -1,0 +1,28 @@
+# templates/r_profile_site_welcome.R.template
+# This R code snippet is appended to /etc/R/Rprofile.site to show a welcome message.
+# Placeholders like %%PLACEHOLDER%% are filled by the setup script.
+# Added by RStudio setup script $(date '+%Y-%m-%d %H:%M:%S')
+
+setHook("rstudio.sessionInit", function(newSession) {
+  if (newSession) {
+    # Attempt to load sessioninfo if available, otherwise skip
+    if (requireNamespace("sessioninfo", quietly = TRUE)) {
+      tryCatch(
+        print(sessioninfo::session_info()),
+        error = function(e) message("Note: Could not print session_info().")
+      )
+    }
+    message("******************************************************************")
+    message("*** You are welcome to '%%R_HOST%%' - '%%R_IP%%'        ***")
+    message("***                                                        ***")
+    message("*** For personal R package installation:                   ***")
+    message("*** Your personal library should be configured at:         ***")
+    message("***   %%R_PROJECTS_ROOT%%/YOUR_USERNAME/R/...               ***")
+    message("*** Check with .libPaths()                                 ***")
+    message("***                                                        ***")
+    message("*** If issues with system package manager (e.g., bspm/PPM):***")
+    message("***   bspm::disable()                                      ***")
+    message("***   Then use install.packages(\"your_package\") as usual.  ***")
+    message("******************************************************************")
+  }
+}, action = "append")

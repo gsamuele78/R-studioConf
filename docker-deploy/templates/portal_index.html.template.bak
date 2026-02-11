@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Botanical Big Data Calculus - Research Portal</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="background-overlay"></div>
+    <div class="main-container">
+        <header class="glass-header">
+            <div class="logo-container">
+                <img src="logo.png" alt="Botanical Big Data Calculus Logo" class="logo">
+                <div class="site-title">
+                    <h1>Botanical Big Data Calculus</h1>
+                    <p class="subtitle">Research Group Portal</p>
+                </div>
+            </div>
+                <button onclick="showLoginModal()" class="secure-connect-btn">
+                    <span class="lock-icon">🔒</span> Secure Access
+                </button>
+        </header>
+
+        <section id="serviceGrid" class="portal-grid blurred-locked">
+            <a href="/rstudio/" class="portal-card">
+                <div class="card-icon">📊</div>
+                <div class="card-content">
+                    <h2>RStudio Server</h2>
+                    <p>Advanced statistical computing and graphics environment.</p>
+                </div>
+                <div class="card-arrow">→</div>
+            </a>
+
+            <a href="/files/" class="portal-card">
+                <div class="card-icon">☁️</div>
+                <div class="card-content">
+                    <h2>Research Data</h2>
+                    <p>Nextcloud File Access & Collaboration.</p>
+                </div>
+                <div class="card-arrow">→</div>
+            </a>
+
+            <a href="/terminal/" class="portal-card">
+                <div class="card-icon">💻</div>
+                <div class="card-content">
+                    <h2>Secure Terminal</h2>
+                    <p>Direct shell access via Web Terminal.</p>
+                </div>
+                <div class="card-arrow">→</div>
+            </a>
+            
+             <a href="https://www.unibo.it" target="_blank" class="portal-card external">
+                <div class="card-icon">🏛️</div>
+                <div class="card-content">
+                    <h2>University Home</h2>
+                    <p>Official University of Bologna website.</p>
+                </div>
+                <div class="card-arrow">↗</div>
+            </a>
+        </section>
+
+        <footer class="glass-footer">
+            <p>&copy; %%CURRENT_YEAR%% Botanical Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
+        </footer>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeLoginModal()">&times;</span>
+            <div class="login-form">
+                <h2>Secure Connect</h2>
+                <p style="text-align:center; color:#ccc; font-size:0.9rem; margin-bottom:1.5rem;">Enter your AD credentials to seed access for all services.</p>
+                <!-- Added action and method to help browser password managers detect this as a login form -->
+                <form id="connectForm" action="#" method="POST" onsubmit="handleConnect(event)">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" name="username" required placeholder="user@domain.com" autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" required placeholder="••••••••" autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="submit-btn" id="connectBtn">Connect & Save</button>
+                    <p id="loginStatus" style="text-align:center; margin-top:1rem; font-size:0.9rem;"></p>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Modal Logic
+        var modal = document.getElementById("loginModal");
+        
+        function showLoginModal() {
+            // Step 1: Clear existing sessions silently
+            clearAuthSessions();
+            modal.style.display = "block";
+            setTimeout(() => modal.classList.add("show"), 10);
+            document.getElementById("username").focus();
+        }
+
+        function closeLoginModal() {
+            modal.classList.remove("show");
+            setTimeout(() => modal.style.display = "none", 300);
+        }
+
+        window.onclick = function(event) {
+            if (event.target == modal) {
+                closeLoginModal();
+            }
+        }
+
+        // Clear Authentication Logic
+        function clearAuthSessions() {
+            console.log("Clearing sessions...");
+            // 1. Clear Basic Auth (Terminal) logic
+            var xhr = new XMLHttpRequest();
+            xhr.open("GET", "/terminal/", true, "logout", "logout");
+            xhr.send();
+            
+            // 2. Clear RStudio Session (if possible via logout endpoint)
+            // RStudio usually uses a cookie 'user-id' or 'session-user-id'.
+            // Accessing /rstudio-inner/auth-sign-out ensures the server kills it.
+            var img = new Image();
+            img.src = "/rstudio-inner/auth-sign-out"; // Fire and forget
+            
+            // 3. Optional: Clear Nextcloud
+            // var nc = new Image(); nc.src = "/files-inner/logout"; 
+        }
+
+        // Handle Connect
+        function handleConnect(event) {
+            event.preventDefault();
+            console.group("🔐 Botanical Portal Auth Debug");
+            console.time("Auth Sequence");
+            
+            var btn = document.getElementById("connectBtn");
+            var status = document.getElementById("loginStatus");
+            var user = document.getElementById("username").value;
+            var pass = document.getElementById("password").value;
+
+            console.log("1. Initiating connection for user:", user);
+
+            btn.disabled = true;
+            btn.innerHTML = "Verifying...";
+            status.style.color = "#ccc";
+            status.innerHTML = "Checking credentials against Secure Terminal...";
+
+            // We validate credentials by attempting a fetch to the protected /terminal/ endpoint
+            // using the provided credentials as Basic Auth.
+            var authHeader = "Basic " + btoa(user + ":" + pass);
+
+            fetch("/terminal/", {
+                method: "GET",
+                headers: {
+                    "Authorization": authHeader
+                }
+            })
+            .then(response => {
+                console.log("2. Terminal Auth Response:", response.status, response.statusText);
+                
+                if (response.status === 200 || response.status === 403) {
+                    // 200 = OK, 403 = Forbidden (but authenticated! 401 would be unauthenticated)
+                    
+                    status.style.color = "#8FBC8F";
+                    status.innerHTML = "✅ Verified! Signing into services...";
+                    console.log("3. Credentials Validated. Proceeding to Service Sign-in...");
+                    
+                    // Attempt Direct Login to RStudio
+                    loginRStudio(user, pass)
+                        .then(() => {
+                            console.log("5. Direct Login Sequence Complete");
+                            console.timeEnd("Auth Sequence");
+                            console.groupEnd();
+                        })
+                        .finally(() => {
+                            // Success UI Transition
+                            setTimeout(() => {
+                                closeLoginModal();
+                                // Unlock the grid
+                                document.getElementById("serviceGrid").classList.remove("blurred-locked");
+                                
+                                // Change button to Logout
+                                var btnOps = document.querySelector(".secure-connect-btn");
+                                btnOps.innerHTML = '<span class="lock-icon">🔓</span> Logout / Reset';
+                                btnOps.onclick = handleLogout; 
+                                btnOps.classList.add("logout-mode"); 
+                                
+                                btn.disabled = false;
+                                btn.innerHTML = "Connect & Save";
+                                status.innerHTML = "";
+                            }, 1000);
+                        });
+                } else {
+                    console.error("2. Authentication Failed. Status:", response.status);
+                    throw new Error("Authentication Failed (Status: " + response.status + ")");
+                }
+            })
+            .catch(error => {
+                console.error("❌ Login Critical Error:", error);
+                console.groupEnd();
+                
+                status.style.color = "#ff6b6b";
+                status.innerHTML = "❌ Login Failed. Please check AD credentials.";
+                btn.disabled = false;
+                btn.innerHTML = "Connect & Save";
+            });
+        }
+
+        // RStudio Direct Login (Plaintext - requires auth-encrypt-password=0 on server)
+        function loginRStudio(username, password) {
+            console.log("4. Attempting RStudio Background Login...");
+            
+            // Step 1: parse the login page to get the CSRF token
+            return fetch("/rstudio-inner/auth-sign-in")
+            .then(response => response.text())
+            .then(html => {
+                var parser = new DOMParser();
+                var doc = parser.parseFromString(html, "text/html");
+                var csrfToken = doc.querySelector('input[name="rs-csrf-token"]')?.value;
+                
+                if (!csrfToken) {
+                    console.warn("4b. Could not find RStudio CSRF token. Login may fail.");
+                } else {
+                    console.log("4b. Found CSRF Token:", csrfToken);
+                }
+
+                // Step 2: Post credentials + token
+                var data = new URLSearchParams();
+                data.append('username', username);
+                data.append('password', password);
+                // Backend expects 'persist', not 'staySignedIn'
+                data.append('persist', '1');
+                data.append('clientPath', '/rstudio-inner/'); 
+                data.append('appUri', '');
+                
+                // IMPORTANT: Do NOT send 'v' parameter for plaintext login!
+                // Sending 'v' triggers encrypted auth mode -> fails with plaintext.
+
+                if (csrfToken) {
+                    data.append('rs-csrf-token', csrfToken);
+                }
+                
+                // Debug the payload
+                console.log("4b. Sending Plaintext Payload:", data.toString());
+
+                return fetch("/rstudio-inner/auth-do-sign-in", {
+                    method: "POST",
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+                    },
+                    body: data,
+                    credentials: 'include' 
+                });
+            })
+            .then(response => {
+                console.log("4c. RStudio Response Status:", response.status);
+                return response;
+            })
+            .catch(err => {
+                console.warn("4d. RStudio Background Login Failed:", err);
+            });
+        }
+
+        // Handle Logout
+        function handleLogout() {
+            if(!confirm("Are you sure you want to logout and lock the portal?")) return;
+            
+            // 1. Clear Sessions
+            clearAuthSessions();
+            
+            // 2. Re-lock the Grid
+            document.getElementById("serviceGrid").classList.add("blurred-locked");
+            
+            // 3. Reset Button
+            var btnOps = document.querySelector(".secure-connect-btn");
+            btnOps.innerHTML = '<span class="lock-icon">🔒</span> Secure Access';
+            btnOps.onclick = showLoginModal;
+            btnOps.classList.remove("logout-mode");
+            
+            alert("You have been logged out.\nServices are now locked.");
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,240 @@
+#!/bin/bash
+# shellcheck disable=SC2034,SC2155,SC2086,SC2046 # Unused (template vars), dynamic var assignments, eval quotes
+# This script is generated from a template: templates/rstudio_user_login_script.sh.template
+# It is typically placed at: %%RSTUDIO_PROFILE_SCRIPT_PATH%%
+# Sourced upon user login (including RStudio sessions) to configure user-specific settings.
+
+# set -u # DISABLED: Do not enforce strict variables in sourced login scripts as it breaks potential subsequent scripts or shell init.
+
+# --- Configuration (values are placeholders filled by the setup script) ---
+USER_PROJECTS_BASE_DIR="%%R_PROJECTS_ROOT%%"
+USER_LOGIN_LOG_DIR_BASE="%%USER_LOGIN_LOG_ROOT%%"
+PYTHON_VERSION_FOR_PREFS="%%DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT%%"
+PYTHON_PATH_FOR_PREFS="%%DEFAULT_PYTHON_PATH_LOGIN_SCRIPT%%"
+# --- End Configuration ---
+
+CURRENT_USER=$(whoami)
+USER_LOGIN_LOG_FILE="${USER_LOGIN_LOG_DIR_BASE}/${CURRENT_USER}_login_setup.log"
+
+# Function to log messages from this script
+_log_user_setup() {
+    # Ensure log directory exists and is writable by user
+    # If this fails (e.g. root owned log dir not writable by user), we try to handle gracefully or fail silently
+    if ! mkdir -p "${USER_LOGIN_LOG_DIR_BASE}" 2>/dev/null; then
+         return # Cannot log if we can't create dir
+    fi
+    # Appending to user's log file. Using printf for robustness.
+    printf "%s - [%s] - %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "${CURRENT_USER}" "$1" >> "${USER_LOGIN_LOG_FILE}" 2>/dev/null || true
+}
+
+_ensure_command_exists() {
+    command -v "$1" >/dev/null 2>&1 || { _log_user_setup "Error: Command '$1' not found. Cannot proceed with some operations."; return 1; }
+    return 0
+}
+
+_try_chmod() {
+    local perms="$1"
+    local path="$2"
+    # Only try to chmod if we own the file/dir to avoid "Operation not permitted" errors on NFS/Root-owned mounts
+    if [[ -O "$path" ]]; then
+        chmod "$perms" "$path" 2>/dev/null || _log_user_setup "Warning: Failed to chmod $perms $path"
+    else
+        _log_user_setup "Skipping chmod on $path (not owned by user)"
+    fi
+}
+
+_setup_user_r_environment() {
+    _log_user_setup "Starting R environment setup for ${CURRENT_USER}."
+    local r_path r_version user_specific_projects_dir user_r_config_dir user_r_data_dir user_r_libs_dir
+    local user_actual_home r_environ_file entry key dir
+    declare -A renviron_settings
+
+    r_path=$(which R) || { _log_user_setup "R command not found."; return 1; }
+    r_version=$($r_path --version | head -n1 | awk '{print $3}' | awk -F. '{print $1"."$2}')
+    [[ -z "$r_version" ]] && { _log_user_setup "Could not determine R version."; return 1; }
+
+    user_specific_projects_dir="${USER_PROJECTS_BASE_DIR}/${CURRENT_USER}"
+    user_r_config_dir="${user_specific_projects_dir}/.config" # For XDG_CONFIG_HOME
+    user_r_data_dir="${user_specific_projects_dir}/.local/share" # For XDG_DATA_HOME
+    user_r_libs_dir="${user_specific_projects_dir}/R/x86_64-pc-linux-gnu-library/${r_version}"
+
+    for dir in "$user_specific_projects_dir" "$user_r_config_dir" "$user_r_data_dir" "$user_r_libs_dir"; do
+        mkdir -p "$dir" || { _log_user_setup "Failed to create directory $dir"; return 1; }
+        if [[ "$dir" == "$user_r_config_dir" ]] || [[ "$dir" == "$user_r_data_dir" ]]; then
+             _try_chmod 700 "$dir"
+        else
+             _try_chmod 750 "$dir"
+        fi
+    done
+    _log_user_setup "User R directories created/ensured."
+
+    user_actual_home=$(eval echo ~"${CURRENT_USER}") # For tilde expansion to user's actual home
+    touch "${user_actual_home}/.Renviron" # Ensure it exists
+
+    # Fix ownership of user's actual home if needed and possible
+    # This is critical if the home was created by root or other mechanisms
+    # We use 'chown' which should preserve NFSv4 ACLs (unlike chmod which might reset them).
+    # The user becomes OWNER@ and inherits OWNER@ permissions (usually full access).
+    if [[ -n "$DOMAIN_USER_GROUP" ]]; then
+         _log_user_setup "Checking ownership of ${user_actual_home}..."
+         
+         # Log current ACLs for debugging if nfs4_getfacl is available
+         if command -v nfs4_getfacl >/dev/null 2>&1; then
+             _log_user_setup "Current ACLs: $(nfs4_getfacl "${user_actual_home}" | tr '\n' ',' | cut -c 1-200)..."
+         fi
+
+         _log_user_setup "Attempting to enforce ownership of ${user_actual_home} to ${CURRENT_USER}:${DOMAIN_USER_GROUP} (Preserving ACLs)"
+         
+         # NOTE: We intentionally DO NOT run chmod here as it can strip NFSv4 ACLs.
+         # chown should preserve them while giving the new owner the 'OWNER@' rights.
+         if chown "${CURRENT_USER}:${DOMAIN_USER_GROUP}" "${user_actual_home}" 2>/dev/null; then
+              _log_user_setup "Successfully set ownership of ${user_actual_home}."
+         else
+              _log_user_setup "Failed to set ownership of ${user_actual_home}. Verify user has permissions or if file system allows chown."
+         fi
+    fi
+
+    r_environ_file="${user_actual_home}/.Renviron"
+    renviron_settings=(
+        ["R_LIBS_USER"]="\"${user_r_libs_dir}\""
+        ["XDG_CONFIG_HOME"]="\"${user_r_config_dir}\"" # RStudio Desktop like apps
+        ["XDG_DATA_HOME"]="\"${user_r_data_dir}\""   # RStudio Desktop like apps
+    )
+
+    for key in "${!renviron_settings[@]}"; do
+        entry="${key}=${renviron_settings[$key]}"
+        # Check if key is already in the file
+        if grep -q "^${key}=" "${r_environ_file}"; then
+             # Key exists. Check if value matches.
+             current_line=$(grep "^${key}=" "${r_environ_file}")
+             if [[ "$current_line" != "$entry" ]]; then
+                 # Value is different (stale or changed). Update it in place.
+                 # Escape for sed: we escape forward slashes.
+                 # This assumes keys don't contain special sed regex chars, which is true for these ENV vars.
+                 escaped_entry=$(printf '%s\n' "$entry" | sed 's/[\/&]/\\&/g')
+                 sed -i "s|^${key}=.*$|${escaped_entry}|" "${r_environ_file}"
+                 _log_user_setup "Updated stale .Renviron entry: $key"
+             fi
+             # If equal, do nothing (preserve mtime/speedup)
+        else
+             # Key missing, append
+             printf "%s\n" "${entry}" >> "${r_environ_file}"
+             _log_user_setup "Appended new .Renviron entry: $key"
+        fi
+    done
+    _log_user_setup ".Renviron configuration check complete."
+    return 0
+}
+
+_setup_rstudio_user_prefs() {
+    _log_user_setup "Configuring RStudio user preferences for ${CURRENT_USER}."
+    _ensure_command_exists "jq" || return 1
+
+    local user_specific_projects_dir="${USER_PROJECTS_BASE_DIR}/${CURRENT_USER}"
+    # RStudio preferences go to $XDG_CONFIG_HOME/rstudio/rstudio-prefs.json
+    # which, due to .Renviron, becomes ${user_specific_projects_dir}/.config/rstudio/rstudio-prefs.json
+    local rstudio_prefs_dir="${user_specific_projects_dir}/.config/rstudio"
+    local rstudio_prefs_file="${rstudio_prefs_dir}/rstudio-prefs.json"
+    local prefs_json_template prefs_json temp_prefs_file
+
+    mkdir -p "${rstudio_prefs_dir}" && _try_chmod 700 "${rstudio_prefs_dir}"
+    touch "${rstudio_prefs_file}" && _try_chmod 600 "${rstudio_prefs_file}"
+
+    # Define RStudio preferences JSON (ensure paths are valid JSON strings)
+    read -r -d '' prefs_json_template <<PREFS_EOF || true
+{
+  "always_save_history": false,
+  "auto_detect_indentation": true,
+  "auto_expand_error_tracebacks": true,
+  "check_arguments_to_r_function_calls": true,
+  "check_unexpected_assignment_in_function_call": true,
+  "code_completion_include_already_used": true,
+  "code_formatter": "styler",
+  "default_open_project_location": "%s",
+  "default_project_location": "%s",
+  "editor_theme": "Pastel On Dark",
+  "highlight_selected_line": true,
+  "highlight_r_function_calls": true,
+  "indent_guides": "rainbowfills",
+  "initial_working_directory": "%s",
+  "load_workspace": false,
+  "posix_terminal_shell": "bash",
+  "python_type": "system",
+  "python_version": "${PYTHON_VERSION_FOR_PREFS}",
+  "python_path": "${PYTHON_PATH_FOR_PREFS}",
+  "rainbow_parentheses": true,
+  "reformat_on_save": true,
+  "save_workspace": "never",
+  "show_diagnostics_other": true,
+  "show_help_tooltip_on_idle": true,
+  "show_hidden_files": true,
+  "show_last_dot_value": true,
+  "show_invisibles": true,
+  "show_terminal_tab": false,
+  "syntax_color_console": true,
+  "tab_multiline_completion": true,
+  "terminal_initial_directory": "current",
+  "warn_if_no_such_variable_in_scope": true,
+  "warn_variable_defined_but_not_used": true
+}
+PREFS_EOF
+    printf -v prefs_json "$prefs_json_template" \
+        "${user_specific_projects_dir}" "${user_specific_projects_dir}"
+
+    temp_prefs_file=$(mktemp) || { _log_user_setup "Failed to create temp file for prefs."; return 1; }
+    
+    if [[ ! -s "$rstudio_prefs_file" ]]; then
+        # File doesn't exist or is empty, write fresh
+        printf "%s\n" "$prefs_json" > "$rstudio_prefs_file"
+        _try_chmod 600 "$rstudio_prefs_file"
+        _log_user_setup "Initialized RStudio preferences at ${rstudio_prefs_file}."
+    else
+        # File exists. Check if we actually need to update.
+        # Logic: 
+        # 1. 'prefs_json' contains our MANDATED settings.
+        # 2. We want to see if the EXISTING file ALREADY contains these settings with the same values.
+        # 3. If yes, we touch nothing.
+        # 4. If no (or parse error), we merge mandated settings ON TOP of existing ones and write.
+        
+        # JQ Verification:
+        # We assume flat keys for simplicity as per template.
+        # We construct a jq filter that checks if the input object contains our mandated object.
+        # 'contains' in jq checks if B is contained in A. A contains B.
+        # Input to JQ will be the FILE content. Argument will be our prefs_json.
+        
+        if jq -e --argjson wanted "$prefs_json" 'contains($wanted)' "$rstudio_prefs_file" >/dev/null 2>&1; then
+             _log_user_setup "RStudio preferences already up-to-date. Skipping write."
+        else
+             # Merge existing with new, new overwrites common keys
+             # We put 'prefs_json' second to ensure it overrides (enforces) our settings
+             jq -s '.[0] * .[1]' "$rstudio_prefs_file" <(printf "%s\n" "$prefs_json") > "$temp_prefs_file" && \
+             mv "$temp_prefs_file" "$rstudio_prefs_file" && \
+             _try_chmod 600 "$rstudio_prefs_file"
+             _log_user_setup "Merged/Updated RStudio preferences in ${rstudio_prefs_file}."
+        fi
+    fi
+    rm -f "$temp_prefs_file"
+    return 0
+}
+
+# Main execution for this login script
+_log_user_setup "User login script started (template version)."
+if _ensure_command_exists "R" && \
+   _ensure_command_exists "awk" && \
+   _ensure_command_exists "grep" && \
+   _ensure_command_exists "sed" && \
+   _ensure_command_exists "mkdir" && \
+   _ensure_command_exists "touch" && \
+   _ensure_command_exists "chmod" && \
+   _ensure_command_exists "printf" && \
+   _ensure_command_exists "eval" && \
+   _ensure_command_exists "mktemp"; then
+    if _setup_user_r_environment && _setup_rstudio_user_prefs; then
+        _log_user_setup "User R environment and RStudio preferences setup successfully."
+    else
+        _log_user_setup "Errors occurred during user R environment or RStudio preferences setup."
+    fi
+else
+    _log_user_setup "One or more critical commands missing. Aborting user setup script."
+fi
+_log_user_setup "User login script finished."

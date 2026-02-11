@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Botanical Big Data Calculus - Research Portal</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="background-overlay"></div>
+    <div class="main-container">
+        <header class="glass-header">
+            <div class="logo-container">
+                <img src="logo.png" alt="Botanical Big Data Calculus Logo" class="logo">
+                <div class="site-title">
+                    <h1>Botanical Big Data Calculus</h1>
+                    <p class="subtitle">Research Group Portal</p>
+                </div>
+            </div>
+        </header>
+
+        <!-- No blurred-locked class here -->
+        <section id="serviceGrid" class="portal-grid">
+            <a href="/rstudio/" class="portal-card">
+                <div class="card-icon">📊</div>
+                <div class="card-content">
+                    <h2>RStudio Server</h2>
+                    <p>Advanced statistical computing and graphics environment.</p>
+                </div>
+                <div class="card-arrow">→</div>
+            </a>
+
+            <a href="/files/" class="portal-card">
+                <div class="card-icon">☁️</div>
+                <div class="card-content">
+                    <h2>Research Data</h2>
+                    <p>Nextcloud File Access & Collaboration.</p>
+                </div>
+                <div class="card-arrow">→</div>
+            </a>
+
+            <a href="/terminal/" class="portal-card">
+                <div class="card-icon">💻</div>
+                <div class="card-content">
+                    <h2>Secure Terminal</h2>
+                    <p>Direct shell access via Web Terminal.</p>
+                </div>
+                <div class="card-arrow">→</div>
+            </a>
+            
+             <a href="https://www.unibo.it" target="_blank" class="portal-card external">
+                <div class="card-icon">🏛️</div>
+                <div class="card-content">
+                    <h2>University Home</h2>
+                    <p>Official University of Bologna website.</p>
+                </div>
+                <div class="card-arrow">↗</div>
+            </a>
+        </section>
+
+        <footer class="glass-footer">
+            <p>&copy; %%CURRENT_YEAR%% Botanical Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
+        </footer>
+    </div>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# ----------------------------------------------------------------
+# NGINX PERFORMANCE TUNING (Profile: 4 vCore / 16GB RAM)
+# ----------------------------------------------------------------
+
+# --- Basic Optimization ---
+sendfile on;
+tcp_nopush on;
+tcp_nodelay on;
+
+# --- Upload Handling (Optimized for Remote/Large Files) ---
+# Allow 10GB uploads to match Nextcloud needs
+client_max_body_size 10G;
+
+# Large buffer for initial body read (reduces disk I/O for small-medium requests)
+client_body_buffer_size 512k;
+
+# Dedicated temp path (ensured by cleanup script)
+client_body_temp_path /var/lib/nginx/upload_temp 1 2;
+
+# --- Timeouts (Variables from config) ---
+client_header_timeout %%TIMEOUT_STANDARD%%s;
+client_body_timeout %%TIMEOUT_STANDARD%%s;
+send_timeout %%TIMEOUT_STANDARD%%s;
+keepalive_timeout 300s;
+keepalive_requests 1000;
+
+# --- Compression ---
+# Disabled for high-load upload profile to save CPU.
+gzip off;

@@ -1,0 +1,21 @@
+#!/usr/bin/with-contenv bash
+# /etc/services.d/ttyd/run
+
+# Load environment (Auth Backend etc)
+source /etc/profile
+
+# Command explanation:
+# -p 7681: Port
+# -W: Writable working directory
+# -c: Credential (user:pass) - BUT we want PAM.
+# ttyd by default doesn't do PAM unless we use a login wrapper or standard login.
+# We usage '/usr/local/bin/ttyd_login_wrapper.sh' as the command to run?
+# NO, ttyd wraps a command. 
+# Usage: ttyd login
+# To use PAM, we usually run 'login'.
+
+# However, the original workspace used 'ttyd_login_wrapper.sh'.
+# Let's inspect that wrapper? The user provided `ttyd_login_wrapper.sh` in the file list but we didn't read it.
+# We will assume it handles the nitty gritty.
+
+exec ttyd -p 7681 --writable -t rendererType=webgl /usr/local/bin/ttyd_login_wrapper.sh

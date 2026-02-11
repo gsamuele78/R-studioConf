@@ -1,0 +1,32 @@
+# ----------------------------------------------------------------
+# KERNEL TUNING FOR HIGH THROUGHPUT WEB SERVER & PROXY
+# ----------------------------------------------------------------
+
+# --- GENERAL NETWORK STACK ---
+# Increase the range of ephemeral ports for high concurrency
+net.ipv4.ip_local_port_range = 1024 65535
+
+# Increase the maximum number of connections in the listen queue
+net.core.somaxconn = 65535
+
+# Allow reuse of sockets in TIME_WAIT state for new connections
+net.ipv4.tcp_tw_reuse = 1
+
+# Protection against SYN flood attacks
+net.ipv4.tcp_syncookies = 1
+
+# --- MEMORY BUFFERS (PROFILE: 1GbE / CephFS Safe) ---
+# Active profile for current 1GbE network.
+# 16MB buffers are sufficient for 1Gbps and safe for 16GB RAM.
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+# Moderate backlog to prevent packet drops during spikes
+net.core.netdev_max_backlog = 5000
+
+# --- SWAPPINESS ---
+# Reduce swapping to preserve latency
+vm.swappiness = 10
+
+# --- HOST / VM SPECIFIC (Commented by Default - Managed by Script) ---
+# {{HOST_SPECIFIC_TUNING}}
+# {{VM_SPECIFIC_TUNING}}

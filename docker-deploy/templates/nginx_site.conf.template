@@ -1,0 +1,55 @@
+# --- HTTP Server Block ---
+# Redirects all port 80 traffic to HTTPS.
+# Includes logic for Let's Encrypt ACME challenge.
+
+# MAP: Extract short username (before @) to bypass TTYD 32-char limit
+map $remote_user $short_remote_user {
+    ~^(?P<user>[^@]+)@.*$ $user;
+    default $remote_user;
+}
+
+server {
+    # Listen on all IPv4 addresses
+    listen 80;
+    # Listen on all IPv6 addresses
+    listen [::]:80;
+    server_name %%DOMAIN_OR_IP%%;
+    
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    # Nextcloud Discovery Redirects
+    location ^~ /.well-known/carddav { return 301 /files/remote.php/dav; }
+    location ^~ /.well-known/caldav  { return 301 /files/remote.php/dav; }
+    location ^~ /.well-known/webfinger { return 301 /files/index.php/.well-known/webfinger; }
+    location ^~ /.well-known/nodeinfo { return 301 /files/index.php/.well-known/nodeinfo; }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# --- Main HTTPS Server Block ---
+server {
+    # Listen on all IPv4 addresses for SSL
+    listen 443 ssl http2;
+    # Listen on all IPv6 addresses for SSL
+    listen [::]:443 ssl http2;
+    server_name %%DOMAIN_OR_IP%%;
+
+    access_log %%LOG_DIR%%/rstudio-access.log;
+    error_log %%LOG_DIR%%/rstudio-error.log;
+
+    # Includes the certificate paths (works for both Self-Signed and Let's Encrypt)
+    include %%NGINX_TEMPLATE_DIR%%/nginx_ssl_certificate.conf;
+    
+    # Includes the hardened SSL/TLS parameters
+    include %%NGINX_TEMPLATE_DIR%%/nginx_ssl_params.conf;
+
+    # Includes the performance optimization configuration
+    include %%NGINX_TEMPLATE_DIR%%/nginx_performance.conf;
+
+    # Includes the reverse proxy definitions for all services
+    include %%NGINX_TEMPLATE_DIR%%/nginx_proxy_location.conf;
+}

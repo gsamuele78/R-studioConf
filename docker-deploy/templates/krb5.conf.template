@@ -1,0 +1,20 @@
+
+# krb5.conf template for Kerberos setup (updated for UNIBO and other realms)
+# Placeholders Default_realm:      {{default_realm}}
+# Placeholders Realms_block:       {{realms_block}}
+# Placeholders Domain_realm_block: {{domain_realm_block}}  
+# Placeholders Libdefaults_extra:  {{libdefaults_extra}}
+# End Placeholders
+###################################### 
+# Start Configuration
+
+[libdefaults]
+    default_realm = %%KRB5_DEFAULT_REALM%%
+    dns_lookup_realm = false
+    dns_lookup_kdc = true
+
+[realms]
+%%KRB5_REALMS_BLOCK%%
+
+[domain_realm]
+%%KRB5_DOMAIN_REALM_BLOCK%%

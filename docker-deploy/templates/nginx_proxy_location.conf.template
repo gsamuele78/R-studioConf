@@ -1,0 +1,370 @@
+# ----------------------------------------------------------------
+# NGINX PROXY LOCATION CONFIGURATION (v3.1 - Victorious)
+# ----------------------------------------------------------------
+
+# --- Reverse Proxy for R-Studio Server ---
+# --- Reverse Proxy for R-Studio Server (Unified Iframe) ---
+# 1. /rstudio/ serves the static wrapper
+location /rstudio/ {
+    alias /var/www/html/rstudio/;
+    index index.html;
+    try_files $uri $uri/ =404;
+}
+
+# 2. /rstudio-inner/ proxies to the RStudio backend
+location ^~ /rstudio-inner/ {
+    access_log %%LOG_DIR%%/rstudio-access.log;
+    error_log %%LOG_DIR%%/rstudio-error.log;
+    
+    # Note: RStudio must be configured with www-root-path=/rstudio-inner
+    # Standard proxy configuration for subpath
+    proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/;
+    
+    # Fix Cookie Path: Rewrite backend root cookies to frontend subpath
+
+    
+    # FIX: Explicitly rewrite backend redirects (Location: /) to frontend subpath
+    # RStudio often redirects to / after login, even with www-root-path set
+    proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+    # Also catch https just in case
+    proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+    # And catch generic root redirects
+    proxy_redirect / /rstudio-inner/;
+    
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    
+    # Pass real Host and standardized Forwarded headers
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Port 443;
+    
+    # Pass CSRF Token (prevent login loops)
+    proxy_set_header X-CSRF-Token $http_x_csrf_token;
+    
+    # Explicitly tell RStudio its root path (redundant with www-root-path but safe)
+    proxy_set_header X-RStudio-Root-Path /rstudio-inner;
+    
+    # Extended timeout for long-running R sessions
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+    
+    # Performance & Persistence
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_socket_keepalive on;
+
+    # Hide X-Frame-Options to allow framing in our wrapper
+    proxy_hide_header X-Frame-Options;
+    
+    # CRITICAL: Pass Cookies for Client-Seeded Auth
+    # Ensure the 'csrf-token' cookie set by JS reaches the backend
+    proxy_set_header Cookie $http_cookie;
+    # Ensure the session cookie returned by RStudio reaches the browser
+    proxy_pass_header Set-Cookie;
+
+    # Login Block - Keep Referer spoofing required for Portal Auto-Login (CSRF)
+    location = /rstudio-inner/auth-do-sign-in {
+        proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/auth-do-sign-in;
+        
+        # FIX: Explicitly include port 443 in Origin/Referer
+        # RStudio logs showed expectation of "IP:443"
+        proxy_set_header Referer $scheme://$host:443/auth-sign-in;
+        proxy_set_header Origin $scheme://$host:443;
+        
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+        
+        # Pass CSRF Token
+        proxy_set_header X-CSRF-Token $http_x_csrf_token;
+        
+        # Explicitly tell RStudio its root path during login (Consistency)
+        proxy_set_header X-RStudio-Root-Path /rstudio-inner;
+        
+        # CRITICAL: Pass Cookies for POST login
+        proxy_set_header Cookie $http_cookie;
+        proxy_pass_header Set-Cookie;
+        
+        proxy_hide_header X-Frame-Options;
+        
+        # Explicitly rewrite redirects
+        proxy_redirect http://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        proxy_redirect https://127.0.0.1:%%RSTUDIO_PORT%%/ $scheme://$host/rstudio-inner/;
+        proxy_redirect / /rstudio-inner/;
+        
+        # CRITICAL: NO proxy_cookie_path overrides here.
+        # Inherit samesite=none from parent or enforce it again
+        proxy_cookie_flags ~ secure samesite=none;
+    }
+
+    # Logout Block - Also requires Origin/Referer fix to prevent 400 Bad Request
+    location = /rstudio-inner/auth-sign-out {
+        proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/auth-sign-out;
+        
+        # Fix: Ensure RStudio sees the public Host so it matches Expectation
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+
+        # Spoof Origin/Referer with :443
+        proxy_set_header Referer $scheme://$host:443/;
+        proxy_set_header Origin $scheme://$host:443;
+        
+        # FIX: Pass CSRF Token for Logout too (prevents "invalid CSRF form")
+        proxy_set_header X-CSRF-Token $http_x_csrf_token;
+
+        # Explicitly tell RStudio its root path during logout
+        proxy_set_header X-RStudio-Root-Path /rstudio-inner;
+        
+        proxy_set_header Cookie $http_cookie;
+        proxy_pass_header Set-Cookie;
+    }
+    
+    # Enforce Secure Cookies on all other RStudio responses
+    # Also force Origin for any other POSTs that might happen
+    proxy_set_header Origin $scheme://$host:443;
+    proxy_set_header Referer $scheme://$host:443$request_uri;
+    
+    proxy_cookie_flags ~ secure samesite=none;
+}
+
+# --- Web Portal (Root) ---
+location / {
+    root /var/www/html;
+    index index.html;
+    index index.html;
+    try_files $uri $uri/ =404;
+}
+
+# --- Auth Verification Helper ---
+# Suppresses browser popup on failed login check
+location = /auth-check {
+    # Match Realm exactly to share potential cache scope
+    auth_pam "Secure Terminal - AD Credentials Required";
+    auth_pam_service_name "nginx";
+
+    # FIXED: Do NOT use 'return 200' here, as it runs before auth_pam (Rewrite Phase vs Access Phase).
+    # Instead, use try_files to serve a dummy static file, forcing the Access Phase (Auth) to run first.
+    root /var/www/html;
+    try_files /index.html =500;
+
+    # Failure: Intercept 401 to suppress WWW-Authenticate header
+    error_page 401 = @suppress_popup;
+}
+
+location @suppress_popup {
+    # Return 403 Forbidden to prevent browser credential prompt
+    return 403 "Authentication Failed";
+}
+
+# ### DEFINITIVE FIX for ttyd ###
+# 1. /terminal/ serves the static wrapper with the iframe
+location = /terminal { return 301 /terminal/; }
+location /terminal/ {
+    alias /var/www/html/terminal/;
+    index index.html;
+    try_files $uri $uri/ =404;
+    
+    auth_pam "Secure Terminal - AD Credentials Required";
+    auth_pam_service_name "nginx";
+}
+
+# 2. /terminal-inner/ proxies to the actual ttyd instance
+location ^~ /terminal-inner/ {
+    access_log %%LOG_DIR%%/terminal-access.log;
+    error_log %%LOG_DIR%%/terminal-error.log;
+    
+    auth_pam "Secure Terminal - AD Credentials Required";
+    auth_pam_service_name "nginx";
+    
+    proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/terminal-inner/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    
+    # Performance & Persistence
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_read_timeout 86400s;
+    proxy_socket_keepalive on;
+    
+    proxy_set_header X-Forwarded-User $short_remote_user;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+    # Inject Auto-Logout Script (Simplified for Wrapper)
+    # We kept the logout logic but removed the layout shift/header injection
+    # because the wrapper now handles the UI.
+    proxy_set_header Accept-Encoding "";
+    sub_filter_types *;
+    
+    sub_filter '</body>' '<script>
+        // Wait 3 seconds for initial load to stabilize
+        setTimeout(function() {
+            // Poll for the specific "Connection Closed" overlay
+            setInterval(function() {
+                var divs = document.getElementsByTagName("div");
+                for (var i = 0; i < divs.length; i++) {
+                    var d = divs[i];
+                    // The ttyd OverlayAddon creates a div with "font-size: xx-large"
+                    if (d.style.fontSize === "xx-large" && 
+                       (d.textContent.indexOf("Connection Closed") !== -1 || d.textContent.indexOf("Reconnect") !== -1)) {
+                         // Redirect the TOP window to logout, not just the iframe
+                         window.top.location.replace("/logout");
+                         return;
+                    }
+                }
+            }, 1000);
+        }, 3000);
+    </script></body>';
+    sub_filter_once on;
+}
+
+# --- Telemetry & Monitoring ---
+# Secure metrics endpoint for Prometheus
+location /monitoring/ {
+    # Allow only local access or specific IPs (Modify allows as needed)
+    allow 127.0.0.1;
+    allow 192.168.0.0/16; # Default LAN
+    allow 10.0.0.0/8;     # VPN/Internal
+    deny all;
+    
+    # Custom API
+    proxy_pass http://127.0.0.1:8000/;
+}
+
+location /monitoring/node/ {
+    # Same restrictions
+    allow 127.0.0.1;
+    allow 192.168.0.0/16;
+    allow 10.0.0.0/8;
+    deny all;
+    
+    # Node Exporter
+    proxy_pass http://127.0.0.1:9100/;
+}
+
+# --- Logout Mechanism ---
+# Simple endpoint to trigger a 401 Unauthorized.
+location = /logout {
+    return 401;
+}
+
+# Custom error page for 401 (Logout)
+error_page 401 @logged_out;
+location @logged_out {
+    default_type text/html;
+    # Embed script to clear cached credentials by sending a bad request
+    return 200 '
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Logging Out...</title>
+        <style>
+            body { font-family: sans-serif; text-align: center; padding-top: 50px; background: #f0f2f5; }
+            .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 20px auto; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        </style>
+        <script>
+            // Attempt to clear browser authentication cache for /terminal/
+            function clearAuthAndRedirect() {
+                var xhr = new XMLHttpRequest();
+                // Send invalid credentials to overwrite browser cache
+                xhr.open("GET", "/terminal/", true, "logout", "logout");
+                
+                xhr.onreadystatechange = function() {
+                    if (xhr.readyState == 4) {
+                        // After attempt, redirect to portal
+                        window.location.replace("/");
+                    }
+                };
+                
+                xhr.send();
+                
+                // Safety fallback: Redirect anyway after 1s
+                setTimeout(function() { window.location.replace("/"); }, 1000);
+            }
+            // Run on load
+            window.onload = clearAuthAndRedirect;
+        </script>
+    </head>
+    <body>
+        <div class="box">
+            <h1>Logging Out...</h1>
+            <div class="spinner"></div>
+            <p>Cleaning session and returning to portal.</p>
+        </div>
+    </body>
+    </html>
+    ';
+}
+
+# --- Nextcloud Service Discovery (HTTPS) ---
+location ^~ /.well-known/carddav { return 301 /files/remote.php/dav; }
+location ^~ /.well-known/caldav  { return 301 /files/remote.php/dav; }
+location ^~ /.well-known/webfinger { return 301 /files/index.php/.well-known/webfinger; }
+location ^~ /.well-known/nodeinfo { return 301 /files/index.php/.well-known/nodeinfo; }
+
+# --- Reverse Proxy for Nextcloud (External) ---
+# --- Reverse Proxy for Nextcloud (External) ---
+# --- Reverse Proxy for Nextcloud (Unified Iframe) ---
+# 1. /files/ serves the static wrapper
+location /files/ {
+    alias /var/www/html/files/;
+    index index.html;
+    try_files $uri $uri/ =404;
+}
+
+# 2. /files-inner/ proxies to the Nextcloud backend
+location ^~ /files-inner/ {
+    access_log %%LOG_DIR%%/nextcloud-access.log;
+    error_log %%LOG_DIR%%/nextcloud-error.log;
+    
+    # Proxy to external Nextcloud instance
+    # Note: If target does not handle /files-inner prefix, this might need URL rewriting
+    proxy_pass %%NEXTCLOUD_TARGET_URL%%/;
+    
+    # Force HTTPS only (Nextcloud handles path generation via overwritewebroot)
+    proxy_redirect http:// https://;
+    
+    # CRITICAL: Do NOT set proxy_cookie_path here.
+    # Nextcloud sets 'Path=/files-inner' correctly now. Nginx rewriting it would break it.
+    
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    
+    # Security Headers for Nextcloud
+    add_header Strict-Transport-Security "max-age=15552000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-XSS-Protection "1; mode=block";
+    add_header X-Robots-Tag "none";
+    add_header X-Download-Options "noopen";
+    add_header X-Permitted-Cross-Domain-Policies "none";
+    add_header Referrer-Policy "no-referrer" always;
+
+    # Performance and Upload Optimizations
+    client_max_body_size 10G;
+    client_body_buffer_size 512k;
+    proxy_read_timeout 3600;
+    proxy_connect_timeout 3600;
+    proxy_send_timeout 3600;
+    
+    proxy_request_buffering off;
+    proxy_buffering off;
+
+    # No sub_filter needed (Wrapper handles UI)
+}
