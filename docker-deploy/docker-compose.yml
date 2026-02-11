@@ -2,10 +2,6 @@ version: '3.8'
 
 services:
   # --- RStudio Service (SSSD Backend) ---
-  # Profile: Enable via 'AUTH_BACKEND=sssd' logic or explicit profile
-  # We use the generic name 'rstudio' but conditional build context is hard in standard Compose v1.
-  # So we define two services and user starts one.
-
   rstudio-sssd:
     profiles: [ "sssd" ]
     build:
@@ -14,7 +10,7 @@ services:
     image: rstudio-botanical-sssd:latest
     container_name: rstudio_pet
     restart: unless-stopped
-    network_mode: "host" # Crucial for SSSD/Kerberos
+    network_mode: "host"
     environment:
       - AUTH_BACKEND=sssd
       - USERID=1000
@@ -22,7 +18,6 @@ services:
     volumes:
       - ${HOST_HOME_DIR}:/home
       - ${HOST_PROJECT_ROOT}:/nfs/home
-      # SSSD Mounts
       - /var/lib/sss/pipes:/var/lib/sss/pipes:rw
       - /var/lib/sss/mc:/var/lib/sss/mc:ro
       - /etc/sssd/sssd.conf:/etc/sssd/sssd.conf:ro
@@ -44,7 +39,6 @@ services:
     volumes:
       - ${HOST_HOME_DIR}:/home
       - ${HOST_PROJECT_ROOT}:/nfs/home
-      # Samba Mounts
       - /var/run/samba/winbindd:/var/run/samba/winbindd:rw
       - /var/lib/samba:/var/lib/samba:rw
       - /etc/samba/smb.conf:/etc/samba/smb.conf:ro
@@ -52,19 +46,22 @@ services:
       - /etc/nsswitch.conf:/etc/nsswitch.conf:ro
 
   # --- Nginx Portal Service ---
-  # Only needed if you want the Web Portal Wrapper.
-  # If using network_mode: host for RStudio, Nginx typically should also be on host 
-  # OR use host networking.
   nginx-portal:
     profiles: [ "portal" ]
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    image: botanical-portal-nginx:latest
     container_name: nginx_portal
     network_mode: "host"
     volumes:
-      - ./assets:/usr/share/nginx/html/assets
-      - ./templates:/etc/nginx/templates
+      # Mount assets and templates to context paths if dev changes needed
+      # But Dockerfile copies them in. We might want read-only mounts for live updates?
+      # Let's rely on Image build for stability as per "Pet" design.
+      # Just mount SSL.
       - ${SSL_CERT_PATH}:/etc/ssl/certs/server.crt:ro
       - ${SSL_KEY_PATH}:/etc/ssl/private/server.key:ro
     environment:
       - NGINX_HOST=${HOST_DOMAIN}
       - NGINX_PORT=${HTTPS_PORT}
+      - RSTUDIO_PORT=${RSTUDIO_PORT}

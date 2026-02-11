@@ -1,18 +1,18 @@
 # RStudio Docker Deployment (Dual Backend & Web Portal)
 
-This directory contains the complete infrastructure to deploy RStudio Server in a "Pet Container" mode, fully integrated with your Host's Active Directory (SSSD or Samba), along with a Web Portal.
+This directory contains the complete infrastructure to deploy RStudio Server in a "Pet Container" mode, fully integrated with your Host's Active Directory (SSSD or Samba).
 
 ## Structure matches your project root
 
-* `scripts/`: Mirrored setup scripts + new Docker entrypoints.
-* `config/`: Mirrored configuration files.
-* `templates/`: Mirrored templates + Docker-specific config templates.
+* `scripts/`: Mirrored setup scripts + Docker entrypoints (`entrypoint_nginx.sh` uses `common_utils.sh` logic).
+* `config/`: Mirrored configuration files (Reference only; config is in `.env`).
+* `templates/`: HTML/CSS/Conf Templates used by the Nginx Entrypoint.
 * `lib/`: Shared utilities (`common_utils.sh`).
 * `assets/`: Web portal assets (logo, background).
 
-## configuration
+## Configuration
 
-All settings are controlled by the `.env` file.
+All settings are controlled by the **`.env`** file.
 
 ```ini
 AUTH_BACKEND=sssd          # Choose 'sssd' or 'samba'
@@ -23,31 +23,29 @@ HOST_HOME_DIR=/home
 
 ## How to Deploy
 
-### 1. Select Backend
+### 1. Automated Deployment (Recommended)
 
-Edit `.env` and set `AUTH_BACKEND` to either `sssd` or `samba` matching your Host's setup.
-
-### 2. Build and Run
-
-Use Docker Compose profiles to launch the correct stack.
-
-**For SSSD Backend:**
+Use the included `deploy.sh` script which validates your `.env` and health-checks the services.
 
 ```bash
-docker compose --profile sssd up -d --build
+chmod +x deploy.sh
+./deploy.sh
 ```
 
-**For Samba Backend:**
+### 2. Manual Deployment
 
-```bash
-docker compose --profile samba up -d --build
-```
+Select your backend profile and launch.
 
-**To include the Web Portal:**
-Add the `portal` profile.
+**For SSSD Backend + Portal:**
 
 ```bash
 docker compose --profile sssd --profile portal up -d --build
+```
+
+**For Samba Backend + Portal:**
+
+```bash
+docker compose --profile samba --profile portal up -d --build
 ```
 
 ### 3. Access
@@ -55,7 +53,7 @@ docker compose --profile sssd --profile portal up -d --build
 * **Web Portal**: `https://<host-domain>` (Requires SSL certs mounted as defined in `.env`)
 * **RStudio Direct**: `http://<host-ip>:8787`
 
-## Notes
+## Components
 
-* **Network Mode Host**: The containers run in host networking mode to transparently use the Host's authentication sockets/pipes.
-* **User Persistence**: `/home` is bind-mounted, so RStudio users see their actual Host home directories.
+* **RStudio Pet**: Runs with `network_mode: host` to access Host Auth sockets.
+* **Nginx Portal**: Custom build that processes `templates/portal_index.html.template` using `common_utils.sh` logic at startup.

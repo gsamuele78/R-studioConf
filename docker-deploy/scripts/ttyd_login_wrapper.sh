@@ -46,4 +46,13 @@ export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 export LC_BYOBU="${LC_BYOBU:-0}"
 
 # Execute login
-exec /bin/login -f "$REMOTE_USER"
+# Loop to allow re-login or clean exit
+while true; do
+    echo "Starting login session for: $REMOTE_USER"
+    /bin/login -f "$REMOTE_USER"
+    
+    echo ""
+    echo "Session ended."
+    read -p "Press Enter to reconnect or Ctrl+C to close..."
+    clear
+done

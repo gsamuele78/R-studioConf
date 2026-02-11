@@ -1,0 +1,30 @@
+# Dockerfile.nginx - Custom Nginx Build for Botanical Portal
+FROM nginx:alpine
+
+LABEL maintainer="docker-deploy-botanical-nginx"
+
+# Install bash and gettext (for envsubst) to support our custom scripts
+# We also need 'coreutils' for some common_utils operations if used.
+RUN apk add --no-cache bash gettext coreutils curl
+
+# Cleanup default config
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Structure
+RUN mkdir -p /etc/nginx/templates \
+    /usr/share/nginx/html/assets \
+    /scripts/lib
+
+# Copy mirrored scripts/libs (User requested project logic usage)
+COPY lib/common_utils.sh /scripts/lib/common_utils.sh
+COPY scripts/entrypoint_nginx.sh /docker-entrypoint.sh
+
+# Make entrypoint executable
+RUN chmod +x /docker-entrypoint.sh
+
+# Entrypoint
+# We replace the default entrypoint to run our config logic first
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
+# Default CMD
+CMD ["nginx", "-g", "daemon off;"]
