@@ -493,8 +493,21 @@
                                 // Change button to Logout (open padlock SVG)
                                 var btnOps = document.querySelector(".secure-connect-btn");
                                 btnOps.innerHTML = '<svg class="lock-svg" style="color:#8FBC8F;filter:drop-shadow(0 0 4px rgba(143,188,143,0.7));" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M17 11V7A5 5 0 0 0 7 7v0H9v0a3 3 0 0 1 6 0v4H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1h-2zm-5 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M7 7V5a5 5 0 0 1 10 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none" style="color:#8FBC8F;"/></svg> Logout / Reset';
-                                btnOps.onclick = handleLogout; 
-                                btnOps.classList.add("logout-mode"); 
+                                btnOps.onclick = handleLogout;
+                                btnOps.classList.add("logout-mode");
+
+                                // ── BroadcastChannel: listen for service tabs calling "Back to Portal" ──
+                                // Service tabs can't use window.opener (target=_blank sets noopener),
+                                // so they broadcast {type:'goHome'} and this tab calls window.focus().
+                                if (typeof BroadcastChannel !== 'undefined') {
+                                    if (window._portalChannel) window._portalChannel.close();
+                                    window._portalChannel = new BroadcastChannel('biome-portal-nav');
+                                    window._portalChannel.onmessage = function(e) {
+                                        if (e.data && e.data.type === 'goHome') {
+                                            window.focus();
+                                        }
+                                    };
+                                }
                                 
                                 btn.disabled = false;
                                 btn.innerHTML = "Connect &amp; Save";

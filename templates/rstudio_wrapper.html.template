@@ -59,9 +59,9 @@
     <script>
         // Return to the original portal tab that opened this service tab.
         function goBack() {
-            if (window.opener && !window.opener.closed) {
-                window.opener.focus();
-                window.close();
+            if (typeof BroadcastChannel !== 'undefined') {
+                new BroadcastChannel('biome-portal-nav').postMessage({ type: 'goHome' });
+                setTimeout(function() { window.close(); }, 100);
             } else {
                 window.location.href = '/';
             }

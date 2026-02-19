@@ -477,11 +477,14 @@
 // Uses window.opener.focus() + window.close() instead of href='/' which
 // would open a NEW portal tab rather than returning to the existing one.
 function goBack() {
-    if (window.opener && !window.opener.closed) {
-        window.opener.focus();   // bring original portal tab to the front
-        window.close();          // close this service tab
+    if (typeof BroadcastChannel !== 'undefined') {
+        // Signal the logged-in portal tab to focus itself, then close this tab.
+        // The portal tab listens on this channel after login (BroadcastChannel
+        // works across same-origin tabs regardless of how they were opened).
+        new BroadcastChannel('biome-portal-nav').postMessage({ type: 'goHome' });
+        setTimeout(function() { window.close(); }, 100);
     } else {
-        window.location.href = '/';  // fallback: tab not opened by portal
+        window.location.href = '/';   // fallback for older browsers
     }
 }
 // ── Configuration ──
