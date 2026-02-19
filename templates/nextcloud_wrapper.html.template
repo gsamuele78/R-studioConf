@@ -48,7 +48,7 @@
 </head>
 <body>
     <div id="portal-top-bar">
-        <a href="javascript:void(0)" onclick="window.location.href = window.location.origin + '/';">🏠 Botanical Portal</a>
+        <a href="javascript:void(0)" onclick="goBack()">🏠 Botanical Portal</a>
     </div>
     <iframe id="app-frame" 
             src="/files-inner/" 
@@ -57,6 +57,16 @@
             referrerpolicy="strict-origin-when-cross-origin"
     ></iframe>
     <script>
+        // Return to the original portal tab that opened this service tab.
+        function goBack() {
+            if (window.opener && !window.opener.closed) {
+                window.opener.focus();
+                window.close();
+            } else {
+                window.location.href = '/';
+            }
+        }
+
         document.getElementById("app-frame").addEventListener("load", function() {
             console.log("ℹ️ [Nextcloud Wrapper] Iframe Loaded");
             try {

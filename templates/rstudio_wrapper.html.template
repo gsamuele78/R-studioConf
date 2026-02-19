@@ -48,19 +48,28 @@
 </head>
 <body>
     <div id="portal-top-bar">
-        <a href="javascript:void(0)" onclick="window.location.href = window.location.origin + '/';">🏠 Biome Portal</a>
+        <a href="javascript:void(0)" onclick="goBack()">🏠 Biome Portal</a>
     </div>
-    <iframe id="app-frame" 
-            src="/rstudio-inner/" 
+    <iframe id="app-frame"
+            src="/rstudio-inner/"
             title="RStudio"
-            allow="clipboard-read; clipboard-write" 
+            allow="clipboard-read; clipboard-write"
             referrerpolicy="strict-origin-when-cross-origin"
     ></iframe>
     <script>
+        // Return to the original portal tab that opened this service tab.
+        function goBack() {
+            if (window.opener && !window.opener.closed) {
+                window.opener.focus();
+                window.close();
+            } else {
+                window.location.href = '/';
+            }
+        }
+
         document.getElementById("app-frame").addEventListener("load", function() {
             console.log("ℹ️ [RStudio Wrapper] Iframe Loaded");
             try {
-                // Check if we are still on the inner proxy or sent to login
                 console.log("   Location:", this.contentWindow.location.href);
                 if (this.contentWindow.location.href.includes("auth-sign-in")) {
                     console.warn("⚠️ [RStudio Wrapper] Redirected to Login Page (Auth cookie missing?)");

@@ -4,7 +4,7 @@
 
 # Rate limit zone for public /api/ status endpoint (http-level = correct scope)
 # Shared memory zone: 1m ≈ 16,000 IP addresses tracked
-limit_req_zone $binary_remote_addr zone=api_status:1m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=api_status:1m rate=30r/m;
 
 # MAP: Extract short username (before @) to bypass TTYD 32-char limit
 map $remote_user $short_remote_user {
