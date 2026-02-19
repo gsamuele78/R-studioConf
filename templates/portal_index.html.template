@@ -11,45 +11,56 @@
     <style>
         /* ── Telemetry Strip (%%ENABLE_TELEMETRY_STRIP%%) ── */
         .telemetry-strip {
-            background: rgba(10,26,26,0.65);
+            background: rgba(10,26,26,0.70);
             backdrop-filter: blur(14px);
             -webkit-backdrop-filter: blur(14px);
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 16px;
-            padding: 0.75rem 1.5rem;
-            margin-bottom: 1.5rem;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 18px;
+            padding: 1.1rem 2rem;
+            margin-bottom: 2rem;
             display: flex;
             align-items: center;
             justify-content: space-between;
             flex-wrap: wrap;
-            gap: 0.75rem;
+            gap: 1rem;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 0.78rem;
+            font-size: 0.85rem;
             animation: stripFadeIn 0.8s ease;
+            transition: opacity 0.5s ease, max-height 0.5s ease, padding 0.5s ease, margin 0.5s ease;
+            max-height: 200px;
+            overflow: hidden;
+        }
+        .telemetry-strip.hidden-strip {
+            opacity: 0;
+            max-height: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            margin-bottom: 0;
+            pointer-events: none;
         }
         @keyframes stripFadeIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
         .strip-metric {
             display: flex;
             flex-direction: column;
             align-items: flex-start;
-            gap: 0.15rem;
-            min-width: 80px;
+            gap: 0.2rem;
+            min-width: 90px;
         }
         .strip-label {
-            font-size: 0.65rem;
+            font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 1px;
-            color: rgba(240,255,240,0.45);
+            color: rgba(240,255,240,0.5);
         }
         .strip-value {
-            font-size: 0.88rem;
+            font-size: 0.97rem;
             font-weight: 600;
-            color: rgba(240,255,240,0.9);
+            color: rgba(240,255,240,0.95);
         }
         .strip-bar-track {
             width: 100%;
-            height: 3px;
-            background: rgba(255,255,255,0.08);
+            height: 4px;
+            background: rgba(255,255,255,0.1);
             border-radius: 2px;
             overflow: hidden;
         }
@@ -60,20 +71,20 @@
         }
         .strip-divider {
             width: 1px;
-            height: 36px;
-            background: rgba(255,255,255,0.1);
+            height: 46px;
+            background: rgba(255,255,255,0.12);
         }
         .strip-detail-link {
             display: flex;
             align-items: center;
-            gap: 0.35rem;
-            padding: 0.3rem 0.9rem;
-            border-radius: 20px;
+            gap: 0.4rem;
+            padding: 0.45rem 1.1rem;
+            border-radius: 22px;
             border: 1px solid rgba(143,188,143,0.35);
             background: rgba(143,188,143,0.1);
             color: #8FBC8F;
             text-decoration: none;
-            font-size: 0.75rem;
+            font-size: 0.82rem;
             font-family: 'Outfit', sans-serif;
             transition: all 0.2s;
             white-space: nowrap;
@@ -177,8 +188,11 @@
             </div>
             <div class="strip-divider"></div>
             <div class="strip-metric">
-                <span class="strip-label">🤖 AI</span>
-                <span class="strip-value" id="st-ai">—</span>
+                <span class="strip-label">📀 Disk</span>
+                <span class="strip-value" id="st-disk-nfs">—</span>
+                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-disk-nfs-bar" style="width:0%;background:#9c27b0;"></div></div>
+                <span class="strip-value" id="st-disk-tmp" style="font-size:0.78rem;margin-top:0.1rem;"></span>
+                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-disk-tmp-bar" style="width:0%;background:#D4AF37;"></div></div>
             </div>
             <a class="strip-detail-link" href="/status/" title="Full Server Dashboard">
                 📈 Server Status
@@ -446,15 +460,19 @@
                                 closeLoginModal();
                                 // Unlock the grid
                                 document.getElementById("serviceGrid").classList.remove("blurred-locked");
+
+                                // Hide status strip (tile in grid now shows metrics)
+                                var strip = document.getElementById('telemetry-strip');
+                                if(strip) strip.classList.add('hidden-strip');
                                 
                                 // Change button to Logout
                                 var btnOps = document.querySelector(".secure-connect-btn");
-                                btnOps.innerHTML = '<span class="lock-icon">🔓</span> Logout / Reset';
+                                btnOps.innerHTML = '<span class="lock-icon">🕓</span> Logout / Reset';
                                 btnOps.onclick = handleLogout; 
                                 btnOps.classList.add("logout-mode"); 
                                 
                                 btn.disabled = false;
-                                btn.innerHTML = "Connect & Save";
+                                btn.innerHTML = "Connect &amp; Save";
                                 status.innerHTML = "";
                             }, 1000);
                         });
@@ -655,6 +673,7 @@
                     el = document.getElementById('st-sessions');
                     if(el) el.textContent = d.sessions.rstudio + ' R · ' + d.sessions.terminal + ' Term';
 
+                    // /tmp bar (kept, renamed from AI section)
                     if(d.disk && d.disk.tmp && d.disk.tmp.available) {
                         el = document.getElementById('st-tmp');
                         if(el) el.textContent = d.disk.tmp.pct + '% used';
@@ -662,8 +681,29 @@
                         if(el){ el.style.width=clamp(d.disk.tmp.pct,0,100)+'%'; el.style.background=colorForPct(d.disk.tmp.pct,70,85); }
                     }
 
-                    el = document.getElementById('st-ai');
-                    if(el) el.textContent = d.services.ollama ? '🟢 Online' : '⚫ Idle';
+                    // Disk occupancy (replaces AI): NFS home + /tmp
+                    if(d.disk) {
+                        var nfs = d.disk.nfs_home;
+                        var tmp = d.disk.tmp;
+                        el = document.getElementById('st-disk-nfs');
+                        if(el) el.textContent = nfs && nfs.available
+                            ? 'NFS ' + nfs.free_gb + ' GB free'
+                            : 'NFS —';
+                        el = document.getElementById('st-disk-nfs-bar');
+                        if(el && nfs && nfs.available){
+                            el.style.width = clamp(nfs.pct,0,100)+'%';
+                            el.style.background = colorForPct(nfs.pct,75,90);
+                        }
+                        el = document.getElementById('st-disk-tmp');
+                        if(el) el.textContent = tmp && tmp.available
+                            ? '/tmp ' + tmp.free_gb + ' GB free'
+                            : '/tmp —';
+                        el = document.getElementById('st-disk-tmp-bar');
+                        if(el && tmp && tmp.available){
+                            el.style.width = clamp(tmp.pct,0,100)+'%';
+                            el.style.background = colorForPct(tmp.pct,70,85);
+                        }
+                    }
 
                     // Monitor tile metrics (logged-in only)
                     el = document.getElementById('mt-cpu');
@@ -705,10 +745,14 @@
             
             // 2. Re-lock the Grid
             document.getElementById("serviceGrid").classList.add("blurred-locked");
+
+            // 3. Re-show status strip
+            var strip = document.getElementById('telemetry-strip');
+            if(strip) strip.classList.remove('hidden-strip');
             
-            // 3. Reset Button
+            // 4. Reset Button
             var btnOps = document.querySelector(".secure-connect-btn");
-            btnOps.innerHTML = '<span class="lock-icon">🔒</span> Secure Access';
+            btnOps.innerHTML = '<span class="lock-icon">🕒</span> Secure Access';
             btnOps.onclick = showLoginModal;
             btnOps.classList.remove("logout-mode");
             
