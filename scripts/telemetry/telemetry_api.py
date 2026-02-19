@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import threading
 import time
 
@@ -218,6 +219,7 @@ def _collect() -> None:
 
     payload: dict = {
         "ts": int(time.time()),
+        "hostname": socket.gethostname(),
         "cpu": {
             "pct": round(cpu_pct, 1),
             "cores": cpu_count,

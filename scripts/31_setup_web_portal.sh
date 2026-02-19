@@ -12,6 +12,7 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     echo "Error: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
     exit 1
 fi
+# shellcheck source=../lib/common_utils.sh
 source "$UTILS_SCRIPT_PATH"
 
 LOG_FILE="/var/log/botanical/portal_setup.log"
@@ -54,6 +55,7 @@ deploy_portal() {
     if [[ -f "${WEB_ROOT}/index.nginx-debian.html" ]]; then rm -f "${WEB_ROOT}/index.nginx-debian.html"; fi
     
     local current_year; current_year=$(date +%Y)
+    local server_name;   server_name=$(hostname -s)
     
     # ── Template variable substitutions ──
     # Telemetry strip feature flags for portal template
@@ -70,6 +72,7 @@ deploy_portal() {
     local html_content
     if ! process_template "${TEMPLATE_DIR}/${template_name}" html_content \
         "CURRENT_YEAR=${current_year}" \
+        "SERVER_NAME=${server_name}" \
         "TELEMETRY_STRIP_DISPLAY=${telemetry_strip_display}" \
         "TELEMETRY_STRIP_JS_ENABLED=${telemetry_strip_js_enabled}" \
         "MONITOR_TILE_DISPLAY=${monitor_tile_display}"; then
@@ -135,8 +138,14 @@ deploy_portal() {
     if [[ "${ENABLE_TELEMETRY_STRIP}" == "true" ]]; then
         if [[ -f "${TEMPLATE_DIR}/server_status_wrapper.html.template" ]]; then
             ensure_dir_exists "${WEB_ROOT}/status"
-            cp "${TEMPLATE_DIR}/server_status_wrapper.html.template" "${WEB_ROOT}/status/index.html"
-            log "INFO" "Deployed Server Status Wrapper to ${WEB_ROOT}/status/."
+            local status_html
+            if process_template "${TEMPLATE_DIR}/server_status_wrapper.html.template" status_html \
+                "SERVER_NAME=${server_name}"; then
+                echo "$status_html" > "${WEB_ROOT}/status/index.html"
+                log "INFO" "Deployed Server Status Wrapper to ${WEB_ROOT}/status/ (server: ${server_name})."
+            else
+                handle_error 1 "Failed to process server_status_wrapper.html.template"
+            fi
         else
             log "WARN" "server_status_wrapper.html.template not found — /status/ page not deployed."
         fi

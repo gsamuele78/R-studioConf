@@ -139,6 +139,20 @@
         .mini-gauge-val   { font-family: 'JetBrains Mono', monospace; font-size: 0.95rem; font-weight: 600; margin-top: 0.15rem; }
         .mini-bar-track   { height: 3px; background: rgba(255,255,255,0.08); border-radius: 2px; margin-top: 0.3rem; overflow: hidden; }
         .mini-bar-fill    { height: 100%; border-radius: 2px; transition: width 1s ease; }
+        /* ── Server name badge in header ── */
+        .server-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            font-weight: 600;
+            background: rgba(143,188,143,0.12);
+            border: 1px solid rgba(143,188,143,0.3);
+            color: #8FBC8F;
+            padding: 0.15rem 0.55rem;
+            border-radius: 10px;
+            letter-spacing: 0.5px;
+            vertical-align: middle;
+            white-space: nowrap;
+        }
     </style>
 </head>
 <body>
@@ -149,7 +163,7 @@
                 <img src="logo.png" alt="Biome Big Data Calculus Logo" class="logo">
                 <div class="site-title">
                     <h1>Biome Big Data Calculus</h1>
-                    <p class="subtitle">Research Group Portal</p>
+                    <p class="subtitle">Research Group Portal &nbsp;<span class="server-badge" title="Server node">%%SERVER_NAME%%</span></p>
                 </div>
             </div>
                 <button onclick="showLoginModal()" class="secure-connect-btn">

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BIOME-CALC — Server Status</title>
+    <title>%%SERVER_NAME%% — Server Status</title>
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
@@ -282,7 +282,7 @@
     <div class="brand">
         <a class="back" href="/" title="Back to Portal">← Portal</a>
         <span style="color:var(--glass-border)">│</span>
-        <h1>🖥️ BIOME-CALC — Server Status</h1>
+        <h1 id="page-server-name">🖥️ %%SERVER_NAME%% — Server Status</h1>
     </div>
     <div style="display:flex;align-items:center;gap:0.75rem;">
         <span id="update-badge">–</span>
@@ -468,7 +468,7 @@
 
     <!-- Footer -->
     <div style="text-align:center; color:var(--text-dim); font-size:0.8rem; padding-top:0.5rem; border-top:1px solid var(--glass-border);">
-        Data refreshed every 8 s · BIOME-CALC Research Platform · <a href="/" style="color:var(--sage-green);">← Portal</a>
+        Data refreshed every 8 s · %%SERVER_NAME%% Research Platform · <a href="/" style="color:var(--sage-green);">← Portal</a>
     </div>
 </div>
 
@@ -621,9 +621,13 @@ async function fetchStatus() {
         const loader = document.getElementById('loading-overlay');
         if (loader && !loader.classList.contains('hidden')) loader.classList.add('hidden');
 
-        // Timestamp
+        // Timestamp + hostname from API (if available)
         const ts = new Date(d.ts * 1000);
         setText('update-badge', '↻ ' + ts.toLocaleTimeString());
+        if (d.hostname) {
+            const hEl = document.getElementById('page-server-name');
+            if (hEl) hEl.textContent = '🖥️ ' + d.hostname + ' — Server Status';
+        }
 
         // CPU
         const cpuColor = colorForPct(d.cpu.pct);
