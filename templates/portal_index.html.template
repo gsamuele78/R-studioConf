@@ -636,7 +636,7 @@
 
             async function updateStrip() {
                 try {
-                    const res = await fetch('/api/status', {cache:'no-store'});
+                    const res = await fetch('/api/v1/status', {cache:'no-store'});
                     if (!res.ok) throw new Error(res.status);
                     const d = await res.json();
 

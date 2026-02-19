@@ -474,7 +474,7 @@
 
 <script>
 // ── Configuration ──
-const STATUS_URL    = '/api/status';   // proxied by nginx → FastAPI /api/v1/status
+const STATUS_URL    = '/api/v1/status';  // proxied by nginx /api/ → FastAPI :8000/api/v1/status
 const REFRESH_MS    = 8000;
 const HISTORY_LEN   = 60;             // 60 data points = 8s × 60 = 8 min
 

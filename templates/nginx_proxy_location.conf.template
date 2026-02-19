@@ -257,9 +257,7 @@ location /monitoring/node/ {
 # --- Public Status API (portal telemetry strip) ---
 # Exposes /api/v1/status (JSON) and /api/v1/health only.
 # No sensitive process data or user info — only aggregated counts.
-# Rate-limited: 10 req/min per IP to prevent abuse.
-limit_req_zone $binary_remote_addr zone=api_status:1m rate=10r/m;
-
+# Rate-limited: 10 req/min per IP (zone defined at http-level in nginx_site.conf)
 location /api/ {
     limit_req zone=api_status burst=5 nodelay;
 
