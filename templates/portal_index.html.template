@@ -153,6 +153,17 @@
             vertical-align: middle;
             white-space: nowrap;
         }
+        /* open-padlock icon for the Logout/Reset button (logged-in state) */
+        .unlock-icon {
+            display: inline-block;
+            color: #8FBC8F;
+            text-shadow: 0 0 8px rgba(143,188,143,0.6);
+            font-size: 1.1em;
+            vertical-align: middle;
+        }
+        /* SVG lock icons — consistent across all browsers */
+        .lock-svg   { display:inline-block; width:18px; height:18px; vertical-align:middle; margin-right:4px; }
+        .lock-svg path, .lock-svg rect { fill: currentColor; }
     </style>
 </head>
 <body>
@@ -167,7 +178,11 @@
                 </div>
             </div>
                 <button onclick="showLoginModal()" class="secure-connect-btn">
-                    <span class="lock-icon">🔒</span> Secure Access
+                    <!-- Closed padlock SVG -->
+                    <svg class="lock-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <path d="M17 11V7A5 5 0 0 0 7 7v4H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1h-2zm-5 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-6H9V7a3 3 0 0 1 6 0v4z"/>
+                    </svg>
+                    Secure Access
                 </button>
         </header>
 
@@ -283,6 +298,8 @@
                     </div>
                 </div>
             </a>
+
+        </section>
 
         <footer class="glass-footer">
             <p>&copy; %%CURRENT_YEAR%% Biome Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
@@ -473,9 +490,9 @@
                                 var strip = document.getElementById('telemetry-strip');
                                 if(strip) strip.classList.add('hidden-strip');
                                 
-                                // Change button to Logout
+                                // Change button to Logout (open padlock SVG)
                                 var btnOps = document.querySelector(".secure-connect-btn");
-                                btnOps.innerHTML = '<span class="lock-icon">🕓</span> Logout / Reset';
+                                btnOps.innerHTML = '<svg class="lock-svg" style="color:#8FBC8F;filter:drop-shadow(0 0 4px rgba(143,188,143,0.7));" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M17 11V7A5 5 0 0 0 7 7v0H9v0a3 3 0 0 1 6 0v4H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1h-2zm-5 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M7 7V5a5 5 0 0 1 10 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none" style="color:#8FBC8F;"/></svg> Logout / Reset';
                                 btnOps.onclick = handleLogout; 
                                 btnOps.classList.add("logout-mode"); 
                                 
@@ -752,7 +769,8 @@
             
             // 4. Reset Button
             var btnOps = document.querySelector(".secure-connect-btn");
-            btnOps.innerHTML = '<span class="lock-icon">🕒</span> Secure Access';
+            // Restore closed padlock SVG
+            btnOps.innerHTML = '<svg class="lock-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M17 11V7A5 5 0 0 0 7 7v4H5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1h-2zm-5 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-6H9V7a3 3 0 0 1 6 0v4z"/></svg> Secure Access';
             btnOps.onclick = showLoginModal;
             btnOps.classList.remove("logout-mode");
             
