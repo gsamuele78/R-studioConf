@@ -17,6 +17,7 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     echo "Error: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
     exit 1
 fi
+# shellcheck source=../lib/common_utils.sh
 source "$UTILS_SCRIPT_PATH"
 
 install_prerequisites() {

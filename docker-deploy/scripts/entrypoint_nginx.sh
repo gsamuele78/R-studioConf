@@ -96,7 +96,7 @@ fi
 log "INFO" "Processing Nginx Configuration..."
 if [ -f "${TEMPLATE_DIR}/nginx.conf.template" ]; then
     # We use envsubst for system configs usually
-    envsubst '${NGINX_PORT} ${NGINX_HOST} ${RSTUDIO_PORT}' < "${TEMPLATE_DIR}/nginx.conf.template" > "${NGINX_CONF_DIR}/nginx.conf"
+    envsubst "\${NGINX_PORT} \${NGINX_HOST} \${RSTUDIO_PORT}" < "${TEMPLATE_DIR}/nginx.conf.template" > "${NGINX_CONF_DIR}/nginx.conf"
     log "INFO" "Generated nginx.conf"
 fi
 

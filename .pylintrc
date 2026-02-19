@@ -1,0 +1,30 @@
+[MASTER]
+# Use the venv Python so Pylint can resolve fastapi, uvicorn, prometheus_client etc.
+# These packages are in /opt/botanical-telemetry, NOT the system Python.
+# Without this, Pylint reports "Unable to import" for all venv-only packages.
+init-hook=
+    import sys;
+    sys.path.insert(0, '/opt/botanical-telemetry/lib/python3.12/site-packages')
+
+[MESSAGES CONTROL]
+# E0401 (import-error) is suppressed for this project because:
+#   - fastapi, uvicorn, psutil, prometheus_client live in /opt/botanical-telemetry venv
+#   - The system Python the IDE uses does not have them, causing false positives
+#   - The init-hook above adds the venv site-packages; if it doesn't resolve on your
+#     machine (e.g. Python version mismatch), disable the error here instead.
+disable=
+    import-error,
+    # W0703: broad-exception-caught is intentional in the telemetry daemon top-level
+    # loop — it must not crash on transient psutil/OS errors.
+    broad-exception-caught,
+    # C0114: missing-module-docstring — the file-level docstring is present already
+    missing-module-docstring,
+    # R0903: too-few-public-methods — _Cache class is intentionally minimal
+    too-few-public-methods
+
+[FORMAT]
+max-line-length=120
+
+[DESIGN]
+max-args=8
+max-attributes=10

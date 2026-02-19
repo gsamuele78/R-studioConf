@@ -182,12 +182,6 @@
             </div>
             <div class="strip-divider"></div>
             <div class="strip-metric">
-                <span class="strip-label">⚡ /tmp</span>
-                <span class="strip-value" id="st-tmp">—</span>
-                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-tmp-bar" style="width:0%;background:#D4AF37;"></div></div>
-            </div>
-            <div class="strip-divider"></div>
-            <div class="strip-metric">
                 <span class="strip-label">📀 Disk</span>
                 <span class="strip-value" id="st-disk-nfs">—</span>
                 <div class="strip-bar-track"><div class="strip-bar-fill" id="st-disk-nfs-bar" style="width:0%;background:#9c27b0;"></div></div>
@@ -673,15 +667,7 @@
                     el = document.getElementById('st-sessions');
                     if(el) el.textContent = d.sessions.rstudio + ' R · ' + d.sessions.terminal + ' Term';
 
-                    // /tmp bar (kept, renamed from AI section)
-                    if(d.disk && d.disk.tmp && d.disk.tmp.available) {
-                        el = document.getElementById('st-tmp');
-                        if(el) el.textContent = d.disk.tmp.pct + '% used';
-                        el = document.getElementById('st-tmp-bar');
-                        if(el){ el.style.width=clamp(d.disk.tmp.pct,0,100)+'%'; el.style.background=colorForPct(d.disk.tmp.pct,70,85); }
-                    }
-
-                    // Disk occupancy (replaces AI): NFS home + /tmp
+                    // Disk occupancy: NFS home + /tmp
                     if(d.disk) {
                         var nfs = d.disk.nfs_home;
                         var tmp = d.disk.tmp;
