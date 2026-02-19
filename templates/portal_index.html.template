@@ -3,20 +3,141 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Botanical Big Data Calculus - Research Portal</title>
+    <title>Biome Big Data Calculus - Research Portal</title>
     <!-- Prevent Favicon 404 -->
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        /* ── Telemetry Strip (%%ENABLE_TELEMETRY_STRIP%%) ── */
+        .telemetry-strip {
+            background: rgba(10,26,26,0.65);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 16px;
+            padding: 0.75rem 1.5rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            animation: stripFadeIn 0.8s ease;
+        }
+        @keyframes stripFadeIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
+        .strip-metric {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.15rem;
+            min-width: 80px;
+        }
+        .strip-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(240,255,240,0.45);
+        }
+        .strip-value {
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: rgba(240,255,240,0.9);
+        }
+        .strip-bar-track {
+            width: 100%;
+            height: 3px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .strip-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 1s ease;
+        }
+        .strip-divider {
+            width: 1px;
+            height: 36px;
+            background: rgba(255,255,255,0.1);
+        }
+        .strip-detail-link {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.3rem 0.9rem;
+            border-radius: 20px;
+            border: 1px solid rgba(143,188,143,0.35);
+            background: rgba(143,188,143,0.1);
+            color: #8FBC8F;
+            text-decoration: none;
+            font-size: 0.75rem;
+            font-family: 'Outfit', sans-serif;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .strip-detail-link:hover {
+            background: rgba(143,188,143,0.2);
+            box-shadow: 0 0 12px rgba(143,188,143,0.2);
+        }
+        .strip-offline {
+            color: rgba(240,255,240,0.3);
+            font-size: 0.72rem;
+        }
+        /* ── Monitoring Tile (logged-in only) ── */
+        .monitor-tile {
+            background: rgba(15,30,30,0.8);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 16px;
+            padding: 1.5rem;
+            text-decoration: none;
+            color: var(--text-light);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .monitor-tile::before {
+            content: '';
+            position: absolute; top: 0; left: 0; right: 0; height: 2px;
+            background: linear-gradient(90deg, #8FBC8F, #2196f3, #D4AF37);
+            opacity: 0.6;
+        }
+        .monitor-tile:hover {
+            border-color: rgba(143,188,143,0.5);
+            box-shadow: 0 15px 35px rgba(0,0,0,0.25);
+            transform: translateY(-5px);
+        }
+        .mini-gauge-row {
+            display: flex;
+            gap: 0.6rem;
+            margin-top: 0.8rem;
+        }
+        .mini-gauge {
+            flex: 1;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 0.4rem 0.5rem;
+        }
+        .mini-gauge-label { font-size: 0.65rem; color: rgba(240,255,240,0.5); text-transform: uppercase; letter-spacing: 0.8px; }
+        .mini-gauge-val   { font-family: 'JetBrains Mono', monospace; font-size: 0.95rem; font-weight: 600; margin-top: 0.15rem; }
+        .mini-bar-track   { height: 3px; background: rgba(255,255,255,0.08); border-radius: 2px; margin-top: 0.3rem; overflow: hidden; }
+        .mini-bar-fill    { height: 100%; border-radius: 2px; transition: width 1s ease; }
+    </style>
 </head>
 <body>
     <div class="background-overlay"></div>
     <div class="main-container">
         <header class="glass-header">
             <div class="logo-container" onclick="handleHeaderLogout()" style="cursor: pointer;" title="Click to Logout">
-                <img src="logo.png" alt="Botanical Big Data Calculus Logo" class="logo">
+                <img src="logo.png" alt="Biome Big Data Calculus Logo" class="logo">
                 <div class="site-title">
-                    <h1>Botanical Big Data Calculus</h1>
+                    <h1>Biome Big Data Calculus</h1>
                     <p class="subtitle">Research Group Portal</p>
                 </div>
             </div>
@@ -24,6 +145,45 @@
                     <span class="lock-icon">🔒</span> Secure Access
                 </button>
         </header>
+
+        <!-- ════════════════════════════════════════════════════════
+             TELEMETRY STATUS STRIP — always visible, pre-login
+             Requires: /api/status endpoint (40_install_telemetry.sh)
+             Toggle ENABLE_TELEMETRY_STRIP in 31_setup_web_portal.sh
+             ════════════════════════════════════════════════════════ -->
+        <div class="telemetry-strip" id="telemetry-strip" style="%%TELEMETRY_STRIP_DISPLAY%%">
+            <!-- Populated by JS; gracefully hidden on API failure -->
+            <div class="strip-metric">
+                <span class="strip-label">🔥 CPU</span>
+                <span class="strip-value" id="st-cpu">—</span>
+                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-cpu-bar" style="width:0%;background:#8FBC8F;"></div></div>
+            </div>
+            <div class="strip-divider"></div>
+            <div class="strip-metric">
+                <span class="strip-label">💾 RAM</span>
+                <span class="strip-value" id="st-ram">—</span>
+                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-ram-bar" style="width:0%;background:#2196f3;"></div></div>
+            </div>
+            <div class="strip-divider"></div>
+            <div class="strip-metric">
+                <span class="strip-label">📊 Sessions</span>
+                <span class="strip-value" id="st-sessions">—</span>
+            </div>
+            <div class="strip-divider"></div>
+            <div class="strip-metric">
+                <span class="strip-label">⚡ /tmp</span>
+                <span class="strip-value" id="st-tmp">—</span>
+                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-tmp-bar" style="width:0%;background:#D4AF37;"></div></div>
+            </div>
+            <div class="strip-divider"></div>
+            <div class="strip-metric">
+                <span class="strip-label">🤖 AI</span>
+                <span class="strip-value" id="st-ai">—</span>
+            </div>
+            <a class="strip-detail-link" href="/status/" title="Full Server Dashboard">
+                📈 Server Status
+            </a>
+        </div>
 
         <section id="serviceGrid" class="portal-grid blurred-locked">
             <a href="/rstudio/" class="portal-card" target="_blank">
@@ -73,8 +233,37 @@
                 </div>
                 <div class="card-arrow">↗</div>
             </a>
+
+            <!-- ── MONITORING TILE (logged-in only, shown with service grid) ── -->
+            <a href="/status/" class="monitor-tile" id="monitor-tile" style="%%MONITOR_TILE_DISPLAY%%">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                    <div>
+                        <div style="font-size:1.8rem;margin-bottom:0.4rem;">📈</div>
+                        <h2 style="font-family:'Playfair Display',serif;font-size:1.35rem;color:#fff;margin:0 0 0.3rem;">Server Dashboard</h2>
+                        <p style="font-size:0.88rem;color:#ccc;margin:0;">Live R computation &amp; node status.</p>
+                    </div>
+                    <span style="color:#8FBC8F;font-size:1.1rem;opacity:0;transition:opacity 0.3s;" class="tile-arrow">→</span>
+                </div>
+                <div class="mini-gauge-row">
+                    <div class="mini-gauge">
+                        <div class="mini-gauge-label">CPU</div>
+                        <div class="mini-gauge-val" id="mt-cpu">—</div>
+                        <div class="mini-bar-track"><div class="mini-bar-fill" id="mt-cpu-bar" style="width:0%;background:#8FBC8F;"></div></div>
+                    </div>
+                    <div class="mini-gauge">
+                        <div class="mini-gauge-label">RAM</div>
+                        <div class="mini-gauge-val" id="mt-ram">—</div>
+                        <div class="mini-bar-track"><div class="mini-bar-fill" id="mt-ram-bar" style="width:0%;background:#2196f3;"></div></div>
+                    </div>
+                    <div class="mini-gauge">
+                        <div class="mini-gauge-label">R Sessions</div>
+                        <div class="mini-gauge-val" id="mt-sess">—</div>
+                    </div>
+                </div>
+            </a>
+
         <footer class="glass-footer">
-            <p>&copy; %%CURRENT_YEAR%% Botanical Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
+            <p>&copy; %%CURRENT_YEAR%% Biome Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
         </footer>
     </div>
 
@@ -183,7 +372,7 @@
         // Handle Connect
         function handleConnect(event) {
             event.preventDefault();
-            console.group("🔐 Botanical Portal Auth Debug");
+            console.group("🔐 Biome Portal Auth Debug");
             console.time("Auth Sequence");
             
             var btn = document.getElementById("connectBtn");
@@ -430,6 +619,82 @@
                 });
             }).catch(e => console.warn("Fallback failed", e));
         }
+
+        // ══════════════════════════════════════════════════
+        // TELEMETRY STRIP — polls /api/status every 10s
+        // Works pre-login, degrades gracefully on failure.
+        // ══════════════════════════════════════════════════
+        (function telemetryStrip() {
+            const STRIP_ENABLED = %%TELEMETRY_STRIP_JS_ENABLED%%;
+            if (!STRIP_ENABLED) return;
+
+            function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
+            function colorForPct(p,w,c){
+                w=w||70;c=c||90;
+                return p>=c?'#f44336':p>=w?'#ff9800':'#4caf50';
+            }
+
+            async function updateStrip() {
+                try {
+                    const res = await fetch('/api/status', {cache:'no-store'});
+                    if (!res.ok) throw new Error(res.status);
+                    const d = await res.json();
+
+                    // Strip metrics
+                    var el;
+                    el = document.getElementById('st-cpu');
+                    if(el) el.textContent = d.cpu.pct + '% (L' + d.cpu.load_1m + ')';
+                    el = document.getElementById('st-cpu-bar');
+                    if(el){ el.style.width = clamp(d.cpu.pct,0,100)+'%'; el.style.background=colorForPct(d.cpu.pct); }
+
+                    el = document.getElementById('st-ram');
+                    if(el) el.textContent = d.ram.used_gb + '/' + d.ram.total_gb + ' GB';
+                    el = document.getElementById('st-ram-bar');
+                    if(el){ el.style.width = clamp(d.ram.pct,0,100)+'%'; el.style.background=colorForPct(d.ram.pct,75,90); }
+
+                    el = document.getElementById('st-sessions');
+                    if(el) el.textContent = d.sessions.rstudio + ' R · ' + d.sessions.terminal + ' Term';
+
+                    if(d.disk && d.disk.tmp && d.disk.tmp.available) {
+                        el = document.getElementById('st-tmp');
+                        if(el) el.textContent = d.disk.tmp.pct + '% used';
+                        el = document.getElementById('st-tmp-bar');
+                        if(el){ el.style.width=clamp(d.disk.tmp.pct,0,100)+'%'; el.style.background=colorForPct(d.disk.tmp.pct,70,85); }
+                    }
+
+                    el = document.getElementById('st-ai');
+                    if(el) el.textContent = d.services.ollama ? '🟢 Online' : '⚫ Idle';
+
+                    // Monitor tile metrics (logged-in only)
+                    el = document.getElementById('mt-cpu');
+                    if(el) el.textContent = d.cpu.pct + '%';
+                    el = document.getElementById('mt-cpu-bar');
+                    if(el){ el.style.width=clamp(d.cpu.pct,0,100)+'%'; el.style.background=colorForPct(d.cpu.pct); }
+
+                    el = document.getElementById('mt-ram');
+                    if(el) el.textContent = d.ram.pct + '%';
+                    el = document.getElementById('mt-ram-bar');
+                    if(el){ el.style.width=clamp(d.ram.pct,0,100)+'%'; el.style.background=colorForPct(d.ram.pct,75,90); }
+
+                    el = document.getElementById('mt-sess');
+                    if(el) el.textContent = d.sessions.rstudio;
+
+                } catch(e) {
+                    // Silently degrade — API unreachable
+                    console.debug('Telemetry strip: API unreachable', e);
+                }
+            }
+
+            // Show hover arrow on monitor tile
+            var mt = document.getElementById('monitor-tile');
+            if(mt) {
+                mt.addEventListener('mouseenter', function(){ var a = mt.querySelector('.tile-arrow'); if(a) a.style.opacity='1'; });
+                mt.addEventListener('mouseleave', function(){ var a = mt.querySelector('.tile-arrow'); if(a) a.style.opacity='0'; });
+            }
+
+            updateStrip();
+            setInterval(updateStrip, 10000);
+        })();
 
         // Handle Logout
         function handleLogout() {

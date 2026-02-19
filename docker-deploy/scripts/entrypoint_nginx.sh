@@ -25,51 +25,60 @@ fi
 
 log "INFO" "Starting Botanical Portal Nginx Entrypoint..."
 
-# 0. PKI Trust & Certificate Enrollment
-if [ -n "${STEP_CA_URL:-}" ]; then
-    log "INFO" "STEP_CA_URL detected. Configuring PKI..."
-    
-    # 1. Fetch Root CA (Trust)
-    if [ -f "/scripts/pki/fetch_root.sh" ]; then
-        /scripts/pki/fetch_root.sh || log "WARN" "Failed to fetch Root CA."
-    fi
+# 2. System Optimization (Nginx Tuning)
+log "INFO" "Applying Nginx Optimizations..."
+# Default to auto/1024 if not set
+WORKER_PROCESSES="${NGINX_WORKER_PROCESSES:-auto}"
+WORKER_CONNECTIONS="${NGINX_WORKER_CONNECTIONS:-1024}"
 
-    # 2. Key/Cert Paths
-    # We use standard locations for Nginx to pick up
-    # Note: You must ensure nginx.conf typically looks at /etc/ssl/certs/ssl-cert-snakeoil.pem 
-    # OR we overwrite those files, OR we configure Nginx to look at /etc/ssl/step/site.crt
+# We use sed to patch nginx.conf (since our template might not have these variables)
+if [ -f "/etc/nginx/nginx.conf" ]; then
+    sed -i "s/^worker_processes.*/worker_processes ${WORKER_PROCESSES};/" /etc/nginx/nginx.conf
+    sed -i "s/worker_connections.*/worker_connections ${WORKER_CONNECTIONS};/" /etc/nginx/nginx.conf
+fi
+
+# 3. SSL Configuration & ACME Enrollment
+if [ "${LE_ENABLED}" == "true" ]; then
+    log "INFO" "Let's Encrypt / ACME Enrollment Enabled."
     
-    # Let's target a specific directory and assume Nginx template uses it OR we symlink.
-    # The existing .env mounts snakeoil. We should probably overwrite "site.crt" in a volume or ephemeral path.
-    # If the user mounted SSL_CERT_PATH (read-only usually), we can't overwrite.
-    # BUT this is a "Pet Container" style fix. 
-    
-    # Dockerfile.nginx doesn't show where keys are expected unless we look at nginx.conf.template.
-    # Assuming we want to generate them to specific path.
-    
-    CERT_DIR="/etc/ssl/step"
-    mkdir -p "$CERT_DIR"
-    
-    # Enroll
-    if [ -f "/scripts/pki/enroll_cert.sh" ]; then
-        /scripts/pki/enroll_cert.sh "$CERT_DIR/site.crt" "$CERT_DIR/site.key"
+    if [ -z "${LE_DOMAIN}" ] || [ -z "${LE_EMAIL}" ]; then
+        log "ERROR" "LE_DOMAIN and LE_EMAIL must be set."
+    else
+        # Check if certificate already exists
+        if [ ! -d "/etc/letsencrypt/live/${LE_DOMAIN}" ]; then
+            log "INFO" "Obtaining certificate for ${LE_DOMAIN}..."
+            
+            CERTBOT_CMD="certbot --nginx -d ${LE_DOMAIN} --email ${LE_EMAIL} --agree-tos --non-interactive"
+            
+            # Internal CA Support
+            if [ -n "${LE_ACME_SERVER:-}" ]; then
+                log "INFO" "Using Custom ACME Server: ${LE_ACME_SERVER}"
+                CERTBOT_CMD="${CERTBOT_CMD} --server ${LE_ACME_SERVER}"
+            fi
+            
+            if $CERTBOT_CMD; then
+                log "INFO" "Certificate obtained successfully."
+                # Setup Auto-renewal loop (simple background process)
+                (while :; do sleep 12h; certbot renew --quiet --post-hook "nginx -s reload"; done) &
+            else
+                log "ERROR" "Certbot failed."
+            fi
+        else
+            log "INFO" "Certificate already exists for ${LE_DOMAIN}. Starting renewal loop."
+            (while :; do sleep 12h; certbot renew --quiet --post-hook "nginx -s reload"; done) &
+        fi
     fi
-     
-    # If enrollment succeeded, we should try to use these certs.
-    # Since legacy config points to /etc/ssl/certs/ssl-cert-snakeoil.pem (often mounted RO),
-    # we might need to adjust Nginx config generation OR symlink if possible (unlikely if RO mount).
-    # However, envsubst in entrypoint generates nginx.conf.
-    # We can export SSL_CERT_PATH override *inside the container* if the template uses it variable?
-    # nginx.conf.template usually uses hardcoded paths or check.
-    
+else
+    # Fallback to Enrolled Step-CA Certificates if present
+    # Logic: If we enrolled via sidecar or volume, use them.
+    CERT_DIR="/etc/ssl/step"
     if [ -f "$CERT_DIR/site.crt" ] && [ -s "$CERT_DIR/site.crt" ]; then
         log "INFO" "Using Enrolled Step-CA Certificates..."
-        # We need to make sure nginx uses these.
-        # If nginx.conf.template uses ${SSL_CERT_PATH}, we can export it here!
         export SSL_CERT_PATH="$CERT_DIR/site.crt"
         export SSL_KEY_PATH="$CERT_DIR/site.key"
     fi
 fi
+
 
 # --- Template Processing Logic ---
 # The user specifically asked to use common_utils logic.

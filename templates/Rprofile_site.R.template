@@ -1,0 +1,592 @@
+# ==============================================================================
+# %%BIOME_HOST%% SYSTEM PROFILE v%%RPROFILE_VERSION%% — MIGRATION-SAFE STABILITY FIX
+# ==============================================================================
+# VM:      QEMU on Proxmox 9.x (Ceph), x86-64-v4 CPU, %%VM_VCORES%% vCores, ~%%VM_RAM_GB%%GB RAM
+# System:  Ubuntu 24.04, R 4.5.x, bspm enabled
+# Contact: %%BIOME_CONTACT%%
+#
+# Key design principles:
+#   - CORETYPE auto-detected from CPU vendor on EVERY session start (migration-safe)
+#   - No static CORETYPE, OMP, or BLAS thread counts in env files
+#   - Boot-time detection: biome-detect-coretype.service (systemd oneshot)
+#   - Per-session detection: this profile (handles live migration without reboot)
+#   - Thread cap: %%MAX_BLAS_THREADS%% max to prevent QEMU livelock
+# ==============================================================================
+
+# ── SECTION 0: bspm (Critical Pre-Load) ──
+options(bspm.sudo = TRUE, bspm.version.check = FALSE)
+tryCatch(suppressMessages({
+  if (requireNamespace("bspm", quietly = TRUE)) bspm::enable()
+}), error = function(e) NULL)
+
+# ── GUARD: Prevent double-init ──
+if (isTRUE(getOption("biome.profile.loaded"))) return(invisible(NULL))
+options(biome.profile.loaded = TRUE)
+
+# ── MAIN BLOCK ──
+local({
+  
+  .start_time <- Sys.time()
+  VERSION     <- "%%RPROFILE_VERSION%%"
+  
+  # ── ANSI Colors ──
+  .ESC      <- intToUtf8(27)
+  .C_RESET  <- paste0(.ESC, "[39m")
+  .C_RED    <- paste0(.ESC, "[31m")
+  .C_GREEN  <- paste0(.ESC, "[32m") 
+  .C_YELLOW <- paste0(.ESC, "[33m")
+  .C_BLUE   <- paste0(.ESC, "[34m")
+  .C_CYAN   <- paste0(.ESC, "[36m")
+  .C_BOLD   <- paste0(.ESC, "[1m")
+  .C_GRAY   <- paste0(.ESC, "[90m")
+  .C_ITALIC <- paste0(.ESC, "[3m")
+
+  # ── Feature Flags ──
+  ENABLE_RESOURCE_MGMT <- TRUE   # Fair-Share RAM/CPU
+  ENABLE_SMART_IO      <- TRUE   # Parquet/CSV auto-switch
+  ENABLE_AI_ASSISTANT  <- TRUE   # Ollama (model from %%BIOME_CONF%%/ai_model)
+  ENABLE_SYS_LOGGING   <- TRUE   # Logging to /var/log
+  ENABLE_TMP_CLEANUP   <- TRUE   # Smart /tmp cleanup
+  ENABLE_BLAS_MGMT     <- TRUE   # OpenBLAS/OMP
+  ENABLE_TERRA_OPT     <- TRUE   # Geospatial (Terra/GDAL)
+  ENABLE_RGEE_OPT      <- TRUE   # Google Earth Engine dynamic RAM
+  ENABLE_ARROW_OPT     <- TRUE   # Arrow/Parquet
+  ENABLE_FUTURE_OPT    <- TRUE   # Parallel Computing
+  ENABLE_CGROUP_AWARE  <- TRUE   # Proxmox/LXC Awareness
+  ENABLE_TF_MGMT       <- TRUE   # Keras/TensorFlow (CPU Optimized)
+  ENABLE_NUMA_AWARE    <- FALSE  # NUMA optimizations
+
+  # ── Infrastructure (filled by 20_configure_rstudio.sh from setup_nodes.vars.conf) ──
+  R_HOST       <- "%%BIOME_HOST%%"
+  LOG_PATH     <- "%%LOG_FILE%%"
+  VM_VCORES    <- %%VM_VCORES%%L
+  VM_RAM_GB    <- %%VM_RAM_GB%%L
+  RAMDISK_GB   <- tryCatch(as.integer(Sys.getenv("BIOME_RAMDISK_GB", "%%RAMDISK_GB%%")), error=function(e) %%RAMDISK_GB%%L)
+  MAX_THREADS  <- %%MAX_BLAS_THREADS%%L   # Hard cap: prevents QEMU BLAS livelock
+  
+  # AI Service Config
+  OLLAMA_API   <- "http://127.0.0.1:11434/api/generate"
+  AI_MODEL     <- tryCatch({
+    mf <- "%%BIOME_CONF%%/ai_model"
+    if (file.exists(mf)) trimws(readLines(mf, n = 1, warn = FALSE)) else "codellama:7b"
+  }, error = function(e) "codellama:7b")
+  AI_CURL_TIMEOUT <- 120   # seconds — hard ceiling for curl to Ollama
+
+  # ── User Context ──
+  curr_user    <- Sys.info()[["user"]]
+  r_ver_short  <- paste0(R.version$major, ".", substr(R.version$minor, 1, 1))
+  personal_lib <- file.path(Sys.getenv("HOME"), "R", "x86_64-pc-linux-gnu-library", r_ver_short)
+  
+  # ── Portable UID ──
+  get_my_uid <- function() {
+    tryCatch({
+      if (requireNamespace("unix", quietly=TRUE)) return(unix::getuid())
+      td <- tempdir(); if (dir.exists(td)) { uid <- file.info(td)$uid; if (!is.na(uid)) return(uid) }
+      uid <- suppressWarnings(as.integer(system2("id", args="-u", stdout=TRUE, stderr=FALSE)))
+      if (!is.na(uid)) return(uid)
+      -1L
+    }, error = function(e) -1L)
+  }
+  MY_UID <- get_my_uid()
+
+  # ── Global Options ──
+  options(
+    parallelly.fork.enable             = TRUE,
+    stringsAsFactors                   = FALSE,
+    timeout                            = 300,
+    editor                             = "vi",
+    menu.graphics                      = FALSE,
+    reticulate.python.usage.suggestion = FALSE,
+    repos                              = c(CRAN = "https://cloud.r-project.org"),
+    save.defaults                      = list(ascii = FALSE, version = NULL, compress = TRUE)
+  )
+  Sys.setenv(CUDA_VISIBLE_DEVICES = "-1", TF_CPP_MIN_LOG_LEVEL = "2")
+
+  # ========================================================================
+  # AUTO-DETECT OPENBLAS_CORETYPE (Migration-Safe)
+  # ========================================================================
+  # In a Proxmox cluster with mixed Intel/AMD nodes using cpu=x86-64-v4,
+  # the VM can live-migrate between architectures. Static CORETYPE in
+  # env files would be wrong after migration. This block detects the
+  # vendor_id from /proc/cpuinfo on EVERY session start.
+  #
+  # Overrides static values when vendor/CORETYPE mismatch is detected.
+  # Boot-time detection (systemd biome-detect-coretype) provides the
+  # initial value; this corrects it after live migration (no reboot).
+  # ========================================================================
+  if (ENABLE_BLAS_MGMT) tryCatch({
+    cpuinfo    <- readLines("/proc/cpuinfo", n = 30, warn = FALSE)
+    vendor_line <- grep("^vendor_id", cpuinfo, value = TRUE)[1]
+    vendor_id  <- if (!is.na(vendor_line)) trimws(sub(".*:\\s*", "", vendor_line)) else ""
+    flags_line <- grep("^flags", cpuinfo, value = TRUE)[1]
+    cpu_flags  <- if (!is.na(flags_line)) trimws(sub(".*:\\s*", "", flags_line)) else ""
+    model_line <- grep("^model name", cpuinfo, value = TRUE)[1]
+    model_name <- if (!is.na(model_line)) trimws(sub(".*:\\s*", "", model_line)) else ""
+    
+    current_ct <- Sys.getenv("OPENBLAS_CORETYPE", "")
+    intel_types <- c("HASWELL", "SKYLAKEX", "SANDYBRIDGE", "IVYBRIDGE", "BROADWELL", "PRESCOTT")
+    amd_types   <- c("ZEN", "BULLDOZER", "PILEDRIVER", "STEAMROLLER", "EXCAVATOR", "BARCELONA")
+    is_virtual  <- grepl("QEMU|Virtual|KVM|x86-64-v", model_name, ignore.case = TRUE)
+    
+    # Detect ideal CORETYPE for current vendor + flags
+    detect_ct <- function(vendor, flags) {
+      if (grepl("AMD", vendor, ignore.case = TRUE)) {
+        if (grepl("avx512", flags))  return("ZEN")
+        if (grepl("avx2", flags))    return("ZEN")
+        if (grepl("avx", flags))     return("BULLDOZER")
+        return("SANDYBRIDGE")
+      }
+      if (grepl("Intel|Genuine", vendor, ignore.case = TRUE)) {
+        if (grepl("avx512", flags))  return("SKYLAKEX")
+        if (grepl("avx2", flags))    return("HASWELL")
+        if (grepl("avx", flags))     return("SANDYBRIDGE")
+        return("PRESCOTT")
+      }
+      "SANDYBRIDGE"  # universal safe fallback
+    }
+    
+    needs_fix <- FALSE; new_ct <- ""; reason <- ""
+    
+    if (nchar(current_ct) == 0) {
+      needs_fix <- TRUE; new_ct <- detect_ct(vendor_id, cpu_flags); reason <- "unset"
+    } else if (grepl("AMD", vendor_id, ignore.case = TRUE) && toupper(current_ct) %in% intel_types) {
+      needs_fix <- TRUE; new_ct <- detect_ct(vendor_id, cpu_flags)
+      reason <- sprintf("mismatch(%s=Intel on AMD)", current_ct)
+    } else if (grepl("Intel|Genuine", vendor_id, ignore.case = TRUE) && toupper(current_ct) %in% amd_types) {
+      needs_fix <- TRUE; new_ct <- detect_ct(vendor_id, cpu_flags)
+      reason <- sprintf("mismatch(%s=AMD on Intel)", current_ct)
+    }
+    
+    if (needs_fix && nchar(new_ct) > 0) {
+      Sys.setenv(OPENBLAS_CORETYPE = new_ct)
+      msg <- sprintf("CORETYPE: %s -> %s (vendor=%s, reason=%s, virtual=%s)",
+        if (nchar(current_ct) > 0) current_ct else "unset", new_ct, vendor_id, reason, is_virtual)
+      tryCatch(cat(sprintf("[%s] [BLAS-FIX] %s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), msg),
+        file = LOG_PATH, append = TRUE), error = function(e) NULL)
+    }
+  }, error = function(e) NULL)
+
+  # ── Secure Environment ──
+  .biome_env <- new.env(parent = emptyenv())
+  .biome_env$shared_env <- new.env(parent = emptyenv())
+  
+  se <- .biome_env$shared_env
+  se$last_quota    <- 0L; se$last_cores   <- 0L;  se$last_threads <- 0L
+  se$has_gpu       <- FALSE; se$gpu_count  <- 0L
+  se$terra_threads <- 0L;  se$arrow_threads <- 0L; se$future_workers <- 0L
+  se$cgroup_ram_gb <- Inf; se$cgroup_cpus   <- Inf
+  se$ai_active     <- FALSE
+  se$timeout_hours <- 24 
+  se$last_update   <- 0;   se$diag_logs     <- list()
+  se$deferred_done <- FALSE
+  .biome_env$VERSION <- VERSION
+  rm(se)
+
+  # ── Logging Utility ──
+  sys_log <- function(section, status, msg = "") {
+    tryCatch({
+      .biome_env$shared_env$diag_logs[[section]] <- list(status = status, msg = msg, ts = Sys.time())
+    }, error = function(e) NULL)
+    if (ENABLE_SYS_LOGGING) tryCatch({
+      cat(sprintf("[%s] [USER: %-12s] [SEC: %-14s] [STAT: %-4s] %s\n",
+          format(Sys.time(), "%Y-%m-%d %H:%M:%S"), curr_user, section, status, msg),
+          file = LOG_PATH, append = TRUE)
+    }, error = function(e) NULL)
+  }
+
+  # ── Smart Timeout Detection ──
+  get_session_timeout <- function() {
+    conf_file <- "%%RSESSION_CONF_PATH%%"
+    timeout_h <- 24 
+    if (file.exists(conf_file)) {
+      tryCatch({
+        lines <- readLines(conf_file, warn = FALSE)
+        m <- grep("^session-timeout-minutes", lines, value = TRUE)
+        if (length(m) > 0) {
+          mins <- as.numeric(sub(".*(\\d+).*", "\\1", m[1]))
+          if (!is.na(mins) && mins > 0) timeout_h <- ceiling(mins / 60) + 1
+          else if (grepl("=0", m[1])) timeout_h <- 168 
+        }
+      }, error = function(e) NULL)
+    }
+    return(timeout_h)
+  }
+  .biome_env$shared_env$timeout_hours <- get_session_timeout()
+
+  # ── Library Path & Smart Cleanup ──
+  tryCatch({
+    if (!dir.exists(personal_lib)) dir.create(personal_lib, recursive=TRUE, showWarnings=FALSE)
+    if (!personal_lib %in% .libPaths()) .libPaths(c(personal_lib, .libPaths()))
+    sys_log("LibPaths", "OK", paste("Primary:", personal_lib))
+  }, error = function(e) NULL)
+
+  if (ENABLE_TMP_CLEANUP && MY_UID >= 0) {
+    tryCatch({
+      all_tmp <- list.files("/tmp", pattern="^Rtmp|^terra_|^sf_|^arrow_|^rgee_|^gdalwarp_", full.names=TRUE)
+      if (length(all_tmp) > 0) {
+        info <- file.info(all_tmp)
+        age_h <- as.numeric(difftime(Sys.time(), info$mtime, units="hours"))
+        limit_h <- .biome_env$shared_env$timeout_hours
+        to_del <- all_tmp[!is.na(info$uid) & info$uid == MY_UID & age_h > limit_h]
+        if (length(to_del) > 0) {
+           unlink(to_del, recursive=TRUE, force=FALSE)
+           sys_log("Cleanup", "OK", sprintf("Removed %d files older than %dh", length(to_del), limit_h))
+        }
+      }
+    }, error = function(e) NULL)
+  }
+
+  # ── Hardware Topology & Cgroups ──
+  total_vcores <- tryCatch(parallel::detectCores(logical=TRUE), error=function(e) VM_VCORES)
+  
+  if (ENABLE_CGROUP_AWARE) tryCatch({
+    cg2_mem <- "/sys/fs/cgroup/memory.max"; cg1_mem <- "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+    cg2_cpu <- "/sys/fs/cgroup/cpu.max";    cg1_cq  <- "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
+    if (file.exists(cg2_mem)) {
+      v <- trimws(readLines(cg2_mem, n=1, warn=FALSE))
+      if (v != "max") .biome_env$shared_env$cgroup_ram_gb <- as.numeric(v)/(1024^3)
+    } else if (file.exists(cg1_mem)) {
+      v <- as.numeric(readLines(cg1_mem, n=1, warn=FALSE))
+      if (!is.na(v) && v < 1e18) .biome_env$shared_env$cgroup_ram_gb <- v/(1024^3)
+    }
+    if (file.exists(cg2_cpu)) {
+      p <- strsplit(trimws(readLines(cg2_cpu, n=1, warn=FALSE)), " ")[[1]]
+      if (p[1] != "max" && length(p)==2) {
+        q <- as.numeric(p[1]); d <- as.numeric(p[2])
+        if (!is.na(q) && !is.na(d) && d>0) .biome_env$shared_env$cgroup_cpus <- q/d
+      }
+    } else if (file.exists(cg1_cq)) {
+       q <- as.numeric(readLines(cg1_cq, n=1, warn=FALSE))
+       d <- as.numeric(readLines("/sys/fs/cgroup/cpu/cpu.cfs_period_us", n=1, warn=FALSE))
+       if (!is.na(q) && q>0 && !is.na(d) && d>0) .biome_env$shared_env$cgroup_cpus <- q/d
+    }
+  }, error = function(e) sys_log("Cgroup", "WARN", e$message))
+
+  # ── Resource Engine ──
+  get_system_ram_gb <- function() {
+    tryCatch({
+      mi <- readLines("/proc/meminfo", warn=FALSE)
+      al <- grep("^MemAvailable:", mi, value=TRUE)
+      if (length(al) > 0) {
+        kb <- as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1]))
+      } else {
+        f <- as.numeric(sub(".*:\\s+(\\d+).*","\\1",grep("^MemFree:",mi,value=TRUE)[1]))
+        b <- as.numeric(sub(".*:\\s+(\\d+).*","\\1",grep("^Buffers:",mi,value=TRUE)[1]))
+        c <- as.numeric(sub(".*:\\s+(\\d+).*","\\1",grep("^Cached:", mi,value=TRUE)[1]))
+        kb <- sum(c(f,b,c), na.rm=TRUE)
+      }
+      ra <- floor(kb/1024/1024) - RAMDISK_GB
+      if (is.finite(.biome_env$shared_env$cgroup_ram_gb)) ra <- min(ra, floor(.biome_env$shared_env$cgroup_ram_gb))
+      max(2L, as.integer(ra))
+    }, error=function(e) 16L)
+  }
+
+  get_active_users <- function() {
+    tryCatch({
+      r <- system2("pgrep", args=c("-c","rsession"), stdout=TRUE, stderr=FALSE)
+      n <- suppressWarnings(as.integer(r))
+      if (is.na(n) || n<1L) 1L else n
+    }, warning = function(w) 1L, error = function(e) 1L)
+  }
+
+  update_resources <- function(quiet = TRUE) {
+    tryCatch({
+      now <- as.numeric(Sys.time())
+      if (quiet && (now - .biome_env$shared_env$last_update) < 30) return(invisible(NULL))
+      .biome_env$shared_env$last_update <- now
+
+      ram_gb  <- get_system_ram_gb()
+      n_procs <- get_active_users()
+      quota   <- max(2L, as.integer(floor((ram_gb / n_procs) * 0.9)))
+      eff_vc <- total_vcores
+      if (is.finite(.biome_env$shared_env$cgroup_cpus)) eff_vc <- min(eff_vc, as.integer(ceiling(.biome_env$shared_env$cgroup_cpus)))
+      fair_cores <- max(1L, as.integer(floor(eff_vc / n_procs)))
+      
+      # Cap math threads to prevent QEMU livelock
+      bt <- min(fair_cores, MAX_THREADS) 
+        
+      Sys.setenv(OMP_NUM_THREADS=as.character(bt), OPENBLAS_NUM_THREADS=as.character(bt), MKL_NUM_THREADS=as.character(bt))
+      options(mc.cores = fair_cores) 
+      
+      if (isNamespaceLoaded("data.table")) try(data.table::setDTthreads(bt), silent=TRUE)
+      if (isNamespaceLoaded("RhpcBLASctl")) try({RhpcBLASctl::blas_set_num_threads(bt); RhpcBLASctl::omp_set_num_threads(bt)}, silent=TRUE)
+
+      if (ENABLE_RGEE_OPT) {
+        rgee_mem <- floor(quota * 0.3 * 1024) 
+        options(rgee.max_memory = rgee_mem, rgee.n_cores = min(4, fair_cores))
+      }
+      
+      if (ENABLE_TF_MGMT) {
+         inter_op <- max(1L, floor(bt / 2))
+         Sys.setenv(TF_NUM_INTRAOP_THREADS = as.character(bt))
+         Sys.setenv(TF_NUM_INTEROP_THREADS = as.character(inter_op))
+         Sys.setenv(TF_ENABLE_ONEDNN_OPTS = "1")
+      }
+      
+      if (ENABLE_AI_ASSISTANT) Sys.setenv(OLLAMA_NUM_THREADS = as.character(bt))
+      
+      if (!.biome_env$shared_env$ai_active && ENABLE_AI_ASSISTANT) {
+          tryCatch({
+              con <- suppressWarnings(socketConnection("127.0.0.1", port=11434, open="r", timeout=1.5))
+              close(con)
+              .biome_env$shared_env$ai_active <- TRUE
+          }, error = function(e) NULL)
+      }
+
+      prev <- .biome_env$shared_env$last_quota
+      if (!quiet && interactive() && prev > 0 && abs(quota - prev) > 1) {
+        .bx_h <- intToUtf8(0x2550); .bx_v <- intToUtf8(0x2551)
+        message(paste0("\n", .C_YELLOW, intToUtf8(0x2554), strrep(.bx_h, 50), intToUtf8(0x2557)))
+        message(sprintf("%s \u26a1 BIOME-RESCALE: Activity Detected (Users: %-2d)  %s", .bx_v, n_procs, .bx_v))
+        message(sprintf("%s    RAM Quota: %-3d GB | Threads: %-2d              %s", .bx_v, quota, bt, .bx_v))
+        message(paste0(intToUtf8(0x255A), strrep(.bx_h, 50), intToUtf8(0x255D), .C_RESET))
+      }
+      .biome_env$shared_env$last_quota <- quota
+      .biome_env$shared_env$last_cores <- fair_cores
+      .biome_env$shared_env$last_threads <- bt
+    }, error=function(e) sys_log("ResMgmt", "FAIL", e$message))
+  }
+
+  # ── Deferred Loading ──
+  deferred_pkg_init <- function() {
+    if (.biome_env$shared_env$deferred_done) return(invisible(NULL))
+    .biome_env$shared_env$deferred_done <- TRUE
+    fc <- .biome_env$shared_env$last_cores
+    qr <- .biome_env$shared_env$last_quota
+    msg_parts <- c()
+
+    if (ENABLE_TERRA_OPT && isNamespaceLoaded("terra")) tryCatch({
+      tt <- min(fc, 8L); gc_mb <- as.integer(floor(qr * 0.2 * 1024))
+      Sys.setenv(GDAL_NUM_THREADS=as.character(tt), GDAL_CACHEMAX=as.character(gc_mb))
+      td <- file.path("/tmp", paste0("terra_", curr_user))
+      if (!dir.exists(td)) dir.create(td, showWarnings=FALSE)
+      terra::terraOptions(memfrac=0.6, tempdir=td, verbose=FALSE)
+      .biome_env$shared_env$terra_threads <- tt
+      msg_parts <- c(msg_parts, "Terra")
+    }, error = function(e) NULL)
+    
+    if (ENABLE_ARROW_OPT && isNamespaceLoaded("arrow")) tryCatch({
+      at <- min(fc, 16L); arrow::set_cpu_count(at); arrow::set_io_thread_count(min(at,8L))
+      .biome_env$shared_env$arrow_threads <- at
+      msg_parts <- c(msg_parts, "Arrow")
+    }, error = function(e) NULL)
+    
+    if (ENABLE_FUTURE_OPT && isNamespaceLoaded("future")) tryCatch({
+      fw <- max(1L, fc - 1L); future::plan(future::multisession, workers=fw)
+      .biome_env$shared_env$future_workers <- fw
+      msg_parts <- c(msg_parts, "Future")
+    }, error = function(e) NULL)
+
+    if (ENABLE_AI_ASSISTANT && isNamespaceLoaded("chattr")) tryCatch({
+      options(chattr.model = AI_MODEL, chattr.provider = "ollama")
+      msg_parts <- c(msg_parts, "Chattr")
+    }, error = function(e) NULL)
+
+    if (length(msg_parts) > 0 && interactive()) {
+      message(paste0(.C_GREEN, "   \U0001F680 BIOME-CALC: Engines Initialized: ", paste(msg_parts, collapse=", "), .C_RESET))
+    }
+  }
+
+  # ── Smart I/O ──
+  if (ENABLE_SMART_IO) {
+    .biome_smart_io <- function(file, ...) {
+      if (is.character(file) && length(file)==1) {
+        pq <- paste0(file, ".parquet")
+        if (file.exists(pq)) {
+          if (interactive() && requireNamespace("arrow", quietly=TRUE)) {
+            message("BIOME-IO: Using .parquet accelerator!")
+            return(arrow::read_parquet(pq))
+          }
+        }
+      }
+      mc <- as.character(sys.call()[1])
+      if (grepl("fread", mc) && requireNamespace("data.table", quietly=TRUE)) return(data.table::fread(file, ...))
+      return(utils::read.csv(file, ...))
+    }
+    if (requireNamespace("utils", quietly=TRUE)) tryCatch({
+      ue <- as.environment("package:utils")
+      if (exists("read.csv", envir=ue)) {
+        lk <- tryCatch(bindingIsLocked("read.csv",ue), error=function(e)TRUE)
+        if (lk) { unlockBinding("read.csv",ue); assign("read.csv",.biome_smart_io,envir=ue); lockBinding("read.csv",ue) }
+      }
+    }, error=function(e) NULL)
+    setHook(packageEvent("data.table", "onLoad"), function(...) {
+      tryCatch({
+         de <- as.environment("package:data.table")
+         unlockBinding("fread", de); assign("fread", .biome_smart_io, envir=de); lockBinding("fread", de)
+      }, error=function(e) NULL)
+    })
+  }
+
+  # ── CALLBACKS ──
+  .biome_env$shared_env$last_update <- 0
+  update_resources(quiet = TRUE)
+  tryCatch({
+    addTaskCallback(function(...) {
+      try({
+        deferred_pkg_init()
+        update_resources(quiet = TRUE)  # 30s throttle inside
+      }, silent = TRUE)
+      TRUE
+    }, name = "biome_resource_monitor")
+  }, error = function(e) NULL)
+
+  # ── PERSISTENT TOOLS ──
+  tool_env_name <- "tools:biome_calc"
+  if (tool_env_name %in% search()) detach(tool_env_name, character.only = TRUE)
+  tool_env <- attach(NULL, name = tool_env_name)
+
+  .fmt_eng <- function(name, enabled, loaded) {
+      if (!enabled) return(paste0(.C_GRAY, "[\u2717] ", name, .C_RESET))
+      if (loaded)   return(paste0(.C_GREEN, "[\u2713] ", name, .C_RESET))
+      return(paste0(.C_CYAN, "[\u25CB] ", name, .C_RESET))
+  }
+
+  assign("status", function() {
+    update_resources(quiet = FALSE)
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC v", .biome_env$VERSION, " | System Dashboard ===", .C_RESET, "\n"))
+    cat(sprintf("  RAM Quota:    %d GB (fair-share)\n", .biome_env$shared_env$last_quota))
+    cat(sprintf("  vCPU Cores:   %d (Allocated)\n", .biome_env$shared_env$last_cores))
+    cat(sprintf("  Active Users: %d\n", get_active_users()))
+    cat(sprintf("  Tmp Cleanup:  Files >%d hours\n", .biome_env$shared_env$timeout_hours))
+    
+    cat(paste0("\n  ", .C_BOLD, "Engines & Services:", .C_RESET, "\n"))
+    r_sys <- .fmt_eng("Resource Mgmt", ENABLE_RESOURCE_MGMT, TRUE)
+    r_sio <- .fmt_eng("Smart I/O", ENABLE_SMART_IO, TRUE)
+    r_tmp <- .fmt_eng("Tmp Cleanup", ENABLE_TMP_CLEANUP, TRUE)
+    r_ai  <- .fmt_eng(paste0("AI (", AI_MODEL, ")"), ENABLE_AI_ASSISTANT, .biome_env$shared_env$ai_active)
+    r_ter <- .fmt_eng("Terra (Geospatial)", ENABLE_TERRA_OPT, isNamespaceLoaded("terra"))
+    r_arr <- .fmt_eng("Arrow (Parquet)", ENABLE_ARROW_OPT, isNamespaceLoaded("arrow"))
+    r_fut <- .fmt_eng("Future (Parallel)", ENABLE_FUTURE_OPT, isNamespaceLoaded("future"))
+    r_gee <- .fmt_eng("RGEE (Earth Engine)", ENABLE_RGEE_OPT, isNamespaceLoaded("rgee"))
+    r_tf  <- .fmt_eng("Keras/TF (CPU)", ENABLE_TF_MGMT, isNamespaceLoaded("tensorflow"))
+
+    cat(sprintf("  %s  %s  %s\n", r_sys, r_sio, r_tmp))
+    cat(sprintf("  %s  %s  %s\n", r_ter, r_arr, r_gee))
+    cat(sprintf("  %s  %s  %s\n", r_ai, r_fut, r_tf))
+    
+    cat(paste0("\n  ", .C_GRAY, "[\u2713]=Active  [\u25CB]=Lazy(Standby)  [\u2717]=Disabled", .C_RESET, "\n"))
+    invisible(NULL)
+  }, envir = tool_env)
+
+  assign("ask_ai", function(prompt, model=AI_MODEL) {
+    if (!.biome_env$shared_env$ai_active) stop("Ollama service is not responding on port 11434.")
+    message(paste0(.C_CYAN, "Thinking (", model, ")...", .C_RESET))
+    if (requireNamespace("jsonlite", quietly=TRUE)) {
+      body <- jsonlite::toJSON(list(model=model, prompt=prompt, stream=FALSE), auto_unbox=TRUE)
+      res <- suppressWarnings(system2("curl", args = c(
+        "-s", "-m", as.character(AI_CURL_TIMEOUT), "--connect-timeout", "5",
+        "-X", "POST", OLLAMA_API, "-d", shQuote(body)
+      ), stdout = TRUE, stderr = FALSE))
+      if (length(res) > 0) {
+        out <- tryCatch(jsonlite::fromJSON(paste(res, collapse="")), error=function(e) NULL)
+        if (!is.null(out$response)) cat(paste0("\n", .C_GREEN, "\U0001F916 ", model, ":", .C_RESET, "\n", out$response, "\n"))
+        else cat("Error: Invalid JSON response from AI.\n")
+      } else cat("No response from AI service (timeout or connection refused).\n")
+      return(invisible(NULL))
+    }
+    # Fallback: simple json construction without jsonlite
+    clean_prompt <- gsub('"', '\\\\"', prompt)
+    json_body <- sprintf('{"model": "%s", "prompt": "%s", "stream": false}', model, clean_prompt)
+    res <- suppressWarnings(system2("curl", args = c(
+      "-s", "-m", as.character(AI_CURL_TIMEOUT), "--connect-timeout", "5",
+      "-X", "POST", OLLAMA_API, "-d", shQuote(json_body)
+    ), stdout = TRUE, stderr = FALSE))
+    if (length(res) > 0) {
+       raw <- paste(res, collapse="")
+       m <- regexpr('"response":"(.*?)","done"', raw, perl=TRUE)
+       if (m > 0) {
+         txt <- substr(raw, attr(m,"capture.start"), attr(m,"capture.start") + attr(m,"capture.length") - 1)
+         txt <- gsub('\\\\n', '\n', txt); txt <- gsub('\\\\"', '"', txt)
+         cat(paste0("\n", .C_GREEN, "\U0001F916 ", model, ":", .C_RESET, "\n", txt, "\n"))
+       } else cat("Error parsing AI response (Install jsonlite for better results).\n")
+    } else cat("No response from AI service (timeout or connection refused).\n")
+  }, envir = tool_env)
+
+  assign("biome_tutorial", function() {
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC: User Guide ===", .C_RESET, "\n"))
+    cat("This system automatically optimizes resources. Services are 'Lazy' [\u25CB] by default\n")
+    cat("and become 'Active' [\u2713] the moment you use them.\n\n")
+    cat(paste0(.C_BOLD, "1. Resource Management (Auto)", .C_RESET, "\n"))
+    cat("   - RAM & CPU are dynamically allocated based on active users.\n")
+    cat("   - Check your current quota anytime: status()\n\n")
+    cat(paste0(.C_BOLD, "2. Smart I/O (Auto-Parquet)", .C_RESET, "\n"))
+    cat("   - If 'data.csv.parquet' exists, it replaces 'data.csv' automatically.\n\n")
+    cat(paste0(.C_BOLD, "3. AI Assistant", .C_RESET, "\n"))
+    cat(sprintf("   - ask_ai(\"How do I run a PERMANOVA?\")  [Model: %s]\n\n", AI_MODEL))
+    cat(paste0(.C_BOLD, "4. Geospatial (Terra/RGEE)", .C_RESET, "\n"))
+    cat("   - library(terra); library(rgee) — auto-threads & /tmp cache.\n\n")
+    cat(paste0(.C_BOLD, "5. Parallel Computing", .C_RESET, "\n"))
+    cat("   - library(future.apply); future_lapply(1:100, sqrt)\n\n")
+    cat(sprintf("  Support: %s\n", "%%BIOME_CONTACT%%"))
+  }, envir = tool_env)
+
+  assign("biome_help", function() {
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Helper ===", .C_RESET, "\n"))
+    cat("  Commands:\n")
+    cat(paste0("  ", .C_BOLD, "status()", .C_RESET, "         - System Dashboard (RAM/CPU/Engines).\n"))
+    cat(paste0("  ", .C_BOLD, "biome_tutorial()", .C_RESET, " - Code examples for all services.\n"))
+    cat(paste0("  ", .C_BOLD, "ask_ai(txt)", .C_RESET, "      - Ask AI a question.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_help()", .C_RESET, "     - This help message.\n"))
+    cat(sprintf("\n  Support: %s\n", "%%BIOME_CONTACT%%"))
+  }, envir = tool_env)
+
+  assign("biome_restore", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
+  assign("show_quota", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
+
+  # ── FINALIZATION ──
+  setHook("rstudio.sessionInit", function(newSession) {
+    if (newSession && interactive()) {
+      tryCatch({
+        cf <- file.path(Sys.getenv("HOME"), "ULTIMO_CRASH_RAM.txt")
+        if (file.exists(cf)) {
+           message(paste0("\n", .C_RED, " WARNING: Previous session killed by OOM ", .C_RESET))
+           try(file.remove(cf), silent=TRUE)
+        }
+      }, error = function(e) NULL)
+
+      bn <- "**********************************************************"
+      message(paste0("\n", .C_CYAN, bn))
+      message(sprintf("*** You are welcome to BIOME-CALC (%s)        ***", R_HOST))
+      message("*** If you have any problem please write an e-mail to: ***")
+      message(sprintf("*** %-52s ***", "%%BIOME_CONTACT%%"))
+      message("*** Don't share your password with anyone...           ***")
+      message(paste0(bn, .C_RESET))
+
+      message(sprintf("\n   RAM Quota:  %-3d GB  (VM ~%dGB - %dGB tmpfs)", .biome_env$shared_env$last_quota, VM_RAM_GB, RAMDISK_GB))
+      message(sprintf("   vCPU:       %-3d / %d  (Adapts to active users)", .biome_env$shared_env$last_cores, total_vcores))
+      
+      ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto-detecting")
+      cpuv <- tryCatch({
+        ci <- readLines("/proc/cpuinfo", n = 5, warn = FALSE)
+        vl <- grep("^vendor_id", ci, value = TRUE)[1]
+        if (!is.na(vl)) trimws(sub(".*:\\s*", "", vl)) else "unknown"
+      }, error = function(e) "unknown")
+      message(sprintf("   BLAS:       CORETYPE=%s (vendor=%s, dynamic)", ct, cpuv))
+      
+      message(paste0("\n   ", .C_BOLD, "\U0001F680 Engines Initialized / Started:", .C_RESET))
+      r_sio <- .fmt_eng("SmartIO", ENABLE_SMART_IO, TRUE)
+      r_ai  <- .fmt_eng("AI", ENABLE_AI_ASSISTANT, .biome_env$shared_env$ai_active)
+      r_ter <- .fmt_eng("Terra", ENABLE_TERRA_OPT, isNamespaceLoaded("terra"))
+      r_arr <- .fmt_eng("Arrow", ENABLE_ARROW_OPT, isNamespaceLoaded("arrow"))
+      r_tf  <- .fmt_eng("Keras/TF", ENABLE_TF_MGMT, isNamespaceLoaded("tensorflow"))
+      
+      message(sprintf("   %s  %s  %s  %s  %s", r_sio, r_ai, r_ter, r_arr, r_tf))
+      
+      message("----------------------------------------------------------")
+      message(paste0("   \U0001F4A1 Type ", .C_BOLD, "biome_help()", .C_RESET, " for commands."))
+      message(paste0("   \U0001F4DA Type ", .C_BOLD, "biome_tutorial()", .C_RESET, " for examples."))
+      message(paste0("   \U0001F4CA Type ", .C_BOLD, "status()", .C_RESET, " to see resource quotas & active engines."))
+      if (.biome_env$shared_env$ai_active) message(paste0("   \U0001F916 Try  ", .C_BOLD, 'ask_ai("Help me with R")', .C_RESET, "."))
+      message(sprintf("   Startup: %.2fs", as.numeric(difftime(Sys.time(), .start_time, units="secs"))))
+      message(paste0(.C_CYAN, bn, .C_RESET, "\n"))
+    }
+  }, action = "append")
+  
+  reg.finalizer(.biome_env, function(env) {
+    tryCatch({ sys_log("Session", "END", sprintf("User: %s", curr_user)) }, error = function(e) NULL)
+  }, onexit = TRUE)
+
+  sys_log("Profile", "OK", "Loaded successfully")
+})
+# === END ===

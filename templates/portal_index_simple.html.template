@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Botanical Big Data Calculus - Research Portal</title>
+    <title>Biome Big Data Calculus - Research Portal</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&display=swap" rel="stylesheet">
 </head>
@@ -12,9 +12,9 @@
     <div class="main-container">
         <header class="glass-header">
             <div class="logo-container">
-                <img src="logo.png" alt="Botanical Big Data Calculus Logo" class="logo">
+                <img src="logo.png" alt="Biome Big Data Calculus Logo" class="logo">
                 <div class="site-title">
-                    <h1>Botanical Big Data Calculus</h1>
+                    <h1>Biome Big Data Calculus</h1>
                     <p class="subtitle">Research Group Portal</p>
                 </div>
             </div>
@@ -60,7 +60,7 @@
         </section>
 
         <footer class="glass-footer">
-            <p>&copy; %%CURRENT_YEAR%% Botanical Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
+            <p>&copy; %%CURRENT_YEAR%% Biome Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
         </footer>
     </div>
 </body>

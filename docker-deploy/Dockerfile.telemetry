@@ -1,0 +1,25 @@
+# Dockerfile.telemetry
+FROM python:3.9-slim
+
+LABEL maintainer="botanical-telemetry"
+
+WORKDIR /app
+
+# Install system dependencies if needed
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python Libraries
+# (fastapi, uvicorn, psutil, prometheus_client)
+RUN pip install --no-cache-dir fastapi uvicorn psutil prometheus_client
+
+# Copy Telemetry Script
+# We assume the script is at scripts/telemetry/telemetry_api.py in build context or mapped
+COPY scripts/telemetry/telemetry_api.py /app/telemetry_api.py
+
+# Expose API port
+EXPOSE 8000
+
+# Run
+CMD ["python3", "/app/telemetry_api.py"]

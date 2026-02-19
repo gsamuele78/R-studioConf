@@ -40,23 +40,63 @@ if [ -n "${STEP_CA_URL:-}" ]; then
 fi
 
 # 1. Template Processing (Config Generation)
-# We use envsubst to process templates from /etc/docker-templates into /etc/rstudio
-if [ -d "/etc/docker-templates" ]; then
-    log "INFO" "Processing RStudio Configuration Templates..."
-    
-    # RServer.conf
-    if [ -f "/etc/docker-templates/rserver.conf.template" ]; then
-        # Export vars for envsubst (defaults)
-        export RSERVER_WWW_PORT="${RSTUDIO_PORT:-8787}"
-        export RSERVER_WWW_ADDRESS="0.0.0.0" # Listen on all interfaces in container
-        
-        envsubst < /etc/docker-templates/rserver.conf.template > /etc/rstudio/rserver.conf
-        log "INFO" "Generated /etc/rstudio/rserver.conf"
-    fi
-    # PAM (Using generic rstudio pam template if exists)
-else
-    log "WARN" "No templates found in /etc/docker-templates"
+# 1. RStudio Configuration (Native)
+log "INFO" "Configuring RStudio Server (Native)..."
+
+# 1.1 PAM Configuration
+# We implicitly trust the system's PAM stack (common-auth, etc.) which uses SSSD/Winbind
+# This mirrors the legacy script's configure_rstudio_pam function.
+if [ ! -f "/etc/pam.d/rstudio" ]; then
+    log "INFO" "Generating /etc/pam.d/rstudio..."
+    cat > /etc/pam.d/rstudio <<EOF
+#%PAM-1.0
+@include common-auth
+@include common-account
+@include common-password
+@include common-session
+EOF
 fi
+
+# 1.2 RServer Configuration (rserver.conf)
+# We use envsubst if template exists, AND append specific security overlays
+if [ -f "/etc/docker-templates/rserver.conf.template" ]; then
+    export RSERVER_WWW_PORT="${RSTUDIO_PORT:-8787}"
+    export RSERVER_WWW_ADDRESS="0.0.0.0" 
+    envsubst < /etc/docker-templates/rserver.conf.template > /etc/rstudio/rserver.conf
+else
+    # Fallback minimal config
+    echo "www-port=${RSTUDIO_PORT:-8787}" > /etc/rstudio/rserver.conf
+    echo "www-address=0.0.0.0" >> /etc/rstudio/rserver.conf
+fi
+
+# Append Legacy Script Security & Iframe Settings
+{
+    echo "www-frame-origin=same"
+    echo "www-same-site=none"
+    echo "www-enable-origin-check=1"
+    echo "auth-pam-require-password-prompt=0"
+    echo "auth-encrypt-password=0"
+    echo "auth-cookies-force-secure=1" 
+} >> /etc/rstudio/rserver.conf
+
+# 1.3 RSession Configuration (rsession.conf)
+# Mirrors configure_rstudio_session_env_settings
+cat > /etc/rstudio/rsession.conf <<EOF
+session-timeout-minutes=${RSESSION_TIMEOUT_MINUTES:-10080}
+websocket-log-level=${RSESSION_WEBSOCKET_LOG_LEVEL:-1}
+session-handle-offline-enabled=1
+session-connections-block-suspend=1
+session-external-pointers-block-suspend=1
+copilot-enabled=${RSESSION_COPILOT_ENABLED:-0}
+EOF
+
+# 1.4 Environment Variables (env-vars)
+cat > /etc/rstudio/env-vars <<EOF
+OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-4}
+OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
+EOF
+
+log "INFO" "RStudio Configuration Complete."
 
 # 2. Authentication Configuration
 if [ "$AUTH_BACKEND" == "sssd" ]; then

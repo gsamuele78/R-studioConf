@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIOME-CALC — Server Status</title>
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-green: #2F4F4F;
+            --sage-green: #8FBC8F;
+            --gold: #D4AF37;
+            --glass-bg: rgba(255,255,255,0.07);
+            --glass-border: rgba(255,255,255,0.15);
+            --text-light: #F0FFF0;
+            --text-dim: rgba(240,255,240,0.6);
+            --bg-deep: #0a1a1a;
+            --bg-card: rgba(20,40,40,0.75);
+            --ok: #4caf50;
+            --warn: #ff9800;
+            --crit: #f44336;
+            --info: #2196f3;
+            --mono: 'JetBrains Mono', monospace;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-light);
+            min-height: 100vh;
+            overflow-y: auto;
+        }
+
+        /* ── Top Bar ── */
+        #top-bar {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(10,26,26,0.95);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--glass-border);
+            padding: 0.6rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+        #top-bar .brand { display: flex; align-items: center; gap: 0.8rem; }
+        #top-bar a.back {
+            color: var(--sage-green);
+            text-decoration: none;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            transition: opacity 0.2s;
+        }
+        #top-bar a.back:hover { opacity: 0.8; }
+        #top-bar h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: 0.5px; }
+        #update-badge {
+            font-family: var(--mono);
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            background: rgba(255,255,255,0.05);
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            border: 1px solid var(--glass-border);
+        }
+        #refresh-btn {
+            background: rgba(143,188,143,0.15);
+            border: 1px solid rgba(143,188,143,0.3);
+            color: var(--sage-green);
+            padding: 0.35rem 1rem;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-family: 'Outfit', sans-serif;
+            transition: all 0.2s;
+        }
+        #refresh-btn:hover { background: rgba(143,188,143,0.25); }
+
+        /* ── Main Layout ── */
+        .dashboard {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+            display: grid;
+            gap: 1.5rem;
+        }
+
+        /* Row helpers */
+        .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+        .row-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 1.5rem; }
+        .row-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 1.5rem; }
+
+        /* ── Cards ── */
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            transition: border-color 0.3s;
+        }
+        .card::before {
+            content: '';
+            position: absolute; top: 0; left: 0; right: 0; height: 2px;
+            background: linear-gradient(90deg, transparent, var(--sage-green), transparent);
+            opacity: 0.4;
+        }
+        .card-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-dim);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .card-title .ico { font-size: 0.9rem; }
+        .big-number {
+            font-family: var(--mono);
+            font-size: 2.8rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .unit { font-size: 1rem; font-weight: 400; color: var(--text-dim); margin-left: 0.2rem; }
+        .sub-label { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.3rem; }
+
+        /* ── Ring Gauge ── */
+        .gauge-wrap { display: flex; align-items: center; gap: 1.2rem; }
+        .ring-container { position: relative; width: 80px; height: 80px; flex-shrink: 0; }
+        .ring-container svg { transform: rotate(-90deg); }
+        .ring-bg { fill: none; stroke: rgba(255,255,255,0.08); stroke-width: 8; }
+        .ring-fill { fill: none; stroke-width: 8; stroke-linecap: round; transition: stroke-dashoffset 0.8s ease; }
+        .ring-label {
+            position: absolute; inset: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            font-family: var(--mono); font-size: 0.9rem; font-weight: 600;
+        }
+
+        /* ── Bar Charts (sparkline style) ── */
+        .bar-list { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.5rem; }
+        .bar-row { display: flex; flex-direction: column; gap: 0.2rem; }
+        .bar-row-label {
+            display: flex; justify-content: space-between;
+            font-size: 0.78rem; color: var(--text-dim);
+            font-family: var(--mono);
+        }
+        .bar-track {
+            height: 5px; background: rgba(255,255,255,0.08);
+            border-radius: 3px; overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%; border-radius: 3px;
+            transition: width 0.8s ease;
+        }
+
+        /* ── Session Cards ── */
+        .session-table { width: 100%; border-collapse: collapse; }
+        .session-table th {
+            font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--text-dim); padding: 0.4rem 0.5rem;
+            border-bottom: 1px solid var(--glass-border);
+            text-align: left;
+        }
+        .session-table td {
+            font-family: var(--mono); font-size: 0.82rem;
+            padding: 0.5rem 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.04);
+            color: var(--text-light);
+        }
+        .session-table tr:last-child td { border-bottom: none; }
+        .session-table .cpu-bar { width: 60px; }
+        .pill {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.72rem;
+            font-weight: 600;
+        }
+        .pill-ok   { background: rgba(76,175,80,0.2);   color: #81c784; border: 1px solid rgba(76,175,80,0.3); }
+        .pill-warn { background: rgba(255,152,0,0.2);   color: #ffb74d; border: 1px solid rgba(255,152,0,0.3); }
+        .pill-crit { background: rgba(244,67,54,0.2);   color: #e57373; border: 1px solid rgba(244,67,54,0.3); }
+        .pill-dim  { background: rgba(255,255,255,0.05); color: var(--text-dim); border: 1px solid var(--glass-border); }
+
+        /* ── History Sparkline ── */
+        .spark-wrap { margin-top: 0.6rem; }
+        .spark-canvas { width: 100%; height: 40px; display: block; }
+
+        /* ── AI / Services row ── */
+        .service-pill {
+            display: flex; align-items: center; gap: 0.5rem;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.82rem;
+        }
+        .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .dot-ok   { background: var(--ok);   box-shadow: 0 0 6px var(--ok); }
+        .dot-off  { background: #555; }
+        .dot-warn { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+
+        /* ── Section header ── */
+        .section-hdr {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: -0.5rem;
+        }
+        .section-hdr::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--glass-border);
+        }
+
+        /* ── Colors ── */
+        .c-green  { color: var(--ok); }
+        .c-warn   { color: var(--warn); }
+        .c-crit   { color: var(--crit); }
+        .c-gold   { color: var(--gold); }
+        .c-sage   { color: var(--sage-green); }
+        .c-dim    { color: var(--text-dim); }
+
+        /* ── Loading overlay ── */
+        #loading-overlay {
+            position: fixed; inset: 0; z-index: 9999;
+            background: var(--bg-deep);
+            display: flex; align-items: center; justify-content: center;
+            flex-direction: column; gap: 1rem;
+            transition: opacity 0.5s;
+        }
+        #loading-overlay.hidden { opacity:0; pointer-events:none; }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 3px solid rgba(143,188,143,0.2);
+            border-top-color: var(--sage-green);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Error banner ── */
+        #error-banner {
+            display: none;
+            background: rgba(244,67,54,0.15);
+            border: 1px solid rgba(244,67,54,0.4);
+            border-radius: 12px;
+            padding: 0.75rem 1.5rem;
+            color: #ef9a9a;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 1100px) { .row-4 { grid-template-columns: repeat(2,1fr); } }
+        @media (max-width:  768px) { .row-2,.row-3,.row-4 { grid-template-columns: 1fr; } .dashboard { padding: 1rem; } }
+    </style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading-overlay">
+    <div class="spinner"></div>
+    <div style="color:var(--text-dim); font-size:0.9rem;">Fetching system metrics…</div>
+</div>
+
+<!-- Top navigation bar -->
+<div id="top-bar">
+    <div class="brand">
+        <a class="back" href="/" title="Back to Portal">← Portal</a>
+        <span style="color:var(--glass-border)">│</span>
+        <h1>🖥️ BIOME-CALC — Server Status</h1>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.75rem;">
+        <span id="update-badge">–</span>
+        <button id="refresh-btn" onclick="fetchStatus()">↺ Refresh</button>
+    </div>
+</div>
+
+<!-- Dashboard -->
+<div class="dashboard">
+
+    <div id="error-banner">⚠️ Cannot reach telemetry API — showing last known data.</div>
+
+    <!-- ─── ROW 1: Key gauges ─── -->
+    <div class="section-hdr">⚡ Real-Time System Load</div>
+
+    <div class="row-4">
+        <!-- CPU -->
+        <div class="card" id="card-cpu">
+            <div class="card-title"><span class="ico">🔥</span> CPU Utilization</div>
+            <div class="gauge-wrap">
+                <div class="ring-container">
+                    <svg width="80" height="80" viewBox="0 0 80 80">
+                        <circle class="ring-bg" cx="40" cy="40" r="34" />
+                        <circle class="ring-fill" id="ring-cpu" cx="40" cy="40" r="34"
+                                stroke="var(--sage-green)"
+                                stroke-dasharray="213.6" stroke-dashoffset="213.6" />
+                    </svg>
+                    <div class="ring-label" id="ring-cpu-label">–%</div>
+                </div>
+                <div>
+                    <div class="big-number" id="val-cpu">–<span class="unit">%</span></div>
+                    <div class="sub-label" id="val-load">Load: –</div>
+                    <div class="sub-label" id="val-cores">– cores</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RAM -->
+        <div class="card" id="card-ram">
+            <div class="card-title"><span class="ico">💾</span> Memory</div>
+            <div class="gauge-wrap">
+                <div class="ring-container">
+                    <svg width="80" height="80" viewBox="0 0 80 80">
+                        <circle class="ring-bg" cx="40" cy="40" r="34" />
+                        <circle class="ring-fill" id="ring-ram" cx="40" cy="40" r="34"
+                                stroke="#2196f3"
+                                stroke-dasharray="213.6" stroke-dashoffset="213.6" />
+                    </svg>
+                    <div class="ring-label" id="ring-ram-label">–%</div>
+                </div>
+                <div>
+                    <div class="big-number" id="val-ram">–<span class="unit">GB</span></div>
+                    <div class="sub-label" id="val-ram-total">of – GB</div>
+                    <div class="sub-label" id="val-swap">Swap: –%</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RStudio Sessions -->
+        <div class="card" id="card-sessions">
+            <div class="card-title"><span class="ico">📊</span> Active Sessions</div>
+            <div class="big-number c-sage" id="val-rstudio-sessions">–</div>
+            <div class="sub-label">RStudio sessions</div>
+            <div style="margin-top:0.8rem;">
+                <div class="big-number" id="val-terminal-sessions" style="font-size:1.8rem;">–</div>
+                <div class="sub-label">Terminal sessions</div>
+            </div>
+        </div>
+
+        <!-- /tmp RAMDisk -->
+        <div class="card" id="card-tmp">
+            <div class="card-title"><span class="ico">⚡</span> RAMDisk /tmp</div>
+            <div class="gauge-wrap">
+                <div class="ring-container">
+                    <svg width="80" height="80" viewBox="0 0 80 80">
+                        <circle class="ring-bg" cx="40" cy="40" r="34" />
+                        <circle class="ring-fill" id="ring-tmp" cx="40" cy="40" r="34"
+                                stroke="var(--gold)"
+                                stroke-dasharray="213.6" stroke-dashoffset="213.6" />
+                    </svg>
+                    <div class="ring-label" id="ring-tmp-label">–%</div>
+                </div>
+                <div>
+                    <div class="big-number" id="val-tmp">–<span class="unit">%</span></div>
+                    <div class="sub-label" id="val-tmp-free">– GB free</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── ROW 2: CPU sparkline + R Sessions table ─── -->
+    <div class="row-2">
+        <!-- CPU History -->
+        <div class="card">
+            <div class="card-title"><span class="ico">📈</span> CPU History (last 60 s)</div>
+            <canvas class="spark-canvas" id="spark-cpu" height="60"></canvas>
+            <div class="bar-list" style="margin-top:1rem;">
+                <div class="bar-row">
+                    <div class="bar-row-label"><span>Load 1m</span><span id="bar-load1">–</span></div>
+                    <div class="bar-track"><div class="bar-fill" id="barf-load1" style="width:0%;background:var(--sage-green);"></div></div>
+                </div>
+                <div class="bar-row">
+                    <div class="bar-row-label"><span>Load 5m</span><span id="bar-load5">–</span></div>
+                    <div class="bar-track"><div class="bar-fill" id="barf-load5" style="width:0%;background:#7ec8e3;"></div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active R Sessions -->
+        <div class="card">
+            <div class="card-title"><span class="ico">🧬</span> R Computation — Top Sessions</div>
+            <table class="session-table" id="session-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Session</th>
+                        <th>CPU %</th>
+                        <th>RAM (MB)</th>
+                        <th>Age</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="session-tbody">
+                    <tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:1.5rem;">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ─── ROW 3: Storage ─── -->
+    <div class="section-hdr">💽 Storage Overview</div>
+
+    <div class="row-3">
+        <div class="card">
+            <div class="card-title"><span class="ico">🏠</span> NFS Home (/nfs/home)</div>
+            <div id="disk-nfs-content"><div class="c-dim" style="font-size:0.85rem;">Checking…</div></div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="ico">📁</span> R Projects</div>
+            <div id="disk-proj-content"><div class="c-dim" style="font-size:0.85rem;">Checking…</div></div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="ico">⚡</span> /tmp RAMDisk</div>
+            <div id="disk-tmp-content"><div class="c-dim" style="font-size:0.85rem;">Checking…</div></div>
+        </div>
+    </div>
+
+    <!-- ─── ROW 4: Services ─── -->
+    <div class="section-hdr">🔧 Services</div>
+
+    <div class="row-4">
+        <div class="card">
+            <div class="card-title"><span class="ico">📊</span> RStudio Server</div>
+            <div class="service-pill" id="svc-rstudio">
+                <div class="dot dot-ok"></div><span>Running</span>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="ico">💻</span> Web Terminal</div>
+            <div class="service-pill" id="svc-ttyd">
+                <div class="dot dot-ok"></div><span>Running</span>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="ico">🤖</span> Ollama AI</div>
+            <div class="service-pill" id="svc-ollama">
+                <div class="dot dot-off"></div><span>Checking…</span>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title"><span class="ico">📡</span> Telemetry API</div>
+            <div class="service-pill" id="svc-telemetry">
+                <div class="dot dot-ok"></div><span>Online</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── RAM History ─── -->
+    <div class="card">
+        <div class="card-title"><span class="ico">📉</span> RAM History (last 60 s)</div>
+        <canvas class="spark-canvas" id="spark-ram" height="50"></canvas>
+    </div>
+
+    <!-- Footer -->
+    <div style="text-align:center; color:var(--text-dim); font-size:0.8rem; padding-top:0.5rem; border-top:1px solid var(--glass-border);">
+        Data refreshed every 8 s · BIOME-CALC Research Platform · <a href="/" style="color:var(--sage-green);">← Portal</a>
+    </div>
+</div>
+
+<script>
+// ── Configuration ──
+const STATUS_URL    = '/api/status';   // proxied by nginx → FastAPI /api/v1/status
+const REFRESH_MS    = 8000;
+const HISTORY_LEN   = 60;             // 60 data points = 8s × 60 = 8 min
+
+// ── History buffers ──
+const history = { cpu: [], ram: [], ts: [] };
+
+// ── Helpers ──
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function colorForPct(pct, warnAt=70, critAt=90) {
+    if (pct >= critAt) return 'var(--crit)';
+    if (pct >= warnAt) return 'var(--warn)';
+    return 'var(--ok)';
+}
+
+function setRing(id, pct, color) {
+    const circ = 213.6;
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.strokeDashoffset = circ - (circ * clamp(pct,0,100) / 100);
+    el.style.stroke = color;
+}
+
+function setText(id, txt) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = txt;
+}
+
+function setHtml(id, html) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = html;
+}
+
+function pushHistory(arr, val) {
+    arr.push(val);
+    if (arr.length > HISTORY_LEN) arr.shift();
+}
+
+// ── Sparkline (canvas) ──
+function drawSparkline(canvasId, data, color, yMax) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const W = canvas.offsetWidth || canvas.parentElement.offsetWidth || 400;
+    const H = canvas.height || 50;
+    canvas.width = W;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+
+    if (data.length < 2) return;
+    const max = yMax || Math.max(...data, 1);
+    const step = W / (data.length - 1);
+
+    // Gradient fill
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, color.replace(')', ',0.4)').replace('var(','').replace('rgb','rgba') || color + '66');
+    grad.addColorStop(1, 'transparent');
+
+    ctx.beginPath();
+    ctx.moveTo(0, H - (data[0] / max) * H * 0.9);
+    data.forEach((v,i) => ctx.lineTo(i*step, H - clamp(v/max,0,1)*H*0.9));
+    ctx.lineTo(W, H);
+    ctx.lineTo(0, H);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Line
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.moveTo(0, H - (data[0] / max) * H * 0.9);
+    data.forEach((v,i) => ctx.lineTo(i*step, H - clamp(v/max,0,1)*H*0.9));
+    ctx.stroke();
+}
+
+// ── Disk block renderer ──
+function renderDisk(containerId, disk, label) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    if (!disk || !disk.available) {
+        el.innerHTML = '<div class="c-dim" style="font-size:0.85rem;">Not mounted or unavailable</div>';
+        return;
+    }
+    const color = colorForPct(disk.pct, 75, 90);
+    el.innerHTML = `
+        <div style="display:flex;justify-content:space-between;margin-bottom:0.4rem;">
+            <span class="big-number" style="font-size:2rem;">${disk.free_gb}<span class="unit"> GB free</span></span>
+            <span class="pill ${disk.pct>=90?'pill-crit':disk.pct>=75?'pill-warn':'pill-ok'}">${disk.pct}%</span>
+        </div>
+        <div class="bar-track" style="height:6px;margin-bottom:0.4rem;">
+            <div class="bar-fill" style="width:${disk.pct}%;background:${color};"></div>
+        </div>
+        <div class="sub-label">${disk.used_gb} GB used of ${disk.total_gb} GB</div>`;
+}
+
+// ── Session table renderer ──
+function renderSessions(sessions) {
+    const tbody = document.getElementById('session-tbody');
+    if (!tbody) return;
+    if (!sessions || sessions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:1.5rem;">No active R sessions</td></tr>';
+        return;
+    }
+    let html = '';
+    sessions.forEach((s, i) => {
+        const cpuClass = s.cpu_pct >= 80 ? 'pill-crit' : s.cpu_pct >= 50 ? 'pill-warn' : 'pill-ok';
+        const ageStr   = s.age_min >= 60 ? `${(s.age_min/60).toFixed(1)}h` : `${s.age_min}m`;
+        const barW     = clamp(s.cpu_pct, 0, 100);
+        html += `<tr>
+            <td style="color:var(--text-dim)">${i+1}</td>
+            <td>${s.label}</td>
+            <td>
+                <div style="display:flex;align-items:center;gap:0.4rem;">
+                    <div class="bar-track cpu-bar"><div class="bar-fill" style="width:${barW}%;background:${colorForPct(s.cpu_pct)};"></div></div>
+                    <span class="pill ${cpuClass}">${s.cpu_pct}%</span>
+                </div>
+            </td>
+            <td>${s.mem_mb}</td>
+            <td style="color:var(--text-dim)">${ageStr}</td>
+            <td><span class="pill ${s.cpu_pct > 5 ? 'pill-ok' : 'pill-dim'}">${s.cpu_pct > 5 ? 'Active' : 'Idle'}</span></td>
+        </tr>`;
+    });
+    tbody.innerHTML = html;
+}
+
+// ── Service pill updater ──
+function setSvc(id, active, label) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = `<div class="dot ${active?'dot-ok':'dot-off'}"></div><span>${label}</span>`;
+}
+
+// ── Main update ──
+async function fetchStatus() {
+    try {
+        const res  = await fetch(STATUS_URL, { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const d    = await res.json();
+        const err  = document.getElementById('error-banner');
+        if (err) err.style.display = 'none';
+
+        // Hide loader
+        const loader = document.getElementById('loading-overlay');
+        if (loader && !loader.classList.contains('hidden')) loader.classList.add('hidden');
+
+        // Timestamp
+        const ts = new Date(d.ts * 1000);
+        setText('update-badge', '↻ ' + ts.toLocaleTimeString());
+
+        // CPU
+        const cpuColor = colorForPct(d.cpu.pct);
+        setRing('ring-cpu', d.cpu.pct, cpuColor);
+        setText('ring-cpu-label', d.cpu.pct + '%');
+        setHtml('val-cpu', d.cpu.pct + '<span class="unit">%</span>');
+        setText('val-load', `Load: ${d.cpu.load_1m} / ${d.cpu.load_5m}`);
+        setText('val-cores', d.cpu.cores + ' logical cores');
+        pushHistory(history.cpu, d.cpu.pct);
+
+        // Load bars
+        const loadMax = d.cpu.cores * 2 || 32;
+        setText('bar-load1', d.cpu.load_1m);
+        document.getElementById('barf-load1').style.width = clamp(d.cpu.load_1m/loadMax*100,0,100) + '%';
+        setText('bar-load5', d.cpu.load_5m);
+        document.getElementById('barf-load5').style.width = clamp(d.cpu.load_5m/loadMax*100,0,100) + '%';
+
+        // RAM
+        const ramColor = colorForPct(d.ram.pct, 75, 90);
+        setRing('ring-ram', d.ram.pct, ramColor);
+        setText('ring-ram-label', d.ram.pct + '%');
+        setHtml('val-ram', d.ram.used_gb + '<span class="unit">GB</span>');
+        setText('val-ram-total', 'of ' + d.ram.total_gb + ' GB');
+        setText('val-swap', 'Swap: ' + d.swap.pct + '%');
+        pushHistory(history.ram, d.ram.pct);
+
+        // Sessions
+        setText('val-rstudio-sessions', d.sessions.rstudio);
+        setText('val-terminal-sessions', d.sessions.terminal);
+
+        // /tmp
+        if (d.disk.tmp && d.disk.tmp.available) {
+            const tmpColor = colorForPct(d.disk.tmp.pct, 70, 85);
+            setRing('ring-tmp', d.disk.tmp.pct, tmpColor);
+            setText('ring-tmp-label', d.disk.tmp.pct + '%');
+            setHtml('val-tmp', d.disk.tmp.pct + '<span class="unit">%</span>');
+            setText('val-tmp-free', d.disk.tmp.free_gb + ' GB free');
+        }
+
+        // Disk blocks
+        renderDisk('disk-nfs-content',  d.disk.nfs_home, 'NFS Home');
+        renderDisk('disk-proj-content', d.disk.projects, 'R Projects');
+        renderDisk('disk-tmp-content',  d.disk.tmp,      '/tmp');
+
+        // Sessions table
+        renderSessions(d.r_sessions);
+
+        // Services
+        setSvc('svc-rstudio',   d.sessions.rstudio >= 0, 'Running');
+        setSvc('svc-ttyd',      d.sessions.terminal >= 0, 'Running');
+        setSvc('svc-ollama',    d.services.ollama, d.services.ollama ? 'Active' : 'Idle / Off');
+        setSvc('svc-telemetry', true, 'Online');
+
+        // Sparklines
+        pushHistory(history.ts, ts.toLocaleTimeString());
+        requestAnimationFrame(() => {
+            drawSparkline('spark-cpu', history.cpu, '#8FBC8F', 100);
+            drawSparkline('spark-ram', history.ram, '#2196f3', 100);
+        });
+
+    } catch (e) {
+        console.error('Telemetry fetch error:', e);
+        const err = document.getElementById('error-banner');
+        if (err) err.style.display = 'block';
+        const loader = document.getElementById('loading-overlay');
+        if (loader && !loader.classList.contains('hidden')) loader.classList.add('hidden');
+    }
+}
+
+// Bootstrap
+fetchStatus();
+setInterval(fetchStatus, REFRESH_MS);
+
+// Resize sparklines on window resize
+window.addEventListener('resize', () => {
+    drawSparkline('spark-cpu', history.cpu, '#8FBC8F', 100);
+    drawSparkline('spark-ram', history.ram, '#2196f3', 100);
+});
+</script>
+</body>
+</html>

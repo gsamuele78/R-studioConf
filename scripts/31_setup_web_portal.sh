@@ -16,6 +16,12 @@ source "$UTILS_SCRIPT_PATH"
 
 LOG_FILE="/var/log/botanical/portal_setup.log"
 
+# ── Telemetry Strip Feature Flag ──
+# Set to 'true' to include the pre-login CPU/RAM/sessions strip on the portal.
+# Requires: 40_install_telemetry.sh has been run and botanical-telemetry.service is active.
+# Set to 'false' to hide it completely (e.g. if telemetry is not deployed).
+ENABLE_TELEMETRY_STRIP="${ENABLE_TELEMETRY_STRIP:-true}"
+
 setup_logging() {
     mkdir -p "$(dirname "$LOG_FILE")"
     exec > >(tee -a "$LOG_FILE") 2>&1
@@ -28,7 +34,7 @@ uninstall_portal() {
     # 1. Remove files
     log "INFO" "Removing portal files..."
     rm -f "${WEB_ROOT}/index.html" "${WEB_ROOT}/style.css" "${WEB_ROOT}/logo.png" "${WEB_ROOT}/background.png"
-    
+    rm -rf "${WEB_ROOT}/status"
 
     log "INFO" "Uninstallation complete. Note: Nginx proxy config remains active (serving 404/403 on root)."
     log "INFO" "To restore Nginx to default, verify /etc/nginx/sites-enabled configuration."
@@ -49,9 +55,24 @@ deploy_portal() {
     
     local current_year; current_year=$(date +%Y)
     
+    # ── Template variable substitutions ──
+    # Telemetry strip feature flags for portal template
+    local telemetry_strip_display="none"
+    local telemetry_strip_js_enabled="false"
+    local monitor_tile_display="none"
+    if [[ "${ENABLE_TELEMETRY_STRIP}" == "true" ]]; then
+        telemetry_strip_display="flex"
+        telemetry_strip_js_enabled="true"
+        monitor_tile_display="flex;flex-direction:column"
+    fi
+
     log "INFO" "Processing templates..."
     local html_content
-    if ! process_template "${TEMPLATE_DIR}/${template_name}" html_content "CURRENT_YEAR=${current_year}"; then
+    if ! process_template "${TEMPLATE_DIR}/${template_name}" html_content \
+        "CURRENT_YEAR=${current_year}" \
+        "TELEMETRY_STRIP_DISPLAY=${telemetry_strip_display}" \
+        "TELEMETRY_STRIP_JS_ENABLED=${telemetry_strip_js_enabled}" \
+        "MONITOR_TILE_DISPLAY=${monitor_tile_display}"; then
         handle_error 1 "Failed to process ${template_name}"
         return 1
     fi
@@ -110,6 +131,19 @@ deploy_portal() {
         log "WARN" "Nextcloud wrapper template not found."
     fi
 
+    # Server Status Wrapper (Grafana-style detail page — /status/)
+    if [[ "${ENABLE_TELEMETRY_STRIP}" == "true" ]]; then
+        if [[ -f "${TEMPLATE_DIR}/server_status_wrapper.html.template" ]]; then
+            ensure_dir_exists "${WEB_ROOT}/status"
+            cp "${TEMPLATE_DIR}/server_status_wrapper.html.template" "${WEB_ROOT}/status/index.html"
+            log "INFO" "Deployed Server Status Wrapper to ${WEB_ROOT}/status/."
+        else
+            log "WARN" "server_status_wrapper.html.template not found — /status/ page not deployed."
+        fi
+    else
+        log "INFO" "Telemetry strip disabled — skipping /status/ deployment."
+    fi
+
     # Set permissions for all wrappers
     run_command "Set permissions for web root" "chown -R www-data:www-data ${WEB_ROOT} && chmod -R 755 ${WEB_ROOT}"
 }
@@ -124,27 +158,37 @@ show_help() {
 show_menu() {
     echo ""
     printf "\n=== Botanical Web Portal Setup ===\n"
-    printf "1) Deploy Secure Web Portal (Front-end Auth Lock)\n"
+    printf "  Telemetry Strip: %s\n" "$ENABLE_TELEMETRY_STRIP"
+    printf "1) Deploy Secure Web Portal (Front-end Auth Lock + Telemetry Strip)\n"
     printf "2) Deploy Simple Web Portal (Direct Links, No Lock)\n"
-    printf "3) Uninstall Web Portal\n"
-    printf "4) Exit\n"
+    printf "3) Deploy Secure Portal (No Telemetry Strip)\n"
+    printf "4) Uninstall Web Portal\n"
+    printf "5) Exit\n"
     read -r -p "Choice: " choice
     
     case "$choice" in
         1)
-            log "INFO" "--- Starting Secure Web Portal Setup ---"
+            log "INFO" "--- Starting Secure Web Portal Setup (With Telemetry) ---"
+            ENABLE_TELEMETRY_STRIP=true
             deploy_portal "portal_index.html.template"
             log "INFO" "--- Web Portal Setup Complete ---"
             ;;
         2)
             log "INFO" "--- Starting Simple Web Portal Setup ---"
+            ENABLE_TELEMETRY_STRIP=false
             deploy_portal "portal_index_simple.html.template"
             log "INFO" "--- Web Portal Setup Complete ---"
             ;;
         3)
-            uninstall_portal
+            log "INFO" "--- Starting Secure Web Portal Setup (No Telemetry) ---"
+            ENABLE_TELEMETRY_STRIP=false
+            deploy_portal "portal_index.html.template"
+            log "INFO" "--- Web Portal Setup Complete ---"
             ;;
         4)
+            uninstall_portal
+            ;;
+        5)
             log "INFO" "Exiting."
             exit 0
             ;;
@@ -154,7 +198,7 @@ show_menu() {
             ;;
     esac
     
-    if [[ "$choice" == "1" || "$choice" == "2" || "$choice" == "3" ]]; then
+    if [[ "$choice" == "1" || "$choice" == "2" || "$choice" == "3" || "$choice" == "4" ]]; then
         log "INFO" "Restarting Nginx to apply changes..."
         if run_command "Restart Nginx" "systemctl restart nginx"; then
             log "INFO" "Nginx restarted successfully."

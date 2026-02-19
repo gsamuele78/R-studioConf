@@ -24,7 +24,13 @@ RUN echo "bspm::enable()" >> /usr/local/lib/R/etc/Rprofile.site
 COPY scripts/install_botanical_packages.R /rocker_scripts/install_botanical_packages.R
 RUN Rscript /rocker_scripts/install_botanical_packages.R
 
-# 4. Copy Templates (for runtime config generation)
+# 4. Copy Scripts & Configs
+# We copy the entire scripts and lib directories for common_utils and helpers
+COPY scripts /scripts
+COPY lib /lib
+RUN chmod +x /scripts/*.sh
+
+# 5. Copy Templates (for runtime config generation)
 COPY templates /etc/docker-templates
 
 # 5. TTYD Setup & PKI Trust (Step-CLI)
