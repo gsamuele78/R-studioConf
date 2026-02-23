@@ -223,7 +223,7 @@
                 <span class="strip-value" id="st-disk-tmp" style="font-size:0.78rem;margin-top:0.1rem;"></span>
                 <div class="strip-bar-track"><div class="strip-bar-fill" id="st-disk-tmp-bar" style="width:0%;background:#D4AF37;"></div></div>
             </div>
-            <a class="strip-detail-link" href="/status/" title="Full Server Dashboard">
+            <a class="strip-detail-link" href="/status/" target="_blank" title="Full Server Dashboard">
                 📈 Server Status
             </a>
         </div>
@@ -288,7 +288,7 @@
             </a>
 
             <!-- ── MONITORING TILE (logged-in only, shown with service grid) ── -->
-            <a href="/status/" class="monitor-tile" id="monitor-tile" style="%%MONITOR_TILE_DISPLAY%%">
+            <a href="/status/" target="_blank" class="monitor-tile" id="monitor-tile" style="%%MONITOR_TILE_DISPLAY%%">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;">
                     <div>
                         <div style="font-size:1.8rem;margin-bottom:0.4rem;">📈</div>
