@@ -24,7 +24,8 @@ import psutil  # type: ignore[import]
 from pydantic import BaseModel, Field  # type: ignore[import]
 from fastapi import FastAPI  # type: ignore[import]
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import]
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse  # type: ignore[import]
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse, HTMLResponse  # type: ignore[import]
+from fastapi.openapi.docs import get_swagger_ui_html  # type: ignore[import]
 from prometheus_client import CollectorRegistry, Gauge, generate_latest  # type: ignore[import]
 import uvicorn  # type: ignore[import]
 
@@ -98,7 +99,7 @@ refreshes — no polling needed. The browser `EventSource` API reconnects
 automatically on disconnect.
     """,
     version="4.0.0",
-    docs_url="/api/docs",
+    docs_url=None,          # overridden below with custom top-bar
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
     contact={"name": "Biome Research Platform"},
@@ -358,6 +359,141 @@ threading.Thread(
 # ---------------------------------------------------------------------------
 # HTTP Endpoints
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Custom API Docs page (Swagger UI + status-page top-bar)
+# ---------------------------------------------------------------------------
+
+_TOP_BAR_HTML = """
+<style>
+  :root {
+    --sage-green: #8FBC8F;
+    --glass-border: rgba(255,255,255,0.15);
+    --text-dim: rgba(240,255,240,0.6);
+    --mono: 'JetBrains Mono', monospace;
+  }
+  @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap');
+  #biome-top-bar {
+    position: sticky;
+    top: 0;
+    z-index: 99999;
+    background: rgba(10,26,26,0.97);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--glass-border);
+    padding: 0.55rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    font-family: 'Outfit', sans-serif;
+    box-sizing: border-box;
+    width: 100%;
+  }
+  #biome-top-bar .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+  }
+  #biome-top-bar a.back {
+    color: var(--sage-green);
+    text-decoration: none;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    transition: opacity 0.2s;
+  }
+  #biome-top-bar a.back:hover { opacity: 0.8; }
+  #biome-top-bar h1 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    color: #F0FFF0;
+    margin: 0;
+  }
+  #biome-update-badge {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    background: rgba(255,255,255,0.05);
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    border: 1px solid var(--glass-border);
+  }
+  #biome-refresh-btn {
+    background: rgba(143,188,143,0.15);
+    border: 1px solid rgba(143,188,143,0.3);
+    color: var(--sage-green);
+    padding: 0.32rem 0.9rem;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-family: 'Outfit', sans-serif;
+    transition: all 0.2s;
+  }
+  #biome-refresh-btn:hover { background: rgba(143,188,143,0.25); }
+  /* Push Swagger UI below the bar */
+  #swagger-ui { padding-top: 0; }
+  .swagger-ui .topbar { display: none !important; }  /* hide default Swagger topbar */
+</style>
+
+<div id="biome-top-bar">
+  <div class="brand">
+    <a class="back" href="javascript:void(0)" onclick="biomeGoBack()" title="Back to Portal">
+      &#8592; Biome Portal
+    </a>
+    <span style="color:var(--glass-border)">&#x2502;</span>
+    <h1 id="biome-hostname">&#128421;&#65039; &mdash; API Documentation</h1>
+  </div>
+  <div style="display:flex;align-items:center;gap:0.75rem;">
+    <span id="biome-update-badge">&ndash;</span>
+    <button id="biome-refresh-btn" onclick="location.reload()">&#x21BA; Refresh</button>
+  </div>
+</div>
+
+<script>
+  function biomeGoBack() {
+    if (typeof BroadcastChannel !== 'undefined') {
+      new BroadcastChannel('biome-portal-nav').postMessage({ type: 'goHome' });
+      setTimeout(function() { window.close(); }, 100);
+    } else {
+      window.location.href = '/';
+    }
+  }
+  // Live clock
+  function biomedTick() {
+    var b = document.getElementById('biome-update-badge');
+    if (b) b.textContent = '\u21bb ' + new Date().toLocaleTimeString();
+  }
+  biomedTick();
+  setInterval(biomedTick, 1000);
+  // Fetch hostname once
+  fetch('/api/v1/status', {cache:'no-store'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var h = document.getElementById('biome-hostname');
+      if (h && d.hostname) h.textContent = '\uD83D\uDDA5\uFE0F ' + d.hostname + ' \u2014 API Documentation';
+    })
+    .catch(function(){});
+</script>
+"""
+
+
+@app.get("/api/docs", include_in_schema=False)
+async def custom_swagger_ui() -> HTMLResponse:
+    """Swagger UI with the Biome Portal status top-bar injected."""
+    # Get the standard Swagger HTML from FastAPI
+    swagger_resp = get_swagger_ui_html(
+        openapi_url=app.openapi_url or "/api/openapi.json",
+        title=app.title + " — API Docs",
+        swagger_favicon_url="data:;base64,iVBORw0KGgo=",
+    )
+    # Inject our top-bar HTML immediately after <body>
+    html = swagger_resp.body.decode("utf-8")
+    html = html.replace("<body>", "<body>" + _TOP_BAR_HTML, 1)
+    return HTMLResponse(content=html, status_code=200)
+
 
 @app.get("/api/v1/status", response_model=StatusResponse, tags=["Public status"], summary="Full system snapshot")
 async def public_status():
