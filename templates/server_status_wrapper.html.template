@@ -490,8 +490,7 @@ function goBack() {
 // ── Configuration ──
 const STATUS_REST_URL = '/api/v1/status';
 const STATUS_STREAM_URL = '/api/v1/stream';
-const HISTORY_LEN   = 60;  // 60 data points = 5 min (at 5s refresh)
-const HISTORY_LEN   = 60;             // 60 data points = 8s × 60 = 8 min
+const HISTORY_LEN   = 60;  // 60 data points ≈ 5 min (at 5s server refresh)
 
 // ── History buffers ──
 const history = { cpu: [], ram: [], ts: [] };
