@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>%%SERVER_NAME%% — Server Status</title>
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
+    <script src="/biome-portal.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -280,7 +281,7 @@
 <!-- Top navigation bar -->
 <div id="top-bar">
     <div class="brand">
-        <a class="back" href="javascript:void(0)" onclick="goBack()" title="Back to Portal">← Biome Portal</a>
+        <a class="back" href="javascript:void(0)" onclick="Biome.goBack()" title="Back to Portal">← Biome Portal</a>
         <span style="color:var(--glass-border)">│</span>
         <h1 id="page-server-name">🖥️ %%SERVER_NAME%% — Server Status</h1>
     </div>
@@ -475,20 +476,7 @@
 </div>
 
 <script>
-// ── goBack: return to the original portal tab that opened this service tab ──
-// Uses window.opener.focus() + window.close() instead of href='/' which
-// would open a NEW portal tab rather than returning to the existing one.
-function goBack() {
-    if (typeof BroadcastChannel !== 'undefined') {
-        // Signal the logged-in portal tab to focus itself, then close this tab.
-        // The portal tab listens on this channel after login (BroadcastChannel
-        // works across same-origin tabs regardless of how they were opened).
-        new BroadcastChannel('biome-portal-nav').postMessage({ type: 'goHome' });
-        setTimeout(function() { window.close(); }, 100);
-    } else {
-        window.location.href = '/';   // fallback for older browsers
-    }
-}
+// ── goBack, clamp, colorForPct are now provided by /biome-portal.js (Biome.*)
 // ── Configuration ──
 const STATUS_REST_URL = '/api/v1/status';
 const STATUS_STREAM_URL = '/api/v1/stream';
@@ -498,13 +486,8 @@ const HISTORY_LEN   = 60;  // 60 data points ≈ 5 min (at 5s server refresh)
 const history = { cpu: [], ram: [], ts: [] };
 
 // ── Helpers ──
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-
-function colorForPct(pct, warnAt=70, critAt=90) {
-    if (pct >= critAt) return 'var(--crit)';
-    if (pct >= warnAt) return 'var(--warn)';
-    return 'var(--ok)';
-}
+function clamp(v, lo, hi) { return Biome.clamp(v, lo, hi); }
+function colorForPct(pct, warnAt, critAt) { return Biome.colorForPct(pct, warnAt, critAt); }
 
 function setRing(id, pct, color) {
     const circ = 213.6;

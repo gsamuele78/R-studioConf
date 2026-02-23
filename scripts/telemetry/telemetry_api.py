@@ -440,7 +440,7 @@ _TOP_BAR_HTML = """
 
 <div id="biome-top-bar">
   <div class="brand">
-    <a class="back" href="javascript:void(0)" onclick="biomeGoBack()" title="Back to Portal">
+    <a class="back" href="javascript:void(0)" onclick="Biome.goBack()" title="Back to Portal">
       &#8592; Biome Portal
     </a>
     <span style="color:var(--glass-border)">&#x2502;</span>
@@ -452,28 +452,16 @@ _TOP_BAR_HTML = """
   </div>
 </div>
 
+<script src="/biome-portal.js"></script>
 <script>
-  function biomeGoBack() {
-    if (typeof BroadcastChannel !== 'undefined') {
-      new BroadcastChannel('biome-portal-nav').postMessage({ type: 'goHome' });
-      setTimeout(function() { window.close(); }, 100);
-    } else {
-      window.location.href = '/';
-    }
-  }
-  // Live clock
-  function biomedTick() {
-    var b = document.getElementById('biome-update-badge');
-    if (b) b.textContent = '\u21bb ' + new Date().toLocaleTimeString();
-  }
-  biomedTick();
-  setInterval(biomedTick, 1000);
-  // Fetch hostname once
+  // Start live clock using shared library
+  Biome.startClock('biome-update-badge');
+  // Fetch hostname once from telemetry API
   fetch('/api/v1/status', {cache:'no-store'})
     .then(function(r){ return r.json(); })
     .then(function(d){
       var h = document.getElementById('biome-hostname');
-      if (h && d.hostname) h.textContent = '🖥️ ' + d.hostname + ' — API Documentation';
+      if (h && d.hostname) h.textContent = '\uD83D\uDDA5\uFE0F ' + d.hostname + ' \u2014 API Documentation';
     })
     .catch(function(){});
 </script>

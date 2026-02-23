@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 ASSETS_DIR="${SCRIPT_DIR}/../assets"
+LIB_DIR="${SCRIPT_DIR}/../lib"
 WEB_ROOT="/var/www/html"
 
 if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
@@ -34,7 +35,7 @@ uninstall_portal() {
     
     # 1. Remove files
     log "INFO" "Removing portal files..."
-    rm -f "${WEB_ROOT}/index.html" "${WEB_ROOT}/style.css" "${WEB_ROOT}/logo.png" "${WEB_ROOT}/background.png"
+    rm -f "${WEB_ROOT}/index.html" "${WEB_ROOT}/style.css" "${WEB_ROOT}/logo.png" "${WEB_ROOT}/background.png" "${WEB_ROOT}/biome-portal.js"
     rm -rf "${WEB_ROOT}/status"
 
     log "INFO" "Uninstallation complete. Note: Nginx proxy config remains active (serving 404/403 on root)."
@@ -99,6 +100,14 @@ deploy_portal() {
         cp "${ASSETS_DIR}/background.png" "${WEB_ROOT}/background.png"
     else
         log "WARN" "Background asset not found at ${ASSETS_DIR}/background.png"
+    fi
+
+    # Shared JS library (lib/biome-portal.js → /biome-portal.js)
+    if [[ -f "${LIB_DIR}/biome-portal.js" ]]; then
+        cp "${LIB_DIR}/biome-portal.js" "${WEB_ROOT}/biome-portal.js"
+        log "INFO" "Deployed shared JS library: biome-portal.js"
+    else
+        log "WARN" "Shared JS library not found at ${LIB_DIR}/biome-portal.js — portal nav and telemetry utils will not work!"
     fi
     
     run_command "Set permissions for web root" "chown -R www-data:www-data ${WEB_ROOT} && chmod -R 755 ${WEB_ROOT}"

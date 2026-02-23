@@ -8,6 +8,7 @@
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <script src="/biome-portal.js"></script>
     <style>
         /* ── Telemetry Strip (%%ENABLE_TELEMETRY_STRIP%%) ── */
         .telemetry-strip {
@@ -519,18 +520,7 @@
                                 btnOps.onclick = handleLogout;
                                 btnOps.classList.add("logout-mode");
 
-                                // ── BroadcastChannel: listen for service tabs calling "Back to Portal" ──
-                                // Service tabs can't use window.opener (target=_blank sets noopener),
-                                // so they broadcast {type:'goHome'} and this tab calls window.focus().
-                                if (typeof BroadcastChannel !== 'undefined') {
-                                    if (window._portalChannel) window._portalChannel.close();
-                                    window._portalChannel = new BroadcastChannel('biome-portal-nav');
-                                    window._portalChannel.onmessage = function(e) {
-                                        if (e.data && e.data.type === 'goHome') {
-                                            window.focus();
-                                        }
-                                    };
-                                }
+                                Biome.listenForGoHome();
                                 
                                 btn.disabled = false;
                                 btn.innerHTML = "Connect &amp; Save";
@@ -707,11 +697,8 @@
             const STRIP_ENABLED = %%TELEMETRY_STRIP_JS_ENABLED%%;
             if (!STRIP_ENABLED) return;
 
-            function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
-            function colorForPct(p,w,c){
-                w=w||70;c=c||90;
-                return p>=c?'#f44336':p>=w?'#ff9800':'#4caf50';
-            }
+            function clamp(v,lo,hi){ return Biome.clamp(v,lo,hi); }
+            function colorForPct(p,w,c){ return Biome.colorForPct(p,w,c); }
 
             async function updateStrip() {
                 try {

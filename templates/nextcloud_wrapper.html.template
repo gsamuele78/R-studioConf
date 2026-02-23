@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Botanical Files</title>
+    <script src="/biome-portal.js"></script>
     <style>
         body, html {
             margin: 0;
@@ -48,7 +49,7 @@
 </head>
 <body>
     <div id="portal-top-bar">
-        <a href="javascript:void(0)" onclick="goBack()">🏠 Biome Portal</a>
+        <a href="javascript:void(0)" onclick="Biome.goBack()">🏠 Biome Portal</a>
     </div>
     <iframe id="app-frame" 
             src="/files-inner/" 
@@ -57,15 +58,6 @@
             referrerpolicy="strict-origin-when-cross-origin"
     ></iframe>
     <script>
-        // Return to the original portal tab that opened this service tab.
-        function goBack() {
-            if (typeof BroadcastChannel !== 'undefined') {
-                new BroadcastChannel('biome-portal-nav').postMessage({ type: 'goHome' });
-                setTimeout(function() { window.close(); }, 100);
-            } else {
-                window.location.href = '/';
-            }
-        }
 
         document.getElementById("app-frame").addEventListener("load", function() {
             console.log("ℹ️ [Nextcloud Wrapper] Iframe Loaded");
