@@ -99,6 +99,7 @@ check_status() {
 
 main() {
     if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then printf "\033[0;31m[FATAL] Utility script not found at %s\n\033[0m" "$UTILS_SCRIPT_PATH" >&2; exit 1; fi
+    # shellcheck source=../lib/common_utils.sh disable=SC1091
     source "$UTILS_SCRIPT_PATH"
     
     check_root
@@ -106,6 +107,7 @@ main() {
     if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then 
         log "WARN" "Configuration file not found at '$DEFAULT_CONFIG_FILE'. Using defaults."
     else
+        # shellcheck source=../config/install_secure_access.vars.conf disable=SC1091
         source "$DEFAULT_CONFIG_FILE"
     fi
 

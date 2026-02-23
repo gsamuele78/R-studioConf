@@ -11,12 +11,13 @@
 # =====================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
+
 
 if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     echo "ERROR: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
     exit 1
 fi
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "$UTILS_SCRIPT_PATH"
 
 check_root
@@ -27,8 +28,8 @@ CRON_FILE="/etc/cron.daily/nginx_cleanup"
 LOG_FILE="/var/log/nginx/cleanup.log"
 
 # Define the cron script content
-# Note: We write this content directly to the file, but we use run_command to ensure logging.
 # Constructing the script content first.
+# shellcheck disable=SC2016
 cron_script_content='#!/bin/bash
 # Nginx Temp File Cleanup
 # Deletes stale client body temp files to prevent disk exhaustion.
@@ -47,7 +48,7 @@ fi
 
 # Disk Usage Check
 # Get usage percentage of the partition holding /var/lib/nginx
-usage=$(df --output=pcent "$target_dir" | tail -n 1 | tr -dc '\''0-9'\'')
+usage=$(df --output=pcent "$target_dir" | tail -n 1 | tr -dc '"0-9"')
 
 log "Starting cleanup. Disk usage is ${usage}%."
 

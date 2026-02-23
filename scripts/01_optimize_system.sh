@@ -31,11 +31,13 @@ main() {
         printf "Error: Utility script not found at %s\n" "$UTILS_SCRIPT_PATH" >&2
         exit 1
     fi
+    # shellcheck source=../lib/common_utils.sh disable=SC1091
     source "$UTILS_SCRIPT_PATH"
 
     # 2. Source Configuration
     if [[ -f "$CONFIG_FILE" ]]; then
         log "INFO" "Sourcing configuration from $CONFIG_FILE"
+        # shellcheck source=../config/optimize_system_proxmox.vm.vars.conf disable=SC1091
         source "$CONFIG_FILE"
     fi
 

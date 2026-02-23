@@ -10,9 +10,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 # Define paths relative to SCRIPT_DIR
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 # Resolve SSSD/Kerberos script path (support numeric prefix like 00_...)
+# shellcheck disable=SC2012
 SSSD_KERBEROS_SCRIPT_PATH="$(ls "${SCRIPT_DIR}"/*sssd*setup.sh 2>/dev/null | head -n1 || true)"
 SSSD_KERBEROS_SCRIPT_PATH="${SSSD_KERBEROS_SCRIPT_PATH:-${SCRIPT_DIR}/10_join_domain_sssd.sh}"
 # Resolve Samba/Winbind script path
+# shellcheck disable=SC2012
 SAMBA_KERBEROS_SCRIPT_PATH="$(ls "${SCRIPT_DIR}"/*samba*setup.sh 2>/dev/null | head -n1 || true)"
 SAMBA_KERBEROS_SCRIPT_PATH="${SAMBA_KERBEROS_SCRIPT_PATH:-${SCRIPT_DIR}/11_join_domain_samba.sh}"
 # Configuration files
@@ -26,13 +28,13 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     printf "Error: common_utils.sh not found at %s\n" "$UTILS_SCRIPT_PATH" >&2
     exit 1
 fi
-# shellcheck source=common_utils.sh # Inform ShellCheck about sourcing
+# shellcheck source=../lib/common_utils.sh disable=SC1091 # Inform ShellCheck about sourcing
 source "$UTILS_SCRIPT_PATH"
 
 # Source configuration variables if file exists
 if [[ -f "$CONF_VARS_FILE" ]]; then
     log "Sourcing RStudio configuration variables from $CONF_VARS_FILE"
-    # shellcheck source=conf/rstudio_setup.vars.conf
+    # shellcheck source=../config/configure_rstudio.vars.conf disable=SC1091
     source "$CONF_VARS_FILE"
 else
     log "Warning: RStudio configuration file $CONF_VARS_FILE not found. Using internal defaults."
@@ -64,14 +66,14 @@ fi
 # Source SSSD config vars if available (for home template, groups, etc.)
 if [[ -f "$SSSD_CONF_VARS_FILE" ]]; then
     log "Sourcing SSSD configuration variables from $SSSD_CONF_VARS_FILE"
-    # shellcheck source=/dev/null
+    # shellcheck source=../config/join_domain_sssd.vars.conf disable=SC1091
     source "$SSSD_CONF_VARS_FILE"
 fi
 
 # Source Samba config vars if available
 if [[ -f "$SAMBA_CONF_VARS_FILE" ]]; then
     log "Sourcing Samba configuration variables from $SAMBA_CONF_VARS_FILE"
-    # shellcheck source=/dev/null
+    # shellcheck source=../config/join_domain_samba.vars.conf disable=SC1091
     source "$SAMBA_CONF_VARS_FILE"
 fi
 
@@ -576,15 +578,17 @@ main_rstudio_menu() {
 
         case $choice in
             1)
-                backup_config && \
-                check_rstudio_prerequisites && \
-                configure_rstudio_pam && \
-                configure_rstudio_server_conf && \
-                configure_rstudio_user_dirs_and_login_script && \
-                configure_rstudio_global_tmp && \
-                configure_rstudio_session_env_settings && \
-                log "Full RStudio setup completed successfully." || \
-                log "ERROR: Full RStudio setup failed or was interrupted. Check logs."
+                if backup_config && \
+                   check_rstudio_prerequisites && \
+                   configure_rstudio_pam && \
+                   configure_rstudio_server_conf && \
+                   configure_rstudio_user_dirs_and_login_script && \
+                   configure_rstudio_global_tmp && \
+                   configure_rstudio_session_env_settings; then
+                    log "Full RStudio setup completed successfully."
+                else
+                    log "ERROR: Full RStudio setup failed or was interrupted. Check logs."
+                fi
                 log "NOTE: SSSD/Kerberos setup is a separate step (Option S)."
                 ;;
             2) backup_config && check_rstudio_prerequisites && configure_rstudio_server_conf ;;

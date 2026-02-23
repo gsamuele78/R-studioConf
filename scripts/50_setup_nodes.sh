@@ -30,7 +30,7 @@ if [[ ! -f "${COMMON_UTILS}" ]]; then
   echo "[ERROR] Missing: ${COMMON_UTILS}" >&2
   exit 1
 fi
-# shellcheck source=../lib/common_utils.sh
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "${COMMON_UTILS}"
 
 # ── Load configuration ──
@@ -39,7 +39,7 @@ if [[ ! -f "${VARS_CONF}" ]]; then
   log_error "Missing config: ${VARS_CONF}"
   exit 1
 fi
-# shellcheck source=../config/setup_nodes.vars.conf
+# shellcheck source=../config/setup_nodes.vars.conf disable=SC1091
 source "${VARS_CONF}"
 
 # ── Template paths ──
@@ -106,6 +106,7 @@ setup_nodes_uninstall() {
   # Restore Rprofile/Renviron backups
   for f in /etc/R/Rprofile.site /etc/R/Renviron.site; do
     local newest_backup
+    # shellcheck disable=SC2012
     newest_backup=$(ls -t "${f}.bak."* 2>/dev/null | head -1 || true)
     if [[ -n "${newest_backup}" ]]; then
       run_cmd cp "${newest_backup}" "${f}"
@@ -176,7 +177,7 @@ setup_nodes_arrow() {
   if ! dpkg -l 2>/dev/null | grep -q libarrow-dev; then
     local dc di deb
     dc=$(lsb_release --codename --short)
-    di=$(lsb_release --id --short | tr 'A-Z' 'a-z')
+    di=$(lsb_release --id --short | tr '[:upper:]' '[:lower:]')
     deb="apache-arrow-apt-source-latest-${dc}.deb"
     run_cmd wget -q "https://packages.apache.org/artifactory/arrow/${di}/${deb}" -O "/tmp/${deb}"
     run_cmd dpkg -i "/tmp/${deb}"
@@ -352,7 +353,7 @@ Cflags: -fopenmp
 Libs: -fopenmp
 OMPEOF
     if ! echo "${PKG_CONFIG_PATH:-}" | grep -q "/usr/local/lib/pkgconfig"; then
-      echo 'PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}"' >> /etc/environment
+      echo "PKG_CONFIG_PATH=\"/usr/local/lib/pkgconfig:\${PKG_CONFIG_PATH}\"" >> /etc/environment
     fi
     log_success "OpenMP pkg-config installed (${openmp_pc})"
   else
@@ -482,8 +483,8 @@ setup_nodes_config_files() {
 
   local current_ct
   current_ct=$(cat "${BIOME_CONF}/coretype" 2>/dev/null || echo "auto")
-  local cpu_vendor
-  cpu_vendor=$(cat "${BIOME_CONF}/cpu_vendor" 2>/dev/null | grep VENDOR | cut -d= -f2 || echo "unknown")
+  local cpu_vendor cpu_model
+  cpu_vendor=$(grep VENDOR "${BIOME_CONF}/cpu_vendor" 2>/dev/null | cut -d= -f2 || echo "unknown")
 
   # ── Renviron.site ──
   local renviron="/etc/R/Renviron.site"
@@ -727,8 +728,8 @@ OLLEOF
   sleep 3
 
   # Wait for readiness
-  local i
-  for i in $(seq 1 15); do
+  local _i
+  for _i in $(seq 1 15); do
     curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1 && break
     sleep 1
   done

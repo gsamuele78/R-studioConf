@@ -20,11 +20,12 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     printf "Error: common_utils.sh not found at %s\n" "$UTILS_SCRIPT_PATH" >&2
     exit 1
 fi
-# shellcheck source=common_utils.sh
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "$UTILS_SCRIPT_PATH"
 
 # Source shared Kerberos setup script functions
 if [[ -f "$KERBEROS_SETUP_SCRIPT" ]]; then
+    # shellcheck source=12_lib_kerberos_setup.sh disable=SC1091
     source "$KERBEROS_SETUP_SCRIPT"
 else
     log "ERROR: Kerberos setup script not found at $KERBEROS_SETUP_SCRIPT"
@@ -34,7 +35,7 @@ fi
 # Source configuration variables if file exists
 if [[ -f "$CONF_VARS_FILE" ]]; then
     log "Sourcing SSSD/Kerberos configuration variables from $CONF_VARS_FILE"
-    # shellcheck source=conf/sssd_kerberos_setup.vars.conf
+    # shellcheck source=../config/join_domain_sssd.vars.conf disable=SC1091
     source "$CONF_VARS_FILE"
 else
     log "Warning: SSSD/Kerberos configuration file $CONF_VARS_FILE not found. Using script internal defaults."
@@ -49,7 +50,6 @@ else
     DEFAULT_USE_FQNS="true"
     DEFAULT_SIMPLE_ALLOW_GROUPS=""
     DEFAULT_AD_GPO_MAP_SERVICE=""
-    DEFAULT_NTP_FALLBACK_POOLS_SYSTEMD="0.debian.pool.ntp.org 1.debian.pool.ntp.org"
 fi
 
 # --- Global Variables ---
@@ -363,7 +363,7 @@ uninstall_sssd_kerberos() { log "Starting SSSD/Kerberos Uninstallation..."; back
         run_command "DEBIAN_FRONTEND=noninteractive apt-get autoremove -y";
         log "Packages removed: ${actually_installed_for_removal[*]}";
     fi; log "Cleaning configs..."; run_command "rm -rf /etc/sssd /etc/krb5.conf"; local nss_conf_target="/etc/nsswitch.conf"; if [[ -f "$nss_conf_target" ]]; then run_command "cp \"$nss_conf_target\" \"${nss_conf_target}.bak_pre_sss_removal_$(date +%Y%m%d_%H%M%S)\""; run_command "sed -i -E 's/[[:space:]]+sss\b//g; s/\bsss[[:space:]]+//g' \"$nss_conf_target\""; fi; if command -v pam-auth-update &>/dev/null; then if ! run_command "DEBIAN_FRONTEND=noninteractive pam-auth-update --remove sss --remove mkhomedir"; then log "Warning: pam-auth-update --remove failed."; fi; fi; run_command "rm -rf /var/lib/sss/* /var/log/sssd/*"; log "Uninstall attempt complete."; }
-full_sssd_kerberos_setup() { backup_config; ensure_time_sync && install_sssd_krb_packages && join_ad_domain_realm && configure_sssd_conf && configure_krb5_conf && configure_nsswitch && configure_pam && restart_and_verify_sssd && log "Core SSSD/Kerberos setup process completed." || { log "ERROR: Core SSSD/Kerberos setup process failed."; return 1; }; }
+full_sssd_kerberos_setup() { backup_config; if ensure_time_sync && install_sssd_krb_packages && join_ad_domain_realm && configure_sssd_conf && configure_krb5_conf && configure_nsswitch && configure_pam && restart_and_verify_sssd; then log "Core SSSD/Kerberos setup process completed."; else log "ERROR: Core SSSD/Kerberos setup process failed."; return 1; fi; }
 test_machine_keytab() {
     log "Testing Machine Kerberos Keytab (/etc/krb5.keytab)..."
     

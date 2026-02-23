@@ -32,7 +32,7 @@ if [[ ! -f "${COMMON_UTILS}" ]]; then
   echo "[ERROR] Missing: ${COMMON_UTILS}" >&2
   exit 1
 fi
-# shellcheck source=../lib/common_utils.sh
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "${COMMON_UTILS}"
 
 # ── Load configuration ──
@@ -41,7 +41,7 @@ if [[ ! -f "${VARS_CONF}" ]]; then
   log_error "Missing config: ${VARS_CONF}"
   exit 1
 fi
-# shellcheck source=../config/setup_nodes.vars.conf
+# shellcheck source=../config/setup_nodes.vars.conf disable=SC1091
 source "${VARS_CONF}"
 
 AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v26.R.template"

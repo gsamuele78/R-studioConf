@@ -24,7 +24,7 @@ import psutil  # type: ignore[import]
 from pydantic import BaseModel, Field  # type: ignore[import]
 from fastapi import FastAPI  # type: ignore[import]
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import]
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse, HTMLResponse  # type: ignore[import]
+from fastapi.responses import PlainTextResponse, StreamingResponse, HTMLResponse  # type: ignore[import]
 from fastapi.openapi.docs import get_swagger_ui_html  # type: ignore[import]
 from prometheus_client import CollectorRegistry, Gauge, generate_latest  # type: ignore[import]
 import uvicorn  # type: ignore[import]
@@ -34,35 +34,55 @@ import uvicorn  # type: ignore[import]
 # ---------------------------------------------------------------------------
 
 class CpuStatus(BaseModel):
+    """CPU status and utilization metrics."""
     pct: float = Field(..., description="Utilisation %", example=42.1)
     cores: int = Field(..., description="Logical CPU cores", example=32)
     load_1m: float = Field(..., example=1.2)
     load_5m: float = Field(..., example=0.9)
 
 class RamStatus(BaseModel):
-    pct: float; used_gb: float; total_gb: float
+    """RAM usage metrics."""
+    pct: float
+    used_gb: float
+    total_gb: float
 
 class SwapStatus(BaseModel):
-    pct: float; total_gb: float
+    """Swap memory usage metrics."""
+    pct: float
+    total_gb: float
 
 class DiskInfo(BaseModel):
+    """Information for a specific disk partition."""
     available: bool
-    pct: float = 0; free_gb: float = 0
-    used_gb: float = 0; total_gb: float = 0
+    pct: float = 0
+    free_gb: float = 0
+    used_gb: float = 0
+    total_gb: float = 0
 
 class DiskStatus(BaseModel):
-    nfs_home: DiskInfo; projects: DiskInfo; tmp: DiskInfo
+    """Overall disk status across monitored partitions."""
+    nfs_home: DiskInfo
+    projects: DiskInfo
+    tmp: DiskInfo
 
 class RSession(BaseModel):
-    label: str; cpu_pct: float; mem_mb: float; age_min: int
+    """Details for a single active R session."""
+    label: str
+    cpu_pct: float
+    mem_mb: float
+    age_min: int
 
 class SessionCounts(BaseModel):
-    rstudio: int; terminal: int
+    """Counts of active user sessions."""
+    rstudio: int
+    terminal: int
 
 class ServicesStatus(BaseModel):
+    """Status flags for background services."""
     ollama: bool
 
 class StatusResponse(BaseModel):
+    """Comprehensive system status payload."""
     ts: int = Field(..., description="Unix timestamp of snapshot")
     hostname: str
     cache_age_s: float
@@ -75,6 +95,7 @@ class StatusResponse(BaseModel):
     services: ServicesStatus
 
 class HealthResponse(BaseModel):
+    """Basic structural health check response."""
     status: str = Field(..., example="ok")
     cache_age_s: float = Field(..., example=3.1)
 
@@ -494,6 +515,7 @@ async def public_status():
 
 @app.get("/api/v1/stream", tags=["Streaming"], summary="Server-Sent Events — push on every cache refresh")
 async def stream_status():
+    """Stream continuous status updates via Server-Sent Events."""
     async def event_generator():
         last_ts = 0
         while True:
@@ -502,7 +524,7 @@ async def stream_status():
                 last_ts = data["ts"]
                 yield f"data: {json.dumps(data)}\n\n"
             await asyncio.sleep(1)
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",

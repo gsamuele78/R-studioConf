@@ -25,6 +25,7 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
   echo "ERROR: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
   exit 2
 fi
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "$UTILS_SCRIPT_PATH"
 
 check_root
@@ -51,6 +52,7 @@ done
 # Load Config
 if [[ -f "$DEFAULT_CONFIG_FILE" ]]; then
     log INFO "Loading configuration from $DEFAULT_CONFIG_FILE"
+    # shellcheck source=../config/optimize_system.vars.conf disable=SC1091
     source "$DEFAULT_CONFIG_FILE"
 else
     log ERROR "Configuration file not found: $DEFAULT_CONFIG_FILE"

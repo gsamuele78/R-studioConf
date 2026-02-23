@@ -4,21 +4,21 @@ set -euo pipefail
 
 # Detect OS codename and version
 os_codename="$(lsb_release -cs 2>/dev/null || grep VERSION_CODENAME /etc/os-release | cut -d= -f2)"
-os_version="$(lsb_release -rs 2>/dev/null || grep VERSION_ID /etc/os-release | cut -d= -f2 | tr -d '"')"
+# os_version="$(lsb_release -rs 2>/dev/null || grep VERSION_ID /etc/os-release | cut -d= -f2 | tr -d '"')"
 arch="$(uname -m)"
 case "$arch" in
-    x86_64|amd64) deb_arch="amd64" ;;
-    aarch64|arm64) deb_arch="arm64" ;;
-    i386|i686) deb_arch="i386" ;;
-    *) deb_arch="amd64" ;;
+    x86_64|amd64) _deb_arch="amd64" ;;
+    aarch64|arm64) _deb_arch="arm64" ;;
+    i386|i686) _deb_arch="i386" ;;
+    *) ;; # default case
 esac
 
 # Map OS codename/version to supported download section
 # Supported: Ubuntu 20/22/24, Debian 11/12
 case "$os_codename" in
-    jammy|bookworm|noble) os_section="ubuntu" ;; # Ubuntu 22/24, Debian 12
-    focal|bullseye) os_section="ubuntu" ;; # Ubuntu 20, Debian 11
-    *) os_section="ubuntu" ;; # Default to ubuntu
+    jammy|bookworm|noble) _os_section="ubuntu" ;; # Ubuntu 22/24, Debian 12
+    focal|bullseye) _os_section="ubuntu" ;; # Ubuntu 20, Debian 11
+    *) ;; # Default to ubuntu
 esac
 
 # Fetch download page and extract latest .deb for detected arch

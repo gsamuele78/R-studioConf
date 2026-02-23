@@ -13,6 +13,7 @@ TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 
 # Source common utils
 if [[ -f "$UTILS_SCRIPT_PATH" ]]; then
+    # shellcheck source=../lib/common_utils.sh disable=SC1091
     source "$UTILS_SCRIPT_PATH"
 else
     echo "Error: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
@@ -21,6 +22,7 @@ fi
 
 # Source common Kerberos variables
 if [[ -f "$KERBEROS_VARS_FILE" ]]; then
+    # shellcheck source=../config/lib_kerberos_setup.vars.conf disable=SC1091
     source "$KERBEROS_VARS_FILE"
 else
     log "WARN" "Kerberos configuration file not found at $KERBEROS_VARS_FILE. Using internal defaults if available, or failing."

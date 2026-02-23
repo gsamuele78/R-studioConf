@@ -16,10 +16,12 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     printf "Error: common_utils.sh not found at %s\n" "$UTILS_SCRIPT_PATH" >&2
     exit 1
 fi
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "$UTILS_SCRIPT_PATH"
 
 if [[ -f "$CONF_VARS_FILE" ]]; then
     log "Sourcing NTP/chrony configuration variables from $CONF_VARS_FILE"
+    # shellcheck source=../config/configure_time_sync.vars.conf disable=SC1091
     source "$CONF_VARS_FILE"
 else
     log "Warning: NTP/chrony vars file not found; using embedded defaults."
@@ -30,9 +32,6 @@ else
     CHRONY_MAKESTEP="1.0 3"
     CHRONY_RTC_SYNC="yes"
     CHRONY_FALLBACK_POOLS=("pool 2.debian.pool.ntp.org iburst")
-    SYSTEMD_FALLBACK_NTP="0.debian.pool.ntp.org 1.debian.pool.ntp.org 2.debian.pool.ntp.org 3.debian.pool.ntp.org"
-    NTP_CONF_PATH="/etc/ntp.conf"
-    NTP_FALLBACK_SERVERS=("0.debian.pool.ntp.org" "1.debian.pool.ntp.org" "2.debian.pool.ntp.org" "3.debian.pool.ntp.org")
 fi
 
 # FIXED: Separate apt-get commands instead of using && operators
@@ -121,7 +120,7 @@ main_menu() {
     printf "R) Restore configurations from most recent backup\n"
     printf "4) Exit\n"
     read -r -p "Choice: " choice
-    local final_chrony=""
+    read -r -p "Choice: " choice
     case "$choice" in
         1)
             backup_config && install_ntp_client

@@ -13,6 +13,7 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
   echo "ERROR: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
   exit 2
 fi
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "$UTILS_SCRIPT_PATH"
 
 # =============================================================================

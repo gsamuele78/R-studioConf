@@ -13,7 +13,7 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     echo "Error: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
     exit 1
 fi
-# shellcheck source=../lib/common_utils.sh
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "$UTILS_SCRIPT_PATH"
 
 LOG_FILE="/var/log/botanical/portal_setup.log"

@@ -26,6 +26,7 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
   echo "ERROR: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
   exit 2
 fi
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "$UTILS_SCRIPT_PATH"
 
 # =====================================================================
@@ -137,7 +138,8 @@ parse_sssd_config_for_vars() {
   domain_line=$(grep -i "^\[domain/" /etc/sssd/sssd.conf | head -1 | sed 's/.*domain\/\([^]]*\).*/\1/')
   if [[ -n "$domain_line" ]]; then
     export AD_DOMAIN_LOWER="$domain_line"
-    export AD_DOMAIN_UPPER="$(echo "$domain_line" | tr '[:lower:]' '[:upper:]')"
+    AD_DOMAIN_UPPER="$(echo "$domain_line" | tr '[:lower:]' '[:upper:]')"
+    export AD_DOMAIN_UPPER
   fi
   
   # Extract home directory template
@@ -168,7 +170,8 @@ parse_samba_config_for_vars() {
   if [[ -n "$realm" ]]; then
     export AD_DOMAIN_UPPER="$realm"
     export AD_REALM="$realm"
-    export AD_DOMAIN_LOWER="$(echo "$realm" | tr '[:upper:]' '[:lower:]')"
+    AD_DOMAIN_LOWER="$(echo "$realm" | tr '[:upper:]' '[:lower:]')"
+    export AD_DOMAIN_LOWER
   fi
   
   local workgroup
@@ -197,7 +200,7 @@ parse_samba_config_for_vars() {
 load_sssd_kerberos_config_vars() {
   local sssd_vars_file="${SCRIPT_DIR}/../config/join_domain_sssd.vars.conf"
   if [[ -f "$sssd_vars_file" ]]; then
-    # shellcheck source=/dev/null
+    # shellcheck source=../config/join_domain_sssd.vars.conf disable=SC1091
     source "$sssd_vars_file" 2>/dev/null || true
     
     # Extract DEFAULT_* variables and export
@@ -211,7 +214,7 @@ load_sssd_kerberos_config_vars() {
 load_samba_kerberos_config_vars() {
   local samba_vars_file="${SCRIPT_DIR}/../config/join_domain_samba.vars.conf"
   if [[ -f "$samba_vars_file" ]]; then
-    # shellcheck source=/dev/null
+    # shellcheck source=../config/join_domain_samba.vars.conf disable=SC1091
     source "$samba_vars_file" 2>/dev/null || true
     
     # Extract DEFAULT_* variables and export
@@ -386,10 +389,14 @@ _fix_ipv6_and_finish_install() {
   
   local conf_files=()
   if [[ -d "/etc/nginx/conf.d" ]]; then
-    mapfile -t conf_files < <(find /etc/nginx/conf.d -maxdepth 1 -name "*.conf")
+    while IFS= read -r -d '' file; do
+      conf_files+=("$file")
+    done < <(find /etc/nginx/conf.d -maxdepth 1 -name "*.conf" -print0)
   fi
   if [[ -d "/etc/nginx/sites-enabled" ]]; then
-    mapfile -t conf_files < <(find /etc/nginx/sites-enabled -maxdepth 1 -type f)
+    while IFS= read -r -d '' file; do
+      conf_files+=("$file")
+    done < <(find /etc/nginx/sites-enabled -maxdepth 1 -type f -print0)
   fi
   
   for conf_file in "${conf_files[@]}"; do
@@ -541,6 +548,7 @@ install_and_configure_nginx() {
     log ERROR "Config file not found: $config_file"
     return 1
   fi
+  # shellcheck source=../config/install_nginx.vars.conf disable=SC1091
   source "$config_file"
   
   # Use the flag set by menu choice

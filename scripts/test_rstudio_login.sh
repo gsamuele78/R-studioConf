@@ -4,7 +4,7 @@
 
 USERNAME="gianfranco.samuele2"
 # Ask for password safely
-read -s -p "Enter Password for $USERNAME: " PASSWORD
+read -r -s -p "Enter Password for $USERNAME: " PASSWORD
 echo ""
 
 COOKIE_JAR="/tmp/rstudio_cookies.txt"
@@ -81,8 +81,8 @@ echo "$response" | grep -E "HTTP/|Location"
 sleep 5
 echo ""
 echo "=========================================="
-echo "TEST 3: Plaintext Package in 'v' (v=user\npwd)"
-echo "Payload: v=username\npassword, persist=1..."
+printf "TEST 3: Plaintext Package in 'v' (v=user\\npwd)\n"
+printf "Payload: v=username\\npassword, persist=1...\n"
 echo "=========================================="
 PAYLOAD="$(printf '%s\n%s' "$USERNAME" "$PASSWORD")"
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \

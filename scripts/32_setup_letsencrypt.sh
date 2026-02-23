@@ -20,6 +20,7 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
   echo "ERROR: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
   exit 2
 fi
+# shellcheck source=../lib/common_utils.sh disable=SC1091
 source "$UTILS_SCRIPT_PATH"
 
 # =====================================================================
@@ -97,6 +98,7 @@ obtain_certificate() {
   
   # Source config
   if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=../config/install_nginx.vars.conf disable=SC1091
     source "$CONFIG_FILE"
   fi
   
@@ -156,9 +158,7 @@ obtain_certificate() {
   log INFO "Obtaining certificate for: $domain"
   log INFO "Command: $certbot_cmd"
   
-  eval "$certbot_cmd"
-  
-  if [[ $? -eq 0 ]]; then
+  if eval "$certbot_cmd"; then
     log INFO "Certificate obtained successfully!"
     echo ""
     echo "Certificate location: /etc/letsencrypt/live/$domain/"
