@@ -66,20 +66,42 @@ setup_service() {
     cat > "${service_file}" <<EOF
 [Unit]
 Description=Botanical Big Data Telemetry API
+Documentation=https://github.com/gsamuele78/R-studioConf
 After=network.target
 Wants=network.target
 
 [Service]
 Type=simple
+# root required: psutil.net_connections() needs CAP_NET_ADMIN to read full TCP state table.
+# Revisit if a future kernel version allows this with a less privileged user + capabilities.
 User=root
 WorkingDirectory=${api_dir}
+
 # Use the venv Python — not /usr/bin/python3 (which lacks the required packages)
 ExecStart=${TELEMETRY_PYTHON} ${TELEMETRY_API_SCRIPT}
+
+# ── Restart policy ──
 Restart=on-failure
-RestartSec=10
+RestartSec=3
+
+# ── Shutdown tuning (KEY FIX for slow restarts) ──
+# Without TimeoutStopSec, systemd defaults to 90 s before sending SIGKILL.
+# 10 s is more than enough for uvicorn to drain in-flight requests.
+TimeoutStopSec=10
+# mixed: SIGTERM → main process; after TimeoutStopSec → SIGKILL the whole cgroup.
+KillMode=mixed
+
+# ── Environment ──
 # Pass venv to subprocesses just in case
 Environment="PATH=${TELEMETRY_VENV}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="VIRTUAL_ENV=${TELEMETRY_VENV}"
+
+# ── Security hardening (compatible with User=root) ──
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/tmp /var/log
+ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target
