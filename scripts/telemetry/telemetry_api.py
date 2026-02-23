@@ -473,7 +473,7 @@ _TOP_BAR_HTML = """
     .then(function(r){ return r.json(); })
     .then(function(d){
       var h = document.getElementById('biome-hostname');
-      if (h && d.hostname) h.textContent = '\uD83D\uDDA5\uFE0F ' + d.hostname + ' \u2014 API Documentation';
+      if (h && d.hostname) h.textContent = '🖥️ ' + d.hostname + ' — API Documentation';
     })
     .catch(function(){});
 </script>
