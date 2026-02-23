@@ -254,10 +254,18 @@ location /monitoring/node/ {
     proxy_pass http://127.0.0.1:9100/;
 }
 
-# --- Public Status API (portal telemetry strip) ---
-# Exposes /api/v1/status (JSON) and /api/v1/health only.
+location ~* ^/api/(docs|redoc|openapi\.json)$ {
+    proxy_pass         http://127.0.0.1:8000/api/$1;
+    proxy_http_version 1.1;
+    proxy_set_header   Host $host;
+    proxy_buffering    off;
+    add_header         X-Robots-Tag "noindex" always;
+}
+
+# --- Public Status API (portal telemetry strip & SSE stream) ---
+# Exposes /api/v1/status (JSON), /api/v1/stream (SSE) and /api/v1/health only.
 # No sensitive process data or user info — only aggregated counts.
-# Rate-limited: 10 req/min per IP (zone defined at http-level in nginx_site.conf)
+# Rate-limited: 30 req/min per IP (zone defined at http-level in nginx_site.conf)
 location /api/ {
     limit_req zone=api_status burst=5 nodelay;
 
@@ -271,8 +279,9 @@ location /api/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-    # Reuse connections — don't tear down between 10s polling intervals
+    # Reuse connections — don't tear down between 10s polling intervals or active streams
     proxy_set_header Connection "";
+    proxy_buffering off;
 
     # Generous timeout — psutil.cpu_percent blocks ~0.5-2s on busy server
     proxy_read_timeout 15s;

@@ -17,18 +17,98 @@ import shutil
 import socket
 import threading
 import time
+import asyncio
+import json
 
 import psutil  # type: ignore[import]
+from pydantic import BaseModel, Field  # type: ignore[import]
 from fastapi import FastAPI  # type: ignore[import]
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import]
-from fastapi.responses import JSONResponse, PlainTextResponse  # type: ignore[import]
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse  # type: ignore[import]
 from prometheus_client import CollectorRegistry, Gauge, generate_latest  # type: ignore[import]
 import uvicorn  # type: ignore[import]
 
 # ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+class CpuStatus(BaseModel):
+    pct: float = Field(..., description="Utilisation %", example=42.1)
+    cores: int = Field(..., description="Logical CPU cores", example=32)
+    load_1m: float = Field(..., example=1.2)
+    load_5m: float = Field(..., example=0.9)
+
+class RamStatus(BaseModel):
+    pct: float; used_gb: float; total_gb: float
+
+class SwapStatus(BaseModel):
+    pct: float; total_gb: float
+
+class DiskInfo(BaseModel):
+    available: bool
+    pct: float = 0; free_gb: float = 0
+    used_gb: float = 0; total_gb: float = 0
+
+class DiskStatus(BaseModel):
+    nfs_home: DiskInfo; projects: DiskInfo; tmp: DiskInfo
+
+class RSession(BaseModel):
+    label: str; cpu_pct: float; mem_mb: float; age_min: int
+
+class SessionCounts(BaseModel):
+    rstudio: int; terminal: int
+
+class ServicesStatus(BaseModel):
+    ollama: bool
+
+class StatusResponse(BaseModel):
+    ts: int = Field(..., description="Unix timestamp of snapshot")
+    hostname: str
+    cache_age_s: float
+    cpu: CpuStatus
+    ram: RamStatus
+    swap: SwapStatus
+    sessions: SessionCounts
+    disk: DiskStatus
+    r_sessions: list[RSession]
+    services: ServicesStatus
+
+class HealthResponse(BaseModel):
+    status: str = Field(..., example="ok")
+    cache_age_s: float = Field(..., example=3.1)
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Botanical Telemetry API", version="3.2.0")
+app = FastAPI(
+    title="Biome Telemetry API",
+    description="""
+Real-time system metrics for the **Biome Big Data Calculus** research platform.
+
+Metrics are collected every 5 seconds by a background daemon and served
+with <1 ms latency from an in-memory cache.
+
+### Authentication
+Public endpoints (`/api/v1/*`) are rate-limited at 30 req/min per IP by Nginx.
+Prometheus (`/metrics`) and legacy (`/status`) endpoints are LAN-only.
+
+### Push streaming
+Use `GET /api/v1/stream` (SSE) to receive updates the instant the cache
+refreshes — no polling needed. The browser `EventSource` API reconnects
+automatically on disconnect.
+    """,
+    version="4.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+    contact={"name": "Biome Research Platform"},
+    openapi_tags=[
+        {"name": "Public status",  "description": "Rate-limited via Nginx proxy"},
+        {"name": "Streaming",      "description": "SSE push — no polling required"},
+        {"name": "Health",         "description": "Liveness probes"},
+        {"name": "Monitoring",     "description": "LAN-only Prometheus + legacy"},
+    ],
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -279,16 +359,38 @@ threading.Thread(
 # HTTP Endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/api/v1/status")
-async def public_status() -> JSONResponse:
+@app.get("/api/v1/status", response_model=StatusResponse, tags=["Public status"], summary="Full system snapshot")
+async def public_status():
     """Public portal status — returns pre-computed cache, always < 1 ms."""
     payload, ts = _cache.read_status()
     payload["cache_age_s"] = round(time.time() - ts, 1)
-    return JSONResponse(content=payload)
+    # FastAPI automatically validates and serializes the dict to the response_model
+    return payload
 
 
-@app.get("/api/v1/health")
-async def health() -> dict:
+@app.get("/api/v1/stream", tags=["Streaming"], summary="Server-Sent Events — push on every cache refresh")
+async def stream_status():
+    async def event_generator():
+        last_ts = 0
+        while True:
+            data, _ = _cache.read_status()
+            if data and data.get("ts", 0) != last_ts:
+                last_ts = data["ts"]
+                yield f"data: {json.dumps(data)}\n\n"
+            await asyncio.sleep(1)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.get("/api/v1/health", response_model=HealthResponse, tags=["Health"], summary="Liveness probe")
+async def health():
     """Liveness probe."""
     _, ts = _cache.read_status()
     return {"status": "ok", "cache_age_s": round(time.time() - ts, 1)}
