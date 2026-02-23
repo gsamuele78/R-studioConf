@@ -294,7 +294,7 @@ location /api/ {
     add_header Cache-Control "no-store, no-cache" always;
 
     # Stream JSON immediately, don't buffer
-    proxy_buffering off;
+    #proxy_buffering off;
 }
 
 # --- Server Status Wrapper (full Grafana-style detail page) ---
