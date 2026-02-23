@@ -786,7 +786,7 @@
             }
 
             updateStrip();
-            setInterval(updateStrip, 10000);
+            setInterval(updateStrip, 5000);
         })();
 
         // Handle Logout

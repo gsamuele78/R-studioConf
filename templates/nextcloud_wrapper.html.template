@@ -48,7 +48,7 @@
 </head>
 <body>
     <div id="portal-top-bar">
-        <a href="javascript:void(0)" onclick="goBack()">🏠 Botanical Portal</a>
+        <a href="javascript:void(0)" onclick="goBack()">🏠 Biome Portal</a>
     </div>
     <iframe id="app-frame" 
             src="/files-inner/" 

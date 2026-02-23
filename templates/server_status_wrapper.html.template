@@ -280,7 +280,7 @@
 <!-- Top navigation bar -->
 <div id="top-bar">
     <div class="brand">
-        <a class="back" href="javascript:void(0)" onclick="goBack()" title="Back to Portal">← Portal</a>
+        <a class="back" href="javascript:void(0)" onclick="goBack()" title="Back to Portal">← Biome Portal</a>
         <span style="color:var(--glass-border)">│</span>
         <h1 id="page-server-name">🖥️ %%SERVER_NAME%% — Server Status</h1>
     </div>
@@ -412,6 +412,12 @@
         </div>
     </div>
 
+    <!-- ─── RAM History ─── -->
+    <div class="card">
+        <div class="card-title"><span class="ico">📉</span> RAM History (last 60 s)</div>
+        <canvas class="spark-canvas" id="spark-ram" height="50"></canvas>
+    </div>
+
     <!-- ─── ROW 3: Storage ─── -->
     <div class="section-hdr">💽 Storage Overview</div>
 
@@ -460,15 +466,11 @@
         </div>
     </div>
 
-    <!-- ─── RAM History ─── -->
-    <div class="card">
-        <div class="card-title"><span class="ico">📉</span> RAM History (last 60 s)</div>
-        <canvas class="spark-canvas" id="spark-ram" height="50"></canvas>
-    </div>
+
 
     <!-- Footer -->
     <div style="text-align:center; color:var(--text-dim); font-size:0.8rem; padding-top:0.5rem; border-top:1px solid var(--glass-border);">
-        Data refreshed every 8 s · %%SERVER_NAME%% Research Platform · <a href="javascript:void(0)" onclick="goBack()" style="color:var(--sage-green);">← Portal</a>
+        Data refreshed every 5 s · %%SERVER_NAME%% Research Platform · <a href="javascript:void(0)" onclick="goBack()" style="color:var(--sage-green);">← biome Portal</a>
     </div>
 </div>
 
