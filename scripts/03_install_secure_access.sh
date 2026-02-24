@@ -40,7 +40,9 @@ install_services() {
     log "INFO" "Terminal wrapper deployment is now handled by 30_install_nginx.sh in the unified architecture."
 
     log "INFO" "Creating and enabling service files..."; 
-    ensure_dir_exists "${TTYD_OVERRIDE_DIR}"; process_systemd_template "${SCRIPT_DIR}/../templates/ttyd.service.override.template" "ttyd.service.d/override.conf"
+    ensure_dir_exists "${TTYD_OVERRIDE_DIR}"
+    ensure_dir_exists "/var/log/biome-log/secure_access"
+    process_systemd_template "${SCRIPT_DIR}/../templates/ttyd.service.override.template" "ttyd.service.d/override.conf"
     if [ ! -f "${PAM_CONFIG_PATH}" ]; then echo "@include common-auth" | sudo tee "${PAM_CONFIG_PATH}" > /dev/null; fi
     
     log "INFO" "Reloading systemd and restarting services..."; 

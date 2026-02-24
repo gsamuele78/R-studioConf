@@ -1,8 +1,8 @@
 #!/bin/bash
 # /usr/local/bin/ttyd_login_wrapper.sh
 
-# DEBUGGING: Log to /tmp which is universally writable
-LOG_FILE="/tmp/ttyd_debug.log"
+# LOGGING: Log to secure_access directory
+LOG_FILE="/var/log/biome-log/secure_access/ttyd_login_wrapper.log"
 
 # Log header
 {
