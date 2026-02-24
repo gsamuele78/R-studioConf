@@ -848,7 +848,11 @@ setup_nodes_ollama() {
   # ── Install Ollama ──
   if ! command -v ollama &>/dev/null; then
     log_info "Installing Ollama..."
-    curl -fsSL https://ollama.com/install.sh | sh
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      log_info "[DRY-RUN] curl -fsSL https://ollama.com/install.sh | sh"
+    else
+      curl -fsSL https://ollama.com/install.sh | sh
+    fi
   else
     log_info "Ollama already installed: $(ollama --version 2>/dev/null || echo 'unknown')"
   fi
@@ -881,11 +885,16 @@ OLLEOF
   # Wait for readiness
   local _i
   for _i in $(seq 1 15); do
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      break
+    fi
     curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1 && break
     sleep 1
   done
 
-  if ! curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    log_success "[DRY-RUN] Ollama running on 127.0.0.1:11434"
+  elif ! curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
     log_error "Ollama failed to start — check: journalctl -u ollama -n 50"
   else
     log_success "Ollama running on 127.0.0.1:11434"
