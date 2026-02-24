@@ -789,7 +789,7 @@ setup_nodes_logging() {
   printf "%s" "$generated_audit" > "${tmp_audit}"
   run_cmd cp "${tmp_audit}" "${BIOME_CONF}/00_audit_v26.R"
   rm -f "${tmp_audit}"
-  chmod 644 "${BIOME_CONF}/00_audit_v26.R"
+  run_cmd chmod 644 "${BIOME_CONF}/00_audit_v26.R"
   log_success "Audit: ${BIOME_CONF}/00_audit_v26.R"
 
   # System log
