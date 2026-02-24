@@ -1121,6 +1121,10 @@ case "${choice}" in
     setup_nodes_preflight
     setup_nodes_swap
     ;;
+  8)
+    setup_nodes_preflight
+    setup_nodes_orphan_cleanup
+    ;;
   U)
     setup_nodes_uninstall
     ;;
