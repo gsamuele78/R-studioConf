@@ -977,9 +977,9 @@ MFEOF
   echo "${OLLAMA_CUSTOM_MODEL}" > "${BIOME_CONF}/ai_model"
   run_cmd chmod 644 "${BIOME_CONF}/ai_model"
 
-  # Security check
-  if ss -tlnp 2>/dev/null | grep ":11434" | grep -q "0.0.0.0"; then
-    log_error "SECURITY: Ollama listening on 0.0.0.0! Should be 127.0.0.1 only."
+  # Security check: Ensure Ollama is only bound to 127.0.0.1 (check column 4 of ss output)
+  if ss -tlnp 2>/dev/null | awk '$4 ~ /:11434$/ {print $4}' | grep -E -q '^(0\.0\.0\.0|\*)'; then
+    log_warn "SECURITY: Ollama listening on 0.0.0.0! Should be 127.0.0.1 only."
   else
     log_success "Ollama security: 127.0.0.1 only"
   fi
