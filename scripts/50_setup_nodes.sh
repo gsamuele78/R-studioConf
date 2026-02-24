@@ -565,34 +565,35 @@ setup_nodes_python() {
 setup_nodes_r_packages() {
   log_step "Step 7: bspm & R Packages"
 
-  run_cmd Rscript --vanilla -e '
-if (!requireNamespace("bspm",quietly=TRUE))
-  install.packages("bspm",repos="https://cloud.r-project.org")
-'
+  run_cmd bash -c 'Rscript --vanilla -e "
+    if (!requireNamespace(\"bspm\", quietly=TRUE))
+      install.packages(\"bspm\", repos=\"https://cloud.r-project.org\")
+  "'
 
   # Build a safe R vector from the bash array
   local r_pkg_vector
   r_pkg_vector=$(printf '"%s",' "${R_PACKAGES[@]}" | sed 's/,$//')
 
-  run_cmd Rscript --vanilla -e "
-suppressMessages(bspm::enable())
-pkgs <- c(${r_pkg_vector})
-for (p in pkgs) {
-  if (!requireNamespace(p,quietly=TRUE)) tryCatch({
-    install.packages(p,repos='https://cloud.r-project.org',quiet=TRUE)
-    cat(sprintf('  Installed: %s\n',p))
-  }, error=function(e) cat(sprintf('  FAILED: %s (%s)\n',p,e\$message)))
-}
-"
+  run_cmd bash -c "Rscript --vanilla -e '
+    suppressMessages(bspm::enable())
+    pkgs <- c(${r_pkg_vector})
+    for (p in pkgs) {
+      if (!requireNamespace(p, quietly=TRUE)) tryCatch({
+        install.packages(p, repos=\"https://cloud.r-project.org\", quiet=TRUE)
+        cat(sprintf(\"  Installed: %s\n\", p))
+      }, error=function(e) cat(sprintf(\"  FAILED: %s (%s)\n\", p, e\$message)))
+    }
+  '"
 
   # Configure reticulate
-  run_cmd Rscript --vanilla -e "
-library(reticulate)
-use_python('${PYTHON_ENV}/bin/python',required=TRUE)
-tryCatch({tf<-reticulate::import('tensorflow')
-  cat(sprintf('TensorFlow: %s\n',tf[['__version__']]))\n
-}, error=function(e) cat('TF will init on first use.\n'))
-"
+  run_cmd bash -c "Rscript --vanilla -e '
+    library(reticulate)
+    use_python(\"${PYTHON_ENV}/bin/python\", required=TRUE)
+    tryCatch({
+      tf <- reticulate::import(\"tensorflow\")
+      cat(sprintf(\"TensorFlow: %s\n\", tf[[\"__version__\"]]))
+    }, error=function(e) cat(\"TF will init on first use.\n\"))
+  '"
   log_success "R packages configured"
 }
 
