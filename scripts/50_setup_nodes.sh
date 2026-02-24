@@ -652,7 +652,20 @@ RENVEOF
   # Process the template using common_utils process_template
   # (substitutes all %%KEY%% placeholders from vars.conf)
   local tmp_profile="/tmp/Rprofile.site.deploy.${TS}"
-  process_template "${RPROFILE_TEMPLATE}" "${tmp_profile}"
+  local generated_profile
+  process_template "${RPROFILE_TEMPLATE}" generated_profile \
+    BIOME_HOST="${BIOME_HOST}" \
+    RPROFILE_VERSION="${RPROFILE_VERSION}" \
+    VM_VCORES="${VM_VCORES}" \
+    VM_RAM_GB="${VM_RAM_GB}" \
+    BIOME_CONTACT="${BIOME_CONTACT}" \
+    MAX_BLAS_THREADS="${MAX_BLAS_THREADS}" \
+    BIOME_CONF="${BIOME_CONF}" \
+    LOG_FILE="${LOG_FILE}" \
+    RAMDISK_GB="${RAMDISK_GB}" \
+    RSESSION_CONF_PATH="${RSESSION_CONF_PATH}"
+
+  printf "%s" "$generated_profile" > "${tmp_profile}"
   run_cmd cp "${tmp_profile}" "${rprofile}"
   rm -f "${tmp_profile}"
   chmod 644 "${rprofile}"
@@ -764,7 +777,16 @@ setup_nodes_logging() {
 
   # Deploy audit script from template
   local tmp_audit="/tmp/00_audit_v26.R.deploy.${TS}"
-  process_template "${AUDIT_TEMPLATE}" "${tmp_audit}"
+  local generated_audit
+  process_template "${AUDIT_TEMPLATE}" generated_audit \
+    BIOME_CONF="${BIOME_CONF}" \
+    LOG_FILE="${LOG_FILE}" \
+    MAX_THREADS="${MAX_THREADS}" \
+    NFS_HOME="${NFS_HOME}" \
+    CIFS_ARCHIVE="${CIFS_ARCHIVE}" \
+    PYTHON_ENV="${PYTHON_ENV}"
+
+  printf "%s" "$generated_audit" > "${tmp_audit}"
   run_cmd cp "${tmp_audit}" "${BIOME_CONF}/00_audit_v26.R"
   rm -f "${tmp_audit}"
   chmod 644 "${BIOME_CONF}/00_audit_v26.R"
