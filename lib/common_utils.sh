@@ -65,8 +65,8 @@ check_bash_version() {
 
 # --- CONFIGURATION VARIABLES (Internal to common_utils) ---
 if [[ -z "${LOG_FILE:-}" ]]; then
-    mkdir -p "/var/log/r_env_manager"
-    LOG_FILE="/var/log/r_env_manager/common_utils.log"
+    mkdir -p "/var/log/biome-log/core"
+    LOG_FILE="/var/log/biome-log/core/common_utils.log"
 fi
 
 BACKUP_DIR_BASE="/var/backups/r_env_manager/config_backups_$(date +%Y%m%d)"

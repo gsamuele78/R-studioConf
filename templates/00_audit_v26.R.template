@@ -7,7 +7,7 @@
 #
 # Template placeholders (filled by 99_audit_r_environment.sh):
 #   %%BIOME_CONF%%    - /etc/biome-calc
-#   %%LOG_FILE%%      - /var/log/r_biome_system.log
+#   %%LOG_FILE%%      - /var/log/biome-log/r_biome_system.log
 #   %%MAX_THREADS%%   - 16 (from setup_nodes.vars.conf)
 #   %%NFS_HOME%%      - /nfs/home
 #   %%CIFS_ARCHIVE%%  - /mnt/ProjectStorage

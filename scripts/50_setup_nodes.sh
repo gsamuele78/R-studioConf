@@ -771,6 +771,7 @@ setup_nodes_logging() {
   log_success "Audit: ${BIOME_CONF}/00_audit_v26.R"
 
   # System log
+  mkdir -p "$(dirname "${LOG_FILE}")"
   touch "${LOG_FILE}"
   chmod 666 "${LOG_FILE}"
   log_success "System log: ${LOG_FILE} (world-writable for AD users)"
@@ -792,6 +793,21 @@ log_file       <- "${LOG_FILE}"
 test_ollama    <- $([ "${SKIP_OLLAMA}" = true ] && echo "FALSE" || echo "TRUE")
 ACONF
   chmod 644 "${BIOME_CONF}/audit.conf"
+
+  # Deploy admin recipients
+  mkdir -p "${BIOME_CONF}/core"
+  if [[ -f "${WORKSPACE_ROOT}/config/admin_recipients.txt" ]]; then
+    run_cmd cp "${WORKSPACE_ROOT}/config/admin_recipients.txt" "${BIOME_CONF}/core/admin_recipients.txt"
+    chmod 644 "${BIOME_CONF}/core/admin_recipients.txt"
+  fi
+
+  # Deploy archiver known projects config
+  mkdir -p "${BIOME_CONF}/archiver"
+  if [[ -f "${WORKSPACE_ROOT}/config/scopri_progetti_known.conf" ]]; then
+    run_cmd cp "${WORKSPACE_ROOT}/config/scopri_progetti_known.conf" "${BIOME_CONF}/archiver/scopri_progetti_known.conf"
+    chmod 644 "${BIOME_CONF}/archiver/scopri_progetti_known.conf"
+  fi
+
   log_success "Logging infrastructure ready"
 }
 

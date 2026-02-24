@@ -24,7 +24,7 @@ source "${SCRIPT_DIR_INIT}/lib/common_utils.sh"
 # shellcheck disable=SC2155
 readonly SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="${SCRIPT_DIR_INIT}"
-readonly LOG_DIR="/var/log/r_env_manager"
+readonly LOG_DIR="/var/log/biome-log/core"
 readonly BACKUP_DIR="/var/backups/r_env_manager"
 readonly CONFIG_DIR="${SCRIPT_DIR}/config"
 readonly STATE_DIR="/var/lib/r_env_manager"

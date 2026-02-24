@@ -21,7 +21,8 @@ MAIL_DOMAIN="${MAIL_DOMAIN}"
 ADMIN_EMAIL="file://${BIOME_CONF}/conf/admin_recipients.txt"
 
 # ── Log Paths ─────────────────────────────────────────────────
-LOG_DIR="/var/log/r_orphan_cleanup"
+# --- Paths and Directories ---
+LOG_DIR="/var/log/biome-log/r_orphan_cleanup"
 LOG_FILE="${LOG_DIR}/cleanup.log"
 NOTIFY_DIR="${LOG_DIR}/notifications"
 

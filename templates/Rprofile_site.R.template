@@ -45,7 +45,7 @@ local({
   ENABLE_RESOURCE_MGMT <- TRUE   # Fair-Share RAM/CPU
   ENABLE_SMART_IO      <- TRUE   # Parquet/CSV auto-switch
   ENABLE_AI_ASSISTANT  <- TRUE   # Ollama (model from %%BIOME_CONF%%/ai_model)
-  ENABLE_SYS_LOGGING   <- TRUE   # Logging to /var/log
+  ENABLE_SYS_LOGGING   <- TRUE   # Logging to /var/log/biome-log
   ENABLE_TMP_CLEANUP   <- TRUE   # Smart /tmp cleanup
   ENABLE_BLAS_MGMT     <- TRUE   # OpenBLAS/OMP
   ENABLE_TERRA_OPT     <- TRUE   # Geospatial (Terra/GDAL)
