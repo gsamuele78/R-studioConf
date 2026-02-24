@@ -641,7 +641,7 @@ BIOME_RAMDISK_GB=${RAMDISK_GB}
 
 # Threading: managed DYNAMICALLY by Rprofile.site. Do NOT set here.
 RENVEOF
-  chmod 644 "${renviron}"
+  run_cmd chmod 644 "${renviron}"
   log_success "Renviron.site deployed (dynamic CORETYPE, no static thread vars)"
 
   # ── Rprofile.site (from template) ──
@@ -668,7 +668,7 @@ RENVEOF
   printf "%s" "$generated_profile" > "${tmp_profile}"
   run_cmd cp "${tmp_profile}" "${rprofile}"
   rm -f "${tmp_profile}"
-  chmod 644 "${rprofile}"
+  run_cmd chmod 644 "${rprofile}"
 
   # Validate R syntax
   log_info "Validating Rprofile.site syntax..."
@@ -762,7 +762,7 @@ XDG_CONFIG_HOME=\${HOME}/.config
 #
 # Threading: managed by system Rprofile.site. Do NOT set manually.
 SKELEOF
-  chmod 644 /etc/skel/.Renviron
+  run_cmd chmod 644 /etc/skel/.Renviron
   log_success "New-user /etc/skel/.Renviron template created"
 }
 
@@ -773,7 +773,7 @@ setup_nodes_logging() {
   log_step "Step 10: Logging & Audit Infrastructure"
 
   mkdir -p "${BIOME_CONF}"
-  chmod 755 "${BIOME_CONF}"
+  run_cmd chmod 755 "${BIOME_CONF}"
 
   # Deploy audit script from template
   local tmp_audit="/tmp/00_audit_v26.R.deploy.${TS}"
@@ -795,14 +795,14 @@ setup_nodes_logging() {
   # System log
   mkdir -p "$(dirname "${LOG_FILE}")"
   touch "${LOG_FILE}"
-  chmod 666 "${LOG_FILE}"
+  run_cmd chmod 666 "${LOG_FILE}"
   log_success "System log: ${LOG_FILE} (world-writable for AD users)"
 
   # RStudio converter log dir
   mkdir -p /var/log/biome_converter
   if getent group rstudio-server &>/dev/null; then
-    chown root:rstudio-server /var/log/biome_converter
-    chmod 775 /var/log/biome_converter
+    run_cmd chown root:rstudio-server /var/log/biome_converter
+    run_cmd chmod 775 /var/log/biome_converter
   fi
 
   # Audit config (read by 00_audit_v26.R and 99_audit_r_environment.sh)
@@ -814,20 +814,20 @@ python_env     <- "${PYTHON_ENV}/bin/python"
 log_file       <- "${LOG_FILE}"
 test_ollama    <- $([ "${SKIP_OLLAMA}" = true ] && echo "FALSE" || echo "TRUE")
 ACONF
-  chmod 644 "${BIOME_CONF}/audit.conf"
+  run_cmd chmod 644 "${BIOME_CONF}/audit.conf"
 
   # Deploy admin recipients
   mkdir -p "${BIOME_CONF}/core"
   if [[ -f "${WORKSPACE_ROOT}/config/admin_recipients.txt" ]]; then
     run_cmd cp "${WORKSPACE_ROOT}/config/admin_recipients.txt" "${BIOME_CONF}/core/admin_recipients.txt"
-    chmod 644 "${BIOME_CONF}/core/admin_recipients.txt"
+    run_cmd chmod 644 "${BIOME_CONF}/core/admin_recipients.txt"
   fi
 
   # Deploy archiver known projects config
   mkdir -p "${BIOME_CONF}/archiver"
   if [[ -f "${WORKSPACE_ROOT}/config/scopri_progetti_known.conf" ]]; then
     run_cmd cp "${WORKSPACE_ROOT}/config/scopri_progetti_known.conf" "${BIOME_CONF}/archiver/scopri_progetti_known.conf"
-    chmod 644 "${BIOME_CONF}/archiver/scopri_progetti_known.conf"
+    run_cmd chmod 644 "${BIOME_CONF}/archiver/scopri_progetti_known.conf"
   fi
 
   log_success "Logging infrastructure ready"
@@ -931,7 +931,7 @@ Rules:
 - Be concise: CPU inference is slow, minimize output.
 """
 MFEOF
-  chmod 644 "${modelfile_path}"
+  run_cmd chmod 644 "${modelfile_path}"
 
   if ollama list 2>/dev/null | grep -q "qwen2.5-coder.*14b"; then
     log_info "Creating custom model: ${OLLAMA_CUSTOM_MODEL}..."
@@ -947,7 +947,7 @@ MFEOF
   fi
 
   echo "${OLLAMA_CUSTOM_MODEL}" > "${BIOME_CONF}/ai_model"
-  chmod 644 "${BIOME_CONF}/ai_model"
+  run_cmd chmod 644 "${BIOME_CONF}/ai_model"
 
   # Security check
   if ss -tlnp 2>/dev/null | grep ":11434" | grep -q "0.0.0.0"; then
@@ -982,7 +982,7 @@ setup_nodes_orphan_cleanup() {
   else
     export SMTP_HOST SMTP_PORT SENDER_EMAIL MAIL_DOMAIN SMTP_DNS_SERVERS KILL_TIMEOUT BIOME_CONF
     envsubst '${SMTP_HOST} ${SMTP_PORT} ${SENDER_EMAIL} ${MAIL_DOMAIN} ${SMTP_DNS_SERVERS} ${KILL_TIMEOUT} ${BIOME_CONF}' < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
-    chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
+    run_cmd chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   fi
 
   # 3. Deploy scripts into BIOME_CONF
@@ -1027,7 +1027,7 @@ ${cron_cleanup}
 ${cron_notify}
 ${cron_report}
 EOF
-    chmod 0644 /etc/cron.d/r_orphan_cleanup
+    run_cmd chmod 0644 /etc/cron.d/r_orphan_cleanup
     log_success "Cron schedules synchronized in /etc/cron.d/r_orphan_cleanup."
   fi
 }
@@ -1074,7 +1074,7 @@ setup_nodes_project_archiver() {
             # Export variables needed for envsubst
             export BIOME_CONF ARCHIVE_LOG_DIR ARCHIVE_CONF_DIR ARCHIVE_CSV_FILE NFS_HOME ARCHIVE_STORAGE_ROOT
             envsubst '${BIOME_CONF} ${ARCHIVE_LOG_DIR} ${ARCHIVE_CONF_DIR} ${ARCHIVE_CSV_FILE} ${NFS_HOME} ${ARCHIVE_STORAGE_ROOT}' < "${WORKSPACE_ROOT}/templates/${tpl}" > "${BIOME_CONF}/script/${dest}"
-            chmod +x "${BIOME_CONF}/script/${dest}"
+            run_cmd chmod +x "${BIOME_CONF}/script/${dest}"
             log_success "Deployed ${dest}"
         fi
     done
@@ -1093,7 +1093,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 ${cron_archiver}
 EOF
-      chmod 0644 /etc/cron.d/biome_archiver
+      run_cmd chmod 0644 /etc/cron.d/biome_archiver
       log_success "Archiver cron schedule synchronized."
     fi
 
