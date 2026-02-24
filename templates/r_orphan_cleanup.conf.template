@@ -1,0 +1,63 @@
+# ============================================================================
+# r_orphan_cleanup.conf
+# Centralized configuration for the R orphan worker cleanup system
+# Managed by BIOME-CALC deployment
+# ============================================================================
+
+# ── Email Utility ─────────────────────────────────────────────
+SEND_EMAIL_SCRIPT="${BIOME_CONF}/script/send_email.sh"
+
+# ── SMTP Settings ─────────────────────────────────────────────
+SMTP_HOST="${SMTP_HOST}"
+SMTP_PORT="${SMTP_PORT}"
+SENDER_EMAIL="${SENDER_EMAIL}"
+DNS_SERVERS="${SMTP_DNS_SERVERS}"
+
+# ── User Email Domain ─────────────────────────────────────────
+MAIL_DOMAIN="${MAIL_DOMAIN}"
+
+# ── Admin Recipients ──────────────────────────────────────────
+# Set to the recipients list deployed during setup
+ADMIN_EMAIL="file://${BIOME_CONF}/conf/admin_recipients.txt"
+
+# ── Log Paths ─────────────────────────────────────────────────
+LOG_DIR="/var/log/r_orphan_cleanup"
+LOG_FILE="${LOG_DIR}/cleanup.log"
+NOTIFY_DIR="${LOG_DIR}/notifications"
+
+# ── Thresholds ────────────────────────────────────────────────
+MIN_AGE_SECONDS=120
+MAX_LOG_SIZE=$((10 * 1024 * 1024))
+KILL_TIMEOUT=${KILL_TIMEOUT:-30}
+
+# ── Process Patterns to Monitor ───────────────────────────────
+ORPHAN_PATTERNS=(
+    "parallel:::.workRSOCK|parallel::PSOCK"
+    "parallel:::.slaveRSOCK|parallel::PSOCK (legacy)"
+    "parallelly:::.workRSOCK|future::multisession"
+    "parallelly:::|future::parallelly"
+    "callr::r_bg|callr::r_bg"
+    "callr::r_session|callr::r_session"
+    "BiocParallel|BiocParallel"
+    "clustermq|clustermq"
+    "batchtools|batchtools"
+    "snowSOCK\\|snowRSOCK|snow (legacy)"
+    "python.*tensorflow|tensorflow (Python)"
+    "python.*keras|keras (Python)"
+    "python.*earthengine|rgee/earthengine (Python)"
+    "python.*torch|PyTorch (Python)"
+    "python.*ee_utils|rgee (Python)"
+    "python.*reticulate|reticulate (Python generico)"
+    "gdal|GDAL subprocess"
+    "ogr2ogr|OGR subprocess"
+    "Rscript.*worker|Rscript worker (generico)"
+)
+
+# ── Excluded Patterns (Must NOT Kill) ─────────────────────────
+EXCLUDE_PATTERNS=(
+    "jupyter"
+    "code-server"
+    "rstudio-server"
+    "rserver"
+    "rsession"
+)

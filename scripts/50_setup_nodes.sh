@@ -176,7 +176,7 @@ setup_nodes_dependencies() {
     libpython3-dev python3-venv python3-pip \
     libudunits2-dev cmake build-essential \
     libopenblas-dev libomp-dev gfortran \
-    libgoogle-perftools-dev
+    libgoogle-perftools-dev sendemail dnsutils
   log_success "Base dependencies installed"
 }
 
@@ -919,6 +919,69 @@ MFEOF
 }
 
 # ==============================================================================
+# STEP 11B: ORPHAN PROCESS CLEANUP
+# ==============================================================================
+setup_nodes_orphan_cleanup() {
+  log_step "Step 11b: Orphan Process Cleanup (cron + email)"
+
+  # 1. Ensure log structures exist
+  run_cmd mkdir -p "${LOG_DIR}/notifications"
+  run_cmd chmod 755 "${LOG_DIR}"
+  run_cmd chmod 777 "${LOG_DIR}/notifications" # Let anyone write their own logs
+
+  # 2. Deploy configs
+  log_info "Deploying email maps and admin recipients..."
+  run_cmd mkdir -p "${BIOME_CONF}/conf"
+  run_cmd cp -f "${DIR}/../config/admin_recipients.txt" "${BIOME_CONF}/conf/admin_recipients.txt"
+  run_cmd cp -f "${DIR}/../config/user_email_map.txt" "${BIOME_CONF}/conf/user_email_map.txt"
+  
+  log_info "Generating r_orphan_cleanup.conf..."
+  if [[ "${DRY_RUN}" == true ]]; then
+    log_info "[DRY-RUN] envsubst on r_orphan_cleanup.conf.template -> ${BIOME_CONF}/conf/r_orphan_cleanup.conf"
+  else
+    export SMTP_HOST SMTP_PORT SENDER_EMAIL MAIL_DOMAIN DNS_SERVERS KILL_TIMEOUT BIOME_CONF LOG_DIR SWAP_SIZE_GB
+    envsubst < "${DIR}/../templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
+    chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
+  fi
+
+  # 3. Deploy scripts into BIOME_CONF
+  log_info "Deploying executable daemon scripts..."
+  run_cmd mkdir -p "${BIOME_CONF}/script"
+  local scripts_to_deploy=(
+    "cleanup_r_orphans.sh.template:cleanup_r_orphans.sh"
+    "notify_r_orphans.sh.template:notify_r_orphans.sh"
+    "r_orphan_report.sh.template:r_orphan_report.sh"
+    "send_email.sh.template:send_email.sh"
+  )
+
+  for pair in "${scripts_to_deploy[@]}"; do
+    local tpl="${pair%%:*}"
+    local dest="${pair##*:}"
+    if [[ "${DRY_RUN}" == true ]]; then
+      log_info "[DRY-RUN] Deploying script ${dest}..."
+    else
+      cp -f "${DIR}/../templates/${tpl}" "${BIOME_CONF}/script/${dest}"
+      chmod +x "${BIOME_CONF}/script/${dest}"
+      log_success "Deployed ${dest}"
+    fi
+  done
+
+  # 4. Bind to cron
+  log_info "Wiring cron schedules..."
+  local cron_cleanup="*/5 * * * * root ${BIOME_CONF}/script/cleanup_r_orphans.sh"
+  local cron_notify="0 8 * * * root ${BIOME_CONF}/script/notify_r_orphans.sh"
+  
+  if [[ "${DRY_RUN}" == true ]]; then
+    log_info "[DRY-RUN] would write to /etc/cron.d/cleanup_r_orphans: ${cron_cleanup}"
+    log_info "[DRY-RUN] would write to /etc/cron.d/notify_r_orphans: ${cron_notify}"
+  else
+    echo "${cron_cleanup}" > /etc/cron.d/cleanup_r_orphans
+    echo "${cron_notify}" > /etc/cron.d/notify_r_orphans
+    log_success "Cron schedules synchronized."
+  fi
+}
+
+# ==============================================================================
 # STEP 12: BLAS SMOKE TEST
 # ==============================================================================
 setup_nodes_blas_test() {
@@ -1007,6 +1070,7 @@ echo "  4) Migrate user configs only (Step 9)"
 echo "  5) Ollama AI service only (Step 11)"
 echo "  6) Run BLAS smoke test only (Step 12)"
 echo "  7) Run Swap Creation only (Step 5b)"
+echo "  8) Setup Orphan Process Cleanup (Step 11b)"
 echo "  U) Uninstall (remove deployed files)"
 echo "  Q) Quit"
 echo ""
@@ -1030,6 +1094,7 @@ case "${choice}" in
     setup_nodes_migrate_users
     setup_nodes_logging
     setup_nodes_ollama
+    setup_nodes_orphan_cleanup
     setup_nodes_blas_test
     setup_nodes_summary
     ;;
