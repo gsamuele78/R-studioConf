@@ -213,11 +213,19 @@ setup_nodes_gcloud() {
 
   if ! command -v gcloud &>/dev/null; then
     if [[ ! -f /usr/share/keyrings/cloud.google.gpg ]]; then
-      curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
-        | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+      if [[ "${DRY_RUN}" == "true" ]]; then
+        log_info "[DRY-RUN] curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg"
+      else
+        curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+          | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+      fi
     fi
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
-      > /etc/apt/sources.list.d/google-cloud-sdk.list
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      log_info "[DRY-RUN] echo \"deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main\" > /etc/apt/sources.list.d/google-cloud-sdk.list"
+    else
+      echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+        > /etc/apt/sources.list.d/google-cloud-sdk.list
+    fi
     run_cmd apt-get update -qq
     run_cmd apt-get install -y -qq google-cloud-cli
     log_success "Google Cloud CLI installed"
