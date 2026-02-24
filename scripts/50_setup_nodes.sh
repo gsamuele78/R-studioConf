@@ -565,38 +565,45 @@ setup_nodes_python() {
 setup_nodes_r_packages() {
   log_step "Step 7: bspm & R Packages"
 
-  local r_code_bspm="'
-if (!requireNamespace(\"bspm\", quietly=TRUE))
-  install.packages(\"bspm\", repos=\"https://cloud.r-project.org\")
-'"
-  run_cmd Rscript --vanilla -e "${r_code_bspm}"
+  local tmp_bspm="/tmp/r_setup_bspm.R"
+  cat > "${tmp_bspm}" << 'EOF'
+if (!requireNamespace("bspm", quietly=TRUE)) {
+  install.packages("bspm", repos="https://cloud.r-project.org")
+}
+EOF
+  run_cmd Rscript --vanilla "${tmp_bspm}"
+  run_cmd rm -f "${tmp_bspm}"
 
   # Build a safe R vector from the bash array
   local r_pkg_vector
   r_pkg_vector=$(printf '"%s",' "${R_PACKAGES[@]}" | sed 's/,$//')
 
-  local r_code_pkgs="'
+  local tmp_pkgs="/tmp/r_setup_pkgs.R"
+  cat > "${tmp_pkgs}" << EOF
 suppressMessages(bspm::enable())
 pkgs <- c(${r_pkg_vector})
 for (p in pkgs) {
   if (!requireNamespace(p, quietly=TRUE)) tryCatch({
-    install.packages(p, repos=\"https://cloud.r-project.org\", quiet=TRUE)
-    cat(sprintf(\"  Installed: %s\n\", p))
-  }, error=function(e) cat(sprintf(\"  FAILED: %s (%s)\n\", p, e\$message)))
+    install.packages(p, repos="https://cloud.r-project.org", quiet=TRUE)
+    cat(sprintf("  Installed: %s\n", p))
+  }, error=function(e) cat(sprintf("  FAILED: %s (%s)\n", p, e\$message)))
 }
-'"
-  run_cmd Rscript --vanilla -e "${r_code_pkgs}"
+EOF
+  run_cmd Rscript --vanilla "${tmp_pkgs}"
+  run_cmd rm -f "${tmp_pkgs}"
 
   # Configure reticulate
-  local r_code_reticulate="'
+  local tmp_reticulate="/tmp/r_setup_reticulate.R"
+  cat > "${tmp_reticulate}" << EOF
 library(reticulate)
-use_python(\"${PYTHON_ENV}/bin/python\", required=TRUE)
+use_python("${PYTHON_ENV}/bin/python", required=TRUE)
 tryCatch({
-  tf <- reticulate::import(\"tensorflow\")
-  cat(sprintf(\"TensorFlow: %s\n\", tf[[\"__version__\"]]))
-}, error=function(e) cat(\"TF will init on first use.\n\"))
-'"
-  run_cmd Rscript --vanilla -e "${r_code_reticulate}"
+  tf <- reticulate::import("tensorflow")
+  cat(sprintf("TensorFlow: %s\n", tf[["__version__"]]))
+}, error=function(e) cat("TF will init on first use.\n"))
+EOF
+  run_cmd Rscript --vanilla "${tmp_reticulate}"
+  run_cmd rm -f "${tmp_reticulate}"
   log_success "R packages configured"
 }
 
