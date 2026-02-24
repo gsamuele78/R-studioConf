@@ -934,15 +934,15 @@ setup_nodes_orphan_cleanup() {
   # 2. Deploy configs
   log_info "Deploying email maps and admin recipients..."
   run_cmd mkdir -p "${BIOME_CONF}/conf"
-  run_cmd cp -f "${DIR}/../config/admin_recipients.txt" "${BIOME_CONF}/conf/admin_recipients.txt"
-  run_cmd cp -f "${DIR}/../config/user_email_map.txt" "${BIOME_CONF}/conf/user_email_map.txt"
+  run_cmd cp -f "${WORKSPACE_ROOT}/config/admin_recipients.txt" "${BIOME_CONF}/conf/admin_recipients.txt"
+  run_cmd cp -f "${WORKSPACE_ROOT}/config/user_email_map.txt" "${BIOME_CONF}/conf/user_email_map.txt"
   
   log_info "Generating r_orphan_cleanup.conf..."
   if [[ "${DRY_RUN}" == true ]]; then
     log_info "[DRY-RUN] envsubst on r_orphan_cleanup.conf.template -> ${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   else
     export SMTP_HOST SMTP_PORT SENDER_EMAIL MAIL_DOMAIN SMTP_DNS_SERVERS KILL_TIMEOUT BIOME_CONF
-    envsubst '${SMTP_HOST} ${SMTP_PORT} ${SENDER_EMAIL} ${MAIL_DOMAIN} ${SMTP_DNS_SERVERS} ${KILL_TIMEOUT} ${BIOME_CONF}' < "${DIR}/../templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
+    envsubst '${SMTP_HOST} ${SMTP_PORT} ${SENDER_EMAIL} ${MAIL_DOMAIN} ${SMTP_DNS_SERVERS} ${KILL_TIMEOUT} ${BIOME_CONF}' < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
     chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   fi
 
@@ -962,7 +962,7 @@ setup_nodes_orphan_cleanup() {
     if [[ "${DRY_RUN}" == true ]]; then
       log_info "[DRY-RUN] Deploying script ${dest}..."
     else
-      cp -f "${DIR}/../templates/${tpl}" "${BIOME_CONF}/script/${dest}"
+      cp -f "${WORKSPACE_ROOT}/templates/${tpl}" "${BIOME_CONF}/script/${dest}"
       chmod +x "${BIOME_CONF}/script/${dest}"
       log_success "Deployed ${dest}"
     fi
