@@ -446,24 +446,36 @@ setup_nodes_swap() {
     actual_bytes=$(stat -c%s "${SWAP_FILE}" 2>/dev/null || echo 0)
   fi
 
+  # ── Step 1: Determine if we need to (re)create the swap file ──
+  local needs_mkswap=false
+
   if [[ "${actual_bytes}" -eq "${expected_bytes}" ]]; then
-    log_info "Swap file already exists at the correct size (${SWAP_SIZE_GB}GB)."
-    if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "${SWAP_FILE}"; then
-      log_info "Activating existing swap: ${SWAP_FILE}"
-      run_cmd swapon "${SWAP_FILE}"
-    else
-      log_info "Swap already active: ${SWAP_FILE}"
-    fi
+    log_info "Swap file exists and is the exact configured size (${SWAP_SIZE_GB}GB / ${expected_bytes} bytes)."
   else
     if [[ "${actual_bytes}" -gt 0 ]]; then
-      log_info "Swap file exists but is wrong size (expected ${expected_bytes}B, got ${actual_bytes}B). Recreating..."
+      log_info "Swap file size mismatch! Configured: ${expected_bytes}B (${SWAP_SIZE_GB}GB), Current: ${actual_bytes}B."
+      log_info "Resizing swap file..."
     else
-      log_info "Swap file not found. Creating ${SWAP_SIZE_GB}GB swap at ${SWAP_FILE}..."
+      log_info "Swap file not found. Creating new ${SWAP_SIZE_GB}GB swap at ${SWAP_FILE}..."
     fi
+    needs_mkswap=true
+  fi
 
+  # Check active swap size if it's currently on
+  local active_size_bytes=0
+  if swapon --show=NAME --noheadings 2>/dev/null | grep -qF "${SWAP_FILE}"; then
+     active_size_bytes=$(swapon --show=NAME,SIZE --bytes --noheadings 2>/dev/null | awk -v f="${SWAP_FILE}" '$1==f {print $2}')
+     if [[ "${needs_mkswap}" == false && -n "${active_size_bytes}" && "${active_size_bytes}" -ne "${expected_bytes}" ]]; then
+         log_info "Swap is active but reports incorrect runtime size (${active_size_bytes}B instead of ${expected_bytes}B). Recreating..."
+         needs_mkswap=true
+     fi
+  fi
+
+  # ── Step 2: Create/Resize the swap file if necessary ──
+  if [[ "${needs_mkswap}" == true ]]; then
     # Deactivate if active before removing or recreating
     if swapon --show=NAME --noheadings 2>/dev/null | grep -qF "${SWAP_FILE}"; then
-      log_info "Deactivating active swap with wrong size: ${SWAP_FILE}"
+      log_info "Deactivating active swap: ${SWAP_FILE}"
       run_cmd swapoff "${SWAP_FILE}" || true
     fi
 
@@ -478,6 +490,14 @@ setup_nodes_swap() {
     
     log_info "Activating new swap: ${SWAP_FILE}"
     run_cmd swapon "${SWAP_FILE}"
+  else
+    # It exists and is the correct size, just ensure it's on
+    if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "${SWAP_FILE}"; then
+      log_info "Activating existing swap: ${SWAP_FILE}"
+      run_cmd swapon "${SWAP_FILE}"
+    else
+      log_info "Swap is already active and properly sized."
+    fi
   fi
 
   # ── Persist in /etc/fstab (idempotent) ──
