@@ -1,0 +1,354 @@
+#!/bin/bash
+# =============================================================================
+# BIOME AD GROUP INSPECTOR V4
+# /usr/local/custom/script/scopri_progetti_v4.sh
+#
+# Funzione: ispeziona AD, classifica utenti, genera CSV supervisor map
+#           con colonna PROJECT editabile manualmente
+#
+# CSV generato: username,supervisor,project,source,note
+#
+# LOGICA A CASCATA:
+#   1. Mapping manuale certo (KNOWN_SUPERVISORS)
+#   2. Titolo AD → PI / Admin / Cessato
+#   3. Inferenza per tema da gruppi AD specifici
+#   4. _UNKNOWN_ → richiede verifica manuale con i PI
+#
+# NOTA: AD UniBo non popola managedBy sui gruppi dottorato/PRIN.
+#       La colonna project viene estratta dai gruppi AD e può essere
+#       corretta manualmente nel CSV prima di copiarlo in produzione.
+#
+# USO:
+#   sudo ${BIOME_CONF}/script/scopri_progetti.sh
+#   Rivedi CSV draft → correggi supervisor e project → cp in produzione
+# =============================================================================
+
+[[ $EUID -ne 0 ]] && { echo "[ERROR] Eseguire come root (sudo)"; exit 1; }
+
+# --- CARICAMENTO CONFIGURAZIONI GLOBALI E LIBRERIA ----------------------------
+source /etc/biome-calc/conf/setup_nodes.vars.conf || { echo "[FATAL] setup_nodes.vars.conf mancante"; exit 1; }
+source "${BIOME_CONF:-/etc/biome-calc}/script/common_utils.sh" || { echo "[FATAL] common_utils.sh mancante"; exit 1; }
+
+# --- CONFIGURAZIONE INIETTATA (Template) -------------------------------------
+SOURCE_HOME="${NFS_HOME}"
+OUTPUT_REPORT="${ARCHIVE_LOG_DIR}/biome_ad_report_$(date +%Y%m%d).txt"
+OUTPUT_CSV="${ARCHIVE_CONF_DIR}/biome_supervisor_map_$(date +%Y%m%d).csv"
+PROD_CSV="${ARCHIVE_CSV_FILE}"
+
+# Gruppi AD da ignorare (rumore amministrativo UniBo)
+NOISE_PATTERN="Recall|Privacy|PwdPolicy|Exchange|RemotePowerShell|convenzionicubo|OptBase|IncaricoAA|ScelteFinanz|Blocco|Event|competenze|presentazione|seminario|invio|ListaCaric|ListaNuova|doppioCorso|ListaDottor|GrpDsa|CUSBRic|benvenuti|QualificaAggregata|VPN|AbilitatiNAS|dottorandi_italiani|pnrr|VQR|MFA|sertasso|stream|swopt|PRIN2022_Firma|firma-titolare|mailBasic|O365|Speex|cicloseminari|invio14|SegreterieStud|ScelteFinanz|ListaNuova|ListaCaric|Recall|recallunibomodulo|recallprivacy|Cessati|dcnavile|sistemi.cesia|tecnici.inform|sviluppo"
+
+# Prefissi gruppi da rimuovere per nome progetto leggibile
+# es: Str00968-PRIN2022 → PRIN2022
+PROJECT_PREFIX_STRIP="^Str[0-9]+-|^Dsa\.|^GrpDsa|^Ruolo\.|^Qualifica\."
+
+# Gruppi generici che non identificano un progetto specifico
+GENERIC_GROUPS="calc$|all$|data$|access$|news$|biome$|flor$|lifewatch$|SGBGA|svc_|lettor|OpenAI|Amm$|lettoriconsiglio|brahms|BorsistaRicerca|dottorandi|Contrattisti|Dottorando|IncarichiDid|PolicyPwd|GrpDsa|Opzioni|OptBase"
+
+# --- MAPPING MANUALE CERTIFICATO (Esterno) -----------------------------------
+declare -A KNOWN_SUPERVISORS
+declare -A KNOWN_PROJECTS
+SKIP_ACCOUNTS=()
+
+if [[ -f "${ARCHIVE_CONF_DIR}/scopri_progetti_known.conf" ]]; then
+    while IFS=':' read -r k_user k_sup k_proj; do
+        [[ "$k_user" =~ ^# ]] && continue
+        [[ -z "$k_user" ]] && continue
+        if [[ "$k_sup" == "_SKIP_" ]]; then
+            SKIP_ACCOUNTS+=("$k_user")
+        else
+            [[ -n "$k_sup" ]] && KNOWN_SUPERVISORS["$k_user"]="$k_sup"
+            [[ -n "$k_proj" ]] && KNOWN_PROJECTS["$k_user"]="$k_proj"
+        fi
+    done < "${ARCHIVE_CONF_DIR}/scopri_progetti_known.conf"
+else
+    log_warn "${ARCHIVE_CONF_DIR}/scopri_progetti_known.conf non trovato. Nessun override manuale applicato."
+fi
+
+# =============================================================================
+# FUNZIONE: Estrae nome progetto dai gruppi AD
+# Ritorna il primo gruppo specifico trovato, pulito dal prefisso Str00968-
+# =============================================================================
+extract_project_from_groups() {
+    local groups_raw="$1"
+
+    # Cerca prima gruppi PRIN/ERC/progetto con nome esplicito
+    local proj
+    proj=$(echo "$groups_raw" \
+        | grep -oP '(?<=CN=)[^,]+' \
+        | grep -vE "$NOISE_PATTERN|$GENERIC_GROUPS" \
+        | grep -iE "PRIN|ERC|project|progetto|lifewatch|flor|remote|spatial|lichen|algae|conserv|paesagg|BIOMAC|SGBGA-BIOMAC|brahms" \
+        | grep -vE "Firma|mailBasic|Recall|firma" \
+        | head -1 \
+        | sed -E "s/$PROJECT_PREFIX_STRIP//")
+
+    if [[ -n "$proj" ]]; then
+        echo "$proj"
+        return 0
+    fi
+
+    # Fallback: primo gruppo Str00968-NOME non generico
+    proj=$(echo "$groups_raw" \
+        | grep -oP '(?<=CN=)[^,]+' \
+        | grep -iE "^Str00968-" \
+        | grep -vE "$GENERIC_GROUPS" \
+        | head -1 \
+        | sed -E "s/$PROJECT_PREFIX_STRIP//")
+
+    if [[ -n "$proj" ]]; then
+        echo "$proj"
+        return 0
+    fi
+
+    echo "BIOME_General"
+}
+
+# =============================================================================
+# FUNZIONE: Inferenza supervisor da gruppi AD per tema
+# managedBy non è popolato in AD UniBo
+# =============================================================================
+infer_supervisor_from_groups() {
+    local groups="$1"
+
+    if echo "$groups" | grep -qiE "\bflor\b|\blifewatch\b|\bBIOMAC\b|\bSGBGA\b"; then
+        echo "alessandro.chiarucci|tema:floristica-macroecologia"
+        return 0
+    fi
+    if echo "$groups" | grep -qiE "\bremote\b|\bspatial\b|\bteleril\b"; then
+        echo "duccio.rocchini|tema:telerilevamento"
+        return 0
+    fi
+    if echo "$groups" | grep -qiE "\blichen\b|\blicen\b"; then
+        echo "juri.nascimbene|tema:lichenologia"
+        return 0
+    fi
+    if echo "$groups" | grep -qiE "\balghe\b|\balgae\b|\bciano\b"; then
+        echo "marco.cantonati|tema:alghe-cianobatteri"
+        return 0
+    fi
+    if echo "$groups" | grep -qiE "\bconserv\b"; then
+        echo "roberto.cazzolla|tema:conservazione"
+        return 0
+    fi
+    if echo "$groups" | grep -qiE "\bpaesagg\b|\blandscape\b"; then
+        echo "giovanna.pezzi|tema:paesaggio"
+        return 0
+    fi
+    if echo "$groups" | grep -qiE "\bPRIN2022\b"; then
+        echo "francesco.sabatini4|tema:PRIN2022"
+        return 0
+    fi
+
+    echo "_UNKNOWN_|no_pattern"
+    return 1
+}
+
+# =============================================================================
+# INIZIO ELABORAZIONE
+# =============================================================================
+
+mkdir -p "${ARCHIVE_LOG_DIR}"
+log_info "Inizio scansione AD. Report output $\OUTPUT_REPORT"
+
+echo "=== BIOME AD GROUP INSPECTOR V4 - $(date) ===" | tee "$OUTPUT_REPORT"
+echo "CSV draft  : $OUTPUT_CSV"                       | tee -a "$OUTPUT_REPORT"
+echo "CSV produz.: $PROD_CSV"                         | tee -a "$OUTPUT_REPORT"
+echo ""                                               | tee -a "$OUTPUT_REPORT"
+
+# Header CSV con 5 colonne
+cat > "$OUTPUT_CSV" << 'CSVHEADER'
+# BIOME Supervisor Map — generato da scopri_progetti_v4.sh
+# ==========================================================
+# COLONNE: username,supervisor,project,source,note
+#
+# username   = sAMAccountName (non modificare)
+# supervisor = username PI oppure: _PI_ _ADMIN_ _SKIP_ _CESSATA_ _UNKNOWN_
+# project    = nome cartella progetto in ProjectStorage (EDITABILE LIBERAMENTE)
+#              Esempi: PRIN2022-Sabatini, Lichenologia, PNRR-Conservazione
+#              Default automatico: BIOME_General
+# source     = manual | inferred_theme | pi | admin | expired | unknown
+# note       = testo libero (ignorato dallo script)
+#
+# ISTRUZIONI:
+#   1. Controlla colonna "project" → rinomina con nome progetto reale
+#   2. Risolvi supervisor=_UNKNOWN_ (chiedi ai PI)
+#   3. Copia in produzione:
+#        cp ${OUTPUT_CSV} \\
+#           ${PROD_CSV}
+#
+# username,supervisor,project,source,note
+CSVHEADER
+
+# Contatori
+CNT_MATCH=0; CNT_AUTO=0; CNT_PI=0; CNT_ADMIN=0; CNT_SKIP=0; CNT_UNKNOWN=0
+
+for USER_DIR in "$SOURCE_HOME"/*; do
+    [ -d "$USER_DIR" ] || continue
+    USERNAME=$(basename "$USER_DIR")
+    [[ "$USERNAME" =~ ^(Archived|Rtmp|root|nginx_tmp|nCloudAdmin)$ ]] && continue
+    id "$USERNAME" &>/dev/null || continue
+
+    # Skip espliciti
+    if printf '%s\n' "${SKIP_ACCOUNTS[@]}" | grep -qx "$USERNAME"; then
+        echo "${USERNAME},_SKIP_,BIOME_General,skip,\"Account non BIOME\"" >> "$OUTPUT_CSV"
+        printf "[SKIP]    %-30s\n" "$USERNAME" | tee -a "$OUTPUT_REPORT"
+        ((CNT_SKIP++))
+        continue
+    fi
+
+    # Query AD
+    AD_DATA=$(net ads search "(sAMAccountName=${USERNAME})" \
+        displayName title distinguishedName memberOf extensionAttribute4 \
+        -P 2>/dev/null)
+    [ -z "$AD_DATA" ] && continue
+
+    DISPLAY=$(echo "$AD_DATA" | grep "^displayName:"        | sed 's/displayName:[[:space:]]*//')
+    TITLE=$(echo "$AD_DATA"   | grep "^title:"              | sed 's/title:[[:space:]]*//')
+    DN=$(echo "$AD_DATA"      | grep "^distinguishedName:"  | sed 's/distinguishedName:[[:space:]]*//')
+    EXPIRY=$(echo "$AD_DATA"  | grep "^extensionAttribute4:"| sed 's/extensionAttribute4:[[:space:]]*//')
+    MEMBEROF_RAW=$(echo "$AD_DATA" | grep "^memberOf:")
+
+    # Gruppi filtrati (senza noise)
+    GROUPS_CLEAN=$(echo "$MEMBEROF_RAW" \
+        | grep -vE "$NOISE_PATTERN" \
+        | grep -oP '(?<=CN=)[^,]+' \
+        | sort | tr '\n' ' ')
+
+    SUPERVISOR=""; SOURCE=""; NOTE=""; PROJECT=""; TAG=""
+
+    # =========================================================================
+    # CASCATA RISOLUZIONE
+    # =========================================================================
+
+    # 1. Mapping manuale certo
+    if [[ -n "${KNOWN_SUPERVISORS[$USERNAME]}" ]]; then
+        SUPERVISOR="${KNOWN_SUPERVISORS[$USERNAME]}"
+        SOURCE="manual"
+        NOTE="\"Supervisor confermato\""
+        TAG="[MATCH]  "
+        ((CNT_MATCH++))
+
+        # Progetto: da KNOWN_PROJECTS se disponibile, altrimenti estrai da AD
+        if [[ -n "${KNOWN_PROJECTS[$USERNAME]}" ]]; then
+            PROJECT="${KNOWN_PROJECTS[$USERNAME]}"
+        else
+            PROJECT=$(extract_project_from_groups "$MEMBEROF_RAW")
+        fi
+
+    # 2a. PI — Professori / Ricercatori
+    elif echo "$TITLE" | grep -qiE "Professore ordinario|Professore associato|Ricercatore a tempo determinato|Ricercatore universitario"; then
+        SUPERVISOR="_PI_"
+        SOURCE="pi"
+        NOTE="\"$TITLE\""
+        PROJECT="_PI_WORKSPACE"
+        TAG="[PI]     "
+        ((CNT_PI++))
+
+    # 2b. Personale tecnico-amministrativo
+    elif echo "$TITLE" | grep -qi "funzionari"; then
+        SUPERVISOR="_ADMIN_"
+        SOURCE="admin"
+        NOTE="\"$TITLE\""
+        PROJECT="BIOME_Admin"
+        TAG="[ADMIN]  "
+        ((CNT_ADMIN++))
+
+    # 2c. Contratto scaduto
+    elif [[ -n "$EXPIRY" && "$EXPIRY" < "$(date +%Y-%m-%d)" ]]; then
+        SUPERVISOR="_CESSATA_"
+        SOURCE="expired"
+        NOTE="\"Contratto scaduto: $EXPIRY\""
+        PROJECT="BIOME_General"
+        TAG="[SKIP]   "
+        ((CNT_SKIP++))
+
+    # 3. Inferenza per tema
+    else
+        RESOLVED=$(infer_supervisor_from_groups "$GROUPS_CLEAN")
+        SUPERVISOR=$(echo "$RESOLVED" | cut -d'|' -f1)
+        METHOD=$(echo "$RESOLVED" | cut -d'|' -f2)
+        PROJECT=$(extract_project_from_groups "$MEMBEROF_RAW")
+
+        if [[ "$SUPERVISOR" != "_UNKNOWN_" ]]; then
+            SOURCE="inferred_theme"
+            NOTE="\"$TITLE — $METHOD — DA CONFERMARE\""
+            TAG="[AUTO]   "
+            ((CNT_AUTO++))
+        else
+            SUPERVISOR="_UNKNOWN_"
+            SOURCE="unknown"
+            NOTE="\"$TITLE — nessun pattern tema riconoscibile\""
+            TAG="[?????]  "
+            ((CNT_UNKNOWN++))
+        fi
+    fi
+
+    # Scrivi riga CSV (5 colonne)
+    echo "${USERNAME},${SUPERVISOR},${PROJECT},${SOURCE},${NOTE}" >> "$OUTPUT_CSV"
+
+    # Output console
+    printf "%s %-30s → supervisor:%-25s project:%-25s | %s\n" \
+        "$TAG" "$USERNAME" "$SUPERVISOR" "$PROJECT" "$SOURCE" | tee -a "$OUTPUT_REPORT"
+
+    # Gruppi rilevanti nel report
+    if [[ -n "$GROUPS_CLEAN" ]]; then
+        echo "           Gruppi: $GROUPS_CLEAN" >> "$OUTPUT_REPORT"
+    fi
+
+done
+
+# =============================================================================
+# RIEPILOGO
+# =============================================================================
+echo "" | tee -a "$OUTPUT_REPORT"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$OUTPUT_REPORT"
+echo "RIEPILOGO" | tee -a "$OUTPUT_REPORT"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$OUTPUT_REPORT"
+printf "  [MATCH]  : %d  (supervisor certo)\n"                "$CNT_MATCH"   | tee -a "$OUTPUT_REPORT"
+printf "  [AUTO]   : %d  (inferito per tema - DA CONFERMARE)\n" "$CNT_AUTO"  | tee -a "$OUTPUT_REPORT"
+printf "  [PI]     : %d  (professori/ricercatori)\n"           "$CNT_PI"     | tee -a "$OUTPUT_REPORT"
+printf "  [ADMIN]  : %d  (personale tecnico)\n"                "$CNT_ADMIN"  | tee -a "$OUTPUT_REPORT"
+printf "  [SKIP]   : %d  (CeSIA / scaduti)\n"                  "$CNT_SKIP"   | tee -a "$OUTPUT_REPORT"
+printf "  [?????]  : %d  (da risolvere manualmente)\n"         "$CNT_UNKNOWN"| tee -a "$OUTPUT_REPORT"
+echo "" | tee -a "$OUTPUT_REPORT"
+
+# Genera email per PI se ci sono UNKNOWN
+if [[ $CNT_UNKNOWN -gt 0 ]]; then
+    cat > ${ARCHIVE_CONF_DIR}/biome_email_pi.txt << EMAILEOF
+Oggetto: [BIOME-calc01] Richiesta assegnazione storage dottorandi
+
+Cari Colleghi,
+
+stiamo configurando gli spazi di archiviazione su biome-calc01.
+Per i seguenti utenti non siamo riusciti a identificare automaticamente
+il supervisore di riferimento.
+
+Vi chiediamo di rispondere indicando:
+  Nome Dottorando/Assegnista → Vostro Nome → Nome Progetto
+
+$(grep "_UNKNOWN_" "$OUTPUT_CSV" | grep -v "^#" | while IFS=',' read -r uname sup proj src note; do
+    DISP=$(net ads search "(sAMAccountName=${uname})" displayName title -P 2>/dev/null \
+        | grep -E "^(displayName|title):" | tr '\n' ' ' | sed 's/displayName: //;s/title: /— /')
+    printf "  • %-30s %s\n" "$uname" "$DISP"
+done)
+
+Grazie,
+Supporto Informatico BIOME
+EMAILEOF
+    echo "Email PI generata: ${ARCHIVE_CONF_DIR}/biome_email_pi.txt" | tee -a "$OUTPUT_REPORT"
+fi
+
+echo "" | tee -a "$OUTPUT_REPORT"
+echo "CSV draft  : $OUTPUT_CSV" | tee -a "$OUTPUT_REPORT"
+echo "Report     : $OUTPUT_REPORT" | tee -a "$OUTPUT_REPORT"
+echo "" | tee -a "$OUTPUT_REPORT"
+echo "Passi successivi:" | tee -a "$OUTPUT_REPORT"
+echo "  1. Apri il CSV e correggi la colonna 'project' con i nomi reali" | tee -a "$OUTPUT_REPORT"
+echo "     nano $OUTPUT_CSV" | tee -a "$OUTPUT_REPORT"
+echo "  2. Risolvi le righe _UNKNOWN_ con risposta dei PI" | tee -a "$OUTPUT_REPORT"
+echo "  3. Metti in produzione:" | tee -a "$OUTPUT_REPORT"
+echo "     cp $OUTPUT_CSV $PROD_CSV" | tee -a "$OUTPUT_REPORT"
+echo "  4. Dry-run archiver:" | tee -a "$OUTPUT_REPORT"
+echo "     sudo ${BIOME_CONF}/script/unibo_archive_manager.sh" | tee -a "$OUTPUT_REPORT"
+echo "  5. Applica:" | tee -a "$OUTPUT_REPORT"
+echo "     sudo ${BIOME_CONF}/script/unibo_archive_manager.sh --apply" | tee -a "$OUTPUT_REPORT"

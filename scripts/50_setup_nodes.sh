@@ -176,7 +176,8 @@ setup_nodes_dependencies() {
     libpython3-dev python3-venv python3-pip \
     libudunits2-dev cmake build-essential \
     libopenblas-dev libomp-dev gfortran \
-    libgoogle-perftools-dev sendemail dnsutils
+    libgoogle-perftools-dev sendemail dnsutils \
+    samba-common-bin winbind rsync tree
   log_success "Base dependencies installed"
 }
 
@@ -984,6 +985,68 @@ setup_nodes_orphan_cleanup() {
 }
 
 # ==============================================================================
+# STEP 11C: BIOME Precision Archiver
+# ==============================================================================
+setup_nodes_project_archiver() {
+    log_step "Step 11c: BIOME Precision Archiver"
+    local ARCHIVER_LOG_DIR="/var/log/biome_archiver"
+
+    # 1. Ensure log structures exist
+    run_cmd mkdir -p "${ARCHIVER_LOG_DIR}"
+    run_cmd chmod 755 "${ARCHIVER_LOG_DIR}"
+
+    # 2. Deploy configs
+    log_info "Deploying archiver configuration files..."
+    run_cmd mkdir -p "${BIOME_CONF}/conf"
+    run_cmd cp -f "${WORKSPACE_ROOT}/config/scopri_progetti_known.conf" "${BIOME_CONF}/conf/"
+    
+    log_info "Generating archiver config..."
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        log_info "[DRY-RUN] envsubst on archiver config templates"
+    else
+        # No specific template for archiver.conf, assuming it's scopri_progetti_known.conf
+        # If there was a template for archiver.conf, it would be processed here.
+        : # No specific envsubst for a main archiver.conf provided in the snippet
+    fi
+
+    # 3. Deploy scripts into BIOME_CONF
+    log_info "Deploying executable archiver scripts..."
+    run_cmd mkdir -p "${BIOME_CONF}/script"
+    local archiver_scripts_to_deploy=(
+        "scopri_progetti.sh.template:scopri_progetti.sh"
+        "unibo_archive_manager.sh.template:unibo_archive_manager.sh"
+    )
+
+    for pair in "${archiver_scripts_to_deploy[@]}"; do
+        local tpl="${pair%%:*}"
+        local dest="${pair##*:}"
+        if [[ "${DRY_RUN}" == true ]]; then
+            log_info "[DRY-RUN] Deploying script ${dest}..."
+        else
+            # Export variables needed for envsubst
+            export BIOME_CONF ARCHIVE_LOG_DIR ARCHIVE_CONF_DIR ARCHIVE_CSV_FILE NFS_HOME ARCHIVE_STORAGE_ROOT
+            envsubst '${BIOME_CONF} ${ARCHIVE_LOG_DIR} ${ARCHIVE_CONF_DIR} ${ARCHIVE_CSV_FILE} ${NFS_HOME} ${ARCHIVE_STORAGE_ROOT}' < "${WORKSPACE_ROOT}/templates/${tpl}" > "${BIOME_CONF}/script/${dest}"
+            chmod +x "${BIOME_CONF}/script/${dest}"
+            log_success "Deployed ${dest}"
+        fi
+    done
+
+    # 4. Bind to cron (example, adjust as needed)
+    log_info "Wiring archiver cron schedules (if any)..."
+    # Example cron entry, assuming ARCHIVE_CRON_SCHEDULE is defined in vars.conf
+    # local cron_archiver="${ARCHIVE_CRON_SCHEDULE} root ${BIOME_CONF}/script/unibo_archive_manager.sh"
+    # if [[ "${DRY_RUN}" == true ]]; then
+    #   log_info "[DRY-RUN] would write to /etc/cron.d/biome_archiver: ${cron_archiver}"
+    # else
+    #   echo "${cron_archiver}" > /etc/cron.d/biome_archiver
+    #   log_success "Archiver cron schedule synchronized."
+    # fi
+    log_info "Archiver cron schedules are not automatically configured by this script. Please configure manually if needed."
+
+    log_success "BIOME Precision Archiver configuration complete."
+}
+
+# ==============================================================================
 # STEP 12: BLAS SMOKE TEST
 # ==============================================================================
 setup_nodes_blas_test() {
@@ -1073,6 +1136,7 @@ echo "  5) Ollama AI service only (Step 11)"
 echo "  6) Run BLAS smoke test only (Step 12)"
 echo "  7) Run Swap Creation only (Step 5b)"
 echo "  8) Setup Orphan Process Cleanup (Step 11b)"
+echo "  9) Setup BIOME Precision Archiver (Step 11c)"
 echo "  U) Uninstall (remove deployed files)"
 echo "  Q) Quit"
 echo ""
@@ -1097,6 +1161,7 @@ case "${choice}" in
     setup_nodes_logging
     setup_nodes_ollama
     setup_nodes_orphan_cleanup
+    setup_nodes_project_archiver
     setup_nodes_blas_test
     setup_nodes_summary
     ;;
@@ -1126,6 +1191,10 @@ case "${choice}" in
   8)
     setup_nodes_preflight
     setup_nodes_orphan_cleanup
+    ;;
+  9)
+    setup_nodes_preflight
+    setup_nodes_project_archiver
     ;;
   U)
     setup_nodes_uninstall
