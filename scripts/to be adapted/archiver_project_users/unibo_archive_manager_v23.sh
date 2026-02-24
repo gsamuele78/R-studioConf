@@ -1,0 +1,569 @@
+#!/bin/bash
+# =============================================================================
+# BIOME PRECISION ARCHIVER V23
+# /usr/local/custom/script/unibo_archive_manager_v23.sh
+#
+# V23 aggiunge rispetto a V22:
+#   - Tipo record TRANSFER nel CSV per gestire cambio supervisor/progetto
+#   - Modalità --transfer-report: mostra tutti i trasferimenti storici
+#   - Audit log permanente separato dal run log
+#   - Gestione dati: rsync opzionale al cambio supervisor
+#
+# FORMATO CSV (8 colonne):
+#   username,type,supervisor,project,date_start,date_end,source,note
+#
+#   type = ACTIVE  → progetto attivo o storico (default se omesso)
+#          TRANSFER → cambio supervisor/progetto (genera entry speciale)
+#          PI       → il riga appartiene a un PI
+#          ADMIN    → personale tecnico
+#          SKIP     → da escludere
+#
+# ESEMPI MULTI-EVENTO:
+#   # Progetto storico con vecchio supervisor
+#   mario.rossi,ACTIVE,prof.bianchi,PRIN2022-A,2022-01-01,2023-12-31,manual,"progetto concluso"
+#   # Trasferimento al nuovo supervisor con nota motivazione
+#   mario.rossi,TRANSFER,prof.verdi,RemoteSensing-B,2024-01-01,,manual,"cambio tema ricerca"
+#   # Secondo progetto parallelo attivo
+#   mario.rossi,ACTIVE,prof.bianchi,CollabProject-C,2023-06-01,,manual,"collaborazione"
+#
+# STRUTTURA HOME UTENTE:
+#   ~/ARCHIVE_STORAGE/
+#     PRIN2022-A-CONCLUSO      →  .../prof.bianchi/PRIN2022-A/mario.rossi/    (storico)
+#     RemoteSensing-B          →  .../prof.verdi/RemoteSensing-B/mario.rossi/  (attivo)
+#     CollabProject-C          →  .../prof.bianchi/CollabProject-C/mario.rossi/ (parallelo)
+#     TRANSFER_LOG.txt         →  storico trasferimenti (generato dallo script)
+#
+# USO:
+#   sudo ./unibo_archive_manager_v23.sh                    # dry-run
+#   sudo ./unibo_archive_manager_v23.sh --apply            # esegui
+#   sudo ./unibo_archive_manager_v23.sh --status           # stato symlink
+#   sudo ./unibo_archive_manager_v23.sh --list-tree        # albero storage
+#   sudo ./unibo_archive_manager_v23.sh --transfer-report  # report trasferimenti
+#   sudo ./unibo_archive_manager_v23.sh --apply --sync-data # rsync dati al transfer
+# =============================================================================
+
+[[ $EUID -ne 0 ]] && { echo "[ERROR] Eseguire come root (sudo)"; exit 1; }
+
+# --- CONFIGURAZIONE ----------------------------------------------------------
+DEST_ROOT="/mnt/ProjectStorage"
+SOURCE_HOME="/nfs/home"
+SUPERVISOR_MAP="/usr/local/custom/biome_supervisor_map.csv"
+LOG_DIR="/usr/local/custom/logs"
+AUDIT_LOG="/usr/local/custom/logs/biome_audit.log"   # log permanente
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+RUN_LOG="${LOG_DIR}/archive_run_${TIMESTAMP}.log"
+TODAY=$(date +%Y-%m-%d)
+NOW=$(date '+%Y-%m-%d %H:%M:%S')
+
+DRY_RUN=true
+SHOW_STATUS=false
+SHOW_TREE=false
+TRANSFER_REPORT=false
+SYNC_DATA=false
+
+for ARG in "$@"; do
+    case "$ARG" in
+        --apply)            DRY_RUN=false ;;
+        --dry-run)          DRY_RUN=true ;;
+        --status)           SHOW_STATUS=true ;;
+        --list-tree)        SHOW_TREE=true ;;
+        --transfer-report)  TRANSFER_REPORT=true ;;
+        --sync-data)        SYNC_DATA=true ;;
+        --help)
+            cat << HELPEOF
+USO: $0 [OPZIONE...]
+
+  --apply            Esegue realmente le operazioni
+  --dry-run          Simula senza modifiche (default)
+  --status           Stato ARCHIVE_STORAGE per ogni utente
+  --list-tree        Albero corrente ProjectStorage
+  --transfer-report  Report storico trasferimenti supervisor
+  --sync-data        Con --apply: copia dati vecchia dir → nuova al TRANSFER
+                     (usa rsync, dati originali restano intatti)
+
+TIPO RECORD CSV (colonna 'type'):
+  ACTIVE    → Progetto attivo o storico (default)
+  TRANSFER  → Cambio supervisor/progetto: crea nuova dir, aggiorna symlink,
+              mantiene vecchio symlink con suffisso -TRASFERITO
+  PI        → Supervisore (workspace diretto)
+  ADMIN     → Personale tecnico (nessuna azione storage)
+  SKIP      → Escluso (CeSIA, scaduti)
+
+CSV: $SUPERVISOR_MAP
+  Colonne: username,type,supervisor,project,date_start,date_end,source,note
+  Generato da: scopri_progetti_v5.sh (aggiungere colonna type manualmente)
+
+AUDIT LOG: $AUDIT_LOG
+HELPEOF
+                exit 0
+                ;;
+    esac
+done
+
+mkdir -p "$LOG_DIR"
+touch "$AUDIT_LOG"
+
+# =============================================================================
+# FUNZIONE AUDIT LOG
+# =============================================================================
+audit() {
+    local level="$1"; shift
+    echo "[$NOW] [$level] $*" >> "$AUDIT_LOG"
+}
+
+# =============================================================================
+# MODALITA --status
+# =============================================================================
+if [[ "$SHOW_STATUS" == "true" ]]; then
+    echo "=== STATO ARCHIVE_STORAGE - $(date) ==="
+    echo ""
+    for USER_DIR in "$SOURCE_HOME"/*; do
+        [ -d "$USER_DIR" ] || continue
+        USERNAME=$(basename "$USER_DIR")
+        ARCH="$USER_DIR/ARCHIVE_STORAGE"
+        if [[ -L "$ARCH" ]]; then
+            printf "[LEGACY] %-30s → %s  ← symlink singolo, eseguire --apply\n" \
+                "$USERNAME" "$(readlink "$ARCH")"
+        elif [[ -d "$ARCH" ]]; then
+            printf "[OK]     %-30s\n" "$USERNAME"
+            for LINK in "$ARCH"/*; do
+                [[ -e "$LINK" || -L "$LINK" ]] || continue
+                LNAME=$(basename "$LINK")
+                [[ "$LNAME" == "TRANSFER_LOG.txt" ]] && continue
+                if [[ -L "$LINK" ]]; then
+                    TARGET=$(readlink "$LINK")
+                    STATUS="✓"
+                    [[ ! -d "$TARGET" ]] && STATUS="✗ BROKEN"
+                    printf "    %s %-35s → %s\n" "$STATUS" "$LNAME" "$TARGET"
+                fi
+            done
+            # Mostra transfer log se presente
+            if [[ -f "$ARCH/TRANSFER_LOG.txt" ]]; then
+                echo "    [transfers]:"
+                sed 's/^/      /' "$ARCH/TRANSFER_LOG.txt"
+            fi
+        else
+            printf "[NONE]   %-30s\n" "$USERNAME"
+        fi
+    done
+    exit 0
+fi
+
+# =============================================================================
+# MODALITA --list-tree
+# =============================================================================
+if [[ "$SHOW_TREE" == "true" ]]; then
+    echo "=== ALBERO ProjectStorage - $(date) ==="
+    echo ""
+    if command -v tree &>/dev/null; then
+        tree -L 3 --dirsfirst "$DEST_ROOT"
+    else
+        find "$DEST_ROOT" -maxdepth 3 -type d | sort \
+            | sed "s|$DEST_ROOT/||" | grep -v "^$" \
+            | awk -F'/' '{
+                if (NF==1) printf "  [PI]       %s\n", $1
+                if (NF==2) printf "    [proj]   %s/%s\n", $1, $2
+                if (NF==3) printf "      [user] %s/%s/%s\n", $1, $2, $3
+              }'
+    fi
+    exit 0
+fi
+
+# =============================================================================
+# MODALITA --transfer-report
+# =============================================================================
+if [[ "$TRANSFER_REPORT" == "true" ]]; then
+    echo "=== STORICO TRASFERIMENTI SUPERVISOR - $(date) ==="
+    echo ""
+    echo "--- Audit log globale ($AUDIT_LOG) ---"
+    grep "\[TRANSFER\]" "$AUDIT_LOG" 2>/dev/null | tail -50 \
+        || echo "(nessun trasferimento registrato)"
+    echo ""
+    echo "--- Transfer log per utente ---"
+    for USER_DIR in "$SOURCE_HOME"/*; do
+        [ -d "$USER_DIR" ] || continue
+        TLOG="$USER_DIR/ARCHIVE_STORAGE/TRANSFER_LOG.txt"
+        if [[ -f "$TLOG" ]]; then
+            USERNAME=$(basename "$USER_DIR")
+            printf "\n[%s]\n" "$USERNAME"
+            cat "$TLOG"
+        fi
+    done
+    exit 0
+fi
+
+# =============================================================================
+# CARICAMENTO CSV (8 colonne: username,type,supervisor,project,
+#                              date_start,date_end,source,note)
+# Compatibile con V22 (7 colonne: type assente → default ACTIVE)
+# =============================================================================
+if [[ ! -f "$SUPERVISOR_MAP" ]]; then
+    echo "[FATAL] CSV non trovato: $SUPERVISOR_MAP"
+    echo "        Eseguire: sudo /usr/local/custom/script/scopri_progetti_v5.sh"
+    echo "        Poi aggiungere colonna 'type' se necessario."
+    exit 1
+fi
+
+# Array di record per tipo
+declare -a RECORDS_ACTIVE=()
+declare -a RECORDS_TRANSFER=()
+declare -A USER_SPECIAL=()
+declare -A USER_SPECIAL_NOTE=()
+declare -A SEEN_USERS=()
+
+while IFS=',' read -r f1 f2 f3 f4 f5 f6 f7 f8 || [[ -n "$f1" ]]; do
+    [[ "$f1" =~ ^#|^[[:space:]]*$ ]] && continue
+
+    f1=$(echo "$f1" | tr -d ' \r')
+    f2=$(echo "$f2" | tr -d ' \r')
+    f3=$(echo "$f3" | tr -d ' \r')
+    f4=$(echo "$f4" | tr -d ' \r')
+    f5=$(echo "$f5" | tr -d ' \r')
+    f6=$(echo "$f6" | tr -d ' \r')
+    f7=$(echo "$f7" | tr -d ' \r')
+
+    [[ -z "$f1" ]] && continue
+
+    # Detect formato: 7 o 8 colonne
+    # 8 col: username,type,supervisor,project,date_start,date_end,source,note
+    # 7 col: username,supervisor,project,date_start,date_end,source,note
+    local_type="ACTIVE"
+    local_user="$f1"
+    local_sup=""; local_proj=""; local_ds=""; local_de=""; local_src=""; local_note=""
+
+    # Se f2 è un tipo riconosciuto → formato 8 colonne
+    if [[ "$f2" =~ ^(ACTIVE|TRANSFER|PI|ADMIN|SKIP|CESSATA|UNKNOWN)$ ]]; then
+        local_type="$f2"
+        local_sup="$f3"; local_proj="$f4"
+        local_ds="$f5";  local_de="$f6"
+        local_src="$f7"; local_note="$f8"
+    else
+        # Formato 7 colonne (V22 compat) — f2 è supervisor
+        local_sup="$f2"; local_proj="$f3"
+        local_ds="$f4";  local_de="$f5"
+        local_src="$f6"; local_note="$f7"
+
+        # Mappa categorie speciali V22 → type
+        case "$local_sup" in
+            _PI_)      local_type="PI" ;;
+            _ADMIN_)   local_type="ADMIN" ;;
+            _SKIP_|_CESSATA_) local_type="SKIP" ;;
+            _UNKNOWN_) local_type="SKIP" ;;
+        esac
+    fi
+
+    SEEN_USERS["$local_user"]=1
+    [[ -z "$local_proj" ]] && local_proj="BIOME_General"
+
+    case "$local_type" in
+        PI|ADMIN|SKIP|CESSATA|UNKNOWN)
+            USER_SPECIAL["$local_user"]="$local_type"
+            USER_SPECIAL_NOTE["$local_user"]="$local_note"
+            ;;
+        TRANSFER)
+            RECORDS_TRANSFER+=("${local_user}|${local_sup}|${local_proj}|${local_ds}|${local_de}|${local_src}|${local_note}")
+            ;;
+        ACTIVE|*)
+            RECORDS_ACTIVE+=("${local_user}|${local_sup}|${local_proj}|${local_ds}|${local_de}|${local_src}|${local_note}")
+            ;;
+    esac
+
+done < "$SUPERVISOR_MAP"
+
+# =============================================================================
+# HEADER OUTPUT
+# =============================================================================
+MODE_LABEL="DRY-RUN"
+[[ "$DRY_RUN" == "false" ]] && MODE_LABEL="LIVE"
+
+{
+echo "======================================================================"
+echo " BIOME PRECISION ARCHIVER V23"
+echo " Modalità     : $MODE_LABEL"
+echo " CSV          : $SUPERVISOR_MAP"
+echo " Record ACTIVE  : ${#RECORDS_ACTIVE[@]}"
+echo " Record TRANSFER: ${#RECORDS_TRANSFER[@]}"
+echo " Storage      : $DEST_ROOT"
+echo " Audit log    : $AUDIT_LOG"
+echo " Run log      : $RUN_LOG"
+echo " Data         : $(date)"
+[[ "$SYNC_DATA" == "true" ]] && echo " Sync dati    : ABILITATO (rsync)"
+echo "======================================================================"
+echo ""
+} | tee "$RUN_LOG"
+
+[[ "$DRY_RUN" == "true" ]] && \
+    echo "[DRY-RUN] Nessuna modifica. Usare --apply per eseguire." | tee -a "$RUN_LOG"
+echo "" | tee -a "$RUN_LOG"
+
+# =============================================================================
+# FUNZIONI COMUNI
+# =============================================================================
+
+# Migra symlink legacy (singolo) a directory ARCHIVE_STORAGE
+migrate_legacy_symlink() {
+    local username="$1" user_home="$2"
+    local arch_path="$user_home/ARCHIVE_STORAGE"
+    if [[ -L "$arch_path" ]]; then
+        local old_target; old_target=$(readlink "$arch_path")
+        printf "[MIGRATE] %-30s → symlink legacy → directory\n" "$username" | tee -a "$RUN_LOG"
+        audit "INFO" "MIGRATE $username: $old_target → directory"
+        if [[ "$DRY_RUN" == "false" ]]; then
+            rm -f "$arch_path"
+            mkdir -p "$arch_path"
+            chown "$username" "$arch_path" 2>/dev/null
+            ln -sfn "$old_target" "$arch_path/LEGACY_$(date +%Y%m%d)"
+        fi
+    fi
+}
+
+# Crea o aggiorna un symlink dentro ARCHIVE_STORAGE
+manage_symlink() {
+    local username="$1" user_home="$2" link_name="$3" target="$4"
+    local arch_dir="$user_home/ARCHIVE_STORAGE"
+    local link_path="$arch_dir/$link_name"
+
+    if [[ "$DRY_RUN" == "false" ]]; then
+        mkdir -p "$arch_dir"
+        chown "$username" "$arch_dir" 2>/dev/null
+    fi
+
+    if [[ -L "$link_path" ]]; then
+        local cur; cur=$(readlink "$link_path")
+        if [[ "$cur" == "$target" ]]; then
+            printf "             [link-ok]  %s\n" "$link_name" | tee -a "$RUN_LOG"
+            return
+        fi
+        printf "             [link-upd] %s\n               OLD: %s\n               NEW: %s\n" \
+            "$link_name" "$cur" "$target" | tee -a "$RUN_LOG"
+        if [[ "$DRY_RUN" == "false" ]]; then
+            rm -f "$link_path"
+            ln -sfn "$target" "$link_path"
+            chown -h "$username" "$link_path" 2>/dev/null
+        fi
+    else
+        printf "             [link-new] %s → %s\n" "$link_name" "$target" | tee -a "$RUN_LOG"
+        if [[ "$DRY_RUN" == "false" ]]; then
+            ln -sfn "$target" "$link_path"
+            chown -h "$username" "$link_path" 2>/dev/null
+        fi
+    fi
+}
+
+# Crea directory archivio in ProjectStorage
+create_archive_dir() {
+    local supervisor="$1" project="$2" username="$3"
+    local path="$DEST_ROOT/$supervisor/$project/$username"
+    if [[ "$DRY_RUN" == "false" ]]; then
+        mkdir -p "$path"
+        chmod 750 "$path"
+        chown "$supervisor:$supervisor" "$path" 2>/dev/null
+    fi
+    echo "$path"
+}
+
+# Suffisso -CONCLUSO per progetti terminati
+project_link_name() {
+    local project="$1" date_end="$2"
+    if [[ -n "$date_end" && "$date_end" < "$TODAY" ]]; then
+        echo "${project}-CONCLUSO"
+    else
+        echo "$project"
+    fi
+}
+
+# =============================================================================
+# LOOP: CATEGORIE SPECIALI (PI / ADMIN / SKIP)
+# =============================================================================
+CNT_SPECIAL=0; CNT_UNKNOWN=0; CNT_NOCSV=0
+CNT_ACTIVE=0;  CNT_TRANSFER=0
+CNT_WARN=0;    CNT_ERROR=0
+
+for USERNAME in "${!USER_SPECIAL[@]}"; do
+    TYPE="${USER_SPECIAL[$USERNAME]}"
+    NOTE="${USER_SPECIAL_NOTE[$USERNAME]}"
+    case "$TYPE" in
+        PI)
+            PI_WS="$DEST_ROOT/$USERNAME/_PI_WORKSPACE"
+            printf "[PI]     %-30s\n" "$USERNAME" | tee -a "$RUN_LOG"
+            ((CNT_SPECIAL++))
+            if [[ "$DRY_RUN" == "false" ]]; then
+                mkdir -p "$PI_WS"; chmod 750 "$PI_WS"
+                USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+                if [[ -d "$USER_HOME" ]]; then
+                    migrate_legacy_symlink "$USERNAME" "$USER_HOME"
+                    manage_symlink "$USERNAME" "$USER_HOME" "_PI_WORKSPACE" "$PI_WS"
+                fi
+            fi
+            ;;
+        ADMIN)  printf "[ADMIN]  %-30s\n" "$USERNAME" | tee -a "$RUN_LOG"; ((CNT_SPECIAL++)) ;;
+        SKIP|CESSATA)
+                printf "[SKIP]   %-30s | %s\n" "$USERNAME" "$NOTE" | tee -a "$RUN_LOG"; ((CNT_SPECIAL++)) ;;
+        UNKNOWN)
+                printf "[?????]  %-30s\n" "$USERNAME" | tee -a "$RUN_LOG"; ((CNT_UNKNOWN++)) ;;
+    esac
+done
+
+# NOCSV: utenti in home non presenti nel CSV
+for USER_DIR in "$SOURCE_HOME"/*; do
+    [ -d "$USER_DIR" ] || continue
+    USERNAME=$(basename "$USER_DIR")
+    [[ "$USERNAME" =~ ^(Archived|Rtmp|root|nginx_tmp|nCloudAdmin)$ ]] && continue
+    id "$USERNAME" &>/dev/null || continue
+    if [[ -z "${SEEN_USERS[$USERNAME]}" ]]; then
+        printf "[NOCSV]  %-30s\n" "$USERNAME" | tee -a "$RUN_LOG"
+        ((CNT_NOCSV++))
+    fi
+done
+
+# =============================================================================
+# LOOP: RECORD ACTIVE
+# =============================================================================
+declare -A USER_PRINTED=()
+echo "" | tee -a "$RUN_LOG"
+echo "=== RECORD ACTIVE ===" | tee -a "$RUN_LOG"
+
+for RECORD in "${RECORDS_ACTIVE[@]}"; do
+    IFS='|' read -r USERNAME SUPERVISOR PROJECT DATE_START DATE_END SOURCE NOTE <<< "$RECORD"
+
+    [[ -z "${USER_PRINTED[$USERNAME]}" ]] && {
+        printf "\n[USER]   %-30s\n" "$USERNAME" | tee -a "$RUN_LOG"
+        USER_PRINTED["$USERNAME"]=1
+        ((CNT_ACTIVE++))
+    }
+
+    if ! id "$SUPERVISOR" &>/dev/null; then
+        printf "           [WARN] supervisor '%s' non trovato\n" "$SUPERVISOR" | tee -a "$RUN_LOG"
+        ((CNT_WARN++)); continue
+    fi
+
+    LINK_NAME=$(project_link_name "$PROJECT" "$DATE_END")
+    FINAL_PATH=$(create_archive_dir "$SUPERVISOR" "$PROJECT" "$USERNAME")
+
+    STATUS="attivo"
+    [[ -n "$DATE_END" && "$DATE_END" < "$TODAY" ]] && STATUS="concluso:$DATE_END"
+
+    printf "           [active]  %-25s supervisor:%-20s [%s]\n" \
+        "$PROJECT" "$SUPERVISOR" "$STATUS" | tee -a "$RUN_LOG"
+
+    USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+    if [[ -d "$USER_HOME" ]]; then
+        [[ "$DRY_RUN" == "false" ]] && migrate_legacy_symlink "$USERNAME" "$USER_HOME"
+        manage_symlink "$USERNAME" "$USER_HOME" "$LINK_NAME" "$FINAL_PATH"
+    else
+        printf "           [WARN] home '%s' non trovata\n" "$USER_HOME" | tee -a "$RUN_LOG"
+        ((CNT_WARN++))
+    fi
+done
+
+# =============================================================================
+# LOOP: RECORD TRANSFER
+# Logica:
+#   1. Crea nuova directory per nuovo supervisor/progetto
+#   2. Se --sync-data: rsync dati dalla vecchia dir (se esiste) alla nuova
+#   3. Aggiorna symlink attivo → nuova dir
+#   4. Rinomina vecchio symlink → PROJECT_VECCHIO-TRASFERITO-YYYYMMDD
+#   5. Scrive TRANSFER_LOG.txt nella home utente
+#   6. Registra nel audit log globale
+# =============================================================================
+echo "" | tee -a "$RUN_LOG"
+echo "=== RECORD TRANSFER ===" | tee -a "$RUN_LOG"
+
+for RECORD in "${RECORDS_TRANSFER[@]}"; do
+    IFS='|' read -r USERNAME NEW_SUPERVISOR NEW_PROJECT DATE_START DATE_END SOURCE NOTE <<< "$RECORD"
+
+    printf "\n[TRANSF] %-30s → supervisor:%-20s project:%s\n" \
+        "$USERNAME" "$NEW_SUPERVISOR" "$NEW_PROJECT" | tee -a "$RUN_LOG"
+
+    if ! id "$NEW_SUPERVISOR" &>/dev/null; then
+        printf "           [WARN] nuovo supervisor '%s' non trovato\n" \
+            "$NEW_SUPERVISOR" | tee -a "$RUN_LOG"
+        ((CNT_WARN++)); continue
+    fi
+
+    NEW_PATH=$(create_archive_dir "$NEW_SUPERVISOR" "$NEW_PROJECT" "$USERNAME")
+    LINK_NAME="$NEW_PROJECT"
+
+    USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+    if [[ ! -d "$USER_HOME" ]]; then
+        printf "           [WARN] home non trovata\n" | tee -a "$RUN_LOG"
+        ((CNT_WARN++)); continue
+    fi
+
+    ARCH_DIR="$USER_HOME/ARCHIVE_STORAGE"
+
+    if [[ "$DRY_RUN" == "false" ]]; then
+        migrate_legacy_symlink "$USERNAME" "$USER_HOME"
+        mkdir -p "$ARCH_DIR"
+        chown "$USERNAME" "$ARCH_DIR" 2>/dev/null
+    fi
+
+    # Trova e rinomina vecchio symlink che puntava al vecchio progetto
+    # (qualunque symlink nella ARCHIVE_STORAGE che non sia già -CONCLUSO/-TRASFERITO)
+    if [[ -d "$ARCH_DIR" ]]; then
+        for OLD_LINK in "$ARCH_DIR"/*; do
+            [[ -L "$OLD_LINK" ]] || continue
+            OLD_NAME=$(basename "$OLD_LINK")
+            # Salta symlink già marcati o speciali
+            [[ "$OLD_NAME" =~ CONCLUSO|TRASFERITO|LEGACY|_PI_ ]] && continue
+
+            OLD_TARGET=$(readlink "$OLD_LINK")
+            printf "           [old-link] %s → %s\n" "$OLD_NAME" "$OLD_TARGET" | tee -a "$RUN_LOG"
+
+            # rsync dati se richiesto e la vecchia dir esiste
+            if [[ "$SYNC_DATA" == "true" && -d "$OLD_TARGET" ]]; then
+                printf "           [rsync]   %s → %s\n" "$OLD_TARGET" "$NEW_PATH" | tee -a "$RUN_LOG"
+                if [[ "$DRY_RUN" == "false" ]]; then
+                    rsync -a --info=progress2 "$OLD_TARGET/" "$NEW_PATH/" 2>&1 \
+                        | tail -1 | tee -a "$RUN_LOG"
+                    audit "TRANSFER" "RSYNC $USERNAME: $OLD_TARGET → $NEW_PATH"
+                fi
+            fi
+
+            # Rinomina vecchio symlink aggiungendo -TRASFERITO-DATA
+            RENAMED="${OLD_NAME}-TRASFERITO-$(date +%Y%m%d)"
+            printf "           [rename]  %s → %s\n" "$OLD_NAME" "$RENAMED" | tee -a "$RUN_LOG"
+            if [[ "$DRY_RUN" == "false" ]]; then
+                mv "$OLD_LINK" "$ARCH_DIR/$RENAMED" 2>/dev/null || \
+                    ln -sfn "$OLD_TARGET" "$ARCH_DIR/$RENAMED"
+            fi
+        done
+    fi
+
+    # Crea nuovo symlink
+    manage_symlink "$USERNAME" "$USER_HOME" "$LINK_NAME" "$NEW_PATH"
+
+    # Scrivi TRANSFER_LOG.txt nella home utente
+    TRANSFER_MSG="[$TODAY] TRANSFER: $USERNAME → supervisor:$NEW_SUPERVISOR project:$NEW_PROJECT"
+    [[ -n "$NOTE" ]] && TRANSFER_MSG+=" | note:$NOTE"
+    printf "           [log]     %s\n" "$TRANSFER_MSG" | tee -a "$RUN_LOG"
+
+    if [[ "$DRY_RUN" == "false" ]]; then
+        echo "$TRANSFER_MSG" >> "$ARCH_DIR/TRANSFER_LOG.txt"
+        chown "$USERNAME" "$ARCH_DIR/TRANSFER_LOG.txt" 2>/dev/null
+        audit "TRANSFER" "$USERNAME: vecchio→$NEW_SUPERVISOR/$NEW_PROJECT | note:$NOTE"
+    fi
+
+    ((CNT_TRANSFER++))
+done
+
+# =============================================================================
+# RIEPILOGO
+# =============================================================================
+echo "" | tee -a "$RUN_LOG"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$RUN_LOG"
+echo "RIEPILOGO" | tee -a "$RUN_LOG"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" | tee -a "$RUN_LOG"
+printf "  Utenti ACTIVE    : %3d\n"  "$CNT_ACTIVE"   | tee -a "$RUN_LOG"
+printf "  Record TRANSFER  : %3d\n"  "$CNT_TRANSFER" | tee -a "$RUN_LOG"
+printf "  PI/Admin/Skip    : %3d\n"  "$CNT_SPECIAL"  | tee -a "$RUN_LOG"
+printf "  Sconosciuti      : %3d\n"  "$CNT_UNKNOWN"  | tee -a "$RUN_LOG"
+printf "  Non in CSV       : %3d\n"  "$CNT_NOCSV"    | tee -a "$RUN_LOG"
+printf "  Avvisi           : %3d\n"  "$CNT_WARN"     | tee -a "$RUN_LOG"
+echo "" | tee -a "$RUN_LOG"
+
+[[ "$DRY_RUN" == "true" ]] && \
+    echo "[DRY-RUN] Per eseguire: sudo $0 --apply" | tee -a "$RUN_LOG"
+
+echo "Audit log: $AUDIT_LOG" | tee -a "$RUN_LOG"
+echo "Run log  : $RUN_LOG"   | tee -a "$RUN_LOG"

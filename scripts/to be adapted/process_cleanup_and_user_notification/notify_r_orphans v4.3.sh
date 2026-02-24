@@ -1,0 +1,130 @@
+#!/bin/bash
+# ============================================================================
+# notify_r_orphans.sh v4.3
+# Invia notifiche email agli utenti con processi orfani recenti
+#
+# CHANGES v4.3:
+# - Improved email text to explain "Why" clearly.
+# - Explicitly mentions that active sessions are NOT affected.
+#
+# Per BIOME-CALC - 137.204.21.170
+# ============================================================================
+
+CONF_FILE="/usr/local/custom/rstudio/conf/r_orphan_cleanup.conf"
+HELPERS="/usr/local/custom/rstudio/script/orphan_cleanup_helpers.sh"
+
+if [ ! -f "$CONF_FILE" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | ERROR | Config not found: $CONF_FILE" >&2
+    exit 1
+fi
+if [ ! -f "$HELPERS" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | ERROR | Helpers not found: $HELPERS" >&2
+    exit 1
+fi
+
+source "$CONF_FILE"
+source "$HELPERS"
+
+if [ ! -x "$SEND_EMAIL_SCRIPT" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | ERROR | send_email.sh not found: $SEND_EMAIL_SCRIPT" >&2
+    exit 1
+fi
+
+SENT_DIR="${NOTIFY_DIR}/.sent"
+TMPDIR="${LOG_DIR}/tmp"
+mkdir -p "$SENT_DIR" "$TMPDIR"
+
+NOTIFY_LOG="${LOG_DIR}/notify.log"
+log_notify() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | $1" >> "$NOTIFY_LOG"
+}
+
+# ── Risolvi destinatari admin ─────────────────────────────────
+ADMIN_RECIPIENTS=$(resolve_admin_recipients "$ADMIN_EMAIL")
+
+# ── Processa ogni utente ──────────────────────────────────────
+for USER_LOG in "${NOTIFY_DIR}"/*.log; do
+    [ -f "$USER_LOG" ] || continue
+
+    USERNAME=$(basename "$USER_LOG" .log)
+    
+    # Skip temporary files or the truncated ones if they still exist
+    if [[ "$USERNAME" == *"+" ]]; then
+        log_notify "SKIP | Ignorato file con nome troncato: $USER_LOG. Fix applicato in cleanup v4.8."
+        continue
+    fi
+
+    USER_EMAIL=$(resolve_user_email "$USERNAME" "$MAIL_DOMAIN")
+    N_ORPHANS=$(grep -c "PROCESSO ORFANO TERMINATO" "$USER_LOG" 2>/dev/null || echo 0)
+
+    [ "$N_ORPHANS" -eq 0 ] && continue
+
+    # ── Componi body ──────────────────────────────────────────
+    BODY_FILE="${TMPDIR}/body_${USERNAME}_$$.txt"
+
+    {
+        echo "Ciao ${USERNAME},"
+        echo ""
+        echo "Il sistema di monitoraggio di BIOME-CALC ha liberato risorse"
+        echo "terminando ${N_ORPHANS} processi RIMASTI BLOCCATI (orfani)."
+        echo ""
+        echo "PERCHE' RICEVI QUESTA MAIL?"
+        echo "--------------------------------------------------------"
+        echo "1. I processi elencati sotto NON avevano più una sessione RStudio attiva."
+        echo "   (Il sistema verifica se sei connesso o hai sessioni aperte prima di agire)."
+        echo ""
+        echo "2. Questo accade solitamente se:"
+        echo "   - Hai usato parallel/future e la sessione R è crashata."
+        echo "   - Hai chiuso il browser senza usare 'Background Jobs'."
+        echo "   - Uno script parallelo non ha chiuso correttamente il cluster (stopCluster)."
+        echo ""
+        echo "SE LA TUA SESSIONE ERA ATTIVA:"
+        echo "Se ritieni che questi processi fossero legittimi e la tua sessione era attiva,"
+        echo "il sistema è stato recentemente aggiornato (v4.8) per prevenire errori."
+        echo "Ignora le notifiche relative a processi precedenti all'aggiornamento."
+        echo ""
+        echo "========================================================"
+        echo "DETTAGLIO PROCESSI TERMINATI"
+        echo "========================================================"
+        cat "$USER_LOG"
+        echo "========================================================"
+        echo ""
+        echo "Per dubbi tecnici, scrivi a: ${SENDER_EMAIL}"
+        echo ""
+        echo "-- BIOME-CALC Server Admin"
+        echo "   $(date '+%Y-%m-%d %H:%M:%S')"
+    } > "$BODY_FILE"
+
+    SUBJECT="[BIOME-CALC] Cleanup risorse: ${N_ORPHANS} processi terminati"
+
+    # ── Destinatari ───────────────────────────────────────────────
+    ALL_RCPT="$USER_EMAIL"
+    if [ -n "$ADMIN_RECIPIENTS" ]; then
+        ALL_RCPT="${USER_EMAIL},${ADMIN_RECIPIENTS}"
+    fi
+
+    log_notify "SENDING | user=${USERNAME} | email=${USER_EMAIL} | orphans=${N_ORPHANS}"
+
+    # ── Invia ─────────────────────────────────────────────────
+    "$SEND_EMAIL_SCRIPT" \
+        -s "$SMTP_HOST" \
+        -p "$SMTP_PORT" \
+        -f "$SENDER_EMAIL" \
+        -T "$ALL_RCPT" \
+        -u "$SUBJECT" \
+        -m "$BODY_FILE" \
+        -d "$DNS_SERVERS" \
+        -L "r-orphan-notify" \
+    >> "$NOTIFY_LOG" 2>&1
+
+    if [ $? -eq 0 ]; then
+        log_notify "SENT OK | user=${USERNAME}"
+        mv "$USER_LOG" "${SENT_DIR}/${USERNAME}_$(date '+%Y%m%d').log"
+    else
+        log_notify "SEND FAILED | user=${USERNAME}"
+    fi
+
+    rm -f "$BODY_FILE"
+done
+
+rmdir "$TMPDIR" 2>/dev/null || true

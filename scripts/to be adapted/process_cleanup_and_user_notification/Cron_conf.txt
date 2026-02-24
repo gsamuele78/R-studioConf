@@ -1,0 +1,10 @@
+root@biome-calc:~# cat /etc/cron.d/r_orphan_report 
+0 7 * * 1 root /usr/local/custom/rstudio/script/r_orphan_report.sh --mail
+root@biome-calc:~# cat /etc/cron.d/
+.placeholder        cleanup_r_orphans   e2scrub_all         notify_r_orphans    popularity-contest  r_orphan_report     
+root@biome-calc:~# cat /etc/cron.d/cleanup_r_orphans 
+*/5 * * * * root /usr/local/custom/rstudio/script/cleanup_r_orphans.sh
+root@biome-calc:~# cat /etc/cron.d/notify_r_orphans 
+0 8 * * * root /usr/local/custom/rstudio/script/notify_r_orphans.sh
+root@biome-calc:~# 
+

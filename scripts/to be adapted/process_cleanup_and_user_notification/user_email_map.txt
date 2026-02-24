@@ -1,0 +1,4 @@
+# /usr/local/custom/rstudio/conf/user_email_map.txt
+# formato: username  email
+#martina.livornese2   martina.livornese2@studio.unibo.it
+#duccio.rocchini      duccio.rocchini@unibo.it
