@@ -439,46 +439,48 @@ setup_nodes_swap() {
 
   local swap_size_mb=$(( SWAP_SIZE_GB * 1024 ))
   local expected_bytes=$(( swap_size_mb * 1024 * 1024 ))
+  local actual_bytes=0
 
-  # ── Step 1: Determine if we need to (re)create the swap file ──
-  local needs_mkswap=false
-
+  # Check if swap file exists and get its size
   if [[ -f "${SWAP_FILE}" ]]; then
-    local actual_bytes
     actual_bytes=$(stat -c%s "${SWAP_FILE}" 2>/dev/null || echo 0)
-    if [[ "${actual_bytes}" -eq "${expected_bytes}" ]]; then
-      log_info "Swap file already exists at the correct size (${SWAP_SIZE_GB}GB). Skipping dd."
-    else
-      log_info "Swap file exists but is wrong size (expected ${expected_bytes}B, got ${actual_bytes}B). Recreating..."
-      # Deactivate if active before removing
-      if swapon --show=NAME --noheadings 2>/dev/null | grep -qF "${SWAP_FILE}"; then
-        log_info "Deactivating existing swap: ${SWAP_FILE}"
-        run_cmd swapoff "${SWAP_FILE}" || true
-      fi
-      run_cmd rm -f "${SWAP_FILE}"
-      needs_mkswap=true
-    fi
-  else
-    log_info "Swap file not found. Creating ${SWAP_SIZE_GB}GB swap at ${SWAP_FILE}..."
-    needs_mkswap=true
   fi
 
-  # ── Step 2: Create the swap file if necessary ──
-  if [[ "${needs_mkswap}" == true ]]; then
+  if [[ "${actual_bytes}" -eq "${expected_bytes}" ]]; then
+    log_info "Swap file already exists at the correct size (${SWAP_SIZE_GB}GB)."
+    if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "${SWAP_FILE}"; then
+      log_info "Activating existing swap: ${SWAP_FILE}"
+      run_cmd swapon "${SWAP_FILE}"
+    else
+      log_info "Swap already active: ${SWAP_FILE}"
+    fi
+  else
+    if [[ "${actual_bytes}" -gt 0 ]]; then
+      log_info "Swap file exists but is wrong size (expected ${expected_bytes}B, got ${actual_bytes}B). Recreating..."
+    else
+      log_info "Swap file not found. Creating ${SWAP_SIZE_GB}GB swap at ${SWAP_FILE}..."
+    fi
+
+    # Deactivate if active before removing or recreating
+    if swapon --show=NAME --noheadings 2>/dev/null | grep -qF "${SWAP_FILE}"; then
+      log_info "Deactivating active swap with wrong size: ${SWAP_FILE}"
+      run_cmd swapoff "${SWAP_FILE}" || true
+    fi
+
+    if [[ -f "${SWAP_FILE}" ]]; then
+      run_cmd rm -f "${SWAP_FILE}"
+    fi
+
+    # Create new swap file
     run_cmd dd if=/dev/zero of="${SWAP_FILE}" bs=1M count="${swap_size_mb}" status=progress
     run_cmd chmod 600 "${SWAP_FILE}"
     run_cmd mkswap "${SWAP_FILE}"
-  fi
-
-  # ── Step 3: Activate swap ──
-  if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qF "${SWAP_FILE}"; then
-    log_info "Activating swap: ${SWAP_FILE}"
+    
+    log_info "Activating new swap: ${SWAP_FILE}"
     run_cmd swapon "${SWAP_FILE}"
-  else
-    log_info "Swap already active: ${SWAP_FILE}"
   fi
 
-  # ── Step 4: Persist in /etc/fstab (idempotent) ──
+  # ── Persist in /etc/fstab (idempotent) ──
   local fstab_marker="# managed-by: 50_setup_nodes.sh swap"
   local fstab_entry="${SWAP_FILE} none swap sw 0 0  ${fstab_marker}"
   if grep -qF "${SWAP_FILE}" /etc/fstab 2>/dev/null; then
@@ -489,7 +491,7 @@ setup_nodes_swap() {
     log_success "fstab updated: ${fstab_entry}"
   fi
 
-  # ── Step 5: Tune swappiness — prefer RAM for an analytics server ──
+  # ── Tune swappiness — prefer RAM for an analytics server ──
   local swappiness_target=10
   if ! grep -q "^vm.swappiness" /etc/sysctl.conf 2>/dev/null; then
     echo "vm.swappiness=${swappiness_target}" >> /etc/sysctl.conf
@@ -499,7 +501,14 @@ setup_nodes_swap() {
   fi
   sysctl -q vm.swappiness="${swappiness_target}" 2>/dev/null || true
 
-  log_success "Swap: $(free -h | awk '/^Swap:/ {print $2}') active (vm.swappiness=${swappiness_target})"
+  # Show actual summary
+  local final_swap_summary
+  final_swap_summary=$(free -h | awk '/^Swap:/ {print $2}')
+  if [[ "${DRY_RUN}" == true ]]; then
+      log_success "Swap: (Dry-Run active, assuming ${SWAP_SIZE_GB}G) (vm.swappiness=${swappiness_target})"
+  else
+      log_success "Swap: ${final_swap_summary} active (vm.swappiness=${swappiness_target})"
+  fi
 }
 
 # ==============================================================================
