@@ -76,11 +76,23 @@ TS=$(date +%Y%m%d_%H%M%S)
 # ── run_cmd wrapper: respects DRY_RUN ──
 run_cmd() {
   if [[ "${DRY_RUN}" == true ]]; then
-    log_info "[DRY-RUN] $*"
+    log "INFO" "[DRY-RUN] $*"
   else
-    execute_command "$@"
+    run_command "Execute" "$*"
   fi
 }
+
+# ── Logging wrappers ──
+log_step() {
+  echo ""
+  log "INFO" "============================================================"
+  log "INFO" "$1"
+  log "INFO" "============================================================"
+}
+log_info() { log "INFO" "$1"; }
+log_success() { log "INFO" "[SUCCESS] $1"; }
+log_error() { log "ERROR" "$1"; }
+log_warn() { log "WARN" "$1"; }
 
 # ==============================================================================
 # UNINSTALL
