@@ -350,13 +350,13 @@ run_audit("4.1", "/tmp Usage (RAMDisk)", {
   df_line <- system("df -BG /tmp | tail -1", intern = TRUE)
   parts <- strsplit(trimws(df_line), "\\s+")[[1]]
   total_gb <- as.numeric(sub("G", "", parts[2]))
-  used_gb <- as.numeric(sub("G", "", parts[3]))
   free_gb <- as.numeric(sub("G", "", parts[4]))
+  pct <- as.numeric(sub("%", "", parts[5]))
   
-  if (free_gb < 10) stop(sprintf("CRITICAL: Only %d GB free on /tmp. Fallback engaged.", free_gb))
-  if (free_gb < 20) warning(sprintf("LOW: %d GB free. New heavy spatial jobs will use NFS fallback.", free_gb))
+  if (pct >= 95) stop(sprintf("CRITICAL: /tmp at %d%%. Fallback engaged.", pct))
+  if (pct >= 85) warning(sprintf("LOW: %d%% used. New heavy spatial jobs will use NFS fallback.", pct))
   
-  sprintf("OK (%d GB free of %d GB)", free_gb, total_gb)
+  sprintf("OK (%d GB free of %d GB, %d%% used)", free_gb, total_gb, pct)
 }, fix_hint = "Clean stale Rtmp* dirs in /tmp or rely on smart fallback")
 
 run_audit("4.2", sprintf("NFS Mount (%s)", conf$nfs_home), {
@@ -401,7 +401,33 @@ run_audit("4.5", "System Log Permissions", {
   }, error = function(e) stop(sprintf("Write failed: %s", e$message)))
 }, fix_hint = "Run: sudo chmod 666 %%LOG_FILE%% (or redeploy with 50_setup_nodes.sh)")
 
-run_audit("4.6", "NUMA Topology", {
+run_audit("4.6", "Dynamic Smart Routing Active Test", {
+  smart_routing_enabled <- tryCatch(ENABLE_SMART_ROUTING, error = function(e) TRUE)
+  if (!smart_routing_enabled) return("Skipped (Feature disabled in Rprofile.site)")
+
+  force_nfs <- Sys.getenv("BIOME_FORCE_NFS_TMP") == "true"
+  df_line <- system("df /tmp | tail -1", intern = TRUE)
+  pct <- as.numeric(sub("%", "", strsplit(trimws(df_line), "\\s+")[[1]][5]))
+  
+  expected_base <- if (!force_nfs && pct < 85) "/tmp" else file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
+  
+  status_msgs <- c()
+  if (isNamespaceLoaded("terra")) {
+    td <- terra::terraOptions()$tempdir
+    if (!grepl(expected_base, td, fixed = TRUE)) stop(sprintf("terra using %s, expected %s", td, expected_base))
+    status_msgs <- c(status_msgs, sprintf("terra: %s", if(expected_base=="/tmp") "RAMDisk" else "NFS"))
+  }
+  
+  if (isNamespaceLoaded("raster")) {
+    rd <- raster::tmpDir()
+    if (!grepl(expected_base, rd, fixed = TRUE)) stop(sprintf("raster using %s, expected %s", rd, expected_base))
+    status_msgs <- c(status_msgs, sprintf("raster: %s", if(expected_base=="/tmp") "RAMDisk" else "NFS"))
+  }
+  
+  if (length(status_msgs) == 0) "Skipped (GIS packages not loaded in this session)" else paste(status_msgs, collapse=", ")
+}, fix_hint = "Ensure Rprofile_site.R is executing the fallback logic properly")
+
+run_audit("4.7", "NUMA Topology", {
   numa_raw <- tryCatch(system2("lscpu", stdout = TRUE, stderr = FALSE), error = function(e) "")
   numa_line <- grep("NUMA node\\(s\\)", numa_raw, value = TRUE)
   if (length(numa_line) == 0) return("Unknown (lscpu unavailable)")

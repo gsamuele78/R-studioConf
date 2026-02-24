@@ -47,6 +47,7 @@ local({
   # ── Feature Flags ──
   ENABLE_RESOURCE_MGMT <- TRUE   # Fair-Share RAM/CPU
   ENABLE_SMART_IO      <- TRUE   # Parquet/CSV auto-switch
+  ENABLE_SMART_ROUTING <- TRUE   # Dynamic Tmpfs Fallback (>180GB)
   ENABLE_AI_ASSISTANT  <- TRUE   # Ollama (model from %%BIOME_CONF%%/ai_model)
   ENABLE_SYS_LOGGING   <- TRUE   # Logging to /var/log/biome-log
   ENABLE_TMP_CLEANUP   <- TRUE   # Smart /tmp cleanup
@@ -358,15 +359,19 @@ local({
     qr <- .biome_env$shared_env$last_quota
     msg_parts <- c()
 
-    get_tmp_free_gb <- function() {
+    get_tmp_use_pct <- function() {
       tryCatch({
-        df <- system2("df", args = c("-BG", "/tmp"), stdout = TRUE, stderr = FALSE)
-        if (length(df) >= 2) as.numeric(sub("G", "", strsplit(df[2], "\\s+")[[1]][4])) else 50
-      }, error = function(e) 50)
+        df <- system2("df", args = c("/tmp"), stdout = TRUE, stderr = FALSE)
+        if (length(df) >= 2) {
+           parts <- strsplit(trimws(df[2]), "\\s+")[[1]]
+           as.numeric(sub("%", "", parts[5]))
+        } else 0
+      }, error = function(e) 0)
     }
 
-    # If < 20GB on tmpfs, fallback to NFS home securely
-    smart_tmp_base <- if (get_tmp_free_gb() > 20) "/tmp" else file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
+    # If >= 85% usage on tmpfs OR user explicitly requests NFS fallback
+    force_nfs <- Sys.getenv("BIOME_FORCE_NFS_TMP") == "true"
+    smart_tmp_base <- if (!ENABLE_SMART_ROUTING) "/tmp" else if (!force_nfs && get_tmp_use_pct() < 85) "/tmp" else file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
     if (!dir.exists(smart_tmp_base)) dir.create(smart_tmp_base, recursive=TRUE, showWarnings=FALSE)
 
     if (ENABLE_TERRA_OPT && isNamespaceLoaded("terra")) tryCatch({
@@ -378,6 +383,30 @@ local({
       terra::terraOptions(memfrac=0.6, tempdir=td, verbose=FALSE)
       .biome_env$shared_env$terra_threads <- tt
       msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Terra [RAMDisk]" else "Terra [NFS-Fallback]")
+    }, error = function(e) NULL)
+
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("raster")) tryCatch({
+      rt <- file.path(smart_tmp_base, paste0("raster_", curr_user))
+      if (!dir.exists(rt)) dir.create(rt, recursive=TRUE, showWarnings=FALSE)
+      raster::rasterOptions(tmpdir = rt)
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Raster [RAMDisk]" else "Raster [NFS-Fallback]")
+    }, error = function(e) NULL)
+
+    if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("keras") || isNamespaceLoaded("tensorflow"))) tryCatch({
+      kt <- file.path(smart_tmp_base, paste0("keras_cache_", curr_user))
+      if (!dir.exists(kt)) dir.create(kt, recursive=TRUE, showWarnings=FALSE)
+      Sys.setenv(KERAS_CACHE_DIR = kt)
+      Sys.setenv(TF_XLA_FLAGS = paste0("--tf_xla_enable_xla_devices --tf_xla_cpu_global_jit --tf_xla_auto_jit=2 --tf_xla_fallback_tmpdir=", kt))
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Keras [RAMDisk]" else "Keras [NFS-Fallback]")
+    }, error = function(e) NULL)
+
+    if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly"))) tryCatch({
+      gt <- file.path(smart_tmp_base, paste0("plot_cache_", curr_user))
+      if (!dir.exists(gt)) dir.create(gt, recursive=TRUE, showWarnings=FALSE)
+      # Some graphic devices like ragg and svglite rely on system TEMP
+      Sys.setenv(TMP = gt)
+      Sys.setenv(TEMP = gt)
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Ggplot [RAMDisk]" else "Ggplot [NFS-Fallback]")
     }, error = function(e) NULL)
     
     if (ENABLE_ARROW_OPT && isNamespaceLoaded("arrow")) tryCatch({
@@ -468,7 +497,7 @@ local({
       df <- system2("df", args = c("-BG", "/tmp"), stdout = TRUE, stderr = FALSE)
       if (length(df) >= 2) {
          p <- strsplit(df[2], "\\s+")[[1]]
-         sprintf("%s free of %s (Fallback if <20G)", p[4], p[2])
+         sprintf("%s free of %s (Fallback at >=85%% | Current: %s)", p[4], p[2], p[5])
       } else "Unknown"
     }, error = function(e) "Unknown")
     
@@ -543,6 +572,10 @@ local({
     cat("   - library(terra); library(rgee) — auto-threads & /tmp cache.\n\n")
     cat(paste0(.C_BOLD, "5. Parallel Computing", .C_RESET, "\n"))
     cat("   - library(future.apply); future_lapply(1:100, sqrt)\n\n")
+    cat(paste0(.C_BOLD, "6. Massive Data / Tmpfs Bypass (>180GB)", .C_RESET, "\n"))
+    cat("   - Got a 'Disk Full' error on /tmp? Your calculation is too massive!\n")
+    cat("   - Bypass /tmp completely by running this BEFORE loading terra/raster:\n")
+    cat("     Sys.setenv(BIOME_FORCE_NFS_TMP = \"true\")\n\n")
     cat(sprintf("  Support: %s\n", "%%BIOME_CONTACT%%"))
   }, envir = tool_env)
 
