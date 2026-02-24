@@ -721,11 +721,24 @@ install_and_configure_nginx() {
   # Step 6: Process and Deploy ALL Templates
   log "INFO" "Processing and deploying Nginx templates..."
     
+  # Fetch RStudio session timeout to align Nginx proxy timeouts
+  local rstudio_vars_file="${SCRIPT_DIR}/../config/configure_rstudio.vars.conf"
+  local rsession_timeout_minutes=10080 # Default 7 days
+  if [[ -f "$rstudio_vars_file" ]]; then
+    local extracted_timeout
+    extracted_timeout=$(grep -E '^[[:space:]]*RSESSION_TIMEOUT_MINUTES=' "$rstudio_vars_file" | cut -d= -f2- | tr -d '"'\''[:space:]')
+    if [[ -n "$extracted_timeout" && "$extracted_timeout" =~ ^[0-9]+$ ]]; then
+      rsession_timeout_minutes="$extracted_timeout"
+    fi
+  fi
+  local rsession_timeout_seconds=$(( rsession_timeout_minutes * 60 ))
+  log "INFO" "Aligned Nginx proxy timeout to ${rsession_timeout_seconds}s (${rsession_timeout_minutes}m)"
+
   local template_args=(
       "DOMAIN_OR_IP=${DOMAIN_OR_IP}" "RSTUDIO_PORT=${RSTUDIO_PORT}" "WEB_TERMINAL_PORT=${WEB_TERMINAL_PORT}"
       "NEXTCLOUD_TARGET_URL=${NEXTCLOUD_TARGET_URL}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}"
       "CERT_FULLPATH=${cert_fullpath}" "KEY_FULLPATH=${key_fullpath}" "DHPARAM_FULLPATH=${DHPARAM_PATH}"
-      "TIMEOUT_STANDARD=600"
+      "TIMEOUT_STANDARD=600" "RSESSION_TIMEOUT_SECONDS=${rsession_timeout_seconds}"
   )
   local processed_content
     

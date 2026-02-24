@@ -49,8 +49,8 @@ location ^~ /rstudio-inner/ {
     proxy_set_header X-RStudio-Root-Path /rstudio-inner;
     
     # Extended timeout for long-running R sessions
-    proxy_read_timeout 86400s;
-    proxy_send_timeout 86400s;
+    proxy_read_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
+    proxy_send_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
     
     # Performance & Persistence
     proxy_buffering off;
@@ -195,7 +195,7 @@ location ^~ /terminal-inner/ {
     # Performance & Persistence
     proxy_buffering off;
     proxy_request_buffering off;
-    proxy_read_timeout 86400s;
+    proxy_read_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
     proxy_socket_keepalive on;
     
     proxy_set_header X-Forwarded-User $short_remote_user;
