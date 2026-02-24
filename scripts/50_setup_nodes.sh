@@ -971,16 +971,26 @@ setup_nodes_orphan_cleanup() {
 
   # 4. Bind to cron
   log_info "Wiring cron schedules..."
-  local cron_cleanup="*/5 * * * * root ${BIOME_CONF}/script/cleanup_r_orphans.sh"
-  local cron_notify="0 8 * * * root ${BIOME_CONF}/script/notify_r_orphans.sh"
+  local cron_cleanup="${ORPHAN_CRON_CLEANUP:-15 * * * *} root ${BIOME_CONF}/script/cleanup_r_orphans.sh > /dev/null 2>&1"
+  local cron_notify="${ORPHAN_CRON_NOTIFY:-00 18 * * *} root ${BIOME_CONF}/script/notify_r_orphans.sh > /dev/null 2>&1"
+  local cron_report="${ORPHAN_CRON_REPORT:-00 08 * * 1} root ${BIOME_CONF}/script/r_orphan_report.sh > /dev/null 2>&1"
   
-  if [[ "${DRY_RUN}" == true ]]; then
-    log_info "[DRY-RUN] would write to /etc/cron.d/cleanup_r_orphans: ${cron_cleanup}"
-    log_info "[DRY-RUN] would write to /etc/cron.d/notify_r_orphans: ${cron_notify}"
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    log_info "[DRY-RUN] Sarebbero stati scritti i seguenti job in /etc/cron.d/r_orphan_cleanup:"
+    log_info "[DRY-RUN] ${cron_cleanup}"
+    log_info "[DRY-RUN] ${cron_notify}"
+    log_info "[DRY-RUN] ${cron_report}"
   else
-    echo "${cron_cleanup}" > /etc/cron.d/cleanup_r_orphans
-    echo "${cron_notify}" > /etc/cron.d/notify_r_orphans
-    log_success "Cron schedules synchronized."
+    cat > /etc/cron.d/r_orphan_cleanup <<EOF
+# R Orphan Process Cleanup Cron Jobs (Generato automaticamente)
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+${cron_cleanup}
+${cron_notify}
+${cron_report}
+EOF
+    chmod 0644 /etc/cron.d/r_orphan_cleanup
+    log_success "Cron schedules synchronized in /etc/cron.d/r_orphan_cleanup."
   fi
 }
 
@@ -1031,17 +1041,23 @@ setup_nodes_project_archiver() {
         fi
     done
 
-    # 4. Bind to cron (example, adjust as needed)
-    log_info "Wiring archiver cron schedules (if any)..."
-    # Example cron entry, assuming ARCHIVE_CRON_SCHEDULE is defined in vars.conf
-    # local cron_archiver="${ARCHIVE_CRON_SCHEDULE} root ${BIOME_CONF}/script/unibo_archive_manager.sh"
-    # if [[ "${DRY_RUN}" == true ]]; then
-    #   log_info "[DRY-RUN] would write to /etc/cron.d/biome_archiver: ${cron_archiver}"
-    # else
-    #   echo "${cron_archiver}" > /etc/cron.d/biome_archiver
-    #   log_success "Archiver cron schedule synchronized."
-    # fi
-    log_info "Archiver cron schedules are not automatically configured by this script. Please configure manually if needed."
+    # 4. Bind to cron 
+    log_info "Wiring archiver cron schedules..."
+    local cron_archiver="${ARCHIVE_CRON_SCHEDULE:-00 03 * * *} root ${BIOME_CONF}/script/unibo_archive_manager.sh --apply > /dev/null 2>&1"
+    
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      log_info "[DRY-RUN] Sarebbe stato scritto il seguente job in /etc/cron.d/biome_archiver:"
+      log_info "[DRY-RUN] ${cron_archiver}"
+    else
+      cat > /etc/cron.d/biome_archiver <<EOF
+# BIOME Precision Archiver Cron Job (Generato automaticamente)
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+${cron_archiver}
+EOF
+      chmod 0644 /etc/cron.d/biome_archiver
+      log_success "Archiver cron schedule synchronized."
+    fi
 
     log_success "BIOME Precision Archiver configuration complete."
 }
