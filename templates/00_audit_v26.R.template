@@ -346,15 +346,18 @@ run_audit("3.3", "Keras CPU Backend", {
 # ==============================================================================
 audit_cat("\n[4.0] SYSTEM HEALTH\n")
 
-run_audit("4.1", "/tmp Usage", {
-  df_line <- system("df -h /tmp | tail -1", intern = TRUE)
+run_audit("4.1", "/tmp Usage (RAMDisk)", {
+  df_line <- system("df -BG /tmp | tail -1", intern = TRUE)
   parts <- strsplit(trimws(df_line), "\\s+")[[1]]
-  usage <- parts[5]
-  pct <- as.numeric(sub("%", "", usage))
-  if (pct > 80) stop(sprintf("Critical: /tmp at %s", usage))
-  if (pct > 60) warning(sprintf("/tmp at %s — consider cleanup", usage))
-  sprintf("OK (%s used, tmpfs)", usage)
-}, fix_hint = "Clean stale Rtmp* dirs in /tmp")
+  total_gb <- as.numeric(sub("G", "", parts[2]))
+  used_gb <- as.numeric(sub("G", "", parts[3]))
+  free_gb <- as.numeric(sub("G", "", parts[4]))
+  
+  if (free_gb < 10) stop(sprintf("CRITICAL: Only %d GB free on /tmp. Fallback engaged.", free_gb))
+  if (free_gb < 20) warning(sprintf("LOW: %d GB free. New heavy spatial jobs will use NFS fallback.", free_gb))
+  
+  sprintf("OK (%d GB free of %d GB)", free_gb, total_gb)
+}, fix_hint = "Clean stale Rtmp* dirs in /tmp or rely on smart fallback")
 
 run_audit("4.2", sprintf("NFS Mount (%s)", conf$nfs_home), {
   mounts <- system(sprintf("mount | grep '%s'", conf$nfs_home), intern = TRUE)

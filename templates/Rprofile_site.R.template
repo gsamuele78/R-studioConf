@@ -206,7 +206,7 @@ local({
         lines <- readLines(conf_file, warn = FALSE)
         m <- grep("^session-timeout-minutes", lines, value = TRUE)
         if (length(m) > 0) {
-          mins <- as.numeric(sub(".*(\\d+).*", "\\1", m[1]))
+          mins <- as.numeric(sub(".*=(\\d+).*", "\\1", m[1]))
           if (!is.na(mins) && mins > 0) timeout_h <- ceiling(mins / 60) + 1
           else if (grepl("=0", m[1])) timeout_h <- 168 
         }
@@ -358,14 +358,26 @@ local({
     qr <- .biome_env$shared_env$last_quota
     msg_parts <- c()
 
+    get_tmp_free_gb <- function() {
+      tryCatch({
+        df <- system2("df", args = c("-BG", "/tmp"), stdout = TRUE, stderr = FALSE)
+        if (length(df) >= 2) as.numeric(sub("G", "", strsplit(df[2], "\\s+")[[1]][4])) else 50
+      }, error = function(e) 50)
+    }
+
+    # If < 20GB on tmpfs, fallback to NFS home securely
+    smart_tmp_base <- if (get_tmp_free_gb() > 20) "/tmp" else file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
+    if (!dir.exists(smart_tmp_base)) dir.create(smart_tmp_base, recursive=TRUE, showWarnings=FALSE)
+
     if (ENABLE_TERRA_OPT && isNamespaceLoaded("terra")) tryCatch({
       tt <- min(fc, 8L); gc_mb <- as.integer(floor(qr * 0.2 * 1024))
       Sys.setenv(GDAL_NUM_THREADS=as.character(tt), GDAL_CACHEMAX=as.character(gc_mb))
-      td <- file.path("/tmp", paste0("terra_", curr_user))
-      if (!dir.exists(td)) dir.create(td, showWarnings=FALSE)
+      
+      td <- file.path(smart_tmp_base, paste0("terra_", curr_user))
+      if (!dir.exists(td)) dir.create(td, recursive=TRUE, showWarnings=FALSE)
       terra::terraOptions(memfrac=0.6, tempdir=td, verbose=FALSE)
       .biome_env$shared_env$terra_threads <- tt
-      msg_parts <- c(msg_parts, "Terra")
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Terra [RAMDisk]" else "Terra [NFS-Fallback]")
     }, error = function(e) NULL)
     
     if (ENABLE_ARROW_OPT && isNamespaceLoaded("arrow")) tryCatch({
@@ -451,6 +463,16 @@ local({
     cat(sprintf("  RAM Quota:    %d GB (fair-share)\n", .biome_env$shared_env$last_quota))
     cat(sprintf("  vCPU Cores:   %d (Allocated)\n", .biome_env$shared_env$last_cores))
     cat(sprintf("  Active Users: %d\n", get_active_users()))
+    
+    tmp_str <- tryCatch({
+      df <- system2("df", args = c("-BG", "/tmp"), stdout = TRUE, stderr = FALSE)
+      if (length(df) >= 2) {
+         p <- strsplit(df[2], "\\s+")[[1]]
+         sprintf("%s free of %s (Fallback if <20G)", p[4], p[2])
+      } else "Unknown"
+    }, error = function(e) "Unknown")
+    
+    cat(sprintf("  RAMDisk Tmp:  %s\n", tmp_str))
     cat(sprintf("  Tmp Cleanup:  Files >%d hours\n", .biome_env$shared_env$timeout_hours))
     
     cat(paste0("\n  ", .C_BOLD, "Engines & Services:", .C_RESET, "\n"))
