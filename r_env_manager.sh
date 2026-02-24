@@ -924,8 +924,80 @@ install_user_cran_pkgs() {
     install_r_pkg_list "CRAN" "${R_USER_PACKAGES_CRAN[@]}"
 }
 
+configure_java_for_r() {
+    log "INFO" "--- Starting Java Configuration for R ---"
+    
+    # 1. Install prerequisites
+    run_command "Install Java and NetCDF prerequisites" "apt-get install -y netcdf-bin default-jdk"
+    
+    # 2. Determine JAVA_HOME dynamically
+    local java_bin_path
+    java_bin_path=$(readlink -f /usr/bin/javac 2>/dev/null || true)
+    local expected_java_home=""
+    if [[ -n "$java_bin_path" ]]; then
+        expected_java_home=$(dirname "$(dirname "$java_bin_path")")
+    else
+        # Fallback if javac isn't found for some reason
+        expected_java_home="/usr/lib/jvm/java-21-openjdk-amd64"
+    fi
+    log "INFO" "Detected JAVA_HOME: $expected_java_home"
+    
+    # Export for current session
+    export JAVA_HOME="$expected_java_home"
+    
+    # 3. Clean up /etc/environment and set JAVA_HOME properly
+    log "INFO" "Configuring /etc/environment for Java..."
+    sed -i '/^CLASSPATH=/d' /etc/environment
+    sed -i '/^_JAVA_OPTIONS=/d' /etc/environment
+    sed -i '/^JAVA_TOOL_OPTIONS=/d' /etc/environment
+    sed -i '/^JAVA_HOME=/d' /etc/environment
+    
+    echo "JAVA_HOME=${expected_java_home}" >> /etc/environment
+    
+    unset CLASSPATH 2>/dev/null || true
+    unset _JAVA_OPTIONS 2>/dev/null || true
+    unset JAVA_TOOL_OPTIONS 2>/dev/null || true
+    
+    # 4. Add libjvm.so path to the dynamic linker
+    log "INFO" "Configuring ldconfig for JVM..."
+    if [[ -d "${expected_java_home}/lib/server" ]]; then
+        echo "${expected_java_home}/lib/server" > /etc/ld.so.conf.d/java.conf
+        run_command "Update dynamic linker bindings" "ldconfig"
+    else
+        log "WARN" "JVM server library path not found at ${expected_java_home}/lib/server"
+    fi
+    
+    # 5. Reconfigure R to use Java
+    run_command "Reconfigure R with Java" "R CMD javareconf"
+    
+    # 6. Reinstall rJava from within R
+    log "INFO" "Installing rJava package from source..."
+    run_command "Install rJava from source" "Rscript -e 'install.packages(\"rJava\", type=\"source\", repos=\"https://cloud.r-project.org\")'"
+    
+    # 7. Test rJava + class loader
+    log "INFO" "Testing rJava class loader..."
+    if run_command "Verify rJava" "Rscript -e 'library(rJava); .jinit(); print(.jnew(\"java.lang.String\", \"OK\"))'"; then
+        log "INFO" "SUCCESS: rJava test passed."
+    else
+        handle_error $? "Failed to verify rJava functionality."
+        return 1
+    fi
+    
+    # 8. Set java parameters in Rprofile.site
+    get_r_profile_site_path
+    if ! grep -q "java.parameters" "$R_PROFILE_SITE_PATH" 2>/dev/null; then
+        log "INFO" "Adding Java parameters (-Xmx4g) to ${R_PROFILE_SITE_PATH}..."
+        echo 'options(java.parameters = c("-Xmx4g"))' >> "$R_PROFILE_SITE_PATH"
+    else
+        log "INFO" "Java parameters already exist in ${R_PROFILE_SITE_PATH}"
+    fi
+
+    log "INFO" "--- Java Configuration for R Complete ---"
+}
+
 install_user_github_pkgs() {
     log "INFO" "Installing user-defined GitHub packages..."
+    configure_java_for_r
     install_r_pkg_list "GitHub" "${R_USER_PACKAGES_GITHUB[@]}"
 }
 
