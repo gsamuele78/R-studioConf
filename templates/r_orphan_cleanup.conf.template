@@ -28,7 +28,7 @@ NOTIFY_DIR="${LOG_DIR}/notifications"
 # ── Thresholds ────────────────────────────────────────────────
 MIN_AGE_SECONDS=120
 MAX_LOG_SIZE=$((10 * 1024 * 1024))
-KILL_TIMEOUT=${KILL_TIMEOUT:-30}
+KILL_TIMEOUT="${KILL_TIMEOUT}"
 
 # ── Process Patterns to Monitor ───────────────────────────────
 ORPHAN_PATTERNS=(

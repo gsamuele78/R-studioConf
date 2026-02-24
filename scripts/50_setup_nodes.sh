@@ -924,10 +924,12 @@ MFEOF
 setup_nodes_orphan_cleanup() {
   log_step "Step 11b: Orphan Process Cleanup (cron + email)"
 
+  local ORPHAN_LOG_DIR="/var/log/r_orphan_cleanup"
+
   # 1. Ensure log structures exist
-  run_cmd mkdir -p "${LOG_DIR}/notifications"
-  run_cmd chmod 755 "${LOG_DIR}"
-  run_cmd chmod 777 "${LOG_DIR}/notifications" # Let anyone write their own logs
+  run_cmd mkdir -p "${ORPHAN_LOG_DIR}/notifications"
+  run_cmd chmod 755 "${ORPHAN_LOG_DIR}"
+  run_cmd chmod 777 "${ORPHAN_LOG_DIR}/notifications" # Let anyone write their own logs
 
   # 2. Deploy configs
   log_info "Deploying email maps and admin recipients..."
@@ -939,8 +941,8 @@ setup_nodes_orphan_cleanup() {
   if [[ "${DRY_RUN}" == true ]]; then
     log_info "[DRY-RUN] envsubst on r_orphan_cleanup.conf.template -> ${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   else
-    export SMTP_HOST SMTP_PORT SENDER_EMAIL MAIL_DOMAIN DNS_SERVERS KILL_TIMEOUT BIOME_CONF LOG_DIR SWAP_SIZE_GB
-    envsubst < "${DIR}/../templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
+    export SMTP_HOST SMTP_PORT SENDER_EMAIL MAIL_DOMAIN SMTP_DNS_SERVERS KILL_TIMEOUT BIOME_CONF
+    envsubst '${SMTP_HOST} ${SMTP_PORT} ${SENDER_EMAIL} ${MAIL_DOMAIN} ${SMTP_DNS_SERVERS} ${KILL_TIMEOUT} ${BIOME_CONF}' < "${DIR}/../templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
     chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   fi
 
