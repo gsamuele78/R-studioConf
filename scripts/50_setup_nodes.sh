@@ -935,6 +935,7 @@ setup_nodes_summary() {
   echo "    ${BIOME_CONF}/00_audit_v26.R"
   echo "    ${BIOME_CONF}/audit.conf"
   echo "    ${LOG_FILE}"
+  echo "    ${SWAP_FILE} (${SWAP_SIZE_GB}GB)"
   if [[ "${SKIP_OLLAMA}" != true ]]; then
     echo "    ${BIOME_CONF}/ai_model"
     echo "    ${BIOME_CONF}/r-coder.modelfile"
@@ -964,6 +965,7 @@ echo "  3) Config files only (Rprofile + Renviron, Step 8)"
 echo "  4) Migrate user configs only (Step 9)"
 echo "  5) Ollama AI service only (Step 11)"
 echo "  6) Run BLAS smoke test only (Step 12)"
+echo "  7) Run Swap Creation only (Step 5b)"
 echo "  U) Uninstall (remove deployed files)"
 echo "  Q) Quit"
 echo ""
@@ -1008,6 +1010,10 @@ case "${choice}" in
     ;;
   6)
     setup_nodes_blas_test
+    ;;
+  7)
+    setup_nodes_preflight
+    setup_nodes_swap
     ;;
   U)
     setup_nodes_uninstall
