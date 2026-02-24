@@ -547,7 +547,7 @@ setup_nodes_python() {
   fi
 
   run_cmd "${PYTHON_ENV}/bin/pip" install --quiet --upgrade pip
-  run_cmd "${PYTHON_ENV}/bin/pip" install --quiet "${PYTHON_PACKAGES[@]}"
+  run_cmd "${PYTHON_ENV}/bin/pip" install --quiet "$(printf "'%s' " "${PYTHON_PACKAGES[@]}")"
   log_success "Python: $("${PYTHON_ENV}/bin/python" --version 2>&1)"
 }
 

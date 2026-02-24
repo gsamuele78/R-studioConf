@@ -19,6 +19,9 @@ tryCatch(suppressMessages({
   if (requireNamespace("bspm", quietly = TRUE)) bspm::enable()
 }), error = function(e) NULL)
 
+# ── SECTION 1: Santander Fixes ──
+options(java.parameters = c("-Xmx4g"))
+
 # ── GUARD: Prevent double-init ──
 if (isTRUE(getOption("biome.profile.loaded"))) return(invisible(NULL))
 options(biome.profile.loaded = TRUE)
