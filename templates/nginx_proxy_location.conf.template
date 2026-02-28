@@ -33,8 +33,9 @@ location ^~ /rstudio-inner/ {
     
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection $connection_upgrade;
     
+
     # Pass real Host and standardized Forwarded headers
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -53,9 +54,10 @@ location ^~ /rstudio-inner/ {
     proxy_send_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
     
     # Performance & Persistence
-    proxy_buffering off;
-    proxy_request_buffering off;
+    # Let Nginx buffer the payload to slowly stream it to slow clients (fixes JSON RPC errors on slow networks)
     proxy_socket_keepalive on;
+    # Allow large uploads in RStudio
+    client_max_body_size 10G;
 
     # Hide X-Frame-Options to allow framing in our wrapper
     proxy_hide_header X-Frame-Options;
@@ -189,7 +191,7 @@ location ^~ /terminal-inner/ {
     proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/terminal-inner/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection $connection_upgrade;
     proxy_set_header Host $host;
     
     # Performance & Persistence
