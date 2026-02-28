@@ -82,7 +82,7 @@ body {
 }
 
 .logo {
-    height: 140px;
+    height: 100px;
     width: auto;
     max-width: 31%;
     object-fit: contain;
