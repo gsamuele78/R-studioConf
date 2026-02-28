@@ -172,18 +172,20 @@
     <div class="main-container">
         <header class="glass-header logo-header">
             <div class="logos-row">
-                <img src="left.png" alt="BIOME BigData Resources Left Logo" class="logo">
+                <!--<img src="left.png" alt="BIOME BigData Resources Left Logo" class="logo">-->
                 <img src="center.png" alt="BIOME BigData Resources Center Logo" class="logo">
-                <img src="right.png" alt="BIOME BigData Resources Right Logo" class="logo">
+                <!--<img src="right.png" alt="BIOME BigData Resources Right Logo" class="logo">-->
             </div>
         </header>
 
         <header class="glass-header">
             <div class="logo-container" onclick="handleHeaderLogout()" style="cursor: pointer;" title="Click to Logout">
+                <img src="left.png" alt="BIOME BigData Resources Left Logo" class="logo">
                 <div class="site-title">
                     <h1>BIOME BigData Resources</h1>
                     <p class="subtitle">Research Group Portal &nbsp;<span class="server-badge" title="Server node">%%SERVER_NAME%%</span></p>
                 </div>
+                <img src="right.png" alt="BIOME BigData Resources Right Logo" class="logo">
             </div>
                 <button onclick="showLoginModal()" class="secure-connect-btn">
                     <!-- Closed padlock SVG: gold body, grey metallic shackle -->
