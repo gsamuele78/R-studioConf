@@ -35,7 +35,8 @@ uninstall_portal() {
     
     # 1. Remove files
     log "INFO" "Removing portal files..."
-    rm -f "${WEB_ROOT}/index.html" "${WEB_ROOT}/style.css" "${WEB_ROOT}/logo.png" "${WEB_ROOT}/background.png" "${WEB_ROOT}/biome-portal.js"
+    
+    rm -f "${WEB_ROOT}/index.html" "${WEB_ROOT}/style.css" "${WEB_ROOT}/left.png" "${WEB_ROOT}/right.png" "${WEB_ROOT}/background.png" "${WEB_ROOT}/biome-portal.js"
     rm -rf "${WEB_ROOT}/status"
 
     log "INFO" "Uninstallation complete. Note: Nginx proxy config remains active (serving 404/403 on root)."
@@ -89,13 +90,21 @@ deploy_portal() {
     fi
     echo "$css_content" > "${WEB_ROOT}/style.css"
     
-    log "INFO" "Deploying Assets..."
-    if [[ -f "${ASSETS_DIR}/logo.png" ]]; then
-        cp "${ASSETS_DIR}/logo.png" "${WEB_ROOT}/logo.png"
+    log "INFO" "Deploying left asset..."
+    if [[ -f "${ASSETS_DIR}/left.png" ]]; then
+        cp "${ASSETS_DIR}/left.png" "${WEB_ROOT}/left.png"
     else
-        log "WARN" "Logo asset not found at ${ASSETS_DIR}/logo.png"
+        log "WARN" "Left asset not found at ${ASSETS_DIR}/left.png"
     fi
     
+    log "INFO" "Deploying right asset..."
+    if [[ -f "${ASSETS_DIR}/right.png" ]]; then
+        cp "${ASSETS_DIR}/right.png" "${WEB_ROOT}/right.png"
+    else
+        log "WARN" "Right asset not found at ${ASSETS_DIR}/right.png"
+    fi
+
+    log "INFO" "Deploying background asset..."
     if [[ -f "${ASSETS_DIR}/background.png" ]]; then
         cp "${ASSETS_DIR}/background.png" "${WEB_ROOT}/background.png"
     else

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Biome Big Data Calculus - Research Portal</title>
+    <title>BIOME BigData Resources - Research Portal</title>
     <!-- Prevent Favicon 404 -->
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="style.css">
@@ -172,11 +172,12 @@
     <div class="main-container">
         <header class="glass-header">
             <div class="logo-container" onclick="handleHeaderLogout()" style="cursor: pointer;" title="Click to Logout">
-                <img src="logo.png" alt="Biome Big Data Calculus Logo" class="logo">
+                <img src="left.png" alt="BIOME BigData Resources Left Logo" class="logo">
                 <div class="site-title">
-                    <h1>Biome Big Data Calculus</h1>
+                    <h1>BIOME BigData Resources</h1>
                     <p class="subtitle">Research Group Portal &nbsp;<span class="server-badge" title="Server node">%%SERVER_NAME%%</span></p>
                 </div>
+                <img src="right.png" alt="BIOME BigData Resources Right Logo" class="logo">
             </div>
                 <button onclick="showLoginModal()" class="secure-connect-btn">
                     <!-- Closed padlock SVG: gold body, grey metallic shackle -->
@@ -319,7 +320,7 @@
         </section>
 
         <footer class="glass-footer">
-            <p>&copy; %%CURRENT_YEAR%% Biome Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
+            <p>&copy; %%CURRENT_YEAR%% BIOME BigData Resources. Department of Biological, Geological, and Environmental Sciences.</p>
         </footer>
     </div>
 
