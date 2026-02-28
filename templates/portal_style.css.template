@@ -74,7 +74,8 @@ body {
 }
 
 .center-logo {
-    height: 180px; /* Noticeably zoomed from 130px */
+    height: clamp(100px, 15vw, 180px) !important; /* Noticeably zoomed and forced priority */
+    object-fit: contain;
 }
 
 .logos-row {
@@ -95,7 +96,8 @@ body {
 
 .site-title h1 {
     font-family: 'Playfair Display', serif;
-    font-size: 2.2rem;
+    font-size: clamp(1.4rem, 4vw, 2.2rem);
+    white-space: nowrap;
     margin: 0;
     font-weight: 600;
     letter-spacing: 0.5px;
@@ -106,7 +108,8 @@ body {
 
 .subtitle {
     margin: 0.2rem 0 0 0;
-    font-size: 1rem;
+    font-size: clamp(0.75rem, 2.5vw, 1rem);
+    white-space: nowrap;
     color: var(--sage-green);
     text-transform: uppercase;
     letter-spacing: 2px;
