@@ -170,7 +170,7 @@
 <body>
     <div class="background-overlay"></div>
     <div class="main-container">
-        <header class="glass-header logo-header">
+        <header class="logo-header">
             <img src="center.png" alt="BIOME BigData Resources Center Logo" class="logo center-logo">
         </header>
 
