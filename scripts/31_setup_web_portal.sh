@@ -36,7 +36,7 @@ uninstall_portal() {
     # 1. Remove files
     log "INFO" "Removing portal files..."
     
-    rm -f "${WEB_ROOT}/index.html" "${WEB_ROOT}/style.css" "${WEB_ROOT}/left.png" "${WEB_ROOT}/right.png" "${WEB_ROOT}/background.png" "${WEB_ROOT}/biome-portal.js"
+    rm -f "${WEB_ROOT}/index.html" "${WEB_ROOT}/style.css" "${WEB_ROOT}/left.png" "${WEB_ROOT}/center.png" "${WEB_ROOT}/right.png" "${WEB_ROOT}/background.png" "${WEB_ROOT}/biome-portal.js"
     rm -rf "${WEB_ROOT}/status"
 
     log "INFO" "Uninstallation complete. Note: Nginx proxy config remains active (serving 404/403 on root)."
@@ -97,6 +97,13 @@ deploy_portal() {
         log "WARN" "Left asset not found at ${ASSETS_DIR}/left.png"
     fi
     
+    log "INFO" "Deploying center asset..."
+    if [[ -f "${ASSETS_DIR}/center.png" ]]; then
+        cp "${ASSETS_DIR}/center.png" "${WEB_ROOT}/center.png"
+    else
+        log "WARN" "Center asset not found at ${ASSETS_DIR}/center.png"
+    fi
+
     log "INFO" "Deploying right asset..."
     if [[ -f "${ASSETS_DIR}/right.png" ]]; then
         cp "${ASSETS_DIR}/right.png" "${WEB_ROOT}/right.png"

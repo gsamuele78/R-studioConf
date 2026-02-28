@@ -66,18 +66,26 @@ body {
     text-align: center;
 }
 
+.logo-header {
+    margin-bottom: 2rem;
+    padding: 1.5rem 2rem;
+    justify-content: center;
+}
+
 .logos-row {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 0;
-    flex-wrap: wrap; /* Helps fluid scaling on small screens */
+    justify-content: space-between;
+    width: 100%;
+    gap: 1rem;
+    flex-wrap: nowrap;
 }
 
 .logo {
     height: 140px;
     width: auto;
-    max-width: 100%;
+    max-width: 31%;
+    object-fit: contain;
     filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
 }
 
@@ -230,6 +238,16 @@ body {
     
     .logo-container {
         flex-direction: column;
+    }
+    
+    .logos-row {
+        gap: 0.5rem;
+        justify-content: center;
+    }
+    
+    .logo {
+        height: auto;
+        max-width: 31%;
     }
     
     .portal-grid {
