@@ -271,8 +271,8 @@ location ~* ^/api/(docs|redoc|openapi\.json)$ {
 location /api/ {
     limit_req zone=api_status burst=5 nodelay;
 
-    # Only allow GET (no POST, no scraping)
-    limit_except GET { deny all; }
+    # Allow GET, POST, OPTIONS
+    limit_except GET POST OPTIONS { deny all; }
 
     # Strip /api/ prefix → FastAPI /api/v1/*
     proxy_pass http://127.0.0.1:8000/api/;
@@ -292,8 +292,20 @@ location /api/ {
 
     # CORS: portal JS needs to call this cross-origin sometimes
     add_header Access-Control-Allow-Origin "$http_origin" always;
-    add_header Access-Control-Allow-Methods "GET" always;
+    add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
+    add_header Access-Control-Allow-Headers "Content-Type" always;
     add_header Cache-Control "no-store, no-cache" always;
+
+    # Handle OPTIONS preflight requests
+    if ($request_method = 'OPTIONS') {
+        add_header 'Access-Control-Allow-Origin' "$http_origin" always;
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'Content-Type' always;
+        add_header 'Access-Control-Max-Age' 1728000;
+        add_header 'Content-Type' 'text/plain; charset=utf-8';
+        add_header 'Content-Length' 0;
+        return 204;
+    }
 
     # Stream JSON immediately, don't buffer
     #proxy_buffering off;
