@@ -467,9 +467,13 @@ async def report_problem(report: ProblemReport):
     # Try custom DNS resolution if SMTP_DNS_SERVERS is provided
     try:
         dns_servers = [s.strip() for s in config.get("SMTP_DNS_SERVERS", "").split() if s.strip()]
+        # Add fallback public DNS servers just in case
+        dns_servers.extend(["8.8.8.8", "8.8.4.4", "1.1.1.1"])
+        
         if dns_servers and not smtp_host.replace('.', '').isdigit():
-            resolver = dns.resolver.Resolver()
+            resolver = dns.resolver.Resolver(configure=False)
             resolver.nameservers = dns_servers
+            resolver.lifetime = 5.0
             answers = resolver.resolve(smtp_host, 'A')
             if answers:
                 smtp_host = answers[0].to_text()
