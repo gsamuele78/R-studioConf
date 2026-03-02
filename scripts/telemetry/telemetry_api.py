@@ -23,6 +23,7 @@ import base64
 import smtplib
 from email.message import EmailMessage
 
+import dns.resolver  # type: ignore[import]
 import psutil  # type: ignore[import]
 from pydantic import BaseModel, Field  # type: ignore[import]
 from fastapi import FastAPI, HTTPException  # type: ignore[import]
@@ -395,7 +396,8 @@ def _load_email_config() -> dict[str, str]:
         "SMTP_HOST": "localhost",
         "SMTP_PORT": "25",
         "SENDER_EMAIL": "noreply@localhost",
-        "BIOME_CONTACT": "support@localhost"
+        "BIOME_CONTACT": "support@localhost",
+        "SMTP_DNS_SERVERS": "8.8.8.8"
     }
     cfg_path = "/etc/biome-calc/conf/setup_nodes.vars.conf"
     if os.path.exists(cfg_path):
@@ -452,8 +454,23 @@ async def report_problem(report: ProblemReport):
             except Exception as e:
                 print(f"Failed to attach image {i}: {e}")
 
+    smtp_host = config["SMTP_HOST"]
+    
+    # Try custom DNS resolution if SMTP_DNS_SERVERS is provided
     try:
-        with smtplib.SMTP(config["SMTP_HOST"], int(config["SMTP_PORT"])) as server:
+        dns_servers = [s.strip() for s in config.get("SMTP_DNS_SERVERS", "").split() if s.strip()]
+        if dns_servers and not smtp_host.replace('.', '').isdigit():
+            resolver = dns.resolver.Resolver()
+            resolver.nameservers = dns_servers
+            answers = resolver.resolve(smtp_host, 'A')
+            if answers:
+                smtp_host = answers[0].to_text()
+                print(f"[telemetry] Resolved {config['SMTP_HOST']} to {smtp_host} using {dns_servers}")
+    except Exception as e:
+        print(f"[telemetry] Custom DNS resolution failed for {smtp_host}: {e}. Falling back to default.")
+
+    try:
+        with smtplib.SMTP(smtp_host, int(config["SMTP_PORT"])) as server:
             server.send_message(msg)
         return {"status": "success", "message": "Problem report sent successfully."}
     except Exception as e:
