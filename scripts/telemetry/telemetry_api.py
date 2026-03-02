@@ -19,10 +19,13 @@ import threading
 import time
 import asyncio
 import json
+import base64
+import smtplib
+from email.message import EmailMessage
 
 import psutil  # type: ignore[import]
 from pydantic import BaseModel, Field  # type: ignore[import]
-from fastapi import FastAPI  # type: ignore[import]
+from fastapi import FastAPI, HTTPException  # type: ignore[import]
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import]
 from fastapi.responses import PlainTextResponse, StreamingResponse, HTMLResponse  # type: ignore[import]
 from fastapi.openapi.docs import get_swagger_ui_html  # type: ignore[import]
@@ -98,6 +101,12 @@ class HealthResponse(BaseModel):
     """Basic structural health check response."""
     status: str = Field(..., example="ok")
     cache_age_s: float = Field(..., example=3.1)
+
+class ProblemReport(BaseModel):
+    """Payload for submitting a problem report."""
+    message: str
+    images: list[str] = Field(default_factory=list, description="List of base64 data URIs for images")
+    context: dict = Field(default_factory=dict, description="Additional context info")
 
 # ---------------------------------------------------------------------------
 # App
@@ -380,6 +389,75 @@ threading.Thread(
 # ---------------------------------------------------------------------------
 # HTTP Endpoints
 # ---------------------------------------------------------------------------
+
+def _load_email_config() -> dict[str, str]:
+    config = {
+        "SMTP_HOST": "localhost",
+        "SMTP_PORT": "25",
+        "SENDER_EMAIL": "noreply@localhost",
+        "BIOME_CONTACT": "support@localhost"
+    }
+    cfg_path = "/etc/biome-calc/conf/setup_nodes.vars.conf"
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    v = v.strip("\"'")
+                    if k in config:
+                        config[k] = v
+        except Exception as e:
+            print(f"Error loading {cfg_path}: {e}")
+            
+    # As requested, ensure the sender is hostname@unibo.it
+    config["SENDER_EMAIL"] = f"{socket.gethostname()}@unibo.it"
+    return config
+
+@app.post("/api/v1/report-problem", tags=["Support"], summary="Send a problem report via email")
+async def report_problem(report: ProblemReport):
+    """Send a user-submitted problem report to the configured admin email."""
+    config = _load_email_config()
+    
+    msg = EmailMessage()
+    subject = f"[Biome Portal] Problem Report from {socket.gethostname()}"
+    msg['Subject'] = subject
+    msg['From'] = config["SENDER_EMAIL"]
+    msg['To'] = config["BIOME_CONTACT"]
+
+    body_lines = [
+        f"A new problem has been reported from the Biome Portal on {socket.gethostname()}.",
+        "",
+        "--- User Message ---",
+        report.message,
+        "--------------------",
+        "",
+        "--- Context ---"
+    ]
+    for k, v in report.context.items():
+        body_lines.append(f"{k}: {v}")
+        
+    msg.set_content("\n".join(body_lines))
+
+    for i, data_uri in enumerate(report.images):
+        if data_uri.startswith("data:"):
+            try:
+                header, encoded = data_uri.split(",", 1)
+                mime_type = header.split(";")[0].split(":")[1]
+                maintype, subtype = mime_type.split("/")
+                img_data = base64.b64decode(encoded)
+                msg.add_attachment(img_data, maintype=maintype, subtype=subtype, filename=f"screenshot_{i+1}.{subtype}")
+            except Exception as e:
+                print(f"Failed to attach image {i}: {e}")
+
+    try:
+        with smtplib.SMTP(config["SMTP_HOST"], int(config["SMTP_PORT"])) as server:
+            server.send_message(msg)
+        return {"status": "success", "message": "Problem report sent successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}") from e
 
 # ---------------------------------------------------------------------------
 # Custom API Docs page (Swagger UI + status-page top-bar)

@@ -999,10 +999,13 @@ setup_nodes_orphan_cleanup() {
   run_cmd chmod 777 "${ORPHAN_LOG_DIR}/notifications" # Let anyone write their own logs
 
   # 2. Deploy configs
-  log_info "Deploying email maps and admin recipients..."
+  log_info "Deploying email maps, admin recipients and main configuration..."
   run_cmd mkdir -p "${BIOME_CONF}/conf"
   run_cmd cp -f "${WORKSPACE_ROOT}/config/admin_recipients.txt" "${BIOME_CONF}/conf/admin_recipients.txt"
   run_cmd cp -f "${WORKSPACE_ROOT}/config/user_email_map.txt" "${BIOME_CONF}/conf/user_email_map.txt"
+  
+  run_cmd cp -f "${VARS_CONF}" "${BIOME_CONF}/conf/setup_nodes.vars.conf"
+  run_cmd chmod 600 "${BIOME_CONF}/conf/setup_nodes.vars.conf"
   
   log_info "Generating r_orphan_cleanup.conf..."
   if [[ "${DRY_RUN}" == true ]]; then

@@ -24,9 +24,27 @@
             z-index: 1000;
             display: flex;
             align-items: center;
+            justify-content: space-between;
             padding: 0 20px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.2);
             box-sizing: border-box;
+        }
+        .report-btn {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.3);
+            color: #fff;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            transition: background 0.2s;
+        }
+        .report-btn:hover {
+            background: rgba(255,255,255,0.1);
         }
         #portal-top-bar a {
             color: white;
@@ -50,6 +68,7 @@
 <body>
     <div id="portal-top-bar">
         <a href="javascript:void(0)" onclick="Biome.goBack()">🏠 Biome Portal</a>
+        <button class="report-btn" onclick="Biome.showProblemReporter()">🐞 Report Problem</button>
     </div>
     <iframe id="terminal-frame" 
             src="/terminal-inner/" 
