@@ -399,20 +399,28 @@ def _load_email_config() -> dict[str, str]:
         "BIOME_CONTACT": "support@localhost",
         "SMTP_DNS_SERVERS": "8.8.8.8"
     }
-    cfg_path = "/etc/biome-calc/conf/setup_nodes.vars.conf"
-    if os.path.exists(cfg_path):
-        try:
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, v = line.split("=", 1)
-                    v = v.strip("\"'")
-                    if k in config:
-                        config[k] = v
-        except Exception as e:
-            print(f"Error loading {cfg_path}: {e}")
+    # Note: 50_setup_nodes copies this to /etc/biome-calc/conf/setup_nodes.vars.conf
+    # but the service runs as root and might have issues with some permissions or paths.
+    cfg_paths = [
+        "/etc/biome-calc/conf/setup_nodes.vars.conf",
+        "/home/administrator/configServices/R-studioConf/config/setup_nodes.vars.conf"
+    ]
+    
+    for cfg_path in cfg_paths:
+        if os.path.exists(cfg_path):
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        v = v.strip("\"'")
+                        if k in config:
+                            config[k] = v
+                break # Found a valid config file, stop trying others
+            except Exception as e:
+                print(f"Error loading {cfg_path}: {e}")
             
     # As requested, ensure the sender is hostname@unibo.it
     config["SENDER_EMAIL"] = f"{socket.gethostname()}@unibo.it"

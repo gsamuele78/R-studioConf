@@ -52,8 +52,8 @@ install_prerequisites() {
 
     # Install Python libs into the venv
     log "INFO" "Installing Python libraries into telemetry venv..."
-    run_command "Install FastAPI/Uvicorn/psutil/prometheus_client" \
-        "${TELEMETRY_PIP} install --quiet fastapi uvicorn psutil prometheus_client"
+    run_command "Install FastAPI/Uvicorn/psutil/prometheus_client/dnspython" \
+        "${TELEMETRY_PIP} install --quiet fastapi uvicorn psutil prometheus_client dnspython"
 }
 
 setup_service() {
