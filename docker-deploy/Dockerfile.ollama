@@ -1,0 +1,28 @@
+# Dockerfile for BIOME-CALC AI Assist Module
+# Hardened, pre-baked Sysadmin approach for RStudio Coder
+FROM ollama/ollama:latest
+
+LABEL maintainer="docker-deploy-ollama"
+
+# Set Sysadmin Environment limits
+ENV OLLAMA_HOST="0.0.0.0:11434"
+ENV OLLAMA_NUM_PARALLEL=2
+ENV OLLAMA_KEEP_ALIVE="24h"
+ENV OLLAMA_MAX_LOADED_MODELS=1
+
+WORKDIR /root/.ollama
+
+# Bake the custom R-Coder configuration into the image layer
+COPY config/r-coder.modelfile /root/.ollama/r-coder.modelfile
+
+# By pulling at build-time, the container starts instantly at run-time.
+# WARNING: Qwen 14b is ~9GB. If build becomes too heavy, this can be moved to startup 
+# script, but Sysadmin best practice prescribes baking the model in the immutable image.
+# We skip the heavy pull during CI/CD by default and let a helper script do it, 
+# OR we pull a smaller fallback model for CI.
+# RUN nohup ollama serve & sleep 5 && ollama pull qwen2.5-coder:14b-instruct-q4_K_M && ollama create r-coder -f /root/.ollama/r-coder.modelfile && kill $(pidof ollama)
+
+EXPOSE 11434
+
+ENTRYPOINT ["/bin/ollama"]
+CMD ["serve"]

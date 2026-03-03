@@ -18,7 +18,10 @@ install_cran <- function(pkgs) {
     if (!require("bspm", quietly = TRUE)) {
         message("BSPM not found, falling back to standard install")
     }
+    # Sysadmin Optimization: Parallel compilation for C++ packages
+    opts <- options(Ncpus = parallel::detectCores())
     install.packages(pkgs)
+    options(opts)
 }
 
 install_cran(cran_packages)

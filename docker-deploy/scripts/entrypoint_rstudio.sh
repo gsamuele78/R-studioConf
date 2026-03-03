@@ -90,13 +90,98 @@ session-external-pointers-block-suspend=1
 copilot-enabled=${RSESSION_COPILOT_ENABLED:-0}
 EOF
 
-# 1.4 Environment Variables (env-vars)
-cat > /etc/rstudio/env-vars <<EOF
-OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-4}
-OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
-EOF
+# 1.4 Dynamic R Environment (Renviron.site)
+# Maps Docker resource constraints into R equivalents
+log "INFO" "Generating Dynamic Renviron tuning..."
 
-log "INFO" "RStudio Configuration Complete."
+# Safely extract CPU limit or default to host cores
+CPU_VAL="${RSTUDIO_CPU_LIMIT:-0.0}"
+if [[ "$CPU_VAL" == "0.0" || -z "$CPU_VAL" ]]; then
+    ALLOCATED_CORES=$(nproc)
+else
+    # Simple float to int conversion (e.g. 4.0 -> 4)
+    ALLOCATED_CORES=${CPU_VAL%%.*}
+    [ -z "$ALLOCATED_CORES" ] && ALLOCATED_CORES=$(nproc)
+fi
+
+cat > /etc/R/Renviron.site <<RENVEOF
+# BIOME-CALC: Docker Injected R Environment
+# Memory/RAMDisk configuration
+BIOME_RAMDISK_GB=${RAMDISK_SIZE:-16G}
+TMPDIR=/tmp
+TMP=/tmp
+TEMP=/tmp
+R_TEMPDIR=/tmp
+
+# Threading bounds (derived from RSTUDIO_CPU_LIMIT)
+OPENBLAS_NUM_THREADS=${ALLOCATED_CORES}
+OMP_NUM_THREADS=${ALLOCATED_CORES}
+MKL_NUM_THREADS=${ALLOCATED_CORES}
+
+# Disable GPU for Baseline
+CUDA_VISIBLE_DEVICES=-1
+TF_CPP_MIN_LOG_LEVEL=2
+RENVEOF
+
+# 1.5 Dynamic System RProfile & Audit (Sysadmin Porting)
+log "INFO" "Applying Cloud-Native Sysadmin RProfile & Audit Templates..."
+TEMPLATE_DIR="/etc/docker-templates"
+
+# Compile RProfile.site
+if [ -f "${TEMPLATE_DIR}/Rprofile_site.R.template" ]; then
+    log "INFO" "Processing Rprofile_site.R.template..."
+    tmp_profile=$(mktemp /tmp/Rprofile.site.XXXXXX)
+    
+    # We use process_template to inject the 12-Factor variables
+    process_template "${TEMPLATE_DIR}/Rprofile_site.R.template" generated_profile \
+        BIOME_HOST="${HOST_DOMAIN:-botanical-docker}" \
+        RPROFILE_VERSION="$(date +%Y.%m-Docker)" \
+        VM_VCORES="${ALLOCATED_CORES}" \
+        VM_RAM_GB="${RSTUDIO_MEMORY_LIMIT:--1}" \
+        BIOME_CONTACT="${BIOME_CONTACT:-support@botanical.example.com}" \
+        MAX_BLAS_THREADS="${MAX_BLAS_THREADS:-16}" \
+        BIOME_CONF="${BIOME_CONF:-/etc/biome-calc}" \
+        LOG_FILE="/var/log/r_biome_system.log" \
+        RAMDISK_GB="${RAMDISK_SIZE:-16}" \
+        RSESSION_CONF_PATH="/etc/rstudio/rsession.conf"
+        
+    # shellcheck disable=SC2154
+    printf "%s" "$generated_profile" > "${tmp_profile}"
+    cp "${tmp_profile}" /etc/R/Rprofile.site
+    chmod 644 /etc/R/Rprofile.site
+    rm -f "${tmp_profile}"
+    log "INFO" "RProfile.site compiled successfully."
+else
+    log "WARN" "MISSING: ${TEMPLATE_DIR}/Rprofile_site.R.template"
+fi
+
+# Compile Audit Script
+if [ -f "${TEMPLATE_DIR}/00_audit_v26.R.template" ]; then
+    log "INFO" "Processing 00_audit_v26.R.template..."
+    mkdir -p "${BIOME_CONF:-/etc/biome-calc}"
+    tmp_audit=$(mktemp /tmp/00_audit.XXXXXX)
+    
+    process_template "${TEMPLATE_DIR}/00_audit_v26.R.template" generated_audit \
+        BIOME_CONF="${BIOME_CONF:-/etc/biome-calc}" \
+        LOG_FILE="/var/log/r_biome_system.log" \
+        MAX_THREADS="${MAX_BLAS_THREADS:-16}" \
+        NFS_HOME="/nfs/home" \
+        CIFS_ARCHIVE="/nfs/projects" \
+        PYTHON_ENV="/opt/r-geospatial"
+        
+    # shellcheck disable=SC2154
+    printf "%s" "$generated_audit" > "${tmp_audit}"
+    cp "${tmp_audit}" "${BIOME_CONF:-/etc/biome-calc}/00_audit_v26.R"
+    chmod 644 "${BIOME_CONF:-/etc/biome-calc}/00_audit_v26.R"
+    rm -f "${tmp_audit}"
+    
+    # Ensure log is writable
+    touch /var/log/r_biome_system.log
+    chmod 666 /var/log/r_biome_system.log
+    log "INFO" "System Audit Script compiled successfully."
+else
+    log "WARN" "MISSING: ${TEMPLATE_DIR}/00_audit_v26.R.template"
+fi
 
 # 2. Authentication Configuration
 if [ "$AUTH_BACKEND" == "sssd" ]; then

@@ -3,29 +3,236 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Botanical Big Data Calculus - Research Portal</title>
+    <title>BIOME BigData Resources - Research Portal</title>
     <!-- Prevent Favicon 404 -->
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&display=swap" rel="stylesheet">
-    <!-- Load Centralized Telemetry and Feedback JS Library -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <script src="/biome-portal.js"></script>
+    <style>
+        /* ── Telemetry Strip (%%ENABLE_TELEMETRY_STRIP%%) ── */
+        .telemetry-strip {
+            background: rgba(10,26,26,0.70);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 18px;
+            padding: 1.1rem 2rem;
+            margin-bottom: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            animation: stripFadeIn 0.8s ease;
+            transition: opacity 0.5s ease, max-height 0.5s ease, padding 0.5s ease, margin 0.5s ease;
+            max-height: 200px;
+            overflow: hidden;
+        }
+        .telemetry-strip.hidden-strip {
+            opacity: 0;
+            max-height: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            margin-bottom: 0;
+            pointer-events: none;
+        }
+        @keyframes stripFadeIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
+        .strip-metric {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.2rem;
+            min-width: 90px;
+        }
+        .strip-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(240,255,240,0.5);
+        }
+        .strip-value {
+            font-size: 0.97rem;
+            font-weight: 600;
+            color: rgba(240,255,240,0.95);
+        }
+        .strip-bar-track {
+            width: 100%;
+            height: 4px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .strip-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 1s ease;
+        }
+        .strip-divider {
+            width: 1px;
+            height: 46px;
+            background: rgba(255,255,255,0.12);
+        }
+        .strip-detail-link {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.45rem 1.1rem;
+            border-radius: 22px;
+            border: 1px solid rgba(143,188,143,0.35);
+            background: rgba(143,188,143,0.1);
+            color: #8FBC8F;
+            text-decoration: none;
+            font-size: 0.82rem;
+            font-family: 'Outfit', sans-serif;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .strip-detail-link:hover {
+            background: rgba(143,188,143,0.2);
+            box-shadow: 0 0 12px rgba(143,188,143,0.2);
+        }
+        .strip-offline {
+            color: rgba(240,255,240,0.3);
+            font-size: 0.72rem;
+        }
+        /* ── Monitoring Tile (logged-in only) ── */
+        .monitor-tile {
+            background: rgba(15,30,30,0.8);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 16px;
+            padding: 1.5rem;
+            text-decoration: none;
+            color: var(--text-light);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .monitor-tile::before {
+            content: '';
+            position: absolute; top: 0; left: 0; right: 0; height: 2px;
+            background: linear-gradient(90deg, #8FBC8F, #2196f3, #D4AF37);
+            opacity: 0.6;
+        }
+        .monitor-tile:hover {
+            border-color: rgba(143,188,143,0.5);
+            box-shadow: 0 15px 35px rgba(0,0,0,0.25);
+            transform: translateY(-5px);
+        }
+        .mini-gauge-row {
+            display: flex;
+            gap: 0.6rem;
+            margin-top: 0.8rem;
+        }
+        .mini-gauge {
+            flex: 1;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 0.4rem 0.5rem;
+        }
+        .mini-gauge-label { font-size: 0.65rem; color: rgba(240,255,240,0.5); text-transform: uppercase; letter-spacing: 0.8px; }
+        .mini-gauge-val   { font-family: 'JetBrains Mono', monospace; font-size: 0.95rem; font-weight: 600; margin-top: 0.15rem; }
+        .mini-bar-track   { height: 3px; background: rgba(255,255,255,0.08); border-radius: 2px; margin-top: 0.3rem; overflow: hidden; }
+        .mini-bar-fill    { height: 100%; border-radius: 2px; transition: width 1s ease; }
+        /* ── Server name badge in header ── */
+        .server-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            font-weight: 600;
+            background: rgba(143,188,143,0.12);
+            border: 1px solid rgba(143,188,143,0.3);
+            color: #8FBC8F;
+            padding: 0.15rem 0.55rem;
+            border-radius: 10px;
+            letter-spacing: 0.5px;
+            vertical-align: middle;
+            white-space: nowrap;
+        }
+        /* open-padlock icon for the Logout/Reset button (logged-in state) */
+        .unlock-icon {
+            display: inline-block;
+            color: #8FBC8F;
+            text-shadow: 0 0 8px rgba(143,188,143,0.6);
+            font-size: 1.1em;
+            vertical-align: middle;
+        }
+        /* SVG lock icons — consistent across all browsers */
+        .lock-svg   { display:inline-block; width:18px; height:18px; vertical-align:middle; margin-right:4px; }
+        .lock-svg path, .lock-svg rect { fill: currentColor; }
+    </style>
 </head>
 <body>
     <div class="background-overlay"></div>
     <div class="main-container">
+        <header class="logo-header">
+            <img src="center.png" alt="BIOME BigData Resources Center Logo" class="logo center-logo">
+        </header>
+
         <header class="glass-header">
             <div class="logo-container" onclick="handleHeaderLogout()" style="cursor: pointer;" title="Click to Logout">
-                <img src="logo.png" alt="Botanical Big Data Calculus Logo" class="logo">
+                <img src="left.png" alt="BIOME BigData Resources Left Logo" class="logo">
                 <div class="site-title">
-                    <h1>Botanical Big Data Calculus</h1>
-                    <p class="subtitle">Research Group Portal</p>
+                    <h1>BIOME BigData Resources</h1>
+                    <p class="subtitle">Research Group Portal &nbsp;<span class="server-badge" title="Server node">%%SERVER_NAME%%</span></p>
                 </div>
+                <img src="right.png" alt="BIOME BigData Resources Right Logo" class="logo">
             </div>
                 <button onclick="showLoginModal()" class="secure-connect-btn">
-                    <span class="lock-icon">🔒</span> Secure Access
+                    <!-- Closed padlock SVG: gold body, grey metallic shackle -->
+                    <svg class="lock-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <!-- body (gold) -->
+                        <rect x="3" y="11" width="18" height="12" rx="2.5" fill="#D4A017"/>
+                        <rect x="3" y="11" width="18" height="4"  rx="2.5" fill="#FFD740" opacity="0.35"/>
+                        <!-- shackle (grey metallic) - closed U -->
+                        <path d="M7 11V7Q7 2 12 2Q17 2 17 7V11" fill="none" stroke="#A8A8A8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <!-- keyhole -->
+                        <circle cx="12" cy="17" r="2" fill="rgba(0,0,0,0.25)"/>
+                    </svg>
+                    Secure Access
                 </button>
         </header>
+
+        <!-- ════════════════════════════════════════════════════════
+             TELEMETRY STATUS STRIP — always visible, pre-login
+             Requires: /api/status endpoint (40_install_telemetry.sh)
+             Toggle ENABLE_TELEMETRY_STRIP in 31_setup_web_portal.sh
+             ════════════════════════════════════════════════════════ -->
+        <div class="telemetry-strip" id="telemetry-strip" style="%%TELEMETRY_STRIP_DISPLAY%%">
+            <!-- Populated by JS; gracefully hidden on API failure -->
+            <div class="strip-metric">
+                <span class="strip-label">🔥 CPU</span>
+                <span class="strip-value" id="st-cpu">—</span>
+                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-cpu-bar" style="width:0%;background:#8FBC8F;"></div></div>
+            </div>
+            <div class="strip-divider"></div>
+            <div class="strip-metric">
+                <span class="strip-label">💾 RAM</span>
+                <span class="strip-value" id="st-ram">—</span>
+                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-ram-bar" style="width:0%;background:#2196f3;"></div></div>
+            </div>
+            <div class="strip-divider"></div>
+            <div class="strip-metric">
+                <span class="strip-label">📊 Sessions</span>
+                <span class="strip-value" id="st-sessions">—</span>
+            </div>
+            <div class="strip-divider"></div>
+            <div class="strip-metric">
+                <span class="strip-label">📀 Disk</span>
+                <span class="strip-value" id="st-disk-nfs">—</span>
+                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-disk-nfs-bar" style="width:0%;background:#9c27b0;"></div></div>
+                <span class="strip-value" id="st-disk-tmp" style="font-size:0.78rem;margin-top:0.1rem;"></span>
+                <div class="strip-bar-track"><div class="strip-bar-fill" id="st-disk-tmp-bar" style="width:0%;background:#D4AF37;"></div></div>
+            </div>
+            <a class="strip-detail-link" href="/status/" target="_blank" title="Full Server Dashboard">
+                📈 Server Status
+            </a>
+        </div>
 
         <section id="serviceGrid" class="portal-grid blurred-locked">
             <a href="/rstudio/" class="portal-card" target="_blank">
@@ -75,8 +282,49 @@
                 </div>
                 <div class="card-arrow">↗</div>
             </a>
+
+            <!-- ── API DOCS TILE (logged-in only, shown with service grid) ── -->
+            <a href="/api/docs" target="_blank" class="portal-card" id="api-docs-tile" style="%%MONITOR_TILE_DISPLAY%%">
+                <div class="card-icon">📋</div>
+                <div class="card-content">
+                    <h2>API Documentation</h2>
+                    <p>Interactive Swagger UI — test telemetry endpoints live.</p>
+                </div>
+                <div class="card-arrow">↗</div>
+            </a>
+
+            <!-- ── MONITORING TILE (logged-in only, shown with service grid) ── -->
+            <a href="/status/" target="_blank" class="monitor-tile" id="monitor-tile" style="%%MONITOR_TILE_DISPLAY%%">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                    <div>
+                        <div style="font-size:1.8rem;margin-bottom:0.4rem;">📈</div>
+                        <h2 style="font-family:'Playfair Display',serif;font-size:1.35rem;color:#fff;margin:0 0 0.3rem;">Server Dashboard</h2>
+                        <p style="font-size:0.88rem;color:#ccc;margin:0;">Live R computation &amp; node status.</p>
+                    </div>
+                    <span style="color:#8FBC8F;font-size:1.1rem;opacity:0;transition:opacity 0.3s;" class="tile-arrow">→</span>
+                </div>
+                <div class="mini-gauge-row">
+                    <div class="mini-gauge">
+                        <div class="mini-gauge-label">CPU</div>
+                        <div class="mini-gauge-val" id="mt-cpu">—</div>
+                        <div class="mini-bar-track"><div class="mini-bar-fill" id="mt-cpu-bar" style="width:0%;background:#8FBC8F;"></div></div>
+                    </div>
+                    <div class="mini-gauge">
+                        <div class="mini-gauge-label">RAM</div>
+                        <div class="mini-gauge-val" id="mt-ram">—</div>
+                        <div class="mini-bar-track"><div class="mini-bar-fill" id="mt-ram-bar" style="width:0%;background:#2196f3;"></div></div>
+                    </div>
+                    <div class="mini-gauge">
+                        <div class="mini-gauge-label">R Sessions</div>
+                        <div class="mini-gauge-val" id="mt-sess">—</div>
+                    </div>
+                </div>
+            </a>
+
+        </section>
+
         <footer class="glass-footer">
-            <p>&copy; %%CURRENT_YEAR%% Botanical Big Data Calculus. Department of Biological, Geological, and Environmental Sciences.</p>
+            <p>&copy; %%CURRENT_YEAR%% BIOME BigData Resources. Department of Biological, Geological, and Environmental Sciences.</p>
         </footer>
     </div>
 
@@ -185,7 +433,7 @@
         // Handle Connect
         function handleConnect(event) {
             event.preventDefault();
-            console.group("🔐 Botanical Portal Auth Debug");
+            console.group("🔐 Biome Portal Auth Debug");
             console.time("Auth Sequence");
             
             var btn = document.getElementById("connectBtn");
@@ -259,15 +507,28 @@
                                 closeLoginModal();
                                 // Unlock the grid
                                 document.getElementById("serviceGrid").classList.remove("blurred-locked");
+
+                                // Hide status strip (tile in grid now shows metrics)
+                                var strip = document.getElementById('telemetry-strip');
+                                if(strip) strip.classList.add('hidden-strip');
                                 
-                                // Change button to Logout
+                                // Change button to Logout (open padlock SVG)
+                                // Open padlock SVG: gold body, grey shackle rotated upper-right (freed end right)
                                 var btnOps = document.querySelector(".secure-connect-btn");
-                                btnOps.innerHTML = '<span class="lock-icon">🔓</span> Logout / Reset';
-                                btnOps.onclick = handleLogout; 
-                                btnOps.classList.add("logout-mode"); 
+                                btnOps.innerHTML = '<svg class="lock-svg" style="filter:drop-shadow(0 0 4px rgba(143,188,143,0.7));" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
+                                    + '<rect x="3" y="11" width="18" height="12" rx="2.5" fill="#D4A017"/>'
+                                    + '<rect x="3" y="11" width="18" height="4" rx="2.5" fill="#FFD740" opacity="0.35"/>'
+                                    + '<circle cx="12" cy="17" r="2" fill="rgba(0,0,0,0.25)"/>'
+                                    + '<!-- shackle open: right leg stays (17,11)→(17,6), arc swings upper-right -->'
+                                    + '<path d="M17 11V6Q17 1 21 1Q25 1 25 5" fill="none" stroke="#A8A8A8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
+                                    + '</svg> Logout / Reset';
+                                btnOps.onclick = handleLogout;
+                                btnOps.classList.add("logout-mode");
+
+                                Biome.listenForGoHome();
                                 
                                 btn.disabled = false;
-                                btn.innerHTML = "Connect & Save";
+                                btn.innerHTML = "Connect &amp; Save";
                                 status.innerHTML = "";
                             }, 1000);
                         });
@@ -287,8 +548,238 @@
             });
         }
 
-        // All Direct Authentication Logic (RStudio / Nextcloud / Fallbacks) 
-        // has been migrated to the centralized lib/biome-portal.js
+        // Generate UUID for Client-Seeded CSRF (Standard v4 UUID with CSPRNG)
+        // See Research Report Section 7.3: Security Implications (Entropy)
+        function generateUUID() {
+            if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                return crypto.randomUUID();
+            }
+            // Fallback for older browsers (but still CSPRNG)
+            return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+                (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+            );
+        }
+
+        // RStudio Direct Login (Client-Seeded CSRF Mode)
+        // See Research Report Section 5: The "Supported" Integration Mode
+        function loginRStudio(username, password) {
+            console.log("4. Attempting RStudio Background Login (Client-Seeded)...");
+            
+            // Step 1: Generate Client-Side Token
+            var csrfToken = generateUUID();
+            console.log("4a. Generated Client-Seeded Token:", csrfToken);
+            
+            // SAVE TOKEN locally because document.cookie cannot read path=/rstudio-inner/ from root /
+            localStorage.setItem('rstudio_csrf_token', csrfToken);
+
+            // Step 2: Set the Cookie (Critical for Double Submit Check)
+            // Path must match the RStudio proxy path (/rstudio-inner/)
+            // Secure flag is mandatory for SameSite configuration
+            // Set BOTH legacy and new cookie names (Research Fix)
+            document.cookie = "csrf-token=" + csrfToken + "; path=/rstudio-inner/; secure; SameSite=Strict";
+            document.cookie = "rs-csrf-token=" + csrfToken + "; path=/rstudio-inner/; secure; SameSite=Strict";
+            
+            // Step 3: Post credentials + token
+            var data = new URLSearchParams();
+            data.append('username', username);
+            data.append('password', password);
+            data.append('staySignedIn', '1'); // Changed from 'persist' to match OOD
+            data.append('appUri', '');
+            
+            // The body token must match the cookie token we just set
+            data.append('csrf-token', csrfToken); 
+            // Also send legacy name just in case
+            data.append('rs-csrf-token', csrfToken); 
+
+            // Explicitly convert to string to control Content-Type exactly
+            var payload = data.toString();
+
+            // Debug the payload
+            console.log("4b. Sending Client-Seeded Payload:", payload);
+
+            return fetch("/rstudio-inner/auth-do-sign-in", {
+                method: "POST",
+                // Fix: Explicitly set Content-Type without charset to avoid 400 on strict parsers
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: payload,
+                credentials: 'include' // Sends the cookie we just set
+            })
+            .then(response => {
+                console.log("4c. RStudio Response Status:", response.status);
+                return response;
+            })
+            .catch(err => {
+                console.warn("4d. RStudio Background Login Failed:", err);
+            });
+        }
+
+        // Nextcloud Auto-Login (API Mode)
+        function loginNextcloud(username, password) {
+            console.log("4nc. Attempting Nextcloud Background Login via API...");
+            
+            // Step 1: Fetch session token from supported endpoint
+            // Try explicit index.php path which is most reliable
+            return fetch("/files-inner/index.php/csrftoken") 
+            .then(response => {
+                if (!response.ok) throw new Error("CSRF Endpoint returned " + response.status);
+                return response.json();
+            })
+            .then(data => {
+                var requesttoken = data.token;
+                
+                if (!requesttoken) {
+                    throw new Error("API returned empty token");
+                }
+                console.log("4nc. Found CSRF Token via API.");
+
+                var payload = new URLSearchParams();
+                payload.append('user', username);
+                payload.append('password', password);
+                payload.append('requesttoken', requesttoken);
+                payload.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
+                payload.append('timezone_offset', -(new Date().getTimezoneOffset() / 60));
+
+                return fetch("/files-inner/login", {
+                    method: "POST",
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: payload,
+                    credentials: 'include' 
+                });
+            })
+            .then(response => {
+                console.log("4nc. Nextcloud Response Status:", response.status);
+                return response.text();
+            })
+            .catch(err => {
+                 console.warn("4nc. Nextcloud Background Login Failed:", err);
+                 // Fallback: Try classic scraping if API failed (Just in case)
+                 console.log("4nc. Attempting fallback scraping...");
+                 return loginNextcloudFallback(username, password);
+            });
+        }
+
+        // Fallback for older Nextcloud versions or if API route is blocked
+        function loginNextcloudFallback(username, password) {
+             return fetch("/files-inner/login")
+            .then(response => response.text())
+            .then(html => {
+                var match = html.match(/requesttoken\s*=\s*'([^']+)'/) || html.match(/"requesttoken":"([^"]+)"/);
+                var requesttoken = match ? match[1] : null;
+                
+                if (!requesttoken) { 
+                    try {
+                        var doc = new DOMParser().parseFromString(html, "text/html");
+                        requesttoken = doc.querySelector('head > meta[name="csrf-token"]')?.content 
+                                       || doc.querySelector('input[name="requesttoken"]')?.value;
+                    } catch(e){}
+                }
+
+                if(!requesttoken) return; // Give up
+
+                var data = new URLSearchParams();
+                data.append('user', username);
+                data.append('password', password);
+                data.append('requesttoken', requesttoken);
+                
+                return fetch("/files-inner/login", {
+                    method: "POST",
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: data,
+                    credentials: 'include'
+                });
+            }).catch(e => console.warn("Fallback failed", e));
+        }
+
+        // ══════════════════════════════════════════════════
+        // TELEMETRY STRIP — polls /api/status every 10s
+        // Works pre-login, degrades gracefully on failure.
+        // ══════════════════════════════════════════════════
+        (function telemetryStrip() {
+            const STRIP_ENABLED = %%TELEMETRY_STRIP_JS_ENABLED%%;
+            if (!STRIP_ENABLED) return;
+
+            function clamp(v,lo,hi){ return Biome.clamp(v,lo,hi); }
+            function colorForPct(p,w,c){ return Biome.colorForPct(p,w,c); }
+
+            async function updateStrip() {
+                try {
+                    const res = await fetch('/api/v1/status', {cache:'no-store'});
+                    if (!res.ok) throw new Error(res.status);
+                    const d = await res.json();
+
+                    // Strip metrics
+                    var el;
+                    el = document.getElementById('st-cpu');
+                    if(el) el.textContent = d.cpu.pct + '% (L' + d.cpu.load_1m + ')';
+                    el = document.getElementById('st-cpu-bar');
+                    if(el){ el.style.width = clamp(d.cpu.pct,0,100)+'%'; el.style.background=colorForPct(d.cpu.pct); }
+
+                    el = document.getElementById('st-ram');
+                    if(el) el.textContent = d.ram.used_gb + '/' + d.ram.total_gb + ' GB';
+                    el = document.getElementById('st-ram-bar');
+                    if(el){ el.style.width = clamp(d.ram.pct,0,100)+'%'; el.style.background=colorForPct(d.ram.pct,75,90); }
+
+                    el = document.getElementById('st-sessions');
+                    if(el) el.textContent = d.sessions.rstudio + ' R · ' + d.sessions.terminal + ' Term';
+
+                    // Disk occupancy: NFS home + /tmp
+                    if(d.disk) {
+                        var nfs = d.disk.nfs_home;
+                        var tmp = d.disk.tmp;
+                        el = document.getElementById('st-disk-nfs');
+                        if(el) el.textContent = nfs && nfs.available
+                            ? 'NFS ' + nfs.free_gb + ' GB free'
+                            : 'NFS —';
+                        el = document.getElementById('st-disk-nfs-bar');
+                        if(el && nfs && nfs.available){
+                            el.style.width = clamp(nfs.pct,0,100)+'%';
+                            el.style.background = colorForPct(nfs.pct,75,90);
+                        }
+                        el = document.getElementById('st-disk-tmp');
+                        if(el) el.textContent = tmp && tmp.available
+                            ? '/tmp ' + tmp.free_gb + ' GB free'
+                            : '/tmp —';
+                        el = document.getElementById('st-disk-tmp-bar');
+                        if(el && tmp && tmp.available){
+                            el.style.width = clamp(tmp.pct,0,100)+'%';
+                            el.style.background = colorForPct(tmp.pct,70,85);
+                        }
+                    }
+
+                    // Monitor tile metrics (logged-in only)
+                    el = document.getElementById('mt-cpu');
+                    if(el) el.textContent = d.cpu.pct + '%';
+                    el = document.getElementById('mt-cpu-bar');
+                    if(el){ el.style.width=clamp(d.cpu.pct,0,100)+'%'; el.style.background=colorForPct(d.cpu.pct); }
+
+                    el = document.getElementById('mt-ram');
+                    if(el) el.textContent = d.ram.pct + '%';
+                    el = document.getElementById('mt-ram-bar');
+                    if(el){ el.style.width=clamp(d.ram.pct,0,100)+'%'; el.style.background=colorForPct(d.ram.pct,75,90); }
+
+                    el = document.getElementById('mt-sess');
+                    if(el) el.textContent = d.sessions.rstudio;
+
+                } catch(e) {
+                    // Silently degrade — API unreachable
+                    console.debug('Telemetry strip: API unreachable', e);
+                }
+            }
+
+            // Show hover arrow on monitor tile
+            var mt = document.getElementById('monitor-tile');
+            if(mt) {
+                mt.addEventListener('mouseenter', function(){ var a = mt.querySelector('.tile-arrow'); if(a) a.style.opacity='1'; });
+                mt.addEventListener('mouseleave', function(){ var a = mt.querySelector('.tile-arrow'); if(a) a.style.opacity='0'; });
+            }
+
+            updateStrip();
+            setInterval(updateStrip, 5000);
+        })();
 
         // Handle Logout
         function handleLogout() {
@@ -299,10 +790,20 @@
             
             // 2. Re-lock the Grid
             document.getElementById("serviceGrid").classList.add("blurred-locked");
+
+            // 3. Re-show status strip
+            var strip = document.getElementById('telemetry-strip');
+            if(strip) strip.classList.remove('hidden-strip');
             
-            // 3. Reset Button
+            // 4. Reset Button
             var btnOps = document.querySelector(".secure-connect-btn");
-            btnOps.innerHTML = '<span class="lock-icon">🔒</span> Secure Access';
+            // Restore closed padlock SVG (gold body, grey shackle)
+            btnOps.innerHTML = '<svg class="lock-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
+                + '<rect x="3" y="11" width="18" height="12" rx="2.5" fill="#D4A017"/>'
+                + '<rect x="3" y="11" width="18" height="4" rx="2.5" fill="#FFD740" opacity="0.35"/>'
+                + '<path d="M7 11V7Q7 2 12 2Q17 2 17 7V11" fill="none" stroke="#A8A8A8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
+                + '<circle cx="12" cy="17" r="2" fill="rgba(0,0,0,0.25)"/>'
+                + '</svg> Secure Access';
             btnOps.onclick = showLoginModal;
             btnOps.classList.remove("logout-mode");
             

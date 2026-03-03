@@ -417,3 +417,54 @@ location ^~ /files-inner/ {
 
     # No sub_filter needed (Wrapper handles UI)
 }
+
+# --- Telemetry & Monitoring ---
+# Secure metrics endpoint for Prometheus
+location /monitoring/ {
+    allow 127.0.0.1;
+    allow 192.168.0.0/16; # Default LAN
+    allow 10.0.0.0/8;     # VPN/Internal
+    deny all;
+    proxy_pass http://127.0.0.1:8000/;
+}
+
+location /monitoring/node/ {
+    allow 127.0.0.1;
+    allow 192.168.0.0/16;
+    allow 10.0.0.0/8;
+    deny all;
+    proxy_pass http://127.0.0.1:9100/;
+}
+
+# --- Public Status API (portal telemetry strip & SSE stream) ---
+location /api/ {
+    limit_except GET POST OPTIONS { deny all; }
+
+    proxy_pass http://127.0.0.1:8000/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+
+    proxy_read_timeout 15s;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 10s;
+
+    add_header Access-Control-Allow-Origin "$http_origin" always;
+    add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
+    add_header Access-Control-Allow-Headers "Content-Type" always;
+    add_header Cache-Control "no-store, no-cache" always;
+
+    if ($request_method = 'OPTIONS') {
+        add_header Access-Control-Allow-Origin "$http_origin" always;
+        add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Content-Type" always;
+        add_header Access-Control-Max-Age 1728000;
+        add_header Content-Type 'text/plain; charset=utf-8';
+        add_header Content-Length 0;
+        return 204;
+    }
+}

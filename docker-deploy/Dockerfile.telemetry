@@ -1,25 +1,27 @@
-# Dockerfile.telemetry
-FROM python:3.9-slim
+# Dockerfile for Biome Telemetry API Microservice
+FROM python:3.11-slim
 
-LABEL maintainer="botanical-telemetry"
+LABEL maintainer="docker-deploy-telemetry"
+
+# Install system dependencies if required by psutil or other extensions
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc python3-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install system dependencies if needed
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# We install the exact modules required by the pre-existing script
+# Pins are established for deterministic builds
+RUN pip install --no-cache-dir \
+    fastapi==0.111.0 uvicorn==0.30.1 psutil==5.9.8 \
+    prometheus-client==0.20.0 pydantic==2.7.4 \
+    anyio==4.4.0 dnspython==2.6.1 email-validator==2.1.1
 
-# Install Python Libraries
-# (fastapi, uvicorn, psutil, prometheus_client)
-RUN pip install --no-cache-dir fastapi uvicorn psutil prometheus_client
-
-# Copy Telemetry Script
-# We assume the script is at scripts/telemetry/telemetry_api.py in build context or mapped
+# Copy the telemetry application and configurations
 COPY scripts/telemetry/telemetry_api.py /app/telemetry_api.py
+COPY scripts/telemetry/admin_recipients.txt /app/admin_recipients.txt
 
-# Expose API port
-EXPOSE 8000
-
-# Run
-CMD ["python3", "/app/telemetry_api.py"]
+# The application runs as a FastAPI server on port 8000
+# Given network_mode: host, it will bind to the host's 127.0.0.1:8000
+CMD ["python", "telemetry_api.py"]

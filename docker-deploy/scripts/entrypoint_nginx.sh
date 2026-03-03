@@ -114,21 +114,29 @@ fi
 # 2. Process Web Portal HTML/CSS
 # This mirrors logic from scripts/31_setup_web_portal.sh
 current_year=$(date +%Y)
+server_name=$(hostname -s)
+
+ENABLE_TELEMETRY_STRIP="${ENABLE_TELEMETRY_STRIP:-true}"
+telemetry_strip_display="none"
+telemetry_strip_js_enabled="false"
+monitor_tile_display="none"
+if [ "${ENABLE_TELEMETRY_STRIP}" == "true" ]; then
+    telemetry_strip_display="flex"
+    telemetry_strip_js_enabled="true"
+    monitor_tile_display="flex;flex-direction:column"
+fi
 
 if [ -f "${TEMPLATE_DIR}/portal_index.html.template" ]; then
     log "INFO" "Processing Portal HTML Template..."
-    
-    # We need to read the file content to a variable? 
-    # common_utils process_template expects a file path and outputs to a variable.
-    
-    # OUTPUT VAR
     html_content=""
     
-    # Call process_template
-    # Note: common_utils.sh in docker might behave differently if system tools missing? 
-    # We installed bash/coreutils in Dockerfile.nginx.
-    
-    process_template "${TEMPLATE_DIR}/portal_index.html.template" html_content "CURRENT_YEAR=${current_year}" "DOMAIN=${HOST_DOMAIN}"
+    process_template "${TEMPLATE_DIR}/portal_index.html.template" html_content \
+        "CURRENT_YEAR=${current_year}" \
+        "DOMAIN=${HOST_DOMAIN}" \
+        "SERVER_NAME=${server_name}" \
+        "TELEMETRY_STRIP_DISPLAY=${telemetry_strip_display}" \
+        "TELEMETRY_STRIP_JS_ENABLED=${telemetry_strip_js_enabled}" \
+        "MONITOR_TILE_DISPLAY=${monitor_tile_display}"
     
     echo "$html_content" > "${WEB_ROOT}/index.html"
     log "INFO" "Deployed index.html"
@@ -156,6 +164,20 @@ if [ -f "${TEMPLATE_DIR}/terminal_wrapper.html.template" ]; then
     mkdir -p "${WEB_ROOT}/terminal"
     cp "${TEMPLATE_DIR}/terminal_wrapper.html.template" "${WEB_ROOT}/terminal/index.html"
     log "INFO" "Deployed Terminal Wrapper"
+fi
+
+if [ -f "${TEMPLATE_DIR}/nextcloud_wrapper.html.template" ]; then
+    mkdir -p "${WEB_ROOT}/files"
+    cp "${TEMPLATE_DIR}/nextcloud_wrapper.html.template" "${WEB_ROOT}/files/index.html"
+    log "INFO" "Deployed Nextcloud Wrapper"
+fi
+
+if [ "${ENABLE_TELEMETRY_STRIP}" == "true" ] && [ -f "${TEMPLATE_DIR}/server_status_wrapper.html.template" ]; then
+    mkdir -p "${WEB_ROOT}/status"
+    status_html=""
+    process_template "${TEMPLATE_DIR}/server_status_wrapper.html.template" status_html "SERVER_NAME=${server_name}"
+    echo "$status_html" > "${WEB_ROOT}/status/index.html"
+    log "INFO" "Deployed Server Status Wrapper"
 fi
 
 # 4. Check Assets
