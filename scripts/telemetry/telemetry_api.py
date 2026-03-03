@@ -25,7 +25,8 @@ from email.message import EmailMessage
 
 import dns.resolver  # type: ignore[import]
 import psutil  # type: ignore[import]
-from pydantic import BaseModel, Field  # type: ignore[import]
+import anyio  # type: ignore[import]
+from pydantic import BaseModel, Field, field_validator  # type: ignore[import]
 from fastapi import FastAPI, HTTPException  # type: ignore[import]
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import]
 from fastapi.responses import PlainTextResponse, StreamingResponse, HTMLResponse  # type: ignore[import]
@@ -108,8 +109,17 @@ class ProblemReport(BaseModel):
     message: str
     application: str = Field(default="Biome Portal", description="The application where the report was generated")
     user_contact: str = Field(default="", description="Optional user contact email")
-    images: list[str] = Field(default_factory=list, description="List of base64 data URIs for images")
+    images: list[str] = Field(default_factory=list, description="List of base64 data URIs for images", max_length=5)
     context: dict = Field(default_factory=dict, description="Additional context info")
+
+    @field_validator("images")
+    @classmethod
+    def check_image_sizes(cls, images):
+        """Security: Prevent massive base64 payloads from causing OOM crashes."""
+        for idx, img in enumerate(images):
+            if len(img) > 5 * 1024 * 1024:  # roughly 3.7MB decoded, 5MB base64
+                raise ValueError(f"Image {idx} exceeds the 5MB size limit.")
+        return images
 
 # ---------------------------------------------------------------------------
 # App
@@ -564,8 +574,10 @@ def _load_admin_recipients() -> list[str]:
 @app.post("/api/v1/report-problem", tags=["Support"], summary="Send a problem report via email")
 async def report_problem(report: ProblemReport):
     """Send a user-submitted problem report to the configured admin email."""
-    config = _load_email_config()
-    admin_emails = _load_admin_recipients()
+    # Run heavy blocking OS operations in a threadpool to prevent freezing the async event loop
+    config = await anyio.to_thread.run_sync(_load_email_config)
+    admin_emails = await anyio.to_thread.run_sync(_load_admin_recipients)
+    sys_snap = await anyio.to_thread.run_sync(_get_system_snapshot)
     
     app_name = report.application
     msg = EmailMessage()
@@ -656,17 +668,24 @@ async def report_problem(report: ProblemReport):
             resolver = dns.resolver.Resolver(configure=False)
             resolver.nameservers = dns_servers
             resolver.lifetime = 5.0
-            answers = resolver.resolve(smtp_host, 'A')
+            answers = await anyio.to_thread.run_sync(resolver.resolve, smtp_host, 'A')
             if answers:
                 smtp_host = answers[0].to_text()
-                print(f"[telemetry] Resolved {config['SMTP_HOST']} to {smtp_host} using {dns_servers}")
+                print(f"[telemetry] Resolved {config['SMTP_HOST']} to {smtp_host} using {dns_servers}", flush=True)
     except Exception as e:
-        print(f"[telemetry] Custom DNS resolution failed for {smtp_host}: {e}. Falling back to default.")
+        print(f"[telemetry] Custom DNS resolution failed for {smtp_host}: {e}. Falling back to default.", flush=True)
 
     try:
-        with smtplib.SMTP(smtp_host, int(config["SMTP_PORT"])) as server:
-            server.send_message(msg)
+        smtp_port = int(config.get("SMTP_PORT", 25))
+        # Use simple SMTP for typical internal relays. Run in threadpool to prevent UI blocking.
+        def _send():
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+                server.send_message(msg)
+        await anyio.to_thread.run_sync(_send)
         return {"status": "success", "message": "Problem report sent successfully."}
+    except Exception as e:
+        print(f"[telemetry] SMTP Error: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}") from e
 
