@@ -101,8 +101,8 @@ setup_nodes_uninstall() {
   log_step "Uninstalling BIOME-CALC node setup"
   
   local files_to_remove=(
-    "/usr/local/bin/biome-detect-coretype.sh"
-    "/etc/systemd/system/biome-detect-coretype.service"
+    "/etc/profile.d/biome-coretype.sh"
+    "/etc/rstudio/rsession-profile"
     "/etc/systemd/system/ollama.service.d/biome-hardening.conf"
     "/usr/local/lib/pkgconfig/openmp.pc"
     "/etc/tmpfiles.d/thp-madvise.conf"
@@ -125,11 +125,6 @@ setup_nodes_uninstall() {
       log_success "Restored: ${f} from ${newest_backup}"
     fi
   done
-  
-  # Disable and stop services
-  run_cmd systemctl disable biome-detect-coretype.service 2>/dev/null || true
-  run_cmd systemctl stop biome-detect-coretype.service 2>/dev/null || true
-  run_cmd systemctl daemon-reload
   
   log_success "Uninstall complete"
 }
@@ -286,14 +281,12 @@ setup_nodes_blas() {
     fi
   done
 
-  # ── Deploy boot-time CORETYPE detection service ──
-  cat > /usr/local/bin/biome-detect-coretype.sh <<'DETECTEOF'
-#!/usr/bin/env bash
-# BIOME-CALC: Detect CPU vendor and set OPENBLAS_CORETYPE at boot.
-# Deployed by 50_setup_nodes.sh — runs as systemd oneshot on every boot.
-# Rprofile.site also detects per-session (handles live migration).
-VENDOR=$(grep -m1 'vendor_id' /proc/cpuinfo 2>/dev/null | awk -F': ' '{print $2}')
-FLAGS=$(grep -m1 '^flags' /proc/cpuinfo 2>/dev/null | awk -F': ' '{print $2}')
+  # ── Deploy boot/session-time CORETYPE detection wrappers ──
+  cat > /etc/profile.d/biome-coretype.sh <<'DETECTEOF'
+# BIOME-CALC: Detect CPU vendor and set OPENBLAS_CORETYPE.
+# Profile.d script for terminal R usage (Rscript/R batch).
+VENDOR=$(grep -m1 'vendor_id' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | tr -d ' ')
+FLAGS=$(grep -m1 '^flags' /proc/cpuinfo 2>/dev/null | cut -d: -f2)
 if echo "$VENDOR" | grep -qi "AMD"; then
   if echo "$FLAGS" | grep -q "avx2"; then CT="ZEN"
   elif echo "$FLAGS" | grep -q "avx";  then CT="BULLDOZER"
@@ -306,39 +299,21 @@ elif echo "$VENDOR" | grep -qiE "Intel|Genuine"; then
 else
   CT="SANDYBRIDGE"
 fi
-if grep -q "^OPENBLAS_CORETYPE=" /etc/environment 2>/dev/null; then
-  sed -i "s/^OPENBLAS_CORETYPE=.*/OPENBLAS_CORETYPE=${CT}/" /etc/environment
-else
-  echo "OPENBLAS_CORETYPE=${CT}" >> /etc/environment
-fi
-mkdir -p /etc/biome-calc
-echo "$CT" > /etc/biome-calc/coretype
-echo "VENDOR=$VENDOR" > /etc/biome-calc/cpu_vendor
-logger -t biome-calc "CORETYPE=$CT (vendor=$VENDOR)"
+export OPENBLAS_CORETYPE="${CT}"
 DETECTEOF
-  chmod 755 /usr/local/bin/biome-detect-coretype.sh
+  chmod 755 /etc/profile.d/biome-coretype.sh
 
-  cat > /etc/systemd/system/biome-detect-coretype.service <<'SVCEOF'
-[Unit]
-Description=BIOME-CALC: Detect CPU vendor and set OPENBLAS_CORETYPE
-After=local-fs.target
-Before=rstudio-server.service
+  mkdir -p /etc/rstudio
+  cat > /etc/rstudio/rsession-profile <<'RSTEOF'
+#!/bin/sh
+# BIOME-CALC: Evaluate CPU capabilities before spawning rsession.
+if [ -f /etc/profile.d/biome-coretype.sh ]; then
+  . /etc/profile.d/biome-coretype.sh
+fi
+RSTEOF
+  chmod 755 /etc/rstudio/rsession-profile
 
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/biome-detect-coretype.sh
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF
-
-  run_cmd systemctl daemon-reload
-  run_cmd systemctl enable biome-detect-coretype.service
-  /usr/local/bin/biome-detect-coretype.sh
-  local current_ct
-  current_ct=$(cat "${BIOME_CONF}/coretype" 2>/dev/null || echo "unknown")
-  log_success "Boot-time CORETYPE detection service installed (current: ${current_ct})"
+  log_success "OS-level OPENBLAS_CORETYPE wrappers installed (/etc/profile.d & rsession-profile)"
 
   # ── BLAS/LAPACK alternatives: force OpenBLAS-pthread ──
   if [[ -f "${OPENBLAS_BLAS_PATH}" ]]; then
@@ -637,12 +612,11 @@ setup_nodes_config_files() {
 R_LIBS_SITE=/usr/local/lib/R/site-library/:\${R_LIBS_SITE}:/usr/lib/R/library
 
 # OpenBLAS CORETYPE — NOT set here (migration-safe design).
-# Detected dynamically by:
-#   1. biome-detect-coretype.service (systemd oneshot, runs at boot)
-#      -> writes to /etc/environment and ${BIOME_CONF}/coretype
-#   2. Rprofile.site (per R session, reads /proc/cpuinfo vendor_id)
-#      -> handles live migration without reboot
-# Current boot-time detection: CORETYPE=${current_ct} (vendor=${cpu_vendor})
+# Detected dynamically by OS-level wrappers BEFORE R starts:
+#   1. /etc/profile.d/biome-coretype.sh (for terminal R sessions)
+#   2. /etc/rstudio/rsession-profile (for RStudio Server web sessions)
+# This prevents OpenBLAS illegal opcode crashes by evaluating the CPU
+# directly from bash before libopenblas.so is dynamically loaded.
 
 # Temp dirs (${RAMDISK_SIZE} RAMDisk)
 TMPDIR=/tmp
