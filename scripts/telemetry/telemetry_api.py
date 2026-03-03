@@ -234,6 +234,41 @@ _cache = _Cache()
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _load_setup_config() -> dict[str, str]:
+    """Dynamically parses setup_nodes.vars.conf for all system vars."""
+    config = {
+        "SMTP_HOST": "localhost",
+        "SMTP_PORT": "25",
+        "SENDER_EMAIL": f"{socket.gethostname()}@unibo.it",
+        "BIOME_CONTACT": "support@localhost",
+        "SMTP_DNS_SERVERS": "8.8.8.8",
+        "NFS_HOME": "/nfs/home",
+        "CIFS_ARCHIVE": "/mnt/ProjectStorage",
+    }
+    cfg_paths = [
+        "/etc/biome-calc/conf/setup_nodes.vars.conf",
+        "/home/administrator/configServices/R-studioConf/config/setup_nodes.vars.conf"
+    ]
+    
+    for cfg_path in cfg_paths:
+        if os.path.exists(cfg_path):
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        if k in config:
+                            config[k] = v.strip("\"'")
+                break
+            except Exception as e:
+                print(f"Error loading {cfg_path}: {e}")
+                
+    # Always ensure the sender reflects the current server hostname
+    config["SENDER_EMAIL"] = f"{socket.gethostname()}@unibo.it"
+    return config
+
 def _count_procs(name_sub: str) -> int:
     count = 0
     for p in psutil.process_iter(["name", "cmdline"]):
@@ -288,8 +323,13 @@ def _check_service_active(svc_name: str) -> str:
         return "unknown"
 
 
-def _get_system_snapshot() -> dict:
+def _get_system_snapshot(config: dict[str, str]) -> dict:
     """Safely gathers a realistic point-in-time snapshot of the OS state and active users."""
+    
+    # Extract dynamic mount points from the configuration, with safe defaults
+    home_mount = config.get("NFS_HOME", "/nfs/home")
+    project_mount = config.get("CIFS_ARCHIVE", "/mnt/ProjectStorage")
+    
     snapshot = {
         "ip": _get_primary_ip(),
         "uptime_hrs": 0.0,
@@ -298,6 +338,7 @@ def _get_system_snapshot() -> dict:
         "swap_pct": 0.0,
         "disk_root_pct": 0.0,
         "disk_tmp_pct": 0.0,
+        "disk_home_pct": 0.0,
         "disk_projects_pct": 0.0,
         "top_processes": [],
         "services": {},
@@ -314,8 +355,12 @@ def _get_system_snapshot() -> dict:
         
         # Disk Space (Crucial for crashes ENOSPC)
         snapshot["disk_root_pct"] = _disk_info("/").get("pct", 0.0)
-        snapshot["disk_tmp_pct"] = _disk_info("/tmp").get("pct", 0.0)
-        snapshot["disk_projects_pct"] = _disk_info("/media/r_projects").get("pct", 0.0)
+        snapshot["disk_home_pct"] = _disk_info(home_mount).get("pct", 0.0)
+        snapshot["disk_projects_pct"] = _disk_info(project_mount).get("pct", 0.0)
+        
+        # Save the resolved mount points for the email body
+        snapshot["_home_mount_str"] = home_mount
+        snapshot["_project_mount_str"] = project_mount
         
         # CPU/Mem Top processes (identify runaway processes instantly)
         procs = []
@@ -436,9 +481,14 @@ def _collect() -> None:
 
     r_sessions = _count_procs("rsession")
     ttyd_conns = _ttyd_connections()
+    
+    # Load dynamic mount paths
+    conf = _load_setup_config()
+    
     tmp_disk = _disk_info(TMP_DIR)
-    nfs_disk = _disk_info(NFS_HOME_DIR)
-    proj_disk = _disk_info(R_PROJECTS_DIR)
+    nfs_disk = _disk_info(conf.get("NFS_HOME", NFS_HOME_DIR))
+    proj_disk = _disk_info(conf.get("CIFS_ARCHIVE", R_PROJECTS_DIR))
+    
     top_r = _top_r_sessions(TOP_SESSIONS)
     ollama = _ollama_active()
 
@@ -513,41 +563,6 @@ threading.Thread(
 # HTTP Endpoints
 # ---------------------------------------------------------------------------
 
-def _load_email_config() -> dict[str, str]:
-    config = {
-        "SMTP_HOST": "localhost",
-        "SMTP_PORT": "25",
-        "SENDER_EMAIL": "noreply@localhost",
-        "BIOME_CONTACT": "support@localhost",
-        "SMTP_DNS_SERVERS": "8.8.8.8"
-    }
-    # Note: 50_setup_nodes copies this to /etc/biome-calc/conf/setup_nodes.vars.conf
-    # but the service runs as root and might have issues with some permissions or paths.
-    cfg_paths = [
-        "/etc/biome-calc/conf/setup_nodes.vars.conf",
-        "/home/administrator/configServices/R-studioConf/config/setup_nodes.vars.conf"
-    ]
-    
-    for cfg_path in cfg_paths:
-        if os.path.exists(cfg_path):
-            try:
-                with open(cfg_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#") or "=" not in line:
-                            continue
-                        k, v = line.split("=", 1)
-                        v = v.strip("\"'")
-                        if k in config:
-                            config[k] = v
-                break # Found a valid config file, stop trying others
-            except Exception as e:
-                print(f"Error loading {cfg_path}: {e}")
-            
-    # As requested, ensure the sender is hostname@unibo.it
-    config["SENDER_EMAIL"] = f"{socket.gethostname()}@unibo.it"
-    return config
-
 def _load_admin_recipients() -> list[str]:
     recipients = []
     paths = [
@@ -575,9 +590,8 @@ def _load_admin_recipients() -> list[str]:
 async def report_problem(report: ProblemReport):
     """Send a user-submitted problem report to the configured admin email."""
     # Run heavy blocking OS operations in a threadpool to prevent freezing the async event loop
-    config = await anyio.to_thread.run_sync(_load_email_config)
+    config = await anyio.to_thread.run_sync(_load_setup_config)
     admin_emails = await anyio.to_thread.run_sync(_load_admin_recipients)
-    sys_snap = await anyio.to_thread.run_sync(_get_system_snapshot)
     
     app_name = report.application
     msg = EmailMessage()
@@ -586,7 +600,7 @@ async def report_problem(report: ProblemReport):
     msg['From'] = config["SENDER_EMAIL"]
     msg['To'] = ", ".join(admin_emails)
 
-    sys_snap = _get_system_snapshot()
+    sys_snap = await anyio.to_thread.run_sync(_get_system_snapshot, config)
 
     body_lines = [
         f"A new problem has been reported from {app_name} on {socket.gethostname()} ({sys_snap['ip']}).",
@@ -620,8 +634,8 @@ async def report_problem(report: ProblemReport):
     
     body_lines.append("\n[Storage & Filesystems (Usage %)]")
     body_lines.append(f"Root (/): {sys_snap['disk_root_pct']}%")
-    body_lines.append(f"Tmpfs (/tmp): {sys_snap['disk_tmp_pct']}%")
-    body_lines.append(f"Projects (/media/r_projects): {sys_snap['disk_projects_pct']}%")
+    body_lines.append(f"Home ({sys_snap.get('_home_mount_str', '/nfs/home')}): {sys_snap['disk_home_pct']}%")
+    body_lines.append(f"Project Storage ({sys_snap.get('_project_mount_str', '/mnt/ProjectStorage')}): {sys_snap['disk_projects_pct']}%")
     
     body_lines.append("\n[Core Service Status]")
     body_lines.append(f"RStudio Server: {sys_snap['services'].get('rstudio-server')}")
@@ -685,9 +699,7 @@ async def report_problem(report: ProblemReport):
         return {"status": "success", "message": "Problem report sent successfully."}
     except Exception as e:
         print(f"[telemetry] SMTP Error: {e}", flush=True)
-        raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}") from e
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {e}") from e
 
 # ---------------------------------------------------------------------------
 # Custom API Docs page (Swagger UI + status-page top-bar)
