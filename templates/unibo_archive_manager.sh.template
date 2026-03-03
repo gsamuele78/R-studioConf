@@ -381,7 +381,7 @@ create_archive_dir() {
         # 2) Requisito dell'utente: check "if allowed to write for user ad joined if possible". 
         # Dopo la creazione, verifichiamo che il supervisore proprietario possa effettivamente scrivere lì
         # attraverso un sudo controllato. Questo valida AD join in fase attiva.
-        if ! su -s /bin/bash -c "touch $path/.write_test_$$ && rm $path/.write_test_$$" "$supervisor" >/dev/null 2>&1; then
+        if ! su -s /bin/bash -c "touch $path/.biome_access_check && rm $path/.biome_access_check" "$supervisor" >/dev/null 2>&1; then
             log_warn "Supervisore '$supervisor' proprietario della cartella ($path) non ha permessi di scrittura UNIX. Controllare mappatura ID AD/NFS."
         fi
     fi
