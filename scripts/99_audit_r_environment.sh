@@ -82,9 +82,6 @@ deploy_audit() {
 
   mkdir -p "${BIOME_CONF}"
 
-  local ts
-  ts=$(date +%Y%m%d_%H%M%S)
-
   # Backup existing audit if present
   if [[ -f "${AUDIT_DEST}" ]]; then
     backup_file "${AUDIT_DEST}"
@@ -92,7 +89,8 @@ deploy_audit() {
   fi
 
   # Process template (substitutes all %%PLACEHOLDER%% values from vars.conf)
-  local tmp_audit="/tmp/00_audit_v26.R.deploy.${ts}"
+  local tmp_audit
+  tmp_audit=$(mktemp /tmp/00_audit_v26.R.deploy.XXXXXX)
   process_template "${AUDIT_TEMPLATE}" "${tmp_audit}"
   execute_command cp "${tmp_audit}" "${AUDIT_DEST}"
   rm -f "${tmp_audit}"

@@ -493,7 +493,11 @@ setup_nodes_swap() {
     fi
 
     # Create new swap file
-    run_cmd dd if=/dev/zero of="${SWAP_FILE}" bs=1M count="${swap_size_mb}" status=progress
+    log_info "Allocating swap space..."
+    if ! run_cmd fallocate -l "${SWAP_SIZE_GB}G" "${SWAP_FILE}"; then
+      log_warn "fallocate failed, falling back to dd (this may take a while)..."
+      run_cmd dd if=/dev/zero of="${SWAP_FILE}" bs=1M count="${swap_size_mb}" status=progress
+    fi
     run_cmd chmod 600 "${SWAP_FILE}"
     run_cmd mkswap "${SWAP_FILE}"
     
@@ -565,7 +569,8 @@ setup_nodes_python() {
 setup_nodes_r_packages() {
   log_step "Step 7: bspm & R Packages"
 
-  local tmp_bspm="/tmp/r_setup_bspm.R"
+  local tmp_bspm
+  tmp_bspm=$(mktemp /tmp/r_setup_bspm.XXXXXX.R)
   cat > "${tmp_bspm}" << 'EOF'
 if (!requireNamespace("bspm", quietly=TRUE)) {
   install.packages("bspm", repos="https://cloud.r-project.org")
@@ -578,7 +583,8 @@ EOF
   local r_pkg_vector
   r_pkg_vector=$(printf '"%s",' "${R_PACKAGES[@]}" | sed 's/,$//')
 
-  local tmp_pkgs="/tmp/r_setup_pkgs.R"
+  local tmp_pkgs
+  tmp_pkgs=$(mktemp /tmp/r_setup_pkgs.XXXXXX.R)
   cat > "${tmp_pkgs}" << EOF
 suppressMessages(bspm::enable())
 pkgs <- c(${r_pkg_vector})
@@ -593,7 +599,8 @@ EOF
   run_cmd rm -f "${tmp_pkgs}"
 
   # Configure reticulate
-  local tmp_reticulate="/tmp/r_setup_reticulate.R"
+  local tmp_reticulate
+  tmp_reticulate=$(mktemp /tmp/r_setup_reticulate.XXXXXX.R)
   cat > "${tmp_reticulate}" << EOF
 library(reticulate)
 use_python("${PYTHON_ENV}/bin/python", required=TRUE)
@@ -670,7 +677,8 @@ RENVEOF
 
   # Process the template using common_utils process_template
   # (substitutes all %%KEY%% placeholders from vars.conf)
-  local tmp_profile="/tmp/Rprofile.site.deploy.${TS}"
+  local tmp_profile
+  tmp_profile=$(mktemp /tmp/Rprofile.site.deploy.XXXXXX)
   local generated_profile
   process_template "${RPROFILE_TEMPLATE}" generated_profile \
     BIOME_HOST="${BIOME_HOST}" \
@@ -795,7 +803,8 @@ setup_nodes_logging() {
   run_cmd chmod 755 "${BIOME_CONF}"
 
   # Deploy audit script from template
-  local tmp_audit="/tmp/00_audit_v26.R.deploy.${TS}"
+  local tmp_audit
+  tmp_audit=$(mktemp /tmp/00_audit_v26.R.deploy.XXXXXX)
   local generated_audit
   process_template "${AUDIT_TEMPLATE}" generated_audit \
     BIOME_CONF="${BIOME_CONF}" \

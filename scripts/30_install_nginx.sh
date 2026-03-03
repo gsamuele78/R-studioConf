@@ -631,8 +631,7 @@ install_and_configure_nginx() {
   # ===== chack Ipv6 Not Disable Before installation starts =====
   log INFO "Checking IPv6 status..."
   if detect_ipv6_disabled; then
-    log Err "IPv6 Disable -- Re Enable and Restart Script..."
-    return 1
+    log WARN "IPv6 is disabled. Nginx installation may fail initially, but the auto-fix routine will attempt to repair it."
   fi
 
 
