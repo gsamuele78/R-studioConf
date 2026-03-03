@@ -106,6 +106,7 @@ class HealthResponse(BaseModel):
 class ProblemReport(BaseModel):
     """Payload for submitting a problem report."""
     message: str
+    application: str = Field(default="Biome Portal", description="The application where the report was generated")
     images: list[str] = Field(default_factory=list, description="List of base64 data URIs for images")
     context: dict = Field(default_factory=dict, description="Additional context info")
 
@@ -426,19 +427,44 @@ def _load_email_config() -> dict[str, str]:
     config["SENDER_EMAIL"] = f"{socket.gethostname()}@unibo.it"
     return config
 
+def _load_admin_recipients() -> list[str]:
+    recipients = []
+    paths = [
+        "/etc/biome-calc/conf/admin_recipients.txt",
+        "/home/administrator/configServices/R-studioConf/config/admin_recipients.txt"
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            recipients.append(line)
+                if recipients:
+                    break
+            except Exception as e:
+                print(f"Error loading {p}: {e}")
+    
+    if not recipients:
+        recipients.append("Lifewatch_Biome_internal@live.unibo.it")
+    return recipients
+
 @app.post("/api/v1/report-problem", tags=["Support"], summary="Send a problem report via email")
 async def report_problem(report: ProblemReport):
     """Send a user-submitted problem report to the configured admin email."""
     config = _load_email_config()
+    admin_emails = _load_admin_recipients()
     
+    app_name = report.application
     msg = EmailMessage()
-    subject = f"[Biome Portal] Problem Report from {socket.gethostname()}"
+    subject = f"[{app_name}] Problem Report from {socket.gethostname()}"
     msg['Subject'] = subject
     msg['From'] = config["SENDER_EMAIL"]
-    msg['To'] = config["BIOME_CONTACT"]
+    msg['To'] = ", ".join(admin_emails)
 
     body_lines = [
-        f"A new problem has been reported from the Biome Portal on {socket.gethostname()}.",
+        f"A new problem has been reported from {app_name} on {socket.gethostname()}.",
         "",
         "--- User Message ---",
         report.message,
@@ -467,8 +493,6 @@ async def report_problem(report: ProblemReport):
     # Try custom DNS resolution if SMTP_DNS_SERVERS is provided
     try:
         dns_servers = [s.strip() for s in config.get("SMTP_DNS_SERVERS", "").split() if s.strip()]
-        # Add fallback public DNS servers just in case
-        dns_servers.extend(["8.8.8.8", "8.8.4.4", "1.1.1.1"])
         
         if dns_servers and not smtp_host.replace('.', '').isdigit():
             resolver = dns.resolver.Resolver(configure=False)
