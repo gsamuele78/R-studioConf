@@ -254,6 +254,70 @@ def _disk_info(path: str) -> dict:
         return {"available": False}
 
 
+def _get_system_snapshot() -> dict:
+    """Safely gathers a realistic point-in-time snapshot of the OS state and active users."""
+    snapshot = {
+        "uptime_hrs": 0.0,
+        "load_avg": (0.0, 0.0, 0.0),
+        "memory_pct": 0.0,
+        "swap_pct": 0.0,
+        "disk_root_pct": 0.0,
+        "disk_tmp_pct": 0.0,
+        "disk_projects_pct": 0.0,
+        "top_processes": [],
+        "terminal_users": [],
+        "rstudio_users": set(),
+        "error": None
+    }
+    try:
+        snapshot["uptime_hrs"] = round((time.time() - psutil.boot_time()) / 3600, 1)
+        snapshot["load_avg"] = os.getloadavg()
+        snapshot["memory_pct"] = psutil.virtual_memory().percent
+        snapshot["swap_pct"] = psutil.swap_memory().percent
+        
+        # Disk Space (Crucial for crashes ENOSPC)
+        snapshot["disk_root_pct"] = _disk_info("/").get("pct", 0.0)
+        snapshot["disk_tmp_pct"] = _disk_info("/tmp").get("pct", 0.0)
+        snapshot["disk_projects_pct"] = _disk_info("/media/r_projects").get("pct", 0.0)
+        
+        # CPU/Mem Top processes (identify runaway processes instantly)
+        procs = []
+        for p in psutil.process_iter(["name", "cpu_percent", "memory_percent"]):
+            try:
+                if p.info["cpu_percent"] is not None:
+                    procs.append({
+                        "name": p.info["name"], 
+                        "cpu": p.info["cpu_percent"] or 0, 
+                        "mem": p.info["memory_percent"] or 0
+                    })
+            except Exception:
+                pass
+        procs.sort(key=lambda x: x["cpu"], reverse=True)
+        snapshot["top_processes"] = [f"{p['name']} (CPU: {round(p['cpu'],1)}%, Mem: {round(p['mem'],1)}%)" for p in procs[:3]]
+        
+        # OS-level logged in users (SSH, TTYd)
+        for u in psutil.users():
+            user_str = f"{u.name} ({u.terminal})"
+            if user_str not in snapshot["terminal_users"]:
+                snapshot["terminal_users"].append(user_str)
+                
+        # RStudio sessions (don't always register in utmp)
+        for p in psutil.process_iter(["name", "username"]):
+            try:
+                name = p.info.get("name") or ""
+                user = p.info.get("username") or ""
+                if "rsession" in name and user not in ("root", "rstudio-server", "www-data"):
+                    snapshot["rstudio_users"].add(user)
+            except Exception:
+                pass
+                
+    except Exception as e:
+        snapshot["error"] = str(e)
+        
+    snapshot["rstudio_users"] = list(snapshot["rstudio_users"])
+    return snapshot
+
+
 def _top_r_sessions(n: int = 5) -> list:
     """Top N rsession processes by CPU, fully anonymised (no usernames)."""
     attrs = ["pid", "name", "cpu_percent", "memory_info", "create_time"]
@@ -471,11 +535,29 @@ async def report_problem(report: ProblemReport):
         "--- User Message ---",
         report.message,
         "--------------------",
-        "",
-        "--- Context ---"
+        ""
     ]
+    
+    # 1. Attach Client Context (Browser/JS)
+    body_lines.append("--- Client Context ---")
     for k, v in report.context.items():
         body_lines.append(f"{k}: {v}")
+    body_lines.append("----------------------")
+    body_lines.append("")
+    
+    # 2. Attach Realistic Server Snapshot (Sysadmin Best Practice)
+    sys_snap = _get_system_snapshot()
+    body_lines.append("--- Server Snapshot (Point-of-Failure) ---")
+    body_lines.append(f"Uptime: {sys_snap['uptime_hrs']} hours")
+    body_lines.append(f"Load Average: {sys_snap['load_avg']}")
+    body_lines.append(f"Memory / Swap Usage: {sys_snap['memory_pct']}% / {sys_snap['swap_pct']}%")
+    body_lines.append(f"Disk Usage: Root ({sys_snap['disk_root_pct']}%), Tmpfs ({sys_snap['disk_tmp_pct']}%), Projects ({sys_snap['disk_projects_pct']}%)")
+    body_lines.append(f"Top 3 Processes (CPU): {', '.join(sys_snap['top_processes']) or 'None'}")
+    body_lines.append(f"Terminal/SSH Users: {', '.join(sys_snap['terminal_users']) or 'None'}")
+    body_lines.append(f"RStudio Users: {', '.join(sys_snap['rstudio_users']) or 'None'}")
+    if sys_snap.get("error"):
+        body_lines.append(f"Snapshot Error: {sys_snap['error']}")
+    body_lines.append("------------------------------------------")
         
     msg.set_content("\n".join(body_lines))
 
