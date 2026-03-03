@@ -23,6 +23,8 @@ services:
       - /etc/sssd/sssd.conf:/etc/sssd/sssd.conf:ro
       - /etc/krb5.conf:/etc/krb5.conf:ro
       - /etc/nsswitch.conf:/etc/nsswitch.conf:ro
+      # Step-CA Root Trust
+      - ${STEP_CA_ROOT_PATH:-/etc/ssl/certs/step-ca-root.crt}:/usr/local/share/ca-certificates/step-ca-root.crt:ro
 
   # --- RStudio Service (Samba Backend) ---
   rstudio-samba:
@@ -44,6 +46,8 @@ services:
       - /etc/samba/smb.conf:/etc/samba/smb.conf:ro
       - /etc/krb5.conf:/etc/krb5.conf:ro
       - /etc/nsswitch.conf:/etc/nsswitch.conf:ro
+      # Step-CA Root Trust
+      - ${STEP_CA_ROOT_PATH:-/etc/ssl/certs/step-ca-root.crt}:/usr/local/share/ca-certificates/step-ca-root.crt:ro
 
   # --- Nginx Portal Service ---
   nginx-portal:
@@ -59,9 +63,24 @@ services:
       # But Dockerfile copies them in. We might want read-only mounts for live updates?
       # Let's rely on Image build for stability as per "Pet" design.
       # Just mount SSL.
+      # Just mount SSL.
       - ${SSL_CERT_PATH}:/etc/ssl/certs/server.crt:ro
       - ${SSL_KEY_PATH}:/etc/ssl/private/server.key:ro
+      # Step-CA Root Trust
+      - ${STEP_CA_ROOT_PATH:-/etc/ssl/certs/step-ca-root.crt}:/usr/local/share/ca-certificates/step-ca-root.crt:ro
     environment:
       - NGINX_HOST=${HOST_DOMAIN}
       - NGINX_PORT=${HTTPS_PORT}
       - RSTUDIO_PORT=${RSTUDIO_PORT}
+
+  # --- OAuth2-Proxy Sidecar (OIDC Authentication) ---
+  oauth2-proxy:
+    profiles: [ "oidc" ]
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    container_name: oauth2_proxy
+    restart: unless-stopped
+    command:
+      - --config=/etc/oauth2-proxy.cfg
+    volumes:
+      - ${OAUTH2_PROXY_CONFIG:-./config/oauth2-proxy.cfg}:/etc/oauth2-proxy.cfg:ro
+    network_mode: "host"

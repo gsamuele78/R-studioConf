@@ -37,6 +37,17 @@ if [ -f "/etc/nginx/nginx.conf" ]; then
     sed -i "s/worker_connections.*/worker_connections ${WORKER_CONNECTIONS};/" /etc/nginx/nginx.conf
 fi
 
+# 2.5 IPv6 Graceful Fallback
+# If the container host explicitly disables IPv6, mounting templates with [::]:80 or [::]:443
+# will cause Nginx to crash immediately upon boot. We strip it if IPv6 is unreachable.
+if [ "${IPV6_ENABLED}" != "true" ] && ! cat /proc/net/if_inet6 >/dev/null 2>&1; then
+    log "WARN" "IPv6 is disabled on the host kernel. Stripping IPv6 bindings from Nginx templates..."
+    find "${TEMPLATE_DIR}" -type f -name "*.conf.template" -exec sed -i '/listen *\[::\]:/d' {} \;
+    if [ -f "${NGINX_CONF_DIR}/nginx.conf" ]; then
+        sed -i '/listen *\[::\]:/d' "${NGINX_CONF_DIR}/nginx.conf"
+    fi
+fi
+
 # 3. SSL Configuration & ACME Enrollment
 if [ "${LE_ENABLED}" == "true" ]; then
     log "INFO" "Let's Encrypt / ACME Enrollment Enabled."
@@ -152,6 +163,9 @@ if [ -d "/usr/share/nginx/html/assets" ]; then
     # Move assets to root if needed or just leave them.
     # Logic in 31_setup_web_portal.sh copied them to webroot.
     cp -r /usr/share/nginx/html/assets/* "${WEB_ROOT}/" 2>/dev/null || true
+    if [ -f "/usr/share/nginx/html/assets/biome-portal.js" ]; then
+        cp "/usr/share/nginx/html/assets/biome-portal.js" "${WEB_ROOT}/biome-portal.js"
+    fi
 fi
 
 

@@ -16,6 +16,18 @@ location ^~ /rstudio-inner/ {
     access_log %%LOG_DIR%%/rstudio-access.log;
     error_log %%LOG_DIR%%/rstudio-error.log;
     
+    # --- OIDC / OAUTH2-PROXY BLUEPRINT ---
+    # To enable Keycloak/OOD integration, uncomment the following lines
+    # and disable auth_pam in the /auth-check and /terminal locations.
+    # auth_request /oauth2/auth;
+    # error_page 401 = /oauth2/sign_in;
+    # 
+    # # Pass the authenticated user to RStudio (if simulating login)
+    # auth_request_set $user   $upstream_http_x_auth_request_preferred_username;
+    # auth_request_set $email  $upstream_http_x_auth_request_email;
+    # proxy_set_header X-Forwarded-User $user;
+    # ---------------------------------------
+    
     # Note: RStudio must be configured with www-root-path=/rstudio-inner
     # Standard proxy configuration for subpath
     proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/;
@@ -52,8 +64,11 @@ location ^~ /rstudio-inner/ {
     proxy_read_timeout 86400s;
     proxy_send_timeout 86400s;
     
-    # Performance & Persistence
-    proxy_buffering off;
+    # Performance & Persistence (Sysadmin JSON RPC Tuning)
+    proxy_buffer_size 128k;
+    proxy_buffers 4 256k;
+    proxy_busy_buffers_size 256k;
+    large_client_header_buffers 4 32k;
     proxy_request_buffering off;
     proxy_socket_keepalive on;
 
@@ -149,8 +164,13 @@ location / {
 # Suppresses browser popup on failed login check
 location = /auth-check {
     # Match Realm exactly to share potential cache scope
+    # --- AD PAM AUTHENTICATION ---
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
+    
+    # --- OIDC / OAUTH2-PROXY BLUEPRINT ---
+    # auth_request /oauth2/auth;
+    # error_page 401 = /oauth2/sign_in;
 
     # FIXED: Do NOT use 'return 200' here, as it runs before auth_pam (Rewrite Phase vs Access Phase).
     # Instead, use try_files to serve a dummy static file, forcing the Access Phase (Auth) to run first.
@@ -174,8 +194,13 @@ location /terminal/ {
     index index.html;
     try_files $uri $uri/ =404;
     
+    # --- AD PAM AUTHENTICATION ---
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
+    
+    # --- OIDC / OAUTH2-PROXY BLUEPRINT ---
+    # auth_request /oauth2/auth;
+    # error_page 401 = /oauth2/sign_in;
 }
 
 # 2. /terminal-inner/ proxies to the actual ttyd instance
@@ -183,8 +208,13 @@ location ^~ /terminal-inner/ {
     access_log %%LOG_DIR%%/terminal-access.log;
     error_log %%LOG_DIR%%/terminal-error.log;
     
+    # --- AD PAM AUTHENTICATION ---
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
+    
+    # --- OIDC / OAUTH2-PROXY BLUEPRINT ---
+    # auth_request /oauth2/auth;
+    # error_page 401 = /oauth2/sign_in;
     
     proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/terminal-inner/;
     proxy_http_version 1.1;
@@ -308,6 +338,25 @@ location @logged_out {
     </html>
     ';
 }
+
+# --- OIDC / OAUTH2-PROXY ENDPOINTS BLUEPRINT ---
+# Uncomment this block to route authentication traffic to the oauth2-proxy sidecar.
+# location /oauth2/ {
+#     proxy_pass       http://127.0.0.1:4180;
+#     proxy_set_header Host                    $host;
+#     proxy_set_header X-Real-IP               $remote_addr;
+#     proxy_set_header X-Scheme                $scheme;
+#     proxy_set_header X-Auth-Request-Redirect $request_uri;
+# }
+# location = /oauth2/auth {
+#     proxy_pass       http://127.0.0.1:4180;
+#     proxy_set_header Host             $host;
+#     proxy_set_header X-Real-IP        $remote_addr;
+#     proxy_set_header X-Scheme         $scheme;
+#     # nginx auth_request includes headers but not body
+#     proxy_set_header Content-Length   "";
+#     proxy_pass_request_body           off;
+# }
 
 # --- Nextcloud Service Discovery (HTTPS) ---
 location ^~ /.well-known/carddav { return 301 /files/remote.php/dav; }

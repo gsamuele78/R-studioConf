@@ -8,6 +8,8 @@
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital,wght@0,600;1,600&display=swap" rel="stylesheet">
+    <!-- Load Centralized Telemetry and Feedback JS Library -->
+    <script src="/biome-portal.js"></script>
 </head>
 <body>
     <div class="background-overlay"></div>
@@ -285,151 +287,8 @@
             });
         }
 
-        // Generate UUID for Client-Seeded CSRF (Standard v4 UUID with CSPRNG)
-        // See Research Report Section 7.3: Security Implications (Entropy)
-        function generateUUID() {
-            if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-                return crypto.randomUUID();
-            }
-            // Fallback for older browsers (but still CSPRNG)
-            return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
-                (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
-            );
-        }
-
-        // RStudio Direct Login (Client-Seeded CSRF Mode)
-        // See Research Report Section 5: The "Supported" Integration Mode
-        function loginRStudio(username, password) {
-            console.log("4. Attempting RStudio Background Login (Client-Seeded)...");
-            
-            // Step 1: Generate Client-Side Token
-            var csrfToken = generateUUID();
-            console.log("4a. Generated Client-Seeded Token:", csrfToken);
-            
-            // SAVE TOKEN locally because document.cookie cannot read path=/rstudio-inner/ from root /
-            localStorage.setItem('rstudio_csrf_token', csrfToken);
-
-            // Step 2: Set the Cookie (Critical for Double Submit Check)
-            // Path must match the RStudio proxy path (/rstudio-inner/)
-            // Secure flag is mandatory for SameSite configuration
-            // Set BOTH legacy and new cookie names (Research Fix)
-            document.cookie = "csrf-token=" + csrfToken + "; path=/rstudio-inner/; secure; SameSite=Strict";
-            document.cookie = "rs-csrf-token=" + csrfToken + "; path=/rstudio-inner/; secure; SameSite=Strict";
-            
-            // Step 3: Post credentials + token
-            var data = new URLSearchParams();
-            data.append('username', username);
-            data.append('password', password);
-            data.append('staySignedIn', '1'); // Changed from 'persist' to match OOD
-            data.append('appUri', '');
-            
-            // The body token must match the cookie token we just set
-            data.append('csrf-token', csrfToken); 
-            // Also send legacy name just in case
-            data.append('rs-csrf-token', csrfToken); 
-
-            // Explicitly convert to string to control Content-Type exactly
-            var payload = data.toString();
-
-            // Debug the payload
-            console.log("4b. Sending Client-Seeded Payload:", payload);
-
-            return fetch("/rstudio-inner/auth-do-sign-in", {
-                method: "POST",
-                // Fix: Explicitly set Content-Type without charset to avoid 400 on strict parsers
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                body: payload,
-                credentials: 'include' // Sends the cookie we just set
-            })
-            .then(response => {
-                console.log("4c. RStudio Response Status:", response.status);
-                return response;
-            })
-            .catch(err => {
-                console.warn("4d. RStudio Background Login Failed:", err);
-            });
-        }
-
-        // Nextcloud Auto-Login (API Mode)
-        function loginNextcloud(username, password) {
-            console.log("4nc. Attempting Nextcloud Background Login via API...");
-            
-            // Step 1: Fetch session token from supported endpoint
-            // Try explicit index.php path which is most reliable
-            return fetch("/files-inner/index.php/csrftoken") 
-            .then(response => {
-                if (!response.ok) throw new Error("CSRF Endpoint returned " + response.status);
-                return response.json();
-            })
-            .then(data => {
-                var requesttoken = data.token;
-                
-                if (!requesttoken) {
-                    throw new Error("API returned empty token");
-                }
-                console.log("4nc. Found CSRF Token via API.");
-
-                var payload = new URLSearchParams();
-                payload.append('user', username);
-                payload.append('password', password);
-                payload.append('requesttoken', requesttoken);
-                payload.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
-                payload.append('timezone_offset', -(new Date().getTimezoneOffset() / 60));
-
-                return fetch("/files-inner/login", {
-                    method: "POST",
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    body: payload,
-                    credentials: 'include' 
-                });
-            })
-            .then(response => {
-                console.log("4nc. Nextcloud Response Status:", response.status);
-                return response.text();
-            })
-            .catch(err => {
-                 console.warn("4nc. Nextcloud Background Login Failed:", err);
-                 // Fallback: Try classic scraping if API failed (Just in case)
-                 console.log("4nc. Attempting fallback scraping...");
-                 return loginNextcloudFallback(username, password);
-            });
-        }
-
-        // Fallback for older Nextcloud versions or if API route is blocked
-        function loginNextcloudFallback(username, password) {
-             return fetch("/files-inner/login")
-            .then(response => response.text())
-            .then(html => {
-                var match = html.match(/requesttoken\s*=\s*'([^']+)'/) || html.match(/"requesttoken":"([^"]+)"/);
-                var requesttoken = match ? match[1] : null;
-                
-                if (!requesttoken) { 
-                    try {
-                        var doc = new DOMParser().parseFromString(html, "text/html");
-                        requesttoken = doc.querySelector('head > meta[name="csrf-token"]')?.content 
-                                       || doc.querySelector('input[name="requesttoken"]')?.value;
-                    } catch(e){}
-                }
-
-                if(!requesttoken) return; // Give up
-
-                var data = new URLSearchParams();
-                data.append('user', username);
-                data.append('password', password);
-                data.append('requesttoken', requesttoken);
-                
-                return fetch("/files-inner/login", {
-                    method: "POST",
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: data,
-                    credentials: 'include'
-                });
-            }).catch(e => console.warn("Fallback failed", e));
-        }
+        // All Direct Authentication Logic (RStudio / Nextcloud / Fallbacks) 
+        // has been migrated to the centralized lib/biome-portal.js
 
         // Handle Logout
         function handleLogout() {

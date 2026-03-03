@@ -1,8 +1,15 @@
 #!/bin/bash
 # /usr/local/bin/ttyd_login_wrapper.sh
 
-# DEBUGGING: Log to /tmp which is universally writable
-LOG_FILE="/tmp/ttyd_debug.log"
+# DEBUGGING: Log# To debug, change to a valid path, e.g. /tmp/ttyd_debug.XXXXXX
+# Using mktemp prevents race conditions if multiple users login simultaneously.
+LOG_FILE=$(mktemp /tmp/ttyd_debug_wrapper.XXXXXX)
+# Or set to /dev/null for production
+# LOG_FILE="/dev/null"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
 
 # Log header
 {
