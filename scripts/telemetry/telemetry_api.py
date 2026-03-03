@@ -107,6 +107,7 @@ class ProblemReport(BaseModel):
     """Payload for submitting a problem report."""
     message: str
     application: str = Field(default="Biome Portal", description="The application where the report was generated")
+    user_contact: str = Field(default="", description="Optional user contact email")
     images: list[str] = Field(default_factory=list, description="List of base64 data URIs for images")
     context: dict = Field(default_factory=dict, description="Additional context info")
 
@@ -465,6 +466,7 @@ async def report_problem(report: ProblemReport):
 
     body_lines = [
         f"A new problem has been reported from {app_name} on {socket.gethostname()}.",
+        f"User Contact: {report.user_contact if report.user_contact else 'Not provided'}",
         "",
         "--- User Message ---",
         report.message,
