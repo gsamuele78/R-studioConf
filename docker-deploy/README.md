@@ -9,6 +9,28 @@ This directory contains the complete infrastructure to deploy RStudio Server in 
 * `templates/`: HTML/CSS/Conf Templates used by the Nginx Entrypoint.
 * `lib/`: Shared utilities (`common_utils.sh`).
 * `assets/`: Web portal assets (logo, background).
+* `doc/`: Sysadmin Architectural Reference, PRD Logic, and Troubleshooting.
+
+## Sysadmin Architecture & PRD Design
+
+Questa implementazione aderisce alle rigorose Best Practice Sysadmin (es. *Non-Optimistic approach*, Kernel Performance Shielding, *Race Condition Mitigation* via `mktemp`).
+
+Per la documentazione architetturale dettagliata:
+
+### Foundation & Operations
+
+* [Deployment Orchestration](doc/deployment/README.md): Compose profiles, Resource limits, e mount policies.
+* [Operations & Maintenance](doc/operations/README.md): CLI troubleshooting, Tmpfs lifecycle, e Log live-tail.
+* [Developer Reference](doc/developer/README.md): Dockerfile topology, Entrypoint Sandbox (`mktemp`) logic.
+* [Configuration Reference](doc/reference/README.md): `.env` 12-Factor variables e Feature flags.
+
+### Security & Architecture
+
+* [System Overview](doc/architecture/SYSTEM_OVERVIEW.md): Pet Container Pattern, BSPM Packages build, Threading Resource Allocation.
+* [Security Model](doc/architecture/SECURITY_MODEL.md): `tmpfs` RAM isolation, Host Loopback shielding, Network Policies.
+* [Nginx Gateway](doc/components/NGINX_GATEWAY.md): Reverse Proxy, PRD UI Templating, CSRF Auth Flow.
+* [OOD & Keycloak Auth](doc/OOD_KEYCLOAK_INTEGRATION.md): Auth-Proxy pattern documentation.
+* [PKI Trust Integration](doc/PKI_INTEGRATION.md): Root CA certificate internal propagation.
 
 ## Configuration
 
