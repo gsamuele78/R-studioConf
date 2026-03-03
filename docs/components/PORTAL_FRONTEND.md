@@ -77,4 +77,15 @@ The layout (`portal_style.css.template`) is built to be mobile-friendly.
 
 - `templates/portal_index.html.template`: The main HTML/JS logic.
 - `templates/portal_style.css.template`: The visual styling.
+- `lib/biome-portal.js`: The central, shared JavaScript library containing the core classes (e.g., `BiomeTelemetry`) injected into all wrappers, guaranteeing DRY code.
 - `assets/`: Logo and background images.
+
+---
+
+## 5. UX & Optimistic UI State
+
+To ensure a fluid, non-blocking user experience that adheres to modern PRD standards, the frontend heavily employs **Optimistic UI Logic**:
+
+- **Problem Reporting Modal**: When a user submits telemetry/feedback, the UI modal instantly transitions to a "Success/Dismissed" state and unblocks the screen *before* waiting for the Python backend's `200 OK` response. Network latency or email SMTP delays on the backend do not freeze the user's browser.
+- **Visual Cues**: Tile clicking initiates instantaneous CSS glass-blur and spinner animations, giving immediate tactile feedback while the backend negotiates PAM sockets natively.
+- **Shared Library (DRY)**: The `biome-portal.js` library ensures that these optimistic behaviors are consistent across the main portal and any isolated `<iframe>` wrappers.

@@ -57,3 +57,19 @@ Since services run on `localhost` but users access via `public-domain.com`, Ngin
   - Config files: `root:root 644`
   - SSL Keys: `root:root 600`
 - **Minimal Privileges**: `www-data` is granted group membership (`sasl`, `sambashare`) strictly for the socket/pipe needed for authentication, nothing else.
+
+## 6. System Provisioning Security (Sysadmin Safeguards)
+
+Beyond network access, the server's lifecycle scripts (`scripts/`) are hardened against privilege escalation and race conditions during deployment and maintenance:
+
+### 6.1 Temporary File Isolation (`mktemp`)
+
+Historically, setup scripts generated dynamic R or Bash configurations via hardcoded paths like `/tmp/setup.R`. This introduced a critical **Race Condition / Symlink vulnerability** (CWE-377).
+
+- **Hardened Approach**: All temporary files used by `r_env_manager.sh` and `50_setup_nodes.sh` are generated securely using isolated `mktemp` (`/tmp/prefix.XXXXXX`). This ensures the file is created atomically with restricted permissions (`600`), preventing unauthorized users from pre-creating symlinks or hijacking the installation payload.
+
+### 6.2 Defense Against Arbitrary Code Execution (RCE)
+
+R environments inherently execute arbitrary code. The deployment orchestration previously mitigated some dynamic logic with `eval()` and `bash -c` structures to pipe multiline R commands.
+
+- **Hardened Approach**: Replaced dynamic execution vectors with Heredoc injections (`<<EOF`) into the secure `mktemp` files, avoiding string interpolation-based injection flaws. Packages and configurations are now explicitly formulated as deterministic vectors.

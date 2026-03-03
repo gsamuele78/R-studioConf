@@ -69,3 +69,37 @@ If services fail to load, check these headers in the browser network tab:
 - **X-RStudio-Root-Path**: Must be present for RStudio resources.
 - **X-Forwarded-User**: Must be present for Terminal websocket.
 - **Connect-Src**: If using CSP, ensure Websockets (`wss://`) are allowed.
+
+---
+
+## 6. Configuration Rationale & Sysadmin Optimizations
+
+The Nginx Gateway includes advanced tuning deployed by the system administrator to resolve specific architectural constraints of the RStudio/TTYD stack:
+
+### 6.1 JSON RPC Buffer Tuning (RStudio)
+
+RStudio Server relies heavily on JSON RPC calls that can produce massive header/payload combinations when serializing large datatables or deep workspace objects.
+
+- **Problem**: Default Nginx proxy buffers are too small, leading to `502 Bad Gateway` errors due to "upstream sent too big header while reading response header from upstream".
+- **Solution**: We explicitly inflate `proxy_buffer_size`, `proxy_buffers`, and `large_client_header_buffers` purely for the `/rstudio-inner/` location context to digest RPC blobs seamlessly.
+
+### 6.2 Synchronized Timeouts
+
+Long-running R commands or large package compilations can cause silent connection drops if the proxy timeout falls short of the application timeout limit.
+
+- **Problem**: Nginx default timeout is 60s. RStudio might take 10+ minutes to compile a package.
+- **Solution**: The `proxy_read_timeout` and `proxy_send_timeout` are strictly aligned with the RStudio configuration (e.g., dynamically matched during deployment) ensuring developers don't experience spurious disconnects.
+
+### 6.3 Graceful IPv6 / IPv4 Dual-Stack Handling
+
+Many enterprise VPNs or institutional networks drop or mangle IPv6 packets, causing `apt` updates and subsequent Nginx socket bindings to hang.
+
+- **Problem**: Forcing IPv6 on an IPv4-only routed infrastructure creates catastrophic failures.
+- **Solution**: The deployment script (`30_install_nginx.sh`) implements a "detect and recover" logic. If IPv6 is unsupported, rather than aborting, the Gateway logic strips all `[::]:80` bindings and reconfigures `sysctl` dynamically, ensuring Nginx acts as a bulletproof IPv4 termination gateway.
+
+### 6.4 Zero-Cache PAM Invocation
+
+The gateway delegates auth to `sasl`/`pam` directly via the `ngx_http_auth_pam_module`.
+
+- **Problem**: Caching auth in regular apps is standard, but in AD ecosystems, group/permission revocation must be immediate.
+- **Solution**: We don't employ token-based Nginx caching for the WebSocket terminal (`ttyd`). Every connection handshakes directly through the system socket. The overhead is negligible because the Gateway and PAM daemon share the same UNIX bus.

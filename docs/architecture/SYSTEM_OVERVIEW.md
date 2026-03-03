@@ -77,6 +77,11 @@ The Portal is a static HTML/JS application served by Nginx.
 3. **Standardized Auth Headers**:
     - We standardize on `X-Forwarded-User` for identity propagation where possible (Terminal), and standard Session Cookies where not (RStudio, Nextcloud).
 
+4. **Sysadmin Performance Architecture (High Availability)**:
+    - **I/O Offloading via Threadpool**: The Telemetry API Backend utilizes an offloaded `ThreadpoolExecutor` to perform heavy OS operations (`subprocess.run` mapping network/process states) asynchronously, preventing event-loop blocking in FastAPI.
+    - **Memory Exhaustion Safeguards**: Data validation relies on capped `Pydantic` configurations ensuring payloads cannot exceed memory constraints (OOM prevention).
+    - **System Storage Acceleration**: Heavy disk allocations (like Swap space) bypass traditional buffering (`dd`) in favor of direct filesystem abstraction (`fallocate`), reducing setup latency from minutes to milliseconds. R environments are routed to a massive RAMDisk (`/tmp` at 100G) to eliminate I/O barriers during package compilation.
+
 ## 4. Key Decisions & Trade-offs
 
 | Decision | Rationale | Trade-off |
