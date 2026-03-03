@@ -594,19 +594,44 @@ async def report_problem(report: ProblemReport):
     body_lines.append("")
     
     # 2. Attach Realistic Server Snapshot (Sysadmin Best Practice)
-    body_lines.append("--- Server Snapshot (Point-of-Failure) ---")
+    body_lines.append("========= SERVER SNAPSHOT =========")
+    
+    body_lines.append("\n[Host & Network]")
+    body_lines.append(f"Hostname: {socket.gethostname()}")
+    body_lines.append(f"IP: {sys_snap['ip']}")
     body_lines.append(f"Uptime: {sys_snap['uptime_hrs']} hours")
-    body_lines.append(f"Load Average: {sys_snap['load_avg']}")
-    body_lines.append(f"Memory / Swap Usage: {sys_snap['memory_pct']}% / {sys_snap['swap_pct']}%")
-    body_lines.append(f"Disk Usage: Root ({sys_snap['disk_root_pct']}%), Tmpfs ({sys_snap['disk_tmp_pct']}%), Projects ({sys_snap['disk_projects_pct']}%)")
-    body_lines.append(f"Core Services: RStudio ({sys_snap['services'].get('rstudio-server')}), Nginx ({sys_snap['services'].get('nginx')}), Nextcloud PHP ({sys_snap['services'].get('php-fpm')}), TTYd ({sys_snap['services'].get('ttyd')})")
-    body_lines.append(f"App Memory (Total): RStudio Sessions ({sys_snap['app_metrics']['rstudio_mem_mb']} MB), Nextcloud PHP ({sys_snap['app_metrics']['php_fpm_mem_mb']} MB)")
-    body_lines.append(f"Top 3 Processes (CPU): {', '.join(sys_snap['top_processes']) or 'None'}")
-    body_lines.append(f"Terminal/SSH Users: {', '.join(sys_snap['terminal_users']) or 'None'}")
+    
+    body_lines.append("\n[OS Resources & Load]")
+    body_lines.append(f"Load Average (1m, 5m, 15m): {sys_snap['load_avg'][0]}, {sys_snap['load_avg'][1]}, {sys_snap['load_avg'][2]}")
+    body_lines.append(f"Memory Usage: {sys_snap['memory_pct']}%")
+    body_lines.append(f"Swap Usage: {sys_snap['swap_pct']}%")
+    
+    body_lines.append("\n[Storage & Filesystems (Usage %)]")
+    body_lines.append(f"Root (/): {sys_snap['disk_root_pct']}%")
+    body_lines.append(f"Tmpfs (/tmp): {sys_snap['disk_tmp_pct']}%")
+    body_lines.append(f"Projects (/media/r_projects): {sys_snap['disk_projects_pct']}%")
+    
+    body_lines.append("\n[Core Service Status]")
+    body_lines.append(f"RStudio Server: {sys_snap['services'].get('rstudio-server')}")
+    body_lines.append(f"Nginx: {sys_snap['services'].get('nginx')}")
+    body_lines.append(f"Nextcloud PHP: {sys_snap['services'].get('php-fpm')}")
+    body_lines.append(f"TTYd: {sys_snap['services'].get('ttyd')}")
+    
+    body_lines.append("\n[Application Memory & Top Processes]")
+    body_lines.append(f"RStudio Active Sessions (rss): {sys_snap['app_metrics']['rstudio_mem_mb']} MB")
+    body_lines.append(f"Nextcloud Backend (php-fpm rss): {sys_snap['app_metrics']['php_fpm_mem_mb']} MB")
+    body_lines.append("Top CPU Processes:")
+    for proc_str in sys_snap['top_processes']:
+        body_lines.append(f"  - {proc_str}")
+        
+    body_lines.append("\n[Active Users]")
+    body_lines.append(f"SSH/TTY Users: {', '.join(sys_snap['terminal_users']) or 'None'}")
     body_lines.append(f"RStudio Users: {', '.join(sys_snap['rstudio_users']) or 'None'}")
+    
     if sys_snap.get("error"):
-        body_lines.append(f"Snapshot Error: {sys_snap['error']}")
-    body_lines.append("------------------------------------------")
+        body_lines.append(f"\n[Snapshot Error]\n{sys_snap['error']}")
+        
+    body_lines.append("===================================")
         
     msg.set_content("\n".join(body_lines))
 
