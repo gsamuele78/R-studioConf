@@ -17,9 +17,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 2. Configure BSPM
+# 2. Configure BSPM & OpenBLAS CORETYPE Wrappers
 # Enable BSPM in R for faster installs
 RUN echo "bspm::enable()" >> /usr/local/lib/R/etc/Rprofile.site
+
+# Inject migration-safe OpenBLAS CORETYPE wrappers to evaluate CPU vendor/flags 
+# *before* R and libopenblas.so launch.
+RUN cat <<'EOF' > /etc/profile.d/biome-coretype.sh
+# BIOME-CALC: Detect CPU vendor and set OPENBLAS_CORETYPE.
+# Profile.d script for terminal R usage.
+VENDOR=$(grep -m1 'vendor_id' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | tr -d ' ')
+FLAGS=$(grep -m1 '^flags' /proc/cpuinfo 2>/dev/null | cut -d: -f2)
+if echo "$VENDOR" | grep -qi "AMD"; then
+  if echo "$FLAGS" | grep -q "avx2"; then CT="ZEN"
+  elif echo "$FLAGS" | grep -q "avx";  then CT="BULLDOZER"
+  else CT="SANDYBRIDGE"; fi
+elif echo "$VENDOR" | grep -qiE "Intel|Genuine"; then
+  if echo "$FLAGS" | grep -q "avx512"; then CT="SKYLAKEX"
+  elif echo "$FLAGS" | grep -q "avx2";  then CT="HASWELL"
+  elif echo "$FLAGS" | grep -q "avx";   then CT="SANDYBRIDGE"
+  else CT="PRESCOTT"; fi
+else
+  CT="SANDYBRIDGE"
+fi
+export OPENBLAS_CORETYPE="${CT}"
+EOF
+
+RUN chmod 755 /etc/profile.d/biome-coretype.sh && \
+    mkdir -p /etc/rstudio && \
+    cat <<'EOF' > /etc/rstudio/rsession-profile
+#!/bin/sh
+# BIOME-CALC: Evaluate CPU capabilities before spawning rsession.
+if [ -f /etc/profile.d/biome-coretype.sh ]; then
+  . /etc/profile.d/biome-coretype.sh
+fi
+EOF
+
+RUN chmod 755 /etc/rstudio/rsession-profile
 
 # 3. Install Botanical Packages
 # Copy the installation script
