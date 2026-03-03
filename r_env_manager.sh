@@ -830,7 +830,9 @@ install_r_pkg_list() {
     r_check_pkg_vector=$(printf "'%s'," "${r_packages_list[@]}")
     r_check_pkg_vector="c(${r_check_pkg_vector%,})"
 
-    local check_script_path="/tmp/check_missing_pkgs.R"
+    local check_script_path
+    check_script_path=$(mktemp -t r_env_check_XXXXXX.R)
+
     cat > "$check_script_path" <<EOF
     # For GitHub, we check the package name, not the full repo path
     all_pkgs_full <- ${r_check_pkg_vector}
@@ -863,7 +865,8 @@ EOF
     r_install_pkg_vector=$(echo "$missing_packages" | awk '{printf "\"%s\",", $1}' | sed 's/,$//')
     r_install_pkg_vector="c(${r_install_pkg_vector})"
 
-    local pkg_install_script_path="/tmp/install_packages.R"
+    local pkg_install_script_path
+    pkg_install_script_path=$(mktemp -t r_env_install_XXXXXX.R)
     
     cat > "$pkg_install_script_path" <<EOF
     # --- Configuration ---
@@ -907,6 +910,7 @@ EOF
         log "INFO" "SUCCESS: R package installation script completed."
     else
         handle_error $? "R package installation script failed. Check R output for details."
+        rm -f "$pkg_install_script_path"
         return 1
     fi
 
@@ -937,8 +941,12 @@ configure_java_for_r() {
     if [[ -n "$java_bin_path" ]]; then
         expected_java_home=$(dirname "$(dirname "$java_bin_path")")
     else
-        # Fallback if javac isn't found for some reason
-        expected_java_home="/usr/lib/jvm/java-21-openjdk-amd64"
+        # Intelligent fallback: Find latest default-java or openjdk
+        expected_java_home=$(find /usr/lib/jvm -maxdepth 1 -type d \( -name "default-java" -o -name "java-*-openjdk-amd64" \) -print -quit 2>/dev/null || true)
+        if [[ -z "$expected_java_home" ]]; then
+            log "FATAL" "Could not detect JAVA_HOME dynamically via javac or /usr/lib/jvm. Java integration will fail."
+            return 1
+        fi
     fi
     log "INFO" "Detected JAVA_HOME: $expected_java_home"
     
