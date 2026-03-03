@@ -79,6 +79,10 @@ tryCatch(
     {
         suppressMessages(library(tensorflow))
         message("--> Allocazione tensori massivi e calcolo parallelo OneDNN...")
+        # Forziamo l'uso esclusivo della CPU e disabilitiamo i warning CUDA (cuInit)
+        Sys.setenv(CUDA_VISIBLE_DEVICES = "-1")
+        Sys.setenv(TF_CPP_MIN_LOG_LEVEL = "2")
+
         # Evitiamo keras_model_sequential() per aggirare bug delle callback di TF 2.16+ in R
         # Eseguiamo algebra tensoriale pura sforzando tutti i thread CPU disponibili.
         tf_matrix_a <- tf$random$normal(shape(8000L, 8000L))
