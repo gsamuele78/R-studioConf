@@ -56,7 +56,7 @@ export LC_BYOBU="${LC_BYOBU:-0}"
 # Loop to allow re-login or clean exit
 while true; do
     echo "Starting login session for: $REMOTE_USER"
-    /bin/login -f "$REMOTE_USER"
+    /bin/login -f "${REMOTE_USER}"
     
     echo ""
     echo "Session ended."
