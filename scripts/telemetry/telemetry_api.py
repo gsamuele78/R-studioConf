@@ -254,9 +254,34 @@ def _disk_info(path: str) -> dict:
         return {"available": False}
 
 
+def _get_primary_ip() -> str:
+    """Gets the routing IP, bypassing the frequent 127.0.1.1 /etc/hosts issue on Ubuntu."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        # Doesn't actually send packet, just checks routing table
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return socket.gethostbyname(socket.gethostname())
+
+
+def _check_service_active(svc_name: str) -> str:
+    """Quickly check if a systemd service is active without heavy subprocess piping."""
+    try:
+        import subprocess
+        res = subprocess.run(["systemctl", "is-active", svc_name], capture_output=True, text=True, timeout=1, check=False)
+        return res.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
 def _get_system_snapshot() -> dict:
     """Safely gathers a realistic point-in-time snapshot of the OS state and active users."""
     snapshot = {
+        "ip": _get_primary_ip(),
         "uptime_hrs": 0.0,
         "load_avg": (0.0, 0.0, 0.0),
         "memory_pct": 0.0,
@@ -265,6 +290,8 @@ def _get_system_snapshot() -> dict:
         "disk_tmp_pct": 0.0,
         "disk_projects_pct": 0.0,
         "top_processes": [],
+        "services": {},
+        "app_metrics": {"rstudio_mem_mb": 0, "php_fpm_mem_mb": 0},
         "terminal_users": [],
         "rstudio_users": set(),
         "error": None
@@ -295,21 +322,40 @@ def _get_system_snapshot() -> dict:
         procs.sort(key=lambda x: x["cpu"], reverse=True)
         snapshot["top_processes"] = [f"{p['name']} (CPU: {round(p['cpu'],1)}%, Mem: {round(p['mem'],1)}%)" for p in procs[:3]]
         
+        snapshot["services"] = {
+            "rstudio-server": _check_service_active("rstudio-server"),
+            "nginx": _check_service_active("nginx"),
+            "php-fpm": _check_service_active("php8.3-fpm") or _check_service_active("php8.1-fpm"), # common versions
+            "ttyd": _check_service_active("ttyd")
+        }
+        
         # OS-level logged in users (SSH, TTYd)
         for u in psutil.users():
             user_str = f"{u.name} ({u.terminal})"
             if user_str not in snapshot["terminal_users"]:
                 snapshot["terminal_users"].append(user_str)
                 
-        # RStudio sessions (don't always register in utmp)
-        for p in psutil.process_iter(["name", "username"]):
+        # App-specific Deep Dives
+        rsession_mem = 0
+        php_mem = 0
+        for p in psutil.process_iter(["name", "username", "memory_info"]):
             try:
                 name = p.info.get("name") or ""
                 user = p.info.get("username") or ""
-                if "rsession" in name and user not in ("root", "rstudio-server", "www-data"):
-                    snapshot["rstudio_users"].add(user)
+                mem = p.info.get("memory_info")
+                
+                if "rsession" in name:
+                    if mem: rsession_mem += mem.rss
+                    if user not in ("root", "rstudio-server", "www-data"):
+                        snapshot["rstudio_users"].add(user)
+                        
+                if "php-fpm" in name and mem:
+                    php_mem += mem.rss
             except Exception:
                 pass
+                
+        snapshot["app_metrics"]["rstudio_mem_mb"] = round(rsession_mem / 1e6, 1)
+        snapshot["app_metrics"]["php_fpm_mem_mb"] = round(php_mem / 1e6, 1)
                 
     except Exception as e:
         snapshot["error"] = str(e)
@@ -528,8 +574,10 @@ async def report_problem(report: ProblemReport):
     msg['From'] = config["SENDER_EMAIL"]
     msg['To'] = ", ".join(admin_emails)
 
+    sys_snap = _get_system_snapshot()
+
     body_lines = [
-        f"A new problem has been reported from {app_name} on {socket.gethostname()}.",
+        f"A new problem has been reported from {app_name} on {socket.gethostname()} ({sys_snap['ip']}).",
         f"User Contact: {report.user_contact if report.user_contact else 'Not provided'}",
         "",
         "--- User Message ---",
@@ -546,12 +594,13 @@ async def report_problem(report: ProblemReport):
     body_lines.append("")
     
     # 2. Attach Realistic Server Snapshot (Sysadmin Best Practice)
-    sys_snap = _get_system_snapshot()
     body_lines.append("--- Server Snapshot (Point-of-Failure) ---")
     body_lines.append(f"Uptime: {sys_snap['uptime_hrs']} hours")
     body_lines.append(f"Load Average: {sys_snap['load_avg']}")
     body_lines.append(f"Memory / Swap Usage: {sys_snap['memory_pct']}% / {sys_snap['swap_pct']}%")
     body_lines.append(f"Disk Usage: Root ({sys_snap['disk_root_pct']}%), Tmpfs ({sys_snap['disk_tmp_pct']}%), Projects ({sys_snap['disk_projects_pct']}%)")
+    body_lines.append(f"Core Services: RStudio ({sys_snap['services'].get('rstudio-server')}), Nginx ({sys_snap['services'].get('nginx')}), Nextcloud PHP ({sys_snap['services'].get('php-fpm')}), TTYd ({sys_snap['services'].get('ttyd')})")
+    body_lines.append(f"App Memory (Total): RStudio Sessions ({sys_snap['app_metrics']['rstudio_mem_mb']} MB), Nextcloud PHP ({sys_snap['app_metrics']['php_fpm_mem_mb']} MB)")
     body_lines.append(f"Top 3 Processes (CPU): {', '.join(sys_snap['top_processes']) or 'None'}")
     body_lines.append(f"Terminal/SSH Users: {', '.join(sys_snap['terminal_users']) or 'None'}")
     body_lines.append(f"RStudio Users: {', '.join(sys_snap['rstudio_users']) or 'None'}")
