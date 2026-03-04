@@ -539,10 +539,21 @@ setup_nodes_python() {
 }
 
 # ==============================================================================
-# STEP 7: R PACKAGES
+# STEP 7: R PACKAGES & BSPM AUTHENTICATION
 # ==============================================================================
 setup_nodes_r_packages() {
   log_step "Step 7: bspm & R Packages"
+
+  # ── Configure bspm Authentication ──
+  # RStudio Web terminal/console does not have a polkit agent or interactive TTY for passwords.
+  # We must explicitly allow the users to execute apt via bspm without a password.
+  local sudoers_bspm="/etc/sudoers.d/99-bspm-domain-users"
+  log_info "Configuring passwordless sudo for bspm (domain_users)"
+  cat > "${sudoers_bspm}" << 'SUDOEOF'
+# BIOME-CALC: Allow domain_users to use bspm for R package management without password prompts in RStudio.
+%domain_users ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-mark, /usr/bin/dpkg
+SUDOEOF
+  run_cmd chmod 0440 "${sudoers_bspm}"
 
   local tmp_bspm
   tmp_bspm=$(mktemp /tmp/r_setup_bspm.XXXXXX.R)
