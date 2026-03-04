@@ -551,7 +551,7 @@ setup_nodes_r_packages() {
   log_info "Configuring passwordless sudo for bspm (domain_users)"
   cat > "${sudoers_bspm}" << 'SUDOEOF'
 # BIOME-CALC: Allow domain_users to use bspm for R package management without password prompts in RStudio.
-%domain_users ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-mark, /usr/bin/dpkg
+%domain_users ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-mark, /usr/bin/dpkg, /usr/lib/R/site-library/bspm/service/bspm.py
 SUDOEOF
   run_cmd chmod 0440 "${sudoers_bspm}"
 
