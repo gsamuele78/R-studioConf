@@ -636,6 +636,9 @@ TF_CPP_MIN_LOG_LEVEL=2
 KERAS_HOME=/tmp/keras
 CUDA_VISIBLE_DEVICES=-1
 
+# Force BSPM to use sudo instead of pkexec
+BSPM_SUDO=true
+
 # RAMDisk size (read by Rprofile.site)
 BIOME_RAMDISK_GB=${RAMDISK_GB}
 
