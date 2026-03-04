@@ -50,11 +50,21 @@ location ^~ /rstudio-inner/ {
     proxy_set_header X-RStudio-Root-Path /rstudio-inner;
     
     # Extended timeout for long-running R sessions
+    #added 300s to the timeout for long-running R sessions and slow VPN/Wi-Fi networks
+    proxy_connect_timeout 300s;
     proxy_read_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
     proxy_send_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
-    
+    # Extended timeout for long-running R sessions and slow VPN/Wi-Fi networks
+    #proxy_connect_timeout 300s;
+    #proxy_read_timeout 300s;
+    #proxy_send_timeout 300s;
+
+
     # Performance & Persistence
-    # Let Nginx buffer the payload to slowly stream it to slow clients (fixes JSON RPC errors on slow networks)
+    # CRITICAL FIX: Disable Nginx buffering to allow real-time WebSocket and JSON RPC streaming
+    # over slow VPN/Wi-Fi networks. Removing this causes JSON RPC drops.
+    proxy_buffering off;
+    proxy_request_buffering off;
     proxy_socket_keepalive on;
     # Allow large uploads in RStudio
     client_max_body_size 10G;
