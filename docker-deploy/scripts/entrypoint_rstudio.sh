@@ -121,6 +121,10 @@ MKL_NUM_THREADS=${ALLOCATED_CORES}
 # Disable GPU for Baseline
 CUDA_VISIBLE_DEVICES=-1
 TF_CPP_MIN_LOG_LEVEL=2
+
+# Python Venv (Geospatial)
+RETICULATE_PYTHON=${PYTHON_ENV:-/opt/r-geospatial}/bin/python
+EARTHENGINE_PYTHON=${PYTHON_ENV:-/opt/r-geospatial}/bin/python
 RENVEOF
 
 # 1.5 Dynamic System RProfile & Audit (Sysadmin Porting)

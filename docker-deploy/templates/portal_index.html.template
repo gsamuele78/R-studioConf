@@ -485,12 +485,12 @@
                     console.log("3. Credentials Validated. Proceeding to Service Sign-in...");
                     
                     // Attempt Direct Login to RStudio and Nextcloud concurrently
-                    Promise.all([
+                    Promise.allSettled([
                         loginRStudio(user, pass),
                         loginNextcloud(user, pass)
                     ])
-                        .then(() => {
-                            console.log("5. Direct Login Sequence Complete");
+                        .then((results) => {
+                            console.log("5. Direct Login Sequence Complete", results);
                             
                             // FORCE RELOAD of RStudio Iframe to display the new session
                             // Otherwise it might still show "Signed Out" or the login page
@@ -500,9 +500,24 @@
 
                             console.timeEnd("Auth Sequence");
                             console.groupEnd();
-                        })
-                        .finally(() => {
+                            
+                            // Check for degraded responses
+                            var rstudioSuccess = results[0].status === "fulfilled" && results[0].value;
+                            var nextcloudSuccess = results[1].status === "fulfilled" && results[1].value;
+                            
+                            if (!rstudioSuccess || !nextcloudSuccess) {
+                                var msg = "Terminal verified, but background login degraded: ";
+                                if (!rstudioSuccess) msg += "[RStudio Failed] ";
+                                if (!nextcloudSuccess) msg += "[Nextcloud Failed]";
+                                status.style.color = "#ff9800";
+                                status.innerHTML = "⚠️ " + msg;
+                            } else {
+                                status.style.color = "#8FBC8F";
+                                status.innerHTML = "✅ All services connected successfully.";
+                            }
+
                             // Success UI Transition
+                            // Wait longer if there's a warning so the user can read it
                             setTimeout(() => {
                                 closeLoginModal();
                                 // Unlock the grid
@@ -525,12 +540,14 @@
                                 btnOps.onclick = handleLogout;
                                 btnOps.classList.add("logout-mode");
 
-                                Biome.listenForGoHome();
+                                if(typeof Biome !== "undefined" && Biome.listenForGoHome) {
+                                  Biome.listenForGoHome();
+                                }
                                 
                                 btn.disabled = false;
                                 btn.innerHTML = "Connect &amp; Save";
                                 status.innerHTML = "";
-                            }, 1000);
+                            }, (!rstudioSuccess || !nextcloudSuccess) ? 4000 : 1000);
                         });
                 } else {
                     console.error("2. Authentication Failed. Status:", response.status);
@@ -608,10 +625,11 @@
             })
             .then(response => {
                 console.log("4c. RStudio Response Status:", response.status);
-                return response;
+                return response.ok;
             })
             .catch(err => {
                 console.warn("4d. RStudio Background Login Failed:", err);
+                return false;
             });
         }
 
@@ -652,7 +670,7 @@
             })
             .then(response => {
                 console.log("4nc. Nextcloud Response Status:", response.status);
-                return response.text();
+                return response.ok;
             })
             .catch(err => {
                  console.warn("4nc. Nextcloud Background Login Failed:", err);
@@ -690,8 +708,8 @@
                     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
                     body: data,
                     credentials: 'include'
-                });
-            }).catch(e => console.warn("Fallback failed", e));
+                }).then(res => res.ok);
+            }).catch(e => { console.warn("Fallback failed", e); return false; });
         }
 
         // ══════════════════════════════════════════════════

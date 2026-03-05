@@ -61,8 +61,8 @@ location ^~ /rstudio-inner/ {
     proxy_set_header X-RStudio-Root-Path /rstudio-inner;
     
     # Extended timeout for long-running R sessions
-    proxy_read_timeout 86400s;
-    proxy_send_timeout 86400s;
+    proxy_read_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
+    proxy_send_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
     
     # Performance & Persistence (Sysadmin JSON RPC Tuning)
     proxy_buffer_size 128k;
@@ -156,7 +156,6 @@ location ^~ /rstudio-inner/ {
 location / {
     root /var/www/html;
     index index.html;
-    index index.html;
     try_files $uri $uri/ =404;
 }
 
@@ -225,7 +224,7 @@ location ^~ /terminal-inner/ {
     # Performance & Persistence
     proxy_buffering off;
     proxy_request_buffering off;
-    proxy_read_timeout 86400s;
+    proxy_read_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
     proxy_socket_keepalive on;
     
     proxy_set_header X-Forwarded-User $short_remote_user;
@@ -241,20 +240,27 @@ location ^~ /terminal-inner/ {
     sub_filter '</body>' '<script>
         // Wait 3 seconds for initial load to stabilize
         setTimeout(function() {
-            // Poll for the specific "Connection Closed" overlay
-            setInterval(function() {
-                var divs = document.getElementsByTagName("div");
-                for (var i = 0; i < divs.length; i++) {
-                    var d = divs[i];
-                    // The ttyd OverlayAddon creates a div with "font-size: xx-large"
-                    if (d.style.fontSize === "xx-large" && 
-                       (d.textContent.indexOf("Connection Closed") !== -1 || d.textContent.indexOf("Reconnect") !== -1)) {
-                         // Redirect the TOP window to logout, not just the iframe
-                         window.top.location.replace("/logout");
-                         return;
+            // More robust observer-based check for the terminal overlay
+            var observer = new MutationObserver(function(mutations) {
+                mutations.forEach(function(mutation) {
+                    if (mutation.addedNodes) {
+                        mutation.addedNodes.forEach(function(node) {
+                            if (node.tagName === "DIV" && node.classList.contains("terminal-overlay")) {
+                                if (node.textContent.includes("Connection Closed") || node.textContent.includes("Reconnect")) {
+                                    window.top.location.replace("/logout");
+                                }
+                            }
+                            // Fallback for ttyd default styles
+                            if (node.tagName === "DIV" && node.style && node.style.fontSize === "xx-large") {
+                                if (node.textContent.includes("Connection Closed") || node.textContent.includes("Reconnect")) {
+                                    window.top.location.replace("/logout");
+                                }
+                            }
+                        });
                     }
-                }
-            }, 1000);
+                });
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
         }, 3000);
     </script></body>';
     sub_filter_once on;
@@ -438,6 +444,8 @@ location /monitoring/node/ {
 
 # --- Public Status API (portal telemetry strip & SSE stream) ---
 location /api/ {
+    limit_req zone=api_status burst=5 nodelay;
+
     limit_except GET POST OPTIONS { deny all; }
 
     proxy_pass http://127.0.0.1:8000/api/;

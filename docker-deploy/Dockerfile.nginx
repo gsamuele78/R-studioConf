@@ -20,6 +20,10 @@ COPY lib/common_utils.sh /scripts/lib/common_utils.sh
 COPY scripts/entrypoint_nginx.sh /docker-entrypoint.sh
 COPY scripts/manage_pki_trust.sh /usr/local/bin/manage_pki_trust.sh
 
+# Copy templates and assets into the image
+COPY templates /etc/nginx/templates
+COPY assets /usr/share/nginx/html/assets
+
 # Ensure executable
 RUN chmod +x /docker-entrypoint.sh /usr/local/bin/manage_pki_trust.sh
 

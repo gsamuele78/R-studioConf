@@ -105,11 +105,35 @@ fi
 # If templates/portal_index.html.template uses %%CURRENT_YEAR%%, we use process_template.
 
 log "INFO" "Processing Nginx Configuration..."
+mkdir -p "${NGINX_CONF_DIR}/conf.d"
+
 if [ -f "${TEMPLATE_DIR}/nginx.conf.template" ]; then
     # We use envsubst for system configs usually
     envsubst "\${NGINX_PORT} \${NGINX_HOST} \${RSTUDIO_PORT}" < "${TEMPLATE_DIR}/nginx.conf.template" > "${NGINX_CONF_DIR}/nginx.conf"
     log "INFO" "Generated nginx.conf"
 fi
+
+if [ -f "${TEMPLATE_DIR}/nginx_proxy_location.conf.template" ]; then
+    log "INFO" "Processing nginx_proxy_location.conf.template..."
+    
+    export LOG_DIR="/var/log/nginx"
+    export TARGET_RSTUDIO_PORT="${RSTUDIO_PORT:-8787}"
+    export TARGET_WEB_TERMINAL_PORT="${WEB_TERMINAL_PORT:-7681}"
+    export TIMEOUT_SECONDS=$((${RSESSION_TIMEOUT_MINUTES:-10080} * 60))
+    export TARGET_NEXTCLOUD_URL="${NEXTCLOUD_TARGET_URL:-http://localhost:8080}"
+    
+    processed_proxy=""
+    process_template "${TEMPLATE_DIR}/nginx_proxy_location.conf.template" processed_proxy \
+        "LOG_DIR=${LOG_DIR}" \
+        "RSTUDIO_PORT=${TARGET_RSTUDIO_PORT}" \
+        "WEB_TERMINAL_PORT=${TARGET_WEB_TERMINAL_PORT}" \
+        "RSESSION_TIMEOUT_SECONDS=${TIMEOUT_SECONDS}" \
+        "NEXTCLOUD_TARGET_URL=${TARGET_NEXTCLOUD_URL}"
+        
+    echo "$processed_proxy" > "${NGINX_CONF_DIR}/conf.d/proxy_location.conf"
+    log "INFO" "Generated conf.d/proxy_location.conf"
+fi
+
 
 # 2. Process Web Portal HTML/CSS
 # This mirrors logic from scripts/31_setup_web_portal.sh

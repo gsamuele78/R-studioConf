@@ -14,10 +14,15 @@
 # ==============================================================================
 
 # ── SECTION 0: bspm (Critical Pre-Load) ──
+# Force bspm to use sudo instead of pkexec, and disable version check warnings
 options(bspm.sudo = TRUE, bspm.version.check = FALSE)
-tryCatch(suppressMessages({
-  if (requireNamespace("bspm", quietly = TRUE)) bspm::enable()
-}), error = function(e) NULL)
+tryCatch({
+  if (requireNamespace("bspm", quietly = TRUE)) {
+    # Re-assert the option directly before enabling just to be absolutely sure
+    options(bspm.sudo = TRUE)
+    suppressMessages(bspm::enable())
+  }
+}, error = function(e) NULL)
 
 # ── SECTION 1: Santander Fixes ──
 options(java.parameters = c("-Xmx4g"))

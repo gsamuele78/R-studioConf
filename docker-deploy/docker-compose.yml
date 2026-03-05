@@ -46,6 +46,8 @@ services:
       - ${HOST_NSSWITCH_CONF:-/etc/nsswitch.conf}:/etc/nsswitch.conf:ro
       # Step-CA Root Trust
       - ${STEP_CA_ROOT_PATH:-/etc/ssl/certs/step-ca-root.crt}:/usr/local/share/ca-certificates/step-ca-root.crt:ro
+      # Python Geospatial Venv
+      - ${PYTHON_ENV:-/opt/r-geospatial}:/opt/r-geospatial:ro
 
   # --- RStudio Service (Samba Backend) ---
   rstudio-samba:
@@ -90,6 +92,8 @@ services:
       - ${HOST_NSSWITCH_CONF:-/etc/nsswitch.conf}:/etc/nsswitch.conf:ro
       # Step-CA Root Trust
       - ${STEP_CA_ROOT_PATH:-/etc/ssl/certs/step-ca-root.crt}:/usr/local/share/ca-certificates/step-ca-root.crt:ro
+      # Python Geospatial Venv
+      - ${PYTHON_ENV:-/opt/r-geospatial}:/opt/r-geospatial:ro
 
   # --- Nginx Portal Service ---
   nginx-portal:
@@ -154,6 +158,7 @@ services:
       # Mount host root filesystem read-only to let psutil examine host disks
       - ${TELEMETRY_HOST_ROOT:-/}:/hostfs:ro
       - ${TELEMETRY_HOST_RUN:-/var/run}:/var/run:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       # Tell telemetry to look for disk paths on /hostfs
       - NFS_HOME=${TELEMETRY_NFS_HOME:-/hostfs/nfs/home}
@@ -191,8 +196,9 @@ services:
     deploy:
       resources:
         limits:
-          # Protect host from unbounded LLM memory allocation
+          # Protect host from unbounded LLM CPU/Memory allocation
           memory: ${OLLAMA_RAM_LIMIT:-16G}
+          cpus: ${OLLAMA_CPU_LIMIT:-0.0}
     logging:
       driver: "json-file"
       options:
