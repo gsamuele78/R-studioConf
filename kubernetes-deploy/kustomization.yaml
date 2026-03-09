@@ -1,0 +1,64 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: botanical
+
+resources:
+- namespace.yaml
+- configmaps.yaml
+- secrets.yaml
+- storage.yaml
+- rstudio-deployment.yaml
+- rstudio-service.yaml
+- portal-deployment.yaml
+- portal-service.yaml
+- ingress.yaml
+- ollama-deployment.yaml
+- telemetry-api-deployment.yaml
+- oauth2-proxy-deployment.yaml
+
+# Enable configMapGenerator to trigger pod restarts if config changes
+configMapGenerator:
+- name: nginx-templates-config
+  files:
+  - nginx_proxy_location.conf.template=conf/nginx_proxy_location.conf
+
+# Replace hardcoded values using the extracted ConfigMaps
+replacements:
+- source:
+    kind: ConfigMap
+    name: rstudio-config
+    fieldPath: data.HOST_DOMAIN
+  targets:
+  - select:
+      kind: Ingress
+      name: botanical-ingress
+    fieldPaths:
+    - spec.rules.*.host
+    - spec.tls.*.hosts.*
+- source:
+    kind: ConfigMap
+    name: nginx-portal-config
+    fieldPath: data.NEXTCLOUD_TARGET_URL
+  targets:
+  - select:
+      kind: ConfigMap
+      name: nginx-templates-config
+    fieldPaths:
+    - data.nginx_proxy_location\.conf
+    options:
+      delimiter: "https://192.168.1.100"
+
+# Centralized Image Version Management
+# Instead of hardcoding tags in Deployments, they can be bumped here by CI/CD
+images:
+- name: ghcr.io/unibo/r-studioconf/botanical-portal-nginx
+  newTag: "latest"
+- name: ghcr.io/unibo/r-studioconf/rstudio-samba
+  newTag: "latest"
+- name: ghcr.io/unibo/r-studioconf/botanical-telemetry-api
+  newTag: "latest"
+- name: ghcr.io/unibo/r-studioconf/botanical-ai-ollama
+  newTag: "latest"
+- name: quay.io/oauth2-proxy/oauth2-proxy
+  newTag: "v7.6.0"

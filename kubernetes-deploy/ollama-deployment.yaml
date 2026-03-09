@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-ai
+  namespace: botanical
+  labels:
+    app: ollama-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama-ai
+  template:
+    metadata:
+      labels:
+        app: ollama-ai
+    spec:
+      containers:
+        - name: ollama
+          image: ghcr.io/unibo/r-studioconf/botanical-ai-ollama:latest
+          envFrom:
+            - configMapRef:
+                name: rstudio-config
+          env:
+            - name: OLLAMA_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: rstudio-config
+                  key: OLLAMA_HOST_BIND
+            - name: OLLAMA_NUM_PARALLEL
+              valueFrom:
+                configMapKeyRef:
+                  name: rstudio-config
+                  key: OLLAMA_NUM_PARALLEL
+            - name: OLLAMA_KEEP_ALIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: rstudio-config
+                  key: OLLAMA_KEEP_ALIVE
+            - name: OLLAMA_MAX_LOADED_MODELS
+              valueFrom:
+                configMapKeyRef:
+                  name: rstudio-config
+                  key: OLLAMA_MAX_LOADED_MODELS
+          ports:
+            - containerPort: 11434
+              name: api
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+            limits:
+              # Protect cluster from unconstrained AI memory leaks and avoid Noisy Neighbor core starvation
+              memory: "16Gi"
+              cpu: "2500m"
+          livenessProbe:
+            httpGet:
+              path: /api/version
+              port: 11434
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: ollama-storage
+              mountPath: /root/.ollama
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 1000
+            runAsGroup: 1000
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: ollama-storage
+          persistentVolumeClaim:
+            claimName: ollama-storage-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-ai
+  namespace: botanical
+spec:
+  selector:
+    app: ollama-ai
+  ports:
+    - protocol: TCP
+      port: 11434
+      targetPort: 11434
+  type: ClusterIP

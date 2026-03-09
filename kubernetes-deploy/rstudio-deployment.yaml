@@ -1,0 +1,232 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rstudio
+  namespace: botanical
+  labels:
+    app: rstudio
+spec:
+  replicas: 1 # RStudio sessions are often stateful/pet-like per user, but we can scale the dispatcher if needed.
+  selector:
+    matchLabels:
+      app: rstudio
+  template:
+    metadata:
+      labels:
+        app: rstudio
+      annotations:
+        # Non-optimistic restart on config change
+        checksum/config: "placeholder-for-kustomize-injection"
+    spec:
+      securityContext:
+        # Root is needed for rstudio-server to initialize users, but we avoid privileged mode
+        runAsUser: 0
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        # 1. Pessimistic Init: Fetch PKI Root for Internal Trust (from Infra-Iam-PKI pattern)
+        - name: fetch-pki-certs
+          image: smallstep/step-cli:0.25.2
+          env:
+            - name: STEPPATH
+              value: /tmp/step
+          command:
+            - sh
+            - -c
+            - |
+              # Fetch the PKI Trust Anchor from the internal CA
+              until step ca root /certs/step-ca-root.crt --ca-url https://step-ca.pki.svc.cluster.local:9000 --fingerprint ${STEP_FINGERPRINT} --force; do
+                echo "Waiting for PKI CA to come online..."
+                sleep 5
+              done
+              echo "Successfully fetched internal root."
+          envFrom:
+            - secretRef:
+                name: rstudio-secrets
+          volumeMounts:
+            - name: shared-certs
+              mountPath: /certs
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+      containers:
+        # --- Authentication Sidecar (Winbind) ---
+        - name: winbind-sidecar
+          image: ubuntu:22.04
+          command: ["/bin/bash", "-c"]
+          # We run winbind in the foreground. It must successfully start for PAM to work.
+          args: 
+            - |
+              apt-get update && apt-get install -y winbind samba smbclient krb5-user &&
+              echo "Starting Winbind daemon..." &&
+              exec winbindd -F -S -d 1
+          volumeMounts:
+            - name: winbind-socket
+              mountPath: /var/run/samba
+            - name: samba-config
+              mountPath: /etc/samba/smb.conf
+              subPath: smb.conf
+              readOnly: true
+            - name: kerberos-cache
+              mountPath: /tmp
+            - name: advanced-config
+              mountPath: /etc/krb5.conf
+              subPath: krb5.conf
+              readOnly: true
+            - name: advanced-config
+              mountPath: /etc/nsswitch.conf
+              subPath: nsswitch.conf
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"] # Required for winbind ID mapping locally
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command: ["wbinfo", "-p"] # Simple ping to winbind daemon
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+        # --- Main RStudio Application ---
+        - name: rstudio
+          image: ghcr.io/unibo/r-studioconf/rstudio-samba:latest # Or the locally built image repository
+          envFrom:
+            - configMapRef:
+                name: rstudio-config
+          env:
+            - name: AUTH_BACKEND
+              value: "samba"
+            - name: STEP_CA_ROOT_PATH
+              value: "/usr/local/share/ca-certificates/step-ca-root.crt"
+            - name: USERID
+              valueFrom:
+                configMapKeyRef:
+                  name: rstudio-config
+                  key: DOCKER_USERID
+            - name: GROUPID
+              valueFrom:
+                configMapKeyRef:
+                  name: rstudio-config
+                  key: DOCKER_GROUPID
+          ports:
+            - containerPort: 8787
+              name: http
+          resources:
+            requests:
+              memory: "8Gi"
+              cpu: "2000m"
+            limits:
+              # Strict limits as per the sysadmin pattern to prevent Noisy Neighbor Liveloops
+              memory: "16Gi"
+              cpu: "4000m"
+          
+          # Sysadmin Non-Optimistic Probes
+          readinessProbe:
+            exec:
+              # Must only route traffic if winbind successfully maps a known AD group/user AND rstudio is listening
+              command: ["/bin/bash", "-c", "wbinfo -p && curl -f -s http://127.0.0.1:8787/auth-sign-in"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /auth-sign-in
+              port: 8787
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          
+          # Sysadmin Refactor: Mitigate Race Condition
+          # Block rstudio initialization until the winbind sidecar has successfully established trust
+          # and is responding to group lookups.
+          lifecycle:
+            postStart:
+              exec:
+                command: 
+                  - "/bin/bash"
+                  - "-c"
+                  - |
+                    echo "Waiting for Winbind sidecar to initialize AD map..."
+                    until wbinfo -p; do sleep 2; done
+                    echo "Winbind is active. RStudio may proceed."
+
+          volumeMounts:
+            # 1. Mount the shared winbind socket from the sidecar
+            - name: winbind-socket
+              mountPath: /var/run/samba/winbindd
+              subPath: winbindd
+            - name: winbind-socket
+              mountPath: /var/lib/samba
+              subPath: lib
+            # 2. Mount the injected SMB config for the client (must match server perfectly)
+            - name: samba-config
+              mountPath: /etc/samba/smb.conf
+              subPath: smb.conf
+              readOnly: true
+            # 3. Mount PKI Trust
+            - name: shared-certs
+              mountPath: /usr/local/share/ca-certificates/step-ca-root.crt
+              subPath: step-ca-root.crt
+              readOnly: true
+            # 4. Mount Persistent Storage
+            - name: home-storage
+              mountPath: /home
+            - name: projects-storage
+              mountPath: /nfs/home
+            - name: python-venv
+              mountPath: /opt/r-geospatial
+              readOnly: true
+            - name: rstudio-tmpfs
+              mountPath: /tmp
+            - name: advanced-config
+              mountPath: /etc/krb5.conf
+              subPath: krb5.conf
+              readOnly: true
+            - name: advanced-config
+              mountPath: /etc/nsswitch.conf
+              subPath: nsswitch.conf
+              readOnly: true
+          
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"] # Removed SYS_CHROOT to enforce strict least-privilege
+
+      volumes:
+        - name: winbind-socket
+          emptyDir: {}
+        - name: samba-config
+          configMap:
+            name: samba-winbind-config
+        - name: kerberos-cache
+          emptyDir: {}
+        - name: shared-certs
+          emptyDir: {}
+        - name: rstudio-tmpfs
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+        - name: home-storage
+          persistentVolumeClaim:
+            claimName: rstudio-home-pvc
+        - name: projects-storage
+          persistentVolumeClaim:
+            claimName: rstudio-projects-pvc
+        - name: python-venv
+          persistentVolumeClaim:
+            claimName: rstudio-python-venv-pvc
+        - name: advanced-config
+          configMap:
+            name: rstudio-advanced-config

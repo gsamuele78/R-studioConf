@@ -485,9 +485,14 @@
                     console.log("3. Credentials Validated. Proceeding to Service Sign-in...");
                     
                     // Attempt Direct Login to RStudio and Nextcloud concurrently
+                    // Phase 3 Hardening: Enforce pessimistic timeouts preventing indefinite UI hangs
+                    const timeoutPromise = new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error("Login Request Timeout (Backend Unresponsive)")), 8000)
+                    );
+
                     Promise.allSettled([
-                        loginRStudio(user, pass),
-                        loginNextcloud(user, pass)
+                        Promise.race([loginRStudio(user, pass), timeoutPromise]),
+                        Promise.race([loginNextcloud(user, pass), timeoutPromise])
                     ])
                         .then((results) => {
                             console.log("5. Direct Login Sequence Complete", results);

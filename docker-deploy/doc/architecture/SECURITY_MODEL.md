@@ -42,3 +42,11 @@ Tutti i microservizi secondari (Ollama, Biome Telemetry FastAPI, RStudio RPC) so
 ## 4. PKI Trust Implicit
 
 Il container è in grado di importare autonomamente "Root of Trust" (es. certificate server Step-CA o AD-CS) all'avvio. Tramite `manage_pki_trust.sh`, il container invoca `.env` parameters per iniettare e processare il fingerprint SHA256 prima che ogni reverse-proxy possa avviare la convalida SSL, bloccando attacchi Man-In-The-Middle all'interno della demilitarized zone (DMZ) aziendale.
+
+## 5. Phase 3 Sysadmin Hardening (Parity Sync)
+
+Per allineare il deployment Dockerizzato agli standard rigorosi Kubernetes RKE2, sono state implementate le seguenti policy restrittive Zero-Trust:
+
+- **Pessimistic Initialization Loops**: L'approccio ottimistico per l'avvio è stato eliminato. `entrypoint_rstudio.sh` include un ciclo bloccante (`until wbinfo -p` o `getent passwd`) che blocca l'engine finché il socket UNIX AD/PAM host-side non risponde, prevenendo Race Conditions critici al boot.
+- **Strict Capabilities Drop**: Al servizio RStudio è stata revocata esplicitamente la Linux capability protetta (`cap_drop: ["SYS_CHROOT"]`), riducendo brutalmente la superficie d'attacco dall'interno del container verso l'Hypervisor.
+- **Engine Starvation Limits**: L'allocazione risorse per `ollama-ai` è clampata a `2.5` core, prevenendo l'estinzione delle risorse nodali in scenari "Noisy Neighbor".

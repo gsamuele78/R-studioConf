@@ -232,6 +232,24 @@ fi
 # If mounting /home, ensure permissions are sane? 
 # In "Pet" mode, we assume host manages permissions.
 
+# 3.5 Pesimistic Race Condition Prevention (Phase 3 Hardening)
+log "INFO" "Enforcing Non-Optimistic Auth Initialization..."
+if [ "$AUTH_BACKEND" == "sssd" ] && [ -S "/var/lib/sss/pipes/nss" ]; then
+    log "INFO" "Polling SSSD backend..."
+    until getent passwd > /dev/null 2>&1; do
+        log "WARN" "Waiting for SSSD to respond..."
+        sleep 2
+    done
+    log "INFO" "SSSD backend active."
+elif [ "$AUTH_BACKEND" == "samba" ]; then
+    log "INFO" "Polling Winbind backend..."
+    until wbinfo -p > /dev/null 2>&1; do
+        log "WARN" "Waiting for Winbind to respond..."
+        sleep 2
+    done
+    log "INFO" "Winbind backend active."
+fi
+
 # 4. Hand off to S6 Init
 log "INFO" "Initialization complete. Starting Services..."
 exec "$@"

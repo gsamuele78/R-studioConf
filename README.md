@@ -73,16 +73,16 @@ sudo bash setup_r_env.sh
 
 #### 3. Script Actions & Configuration
 
-- **Interactive Menu:** Will guide you through pre-flight checks, CRAN repo, R, OpenBLAS/OpenMP, BSPM, R packages, RStudio Server, and Nginx/SSSD setup.
-- **Logging:** Logs are saved to `/var/log/r_setup/`.
-- **Backups:** Critical config files are backed up to `/opt/r_setup_backups/`.
-- **Environment Variables:** Advanced users can override key paths and settings via environment variables. See the script's `usage()` for details.
+* **Interactive Menu:** Will guide you through pre-flight checks, CRAN repo, R, OpenBLAS/OpenMP, BSPM, R packages, RStudio Server, and Nginx/SSSD setup.
+* **Logging:** Logs are saved to `/var/log/r_setup/`.
+* **Backups:** Critical config files are backed up to `/opt/r_setup_backups/`.
+* **Environment Variables:** Advanced users can override key paths and settings via environment variables. See the script's `usage()` for details.
 
 #### 4. Verify Installation
 
-- RStudio Server should be available at: `http://<YOUR_SERVER_IP>:8787`
-- Nginx (if enabled) will proxy to RStudio and potentially serve SSL if configured.
-- Domain logins (via SSSD) should work for authorized users.
+* RStudio Server should be available at: `http://<YOUR_SERVER_IP>:8787`
+* Nginx (if enabled) will proxy to RStudio and potentially serve SSL if configured.
+* Domain logins (via SSSD) should work for authorized users.
 
 ---
 
@@ -90,35 +90,35 @@ sudo bash setup_r_env.sh
 
 ### install/common_utils.sh
 
-- Shared library of Bash utility functions, logging, error handling, etc.
-- Used by all major scripts for safety and DRY principles.
+* Shared library of Bash utility functions, logging, error handling, etc.
+* Used by all major scripts for safety and DRY principles.
 
 ### install/nginx_setup.sh
 
-- Automates installation and configuration of Nginx as a reverse proxy to RStudio Server.
-- Supports SSL, custom domains, HTTP → HTTPS redirection, and basic hardening.
-- Templates for Nginx config and SSL deployment are in `install/templates/`.
+* Automates installation and configuration of Nginx as a reverse proxy to RStudio Server.
+* Supports SSL, custom domains, HTTP → HTTPS redirection, and basic hardening.
+* Templates for Nginx config and SSL deployment are in `install/templates/`.
 
 ### install/rstudio_setup.sh
 
-- Stand-alone installer for RStudio Server (auto-detects latest version for Ubuntu).
-- Handles removal of old versions, service enablement, and logs all actions.
+* Stand-alone installer for RStudio Server (auto-detects latest version for Ubuntu).
+* Handles removal of old versions, service enablement, and logs all actions.
 
 ### install/sssd_kerberos_setup.sh
 
-- Automates SSSD and Kerberos configuration for Active Directory or LDAP domain login.
-- Manages `/etc/sssd/sssd.conf`, Kerberos keytabs, and PAM/NSS integration.
-- Backs up previous configs, verifies domain join, and can be re-run safely.
+* Automates SSSD and Kerberos configuration for Active Directory or LDAP domain login.
+* Manages `/etc/sssd/sssd.conf`, Kerberos keytabs, and PAM/NSS integration.
+* Backs up previous configs, verifies domain join, and can be re-run safely.
 
 ### install/optimize_vm.sh
 
-- Applies best practices for VM performance (swappiness, noatime, overcommit, etc).
-- Optionally prepares disks, tunes memory, and documents VM hardware.
+* Applies best practices for VM performance (swappiness, noatime, overcommit, etc).
+* Optionally prepares disks, tunes memory, and documents VM hardware.
 
 ### install/conf/ and install/templates/
 
-- Place your custom config templates (SSL certs, Nginx sites, SSSD, etc) here for overrides.
-- The scripts will use these if present, supporting site-specific customization.
+* Place your custom config templates (SSL certs, Nginx sites, SSSD, etc) here for overrides.
+* The scripts will use these if present, supporting site-specific customization.
 
 ---
 
@@ -126,9 +126,9 @@ sudo bash setup_r_env.sh
 
 ### Updating or Expanding
 
-- **Re-run scripts:** All scripts are idempotent; re-running updates or repairs components without breaking existing configs.
-- **Edit templates/configs:** Adjust files under `install/conf/` or `install/templates/` and re-run setup scripts for changes.
-- **Add more R packages:** Edit the package lists in `setup_r_env.sh` and re-run the package install step.
+* **Re-run scripts:** All scripts are idempotent; re-running updates or repairs components without breaking existing configs.
+* **Edit templates/configs:** Adjust files under `install/conf/` or `install/templates/` and re-run setup scripts for changes.
+* **Add more R packages:** Edit the package lists in `setup_r_env.sh` and re-run the package install step.
 
 ### Uninstallation
 
@@ -138,8 +138,8 @@ The main script supports full uninstall:
 sudo bash setup_r_env.sh uninstall_all
 ```
 
-- Removes R, RStudio Server, Nginx, SSSD configs, CRAN/R2U repos, and user data (with confirmation).
-- Backs up configs before removal and logs all actions.
+* Removes R, RStudio Server, Nginx, SSSD configs, CRAN/R2U repos, and user data (with confirmation).
+* Backs up configs before removal and logs all actions.
 
 ---
 
@@ -161,5 +161,4 @@ This project is licensed under the GPL-3.0 License. See the [`LICENSE`](https://
 
 ## Acknowledgements
 
-- Uses open source best practices from the R and Linux system administration communities.
-
+* Uses open source best practices from the R and Linux system administration communities.

@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rstudio-config
+  namespace: botanical
+data:
+  # Base Application Configuration translated from .env
+  HOST_DOMAIN: "botanical.example.com"
+  RSTUDIO_VERSION: "2023.06.0"
+  R_VERSION: "4.3.1"
+  RSESSION_TIMEOUT_MINUTES: "10080"
+  BIOME_CONTACT: "support@botanical.example.com"
+  RSESSION_WEBSOCKET_LOG_LEVEL: "1"
+  MAX_BLAS_THREADS: "16"
+  OPENBLAS_NUM_THREADS: "4"
+  OMP_NUM_THREADS: "4"
+  
+  # Identity Mappings
+  DOCKER_USERID: "1000"
+  DOCKER_GROUPID: "1000"
+  OIDC_ISSUER_URL: "https://keycloak.pki.svc.cluster.local/realms/personale"
+  
+  # Ollama Configuration
+  OLLAMA_HOST_BIND: "0.0.0.0:11434"
+  OLLAMA_NUM_PARALLEL: "2"
+  OLLAMA_KEEP_ALIVE: "24h"
+  OLLAMA_MAX_LOADED_MODELS: "1"
+
+  # Telemetry API
+  TELEMETRY_NFS_HOME: "/nfs/home"
+  TELEMETRY_PROJECTS_DIR: "/nfs/projects"
+  TELEMETRY_TMP_DIR: "/tmp"
+
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: samba-winbind-config
+  namespace: botanical
+data:
+  smb.conf: |
+    [global]
+    # Pessimistic integration: Strict AD integration mirroring Infra-Iam-PKI
+    workgroup = PERSONALE
+    realm = PERSONALE.DIR.UNIBO.IT
+    security = ads
+    
+    # ID Mapping Config - CRITICAL FOR NFS
+    # We must ensure consistent UIDs/GIDs across all nodes
+    idmap config * : backend = tdb
+    idmap config * : range = 10000-999999
+    
+    idmap config PERSONALE : backend = ad
+    idmap config PERSONALE : schema_mode = rfc2307
+    idmap config PERSONALE : range = 163600000-263600000
+    idmap config PERSONALE : unix_nss_info = yes
+    
+    # Winbind options
+    winbind use default domain = yes
+    winbind offline logon = false
+    winbind nss info = rfc2307
+    winbind enum users = yes
+    winbind enum groups = yes
+    
+    # Logging
+    log level = 1
+    max log size = 50
+    
+    # Disable printing
+    load printers = no
+    printing = bsd
+    printcap name = /dev/null
+    disable spoolss = yes
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rstudio-advanced-config
+  namespace: botanical
+data:
+  krb5.conf: |
+    [libdefaults]
+        default_realm = PERSONALE.DIR.UNIBO.IT
+        dns_lookup_realm = false
+        dns_lookup_kdc = true
+  nsswitch.conf: |
+    passwd:         files winbind
+    group:          files winbind
+    shadow:         files
+    gshadow:        files
+
+    hosts:          files dns
+    networks:       files
+
+    protocols:      db files
+    services:       db files
+    ethers:         db files
+    rpc:            db files
+    netgroup:       nis
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-portal-config
+  namespace: botanical
+data:
+  NGINX_WORKER_PROCESSES: "auto"
+  NGINX_WORKER_CONNECTIONS: "1024"
+  ENABLE_TELEMETRY_STRIP: "true"
+  NEXTCLOUD_TARGET_URL: "https://192.168.1.100"

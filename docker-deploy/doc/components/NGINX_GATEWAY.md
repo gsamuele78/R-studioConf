@@ -27,3 +27,10 @@ Sono state rimosse direttive compiacenti (logiche ottimistiche proxy), imponendo
 - **Timeouts Allineati:** Nginx disintegra la sessione in syncro con RStudio (es. `RSESSION_TIMEOUT_MINUTES`), non persistendo connessioni client ghosted (Socket Leakage prevention).
 - **Buffer Tunnings:** Incremento limitato e scalare di `proxy_buffer_size`, idoneo per le transazioni JSON-RPC corpose di Shiny Apps senza esporre vulnerabilità OOM all'Nginx master process.
 - **Risoluzione Socket IPv6:** Rimozione dei conflitti binding IPv6 che forzavano Nginx al crash o all'early-exit su Linux Kernel configurati solo su stack IPv4 legacy.
+
+## Enterprise Security Headers & UI Hardening (Phase 3 Sync)
+
+A seguito dell'audit di parità Sysadmin vs Kubernetes Master:
+
+- **Strict HTTP Headers**: Sono stati iniettati programmaticamente `Strict-Transport-Security`, `X-XSS-Protection`, `X-Content-Type-Options` e `Content-Security-Policy` diretti nell'entrypoint location (`/`).
+- **Pessimistic UI Bounding**: La logica Web JS di pre-caricamento parallelo (RStudio/Nextcloud) è stata rifattorizzata impiegando `Promise.race()` contro un artificial timeout. Previene "Infinite Loading Spinners" degradando garbatamente a fallback d'errore visibile, anziché bloccare l'interfaccia se un backend silente non risponde.

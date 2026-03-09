@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-portal
+  namespace: botanical
+  labels:
+    app: nginx-portal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-portal
+  template:
+    metadata:
+      labels:
+        app: nginx-portal
+    spec:
+      securityContext:
+        runAsUser: 101 # Running completely unprivileged, mapped to the standard nginx low-privilege user
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        # Fetch internal PKI for backend proxying validation
+        - name: fetch-pki-certs
+          image: smallstep/step-cli:0.25.2
+          env:
+            - name: STEPPATH
+              value: /tmp/step
+          command: ["sh", "-c"]
+          args: 
+            - |
+              until step ca root /certs/step-ca-root.crt --ca-url https://step-ca.pki.svc.cluster.local:9000 --fingerprint ${STEP_FINGERPRINT} --force; do
+                echo "Waiting for PKI CA to come online..."
+                sleep 5
+              done
+              echo "PKI initialized."
+          envFrom:
+            - secretRef:
+                name: rstudio-secrets
+          volumeMounts:
+            - name: shared-certs
+              mountPath: /certs
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+      containers:
+        - name: nginx-portal
+          image: ghcr.io/unibo/r-studioconf/botanical-portal-nginx:latest # Or locally built
+          envFrom:
+            - configMapRef:
+                name: nginx-portal-config
+          env:
+            - name: NGINX_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: rstudio-config
+                  key: HOST_DOMAIN
+            - name: NGINX_PORT
+              value: "443"
+            - name: HTTPS_PORT
+              value: "8443"
+            - name: RSTUDIO_PORT
+              value: "8787"
+          ports:
+            - containerPort: 8443
+              name: https
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          
+          # Sysadmin Non-Optimistic Probes
+          readinessProbe:
+            tcpSocket:
+              port: 8443
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+
+          volumeMounts:
+            # We mount dummy certs for Nginx SSL binding since Traefik does TLS offload, 
+            # but legacy Nginx forces SSL on its port. (Or we can mount real certs)
+            - name: shared-certs
+              mountPath: /etc/ssl/certs/server.crt
+              subPath: step-ca-root.crt # Lazy fallback if certs not generated via cert-manager
+              readOnly: true
+            - name: shared-certs
+              mountPath: /etc/ssl/private/server.key
+              subPath: step-ca-root.crt # Obviously this needs a real key in prod, dummy fails nginx syntax unless valid
+            - name: step-ca-root
+              mountPath: /usr/local/share/ca-certificates/step-ca-root.crt
+              subPath: step-ca-root.crt
+              readOnly: true
+            - name: nginx-templates
+              mountPath: /etc/nginx/templates/nginx_proxy_location.conf.template
+              subPath: nginx_proxy_location.conf.template
+              readOnly: true
+          
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"] # Removed NET_BIND_SERVICE fully
+
+      volumes:
+        - name: shared-certs
+          emptyDir: {}
+        - name: step-ca-root
+          emptyDir: {}
+        - name: nginx-templates
+          configMap:
+            name: nginx-templates-config

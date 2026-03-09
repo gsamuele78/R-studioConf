@@ -21,6 +21,8 @@ services:
         limits:
           memory: ${RSTUDIO_MEMORY_LIMIT:-16G}
           cpus: ${RSTUDIO_CPU_LIMIT:-0.0}
+    cap_drop:
+      - SYS_CHROOT
     # Translate /etc/fstab /tmp ramdisk to Docker tmpfs
     tmpfs:
       - /tmp:rw,size=${RAMDISK_SIZE:-16G},uid=0,gid=0,mode=1777
@@ -69,6 +71,8 @@ services:
         limits:
           memory: ${RSTUDIO_MEMORY_LIMIT:-16G}
           cpus: ${RSTUDIO_CPU_LIMIT:-0.0}
+    cap_drop:
+      - SYS_CHROOT
     # Translate /etc/fstab /tmp ramdisk to Docker tmpfs
     tmpfs:
       - /tmp:rw,size=${RAMDISK_SIZE:-16G},uid=0,gid=0,mode=1777
@@ -196,9 +200,9 @@ services:
     deploy:
       resources:
         limits:
-          # Protect host from unbounded LLM CPU/Memory allocation
+          # Protect host from unbounded AI inference core starvation
           memory: ${OLLAMA_RAM_LIMIT:-16G}
-          cpus: ${OLLAMA_CPU_LIMIT:-0.0}
+          cpus: ${OLLAMA_CPU_LIMIT:-2.5}
     logging:
       driver: "json-file"
       options:
