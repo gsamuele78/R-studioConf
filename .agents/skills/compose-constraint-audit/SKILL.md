@@ -1,11 +1,11 @@
 ---
 name: compose-constraint-audit
-description: Validates Docker Compose files against the 12 hard constraints of the Infra-IAM-PKI project. Use when reviewing, editing, or creating any docker-compose.yml file. Checks resource limits, volume types, image pinning, port exposure, and all other pessimistic engineering invariants.
+description: Validates Docker Compose files against the 12 hard constraints of the R-studioConf project. Use when reviewing, editing, or creating any docker-compose.yml file. Checks resource limits, volume types, image pinning, port exposure, and all other pessimistic engineering invariants.
 ---
 
 # Compose Constraint Audit Skill
 
-You are auditing a Docker Compose file for the Infra-IAM-PKI project. This project follows **Pessimistic System Engineering** — assume failure, bound all resources, fail fast.
+You are auditing a Docker Compose file for the R-studioConf project. This project follows **Pessimistic System Engineering** — assume failure, bound all resources, fail fast.
 
 ## Checklist (check EVERY item)
 
@@ -23,7 +23,7 @@ For EACH service in the compose file, verify:
 
 4. **HC-07 Pinned Versions:** Every `image:` must have an explicit version tag. No `:latest`. Correct versions:
    - Read `.ai/extracted_versions.env` for current pinned versions
-   - If that file doesn't exist, check actual compose files in `infra-*/docker-compose.yml`
+   - If that file doesn't exist, check actual compose files in `docker-deploy/docker-compose.yml`
 
 5. **HC-09 No docker.sock:** Only `docker-socket-proxy` and `watchtower` may mount `/var/run/docker.sock`. All other services must NOT.
 

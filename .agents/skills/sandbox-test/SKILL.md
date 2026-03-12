@@ -5,19 +5,13 @@ description: Guides testing changes in the Vagrant/libvirt sandbox environment. 
 
 # Sandbox Testing Skill
 
-You are helping test a change in the Infra-IAM-PKI Vagrant sandbox.
+You are helping test a change in the R-studioConf Vagrant sandbox.
 
 ## Topology
 
-| VM | IP | Component | Compose |
-|----|-----|-----------|---------|
-| pki-host | 192.168.56.10 | step-ca + Postgres + Caddy L4 | `infra-pki/docker-compose.yml` (PRODUCTION — no override) |
-| iam-host | 192.168.56.20 | Keycloak + Postgres + Caddy | `sandbox/iam-sandbox.yml` (sandbox override) |
-| ood-host | 192.168.56.30 | Open OnDemand + Apache | `sandbox/ood-sandbox.yml` (sandbox override) |
-
-## CRITICAL: PKI Uses Production Compose
-
-Changes to `infra-pki/docker-compose.yml` DIRECTLY affect the sandbox. There is no sandbox override for PKI.
+| VM           | IP            | Component                        | Compose                              |
+|--------------|---------------|----------------------------------|--------------------------------------|
+| rstudio-host | 192.168.56.40 | Nginx Portal + RStudio + Backend | `docker-deploy/docker-compose.yml` |
 
 ## Testing Protocol
 
@@ -25,45 +19,26 @@ Changes to `infra-pki/docker-compose.yml` DIRECTLY affect the sandbox. There is 
 ```bash
 cd sandbox/
 vagrant destroy -f           # Clean slate
-vagrant up pki-host          # PKI must start first
+vagrant up rstudio-host      # Start unified environment
 ```
 
-### Step 2: Verify PKI
+### Step 2: Verify Architecture
 ```bash
-vagrant ssh pki-host -c "docker compose -f /workspace/Infra-Iam-PKI/infra-pki/docker-compose.yml ps"
-# All containers should be healthy
-curl -sf http://192.168.56.10/fingerprint/root_ca.fingerprint
-# Must return a SHA256 fingerprint string
+vagrant ssh rstudio-host -c "docker compose -f /workspace/R-studioConf/docker-deploy/docker-compose.yml ps"
+# All containers (nginx-portal, oauth2-proxy, etc.) should be healthy
+curl -sf http://192.168.56.40/health
 ```
 
-### Step 3: Start Dependent VMs
+### Step 3: Push Code Changes
+After modifying configuration files locally:
 ```bash
-vagrant up iam-host          # Fetches fingerprint from pki-host automatically
-vagrant up ood-host          # Same fingerprint fetch
-```
-
-### Step 4: Verify IAM
-```bash
-vagrant ssh iam-host -c "docker compose -f /workspace/Infra-Iam-PKI/sandbox/iam-sandbox.yml ps"
-# Keycloak should be healthy
-curl -sf http://192.168.56.20/health
-```
-
-### Step 5: Push Code Changes
-After modifying files locally:
-```bash
-vagrant rsync                # Push changes to all VMs
-vagrant ssh pki-host         # SSH in and restart affected service
+vagrant rsync                # Push changes to the VM
+vagrant ssh rstudio-host     # SSH in and restart affected services
 ```
 
 ## Sandbox vs Production Key Differences
 
-- Keycloak: `start-dev` (HTTP, no HTTPS)
-- No iam-renewer (no cert lifecycle in sandbox)
-- No watchtower
-- Caddy IAM: simple `reverse-proxy --from :80 --to KC:8080`
-- `.env.sandbox` values are safe for testing
-
-## Known Broken
-
-`full_sandbox_launcher.sh` is broken (TD-09). Do not use it.
+- Uses `docker-deploy/.env.sandbox` configurations.
+- Uses mock SSO bindings to prevent unintended external OIDC invocations during testing.
+- Local testing credentials and test tokens applied.
+- Resource constraints heavily scaled for Vagrant limits.

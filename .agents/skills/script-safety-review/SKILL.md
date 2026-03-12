@@ -1,11 +1,11 @@
 ---
 name: script-safety-review
-description: Reviews shell scripts for safety and compliance with Infra-IAM-PKI project standards. Use when creating, modifying, or reviewing any .sh file in the scripts/ directory. Checks error handling, secret safety, interactive input rules, and script coupling.
+description: Reviews shell scripts for safety and compliance with R-studioConf project standards. Use when creating, modifying, or reviewing any .sh file in the scripts/ directory. Checks error handling, secret safety, interactive input rules, and script coupling.
 ---
 
 # Script Safety Review Skill
 
-You are reviewing a shell script for the Infra-IAM-PKI project.
+You are reviewing a shell script for the R-studioConf project.
 
 ## Mandatory Checks
 
@@ -23,13 +23,9 @@ You are reviewing a shell script for the Infra-IAM-PKI project.
 Check which category this script belongs to:
 
 **Container-internal (NEVER use read -p):**
-- `scripts/infra-pki/init_step_ca.sh`
-- `scripts/infra-pki/patch_ca_config.sh`
-- `scripts/infra-iam/fetch_pki_root.sh`
-- `scripts/infra-iam/fetch_ad_cert.sh`
-- `scripts/infra-iam/renew_certificate.sh`
+Any script executed as an entrypoint or internal daemon via Dockerfile `CMD`, `ENTRYPOINT`, or triggered by a container lifecycle hook.
 
-If the script is in this list and contains `read -p`, `read -rp`, or `read -s`, it WILL hang when run inside a Docker container. This is a **critical failure**.
+If the script is in this category and contains `read -p`, `read -rp`, or `read -s`, it WILL hang when run inside a Docker container. This is a **critical failure**.
 
 **Operator scripts (interactive allowed):**
 All other scripts in `scripts/` that are run by the sysadmin.
@@ -46,7 +42,7 @@ All other scripts in `scripts/` that are run by the sysadmin.
 Before modifying what a script READS or PRODUCES, check the dependency chain:
 
 ```
-generate_token.sh → {host}_join_pki.env → configure_iam_pki.sh → .env → deploy_iam.sh
+configure_rstudio.sh → .env → docker-deploy/docker-compose.yml → RStudio Container
 ```
 
 Read `.ai/agents.md` Section 7.1 for the complete dependency graph.

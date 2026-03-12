@@ -1,6 +1,6 @@
 # .github/workflows/ai-context.yml
 # ══════════════════════════════════════════════════════════════
-# CI pipeline for Infra-IAM-PKI constraint enforcement.
+# CI pipeline for R-studioConf constraint enforcement.
 #
 # Runs on every push and pull request:
 #   1. Validates codebase against hard constraints (validate.sh)
@@ -18,11 +18,12 @@ on:
   push:
     paths:
       # Only run when files that affect constraints change
-      - 'infra-*/docker-compose.yml'
-      - 'infra-*/Dockerfile*'
+      - 'docker-deploy/docker-compose.yml'
+      - 'docker-deploy/Dockerfile*'
+      - 'kubernetes-deploy/**'
       - 'scripts/**/*.sh'
       - 'sandbox/*.yml'
-      - 'infra-*/.env.sandbox'
+      - 'docker-deploy/.env.sandbox'
       - '.ai/**'
       - '.cursorrules'
       - '.clinerules'
@@ -31,8 +32,9 @@ on:
       - '.github/copilot-instructions.md'
   pull_request:
     paths:
-      - 'infra-*/docker-compose.yml'
-      - 'infra-*/Dockerfile*'
+      - 'docker-deploy/docker-compose.yml'
+      - 'docker-deploy/Dockerfile*'
+      - 'kubernetes-deploy/**'
       - 'scripts/**/*.sh'
       - 'sandbox/*.yml'
       - '.ai/**'
@@ -78,28 +80,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate infra-pki compose
+      - name: Validate docker-deploy compose
         run: |
           # Create minimal .env for compose config validation
-          cp infra-pki/.env.sandbox infra-pki/.env
-          docker compose -f infra-pki/docker-compose.yml config > /dev/null
-        continue-on-error: false
-
-      - name: Validate infra-iam compose
-        run: |
-          cp infra-iam/.env.sandbox infra-iam/.env
-          docker compose -f infra-iam/docker-compose.yml config > /dev/null
-        continue-on-error: false
-
-      - name: Validate infra-ood compose
-        run: |
-          # OOD may not have .env.sandbox with all vars — create minimal
-          if [ -f infra-ood/.env.sandbox ]; then
-            cp infra-ood/.env.sandbox infra-ood/.env
-          else
-            touch infra-ood/.env
-          fi
-          docker compose -f infra-ood/docker-compose.yml config > /dev/null
+          cp docker-deploy/.env.sandbox docker-deploy/.env
+          docker compose -f docker-deploy/docker-compose.yml config > /dev/null
         continue-on-error: false
 
   # ────────────────────────────────────────────────────────────

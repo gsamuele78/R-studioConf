@@ -32,6 +32,7 @@ PINNED VERSIONS (extracted from code — do not override):
   ${RSTUDIO_SAMBA_IMAGE: -rstudio-botanical-samba}:${IMAGE_TAG:-latest}
   ${RSTUDIO_SSSD_IMAGE: -rstudio-botanical-sssd}:${IMAGE_TAG:-latest}
   ${TELEMETRY_API_IMAGE: -botanical-telemetry-api}:${IMAGE_TAG:-latest}
+  tecnativa/docker-socket-proxy: 0.3.0
 
 WHEN GENERATING CODE:
 - Output COMPLETE files, not fragments
@@ -44,7 +45,7 @@ WHEN GENERATING CODE:
 
 # FULL PROJECT DOCUMENTATION (from .ai/agents.md)
 
-# Infra-IAM-PKI — Agent Context Document
+# R-studioConf — Agent Context Document
 
 > **Version:** 2.0.0 | **Last Updated:** 2026-03-12
 > **Maintainer:** JFS — IT Officer (Funzionario Tecnico Informatico), BiGeA, Università di Bologna
@@ -159,8 +160,8 @@ step-ca Root CA
 ## 3. Directory Structure
 
 ```
-Infra-Iam-PKI/
-├── infra-pki/                     # PKI stack
+R-studioConf/
+├── docker-deploy/                     # PKI stack
 │   ├── docker-compose.yml         # Production compose
 │   ├── .env / .env.sandbox        # Config (NEVER committed)
 │   ├── caddy/
@@ -171,7 +172,7 @@ Infra-Iam-PKI/
 │   ├── logs/                      # BIND MOUNT — per-service logs
 │   └── logrotate.conf
 │
-├── infra-iam/                     # IAM stack
+├── docker-deploy/                     # IAM stack
 │   ├── docker-compose.yml
 │   ├── .env / .env.sandbox
 │   ├── .Caddyfile                 # L7 reverse proxy config
@@ -190,7 +191,7 @@ Infra-Iam-PKI/
 │   │           └── img/            # Logos
 │   └── old/                       # Legacy compose (reference only)
 │
-├── infra-ood/                     # OOD stack
+├── kubernetes-deploy/                     # OOD stack
 │   ├── docker-compose.yml
 │   ├── .env.sandbox
 │   ├── Dockerfile.init
@@ -202,7 +203,7 @@ Infra-Iam-PKI/
 │   └── scripts/docker-entrypoint.sh
 │
 ├── scripts/
-│   ├── infra-pki/                 # PKI admin scripts
+│   ├── docker-deploy/                 # PKI admin scripts
 │   │   ├── deploy_pki.sh          # 7-step deployment
 │   │   ├── reset_pki.sh           # Destructive wipe
 │   │   ├── backup_pki.sh          # step_data + pg_dump + .env
@@ -219,7 +220,7 @@ Infra-Iam-PKI/
 │   │       ├── join_pki.sh        # Portable client enrollment (SSH host)
 │   │       ├── join_pki.env.template
 │   │       └── setup_client_trust.sh
-│   ├── infra-iam/                 # IAM admin scripts
+│   ├── docker-deploy/                 # IAM admin scripts
 │   │   ├── deploy_iam.sh
 │   │   ├── reset_iam.sh
 │   │   ├── validate_iam_config.sh
@@ -229,7 +230,7 @@ Infra-Iam-PKI/
 │   │   ├── fetch_ad_cert.sh       # LDAPS cert chain extraction
 │   │   ├── fetch_ad_info.sh       # AD fingerprint display
 │   │   └── renew_certificate.sh
-│   ├── infra-ood/
+│   ├── kubernetes-deploy/
 │   │   ├── deploy_ood.sh
 │   │   └── reset_ood.sh
 │   ├── common/
@@ -253,9 +254,9 @@ Infra-Iam-PKI/
 │   └── doc/
 │
 ├── doc/                           # Per-component documentation
-│   ├── infra-pki/
-│   ├── infra-iam/
-│   └── infra-ood/
+│   ├── docker-deploy/
+│   ├── docker-deploy/
+│   └── kubernetes-deploy/
 │
 ├── README.md
 └── .gitignore
@@ -399,7 +400,7 @@ generate_token.sh ──produces──► {hostname}_join_pki.env
                                        │
                     configure_iam_pki.sh ◄──consumes──┘
                            │
-                           ├──modifies──► infra-iam/.env (CA_URL, FINGERPRINT)
+                           ├──modifies──► docker-deploy/.env (CA_URL, FINGERPRINT)
                            │
                     deploy_iam.sh ◄──reads──┘
                            │
@@ -411,7 +412,7 @@ generate_token.sh ──produces──► {hostname}_join_pki.env
 ```
 deploy_pki.sh
     ├──calls──► validate_config.sh --pre-deploy
-    ├──reads──► infra-pki/.env (PUID, PGID, ALLOWED_IPS)
+    ├──reads──► docker-deploy/.env (PUID, PGID, ALLOWED_IPS)
     ├──calls──► docker compose build + up
     ├──calls──► validate_config.sh --post-deploy
     └──waits──► step-ca healthy + caddy healthy
@@ -426,7 +427,7 @@ backup_pki.sh   (standalone — reads .env, pg_dumpall, copies step_data)
 |--------|---------|--------|----------------------|-----------|
 | `deploy_pki.sh` | 7-step deployment orchestrator | `.env`, `--login` flag (optional) | Starts all PKI containers; validates pre+post | Operator (manual) |
 | `reset_pki.sh` | Destructive wipe | Confirmation prompt (`yes`) | Stops containers, deletes `step_data/`, `db_data/`, `logs/` | Operator (manual) |
-| `backup_pki.sh` | Snapshot PKI state | `.env` for DB creds | `/backup/infra-pki/{timestamp}/` with step_data + pg_dump + .env | Cron or manual |
+| `backup_pki.sh` | Snapshot PKI state | `.env` for DB creds | `/backup/docker-deploy/{timestamp}/` with step_data + pg_dump + .env | Cron or manual |
 | `verify_pki.sh` | Health check suite | `.env` for URLs/IPs | Terminal output (colored status) | Operator or CI |
 | `validate_config.sh` | Pre/post deploy validation | `--pre-deploy` or `--post-deploy` | Exit 0 (pass) or exit 1 (fail) | `deploy_pki.sh` |
 | `configure_pki.sh` | Interactive TUI config manager | Keyboard input | Modifies `.env` and `secrets/` files | Operator (manual) |
@@ -444,7 +445,7 @@ backup_pki.sh   (standalone — reads .env, pg_dumpall, copies step_data)
 | `reset_iam.sh` | Destructive wipe | Confirmation prompt (`yes`) | Stops containers, deletes `keycloak_data/`, `caddy_data/`, `certs/`, `logs/` | Operator (manual) |
 | `validate_iam_config.sh` | Pre/post deploy validation | `--pre-deploy` or `--post-deploy` | Exit 0 or 1 | `deploy_iam.sh` |
 | `configure_iam.sh` | Interactive TUI config manager | Keyboard input | Modifies `.env` | Operator (manual) |
-| `configure_iam_pki.sh` | Inject PKI trust into IAM | Path to `{host}_join_pki.env` | Modifies `infra-iam/.env` (CA_URL, FINGERPRINT) | Operator (manual) |
+| `configure_iam_pki.sh` | Inject PKI trust into IAM | Path to `{host}_join_pki.env` | Modifies `docker-deploy/.env` (CA_URL, FINGERPRINT) | Operator (manual) |
 | `fetch_pki_root.sh` | Download root CA via step-cli | `.env` (CA_URL, FINGERPRINT) or CLI args | Writes `root_ca.crt` to specified path | `iam-init` container |
 | `fetch_ad_cert.sh` | Extract LDAPS cert chain | AD_HOST, AD_PORT args | Writes `ad_root_ca.crt` | `iam-init` container |
 | `fetch_ad_info.sh` | Display AD fingerprint | AD_HOST arg | Terminal output (fingerprint + cert details) | Operator (manual) |
@@ -483,7 +484,7 @@ backup_pki.sh   (standalone — reads .env, pg_dumpall, copies step_data)
 [PKI Host] generate_token.sh → produces infra-iam_join_pki.env
 [IAM Host] configure_iam_pki.sh /path/to/infra-iam_join_pki.env
            → reads CA_URL + FINGERPRINT from file
-           → updates infra-iam/.env
+           → updates docker-deploy/.env
 [IAM Host] deploy_iam.sh (or docker compose restart iam-init keycloak)
 ```
 
@@ -499,11 +500,11 @@ backup_pki.sh   (standalone — reads .env, pg_dumpall, copies step_data)
 
 **Workflow D: Backup and restore**
 ```
-[PKI Host] backup_pki.sh  → /backup/infra-pki/{timestamp}/
+[PKI Host] backup_pki.sh  → /backup/docker-deploy/{timestamp}/
                              contains: step_data/, db_dump.sql, .env
            Auto-rotation: backups older than 7 days are purged
 [Restore]  reset_pki.sh   → clean slate
-           cp backup/step_data → infra-pki/step_data
+           cp backup/step_data → docker-deploy/step_data
            psql < db_dump.sql  → restore database
            deploy_pki.sh       → restart
 ```
@@ -518,7 +519,7 @@ The sandbox is NOT a simplified test harness — it is a **1:1 production-topolo
 
 | VM | IP | RAM | CPUs | Component | Compose File Used |
 |----|-----|-----|------|-----------|-------------------|
-| `pki-host` | 192.168.56.10 | 2048 MB | 2 | infra-pki | `infra-pki/docker-compose.yml` (production compose directly) |
+| `pki-host` | 192.168.56.10 | 2048 MB | 2 | infra-pki | `docker-deploy/docker-compose.yml` (production compose directly) |
 | `iam-host` | 192.168.56.20 | 2048 MB | 2 | infra-iam | `sandbox/iam-sandbox.yml` (sandbox override) |
 | `ood-host` | 192.168.56.30 | 4096 MB | 4 | infra-ood | `sandbox/ood-sandbox.yml` (sandbox override) |
 
@@ -529,7 +530,7 @@ The Vagrantfile does the following for each VM (in order):
 **Shared provisioner (all VMs):**
 1. Install Docker CE + Docker Compose plugin from official Docker apt repo
 2. Add `vagrant` user to `docker` group
-3. rsync the full project from host to `/workspace/Infra-Iam-PKI` (excluding `.git/`, `sandbox/.vagrant/`, `step_data/`, `db_data/`, `logs/`)
+3. rsync the full project from host to `/workspace/R-studioConf` (excluding `.git/`, `sandbox/.vagrant/`, `step_data/`, `db_data/`, `logs/`)
 
 **pki-host specific:**
 1. `cp .env.sandbox .env` — uses test credentials
@@ -552,7 +553,7 @@ The Vagrantfile does the following for each VM (in order):
 
 The sandbox uses dedicated compose files that differ from production:
 
-| Aspect | Production (`infra-iam/docker-compose.yml`) | Sandbox (`sandbox/iam-sandbox.yml`) |
+| Aspect | Production (`docker-deploy/docker-compose.yml`) | Sandbox (`sandbox/iam-sandbox.yml`) |
 |--------|----------------------------------------------|--------------------------------------|
 | Keycloak mode | `start --optimized` | `start-dev` (HTTP, no HTTPS requirement) |
 | Keycloak healthcheck | Raw TCP `/dev/tcp` to `:8080` | `curl -sf http://localhost:9000/health` |
@@ -738,7 +739,7 @@ Before any PR or deployment, verify:
 
 ---
 
-# Claude Agent Instructions — Infra-IAM-PKI
+# Claude Agent Instructions — R-studioConf
 
 > **Purpose:** Optimized context file for Claude (Anthropic) when working on this codebase.
 > **Usage:** Include this file in your Claude Project Knowledge or paste at conversation start.
@@ -781,7 +782,7 @@ Use this XML-structured context when working with Claude API or Claude Projects:
 
 ```xml
 <project_context>
-  <name>Infra-IAM-PKI</name>
+  <name>R-studioConf</name>
   <version>2.0.0</version>
   <owner>JFS — IT Officer, BiGeA, Università di Bologna</owner>
   
@@ -970,7 +971,7 @@ When working on sandbox files:
 
 1. **Never modify the Vagrantfile** without understanding all three VM provisioners. They share a common Docker install block but have host-specific logic.
 2. **The rsync excludes matter:** `.git/`, `sandbox/.vagrant/`, `step_data/`, `db_data/`, `logs/` are excluded from rsync. If you add a new data directory, it probably needs to be in this exclude list too.
-3. **Sandbox compose files live in `sandbox/`**, not alongside production compose. Don't confuse `infra-iam/docker-compose.yml` (production) with `sandbox/iam-sandbox.yml` (sandbox).
+3. **Sandbox compose files live in `sandbox/`**, not alongside production compose. Don't confuse `docker-deploy/docker-compose.yml` (production) with `sandbox/iam-sandbox.yml` (sandbox).
 4. **The fingerprint retry loop** in the Vagrantfile is critical. If you change how/where PKI serves the fingerprint, you break the IAM and OOD VM provisioning.
 5. **`full_sandbox_launcher.sh` is broken** (TD-09). Don't reference it or try to fix it unless explicitly asked.
 

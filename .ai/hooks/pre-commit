@@ -3,7 +3,7 @@ set -euo pipefail
 
 # .ai/hooks/pre-commit
 # ══════════════════════════════════════════════════════════════
-# Git pre-commit hook for Infra-IAM-PKI.
+# Git pre-commit hook for R-studioConf.
 # Validates hard constraints BEFORE allowing a commit.
 #
 # Installation:
@@ -25,7 +25,7 @@ STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
 NEEDS_VALIDATION=false
 for f in $STAGED_FILES; do
     case "$f" in
-        infra-*/docker-compose.yml|infra-*/Dockerfile*|scripts/*.sh|sandbox/*.yml|.ai/*)
+        docker-deploy/docker-compose.yml|docker-deploy/Dockerfile*|scripts/*.sh|sandbox/*.yml|.ai/*)
             NEEDS_VALIDATION=true
             break
             ;;

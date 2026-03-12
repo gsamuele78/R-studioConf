@@ -31,6 +31,7 @@ PINNED VERSIONS (extracted from code — do not override):
   ${RSTUDIO_SAMBA_IMAGE: -rstudio-botanical-samba}:${IMAGE_TAG:-latest}
   ${RSTUDIO_SSSD_IMAGE: -rstudio-botanical-sssd}:${IMAGE_TAG:-latest}
   ${TELEMETRY_API_IMAGE: -botanical-telemetry-api}:${IMAGE_TAG:-latest}
+  tecnativa/docker-socket-proxy: 0.3.0
 
 WHEN GENERATING CODE:
 - Output COMPLETE files, not fragments

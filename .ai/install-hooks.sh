@@ -9,7 +9,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 GREEN='\033[0;32m' BLUE='\033[0;34m' NC='\033[0m'
 
-echo -e "${BLUE}Installing Infra-IAM-PKI development hooks...${NC}"
+echo -e "${BLUE}Installing R-studioConf development hooks...${NC}"
 
 # 1. Install pre-commit hook
 GIT_HOOKS="$PROJECT_ROOT/.git/hooks"
