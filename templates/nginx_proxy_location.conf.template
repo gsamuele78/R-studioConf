@@ -153,7 +153,6 @@ location ^~ /rstudio-inner/ {
 location / {
     root /var/www/html;
     index index.html;
-    index index.html;
     try_files $uri $uri/ =404;
 }
 
