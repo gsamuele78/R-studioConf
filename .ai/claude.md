@@ -33,9 +33,9 @@ Claude excels at large-scale refactoring and understanding complex dependency ch
 
 When generating code for this project, Claude MUST follow these formats:
 
-*   **Shell Scripts:** Never provide snippets like "replace this function." Always output the entire script file. This ensures `set -euo pipefail`, color variables, and imports remain intact.
-*   **Docker Compose:** Output the complete service block. Include all mandatory fields (`deploy.resources.limits`, `healthcheck`, `logging`, `depends_on`). Never omit things with `# ... rest of config`.
-*   **File Headers:** The first line of any code block MUST be a comment with the file path (e.g., `# docker-deploy/docker-compose.yml`).
+-   **Shell Scripts:** Never provide snippets like "replace this function." Always output the entire script file. This ensures `set -euo pipefail`, color variables, and imports remain intact.
+-   **Docker Compose:** Output the complete service block. Include all mandatory fields (`deploy.resources.limits`, `healthcheck`, `logging`, `depends_on`). Never omit things with `# ... rest of config`.
+-   **File Headers:** The first line of any code block MUST be a comment with the file path (e.g., `# docker-deploy/docker-compose.yml`).
 
 ---
 

@@ -424,7 +424,7 @@ local({
 
     get_tmp_use_pct <- function() {
       tryCatch({
-        df <- system2("df", args = c("/tmp"), stdout = TRUE, stderr = FALSE)
+        df <- system2("df", args = c("-P", "/tmp"), stdout = TRUE, stderr = FALSE)
         if (length(df) >= 2) {
            parts <- strsplit(trimws(df[2]), "\\s+")[[1]]
            as.numeric(sub("%", "", parts[5]))
@@ -552,7 +552,7 @@ local({
     cat(sprintf("  vCPU Cores:   %d (Allocated)\n", .biome_env$shared_env$last_cores))
     cat(sprintf("  Active Users: %d\n", get_active_users()))
     tmp_str <- tryCatch({
-      df <- system2("df", args = c("-BG", "/tmp"), stdout = TRUE, stderr = FALSE)
+      df <- system2("df", args = c("-P", "-BG", "/tmp"), stdout = TRUE, stderr = FALSE)
       if (length(df) >= 2) {
          p <- strsplit(df[2], "\\s+")[[1]]
          sprintf("%s free of %s (Fallback at >=85%% | Current: %s)", p[4], p[2], p[5])
@@ -582,33 +582,39 @@ local({
   assign("ask_ai", function(prompt, model=AI_MODEL) {
     if (!.biome_env$shared_env$ai_active) stop("Ollama service is not responding on port 11434.")
     message(paste0(.C_CYAN, "Thinking (", model, ")...", .C_RESET))
+
+    tf <- tempfile(pattern = "ollama_req_", fileext = ".json")
+    on.exit(unlink(tf), add = TRUE)
+    
     if (requireNamespace("jsonlite", quietly=TRUE)) {
       body <- jsonlite::toJSON(list(model=model, prompt=prompt, stream=FALSE), auto_unbox=TRUE)
-      res <- suppressWarnings(system2("curl", args = c(
-        "-s", "-m", as.character(AI_CURL_TIMEOUT), "--connect-timeout", "5",
-        "-X", "POST", OLLAMA_API, "-d", shQuote(body)
-      ), stdout = TRUE, stderr = FALSE))
-      if (length(res) > 0) {
+      writeLines(as.character(body), tf)
+    } else {
+      clean_prompt <- gsub('"', '\\\\"', prompt)
+      clean_prompt <- gsub('\n', '\\\\n', clean_prompt)
+      json_body <- sprintf('{"model": "%s", "prompt": "%s", "stream": false}', model, clean_prompt)
+      writeLines(json_body, tf)
+    }
+
+    res <- suppressWarnings(system2("curl", args = c(
+      "-s", "-m", as.character(AI_CURL_TIMEOUT), "--connect-timeout", "5",
+      "-X", "POST", OLLAMA_API, "-d", paste0("@", tf)
+    ), stdout = TRUE, stderr = FALSE))
+    
+    if (length(res) > 0) {
+      if (requireNamespace("jsonlite", quietly=TRUE)) {
         out <- tryCatch(jsonlite::fromJSON(paste(res, collapse="")), error=function(e) NULL)
         if (!is.null(out$response)) cat(paste0("\n", .C_GREEN, "\U0001F916 ", model, ":", .C_RESET, "\n", out$response, "\n"))
         else cat("Error: Invalid JSON response from AI.\n")
-      } else cat("No response from AI service (timeout or connection refused).\n")
-      return(invisible(NULL))
-    }
-    clean_prompt <- gsub('"', '\\\\"', prompt)
-    json_body <- sprintf('{"model": "%s", "prompt": "%s", "stream": false}', model, clean_prompt)
-    res <- suppressWarnings(system2("curl", args = c(
-      "-s", "-m", as.character(AI_CURL_TIMEOUT), "--connect-timeout", "5",
-      "-X", "POST", OLLAMA_API, "-d", shQuote(json_body)
-    ), stdout = TRUE, stderr = FALSE))
-    if (length(res) > 0) {
-       raw <- paste(res, collapse="")
-       m <- regexpr('"response":"(.*?)","done"', raw, perl=TRUE)
-       if (m > 0) {
-         txt <- substr(raw, attr(m,"capture.start"), attr(m,"capture.start") + attr(m,"capture.length") - 1)
-         txt <- gsub('\\\\n', '\n', txt); txt <- gsub('\\\\"', '"', txt)
-         cat(paste0("\n", .C_GREEN, "\U0001F916 ", model, ":", .C_RESET, "\n", txt, "\n"))
-       } else cat("Error parsing AI response (Install jsonlite for better results).\n")
+      } else {
+         raw <- paste(res, collapse="")
+         m <- regexpr('"response":"(.*?)","done"', raw, perl=TRUE)
+         if (m > 0) {
+           txt <- substr(raw, attr(m,"capture.start"), attr(m,"capture.start") + attr(m,"capture.length") - 1)
+           txt <- gsub('\\\\n', '\n', txt); txt <- gsub('\\\\"', '"', txt)
+           cat(paste0("\n", .C_GREEN, "\U0001F916 ", model, ":", .C_RESET, "\n", txt, "\n"))
+         } else cat("Error parsing AI response (Install jsonlite for better results).\n")
+      }
     } else cat("No response from AI service (timeout or connection refused).\n")
   }, envir = tool_env)
 
