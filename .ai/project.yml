@@ -1,0 +1,182 @@
+# .ai/project.yml
+# ══════════════════════════════════════════════════════════════
+# SINGLE SOURCE OF TRUTH for AI agent context generation.
+#
+# This file contains ONLY what cannot be extracted from code:
+#   - Project identity and paradigm
+#   - Hard constraints (the engineering rules)
+#   - Known bugs and tech debt
+#   - Branding requirements
+#   - Script behavioral categories
+#
+# Everything else (image versions, script inventory, .env variables,
+# directory structure, boot sequences) is EXTRACTED from the actual
+# codebase by generate.sh. If this file disagrees with the code,
+# the code wins — and validate.sh will flag the mismatch.
+#
+# Maintenance: Update this file when constraints CHANGE (not when
+# code changes — the generator handles that automatically).
+# ══════════════════════════════════════════════════════════════
+
+project:
+  name: "R-studioConf"
+  version: "1.0.0"
+  owner: "JFS — IT Officer (Funzionario Tecnico Informatico), BiGeA, Università di Bologna"
+  paradigm: "Pessimistic System Engineering"
+  paradigm_definition: "Assume failure. Bound all resources. Verify all trust chains. Fail fast on misconfiguration."
+
+  # Research context
+  department: "BiGeA — Biological, Geological and Environmental Sciences"
+  university: "Alma Mater Studiorum — Università di Bologna"
+  research_group: "BIOME — Biodiversity & MacroEcology"
+  funded_projects:
+    - "PNRR LifeWatch-Plus"
+    - "PON LifeWatch-Plus"
+    - "Life4Pollinators"
+
+# ──────────────────────────────────────────────────────────────
+# HARD CONSTRAINTS
+# These are the non-negotiable engineering rules.
+# Each constraint has an ID, rule text, rationale, and a
+# validation method (used by validate.sh to check compliance).
+# ──────────────────────────────────────────────────────────────
+constraints:
+  - id: "HC-01"
+    rule: "Every container MUST have deploy.resources.limits for both memory and cpus"
+    rationale: "Prevents OOM cascades on shared hosts. Keycloak (Java) is the primary offender."
+    validate: "compose_has_resource_limits"
+
+  - id: "HC-02"
+    rule: "BIND MOUNTS only — zero named Docker volumes"
+    rationale: "Named volumes are opaque, hard to backup, impossible to inspect."
+    validate: "compose_no_named_volumes"
+
+  - id: "HC-03"
+    rule: "All scripts MUST begin with set -euo pipefail"
+    rationale: "Fail-fast on undefined vars, pipe failures, any error."
+    validate: "scripts_have_strict_mode"
+
+  - id: "HC-04"
+    rule: "Passwords MUST be written to files — never passed as CLI arguments"
+    rationale: "Prevents leakage in ps aux, /proc/*/cmdline, Docker inspect, shell history."
+    validate: "no_password_cli_args"
+
+  - id: "HC-05"
+    rule: "PostgreSQL ports are NEVER exposed to the host"
+    rationale: "DB is internal-only. Accessed via Docker network."
+    validate: "compose_no_db_ports"
+
+  - id: "HC-06"
+    rule: "All Dockerfiles bake dependencies at build time — no runtime package installation"
+    rationale: "Eliminates runtime failures if package mirrors are offline. Immutable containers."
+    validate: "no_runtime_pkg_install"
+
+  - id: "HC-07"
+    rule: "Pin ALL upstream image versions — no :latest tag"
+    rationale: "Reproducible builds. Version drift between components causes silent failures."
+    validate: "compose_no_latest_tags"
+
+  - id: "HC-08"
+    rule: ".env files are NEVER committed to git"
+    rationale: "Contains passwords, tokens, fingerprints."
+    validate: "gitignore_has_env"
+
+  - id: "HC-09"
+    rule: "The renewer container NEVER mounts /var/run/docker.sock directly"
+    rationale: "Full host control = container escape vector. Use docker-socket-proxy."
+    validate: "compose_no_docker_sock"
+
+  - id: "HC-10"
+    rule: "Deploy scripts MUST exit 1 if chown/permission setup fails"
+    rationale: "Prevents cryptic Permission Denied errors deep in container logs."
+    validate: "deploy_scripts_check_chown"
+
+  - id: "HC-11"
+    rule: "No external CDN calls for fonts or CSS in UI themes"
+    rationale: "Airgap/Zero-Trust requirement."
+    validate: "no_external_cdn"
+
+  - id: "HC-12"
+    rule: "Use jq for JSON manipulation — never sed/awk on JSON"
+    rationale: "sed breaks on special chars, no schema validation."
+    validate: "no_sed_on_json"
+
+# ──────────────────────────────────────────────────────────────
+# COMPOSE FORMAT RULES
+# ──────────────────────────────────────────────────────────────
+compose_rules:
+  syntax: "Docker Compose v2 — NO version: key"
+  command: "docker compose (space) — NOT docker-compose (hyphen)"
+  required_sections:
+    - "deploy.resources.limits"
+    - "healthcheck (for stateful services)"
+    - "logging (json-file with anchored config)"
+    - "labels (watchtower enable)"
+    - "depends_on (with condition)"
+
+# ──────────────────────────────────────────────────────────────
+# SCRIPT BEHAVIORAL CATEGORIES
+# Container-internal scripts MUST NEVER use interactive input.
+# This list is manually maintained because the distinction is
+# semantic (how the script is called), not syntactic.
+# ──────────────────────────────────────────────────────────────
+script_categories:
+  container_internal:
+    description: "Run inside Docker containers without TTY. NEVER use read -p."
+    scripts: []
+
+  operator_interactive:
+    description: "Run by sysadmin on host. May use interactive input."
+    scripts:
+      - "scripts/01_optimize_system.sh"
+      - "scripts/02_configure_time_sync.sh"
+      - "scripts/03_install_secure_access.sh"
+      - "scripts/10_join_domain_sssd.sh"
+      - "scripts/11_join_domain_samba.sh"
+      - "scripts/12_lib_kerberos_setup.sh"
+      - "scripts/15_setup_nginx_cleanup.sh"
+      - "scripts/20_configure_rstudio.sh"
+      - "scripts/30_install_nginx.sh"
+      - "scripts/31_setup_web_portal.sh"
+      - "scripts/32_setup_letsencrypt.sh"
+      - "scripts/40_install_telemetry.sh"
+      - "scripts/50_setup_nodes.sh"
+
+  client_portable:
+    description: "Copied to remote hosts. Self-contained."
+    scripts: []
+
+# ──────────────────────────────────────────────────────────────
+# KNOWN BUGS / TECH DEBT
+# Do NOT fix without explicit instruction.
+# ──────────────────────────────────────────────────────────────
+known_issues: []
+
+# ──────────────────────────────────────────────────────────────
+# BRANDING
+# ──────────────────────────────────────────────────────────────
+branding:
+  primary_color: "#C80E0F"
+  primary_name: "Unibo Red"
+  secondary_color: "#2C3E50"
+  secondary_name: "BiGeA Gray"
+  dark_variant: "#9A0B0B"
+  font_stack: "system-ui, -apple-system, sans-serif"
+  font_alternative: "Inter (bundled locally, never CDN)"
+  style: "Glassmorphism (backdrop-filter, rgba backgrounds)"
+  reference_site: "https://bigea.unibo.it/it"
+  cdn_policy: "FORBIDDEN — all assets must be local/bundled"
+
+# ──────────────────────────────────────────────────────────────
+# SANDBOX TOPOLOGY
+# ──────────────────────────────────────────────────────────────
+sandbox:
+  provider: "Vagrant + libvirt/KVM"
+  network: "192.168.56.0/24"
+  hosts:
+    - name: "rstudio-host"
+      ip: "192.168.56.40"
+      ram: 4096
+      cpus: 4
+      compose: "docker-deploy/docker-compose.yml"
+      note: "Uses docker-deploy setup with .env.sandbox overrides"

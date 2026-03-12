@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # 15_setup_nginx_cleanup.sh
 # Deploys a daily cron job to clean Nginx temporary body files.
 # Includes disk usage safety check.

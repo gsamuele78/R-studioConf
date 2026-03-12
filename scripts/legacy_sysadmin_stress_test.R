@@ -78,6 +78,7 @@ message("\n[4/5] Inizializzazione Deep Learning (Keras/TF CPU Test)...")
 tryCatch(
     {
         suppressMessages(library(tensorflow))
+        tf <- reticulate::import("tensorflow", delay_load = TRUE)
         message("--> Allocazione tensori massivi e calcolo parallelo OneDNN...")
         # Forziamo l'uso esclusivo della CPU e disabilitiamo i warning CUDA (cuInit)
         Sys.setenv(CUDA_VISIBLE_DEVICES = "-1")
@@ -106,13 +107,45 @@ message("\n[5/6] Test di Stabilità Multi-Core R (future.apply)...")
 tryCatch(
     {
         suppressMessages(library(future.apply))
-        # Pianifica futuro multi-processo su tutti i core disponibili meno 1
-        workers <- max(1, parallel::detectCores(logical = TRUE) - 1)
+        
+        # Rispetta CPU Quota dei container e limiti fisici PAM (max 4 per sicurezza PAM)
+        workers <- min(4, max(1, future::availableCores() - 1))
+        
+        # Cgroups OOM Prevention: riduciamo i worker in base alla RAM disponibile del container
+        mem_limit_mb <- tryCatch({
+            val <- Inf
+            if (file.exists("/sys/fs/cgroup/memory.max")) {
+                txt <- trimws(readLines("/sys/fs/cgroup/memory.max", n = 1, warn = FALSE))
+                if (txt != "max") val <- as.numeric(txt) / 1024^2
+            } else if (file.exists("/sys/fs/cgroup/memory/memory.limit_in_bytes")) {
+                val <- as.numeric(readLines("/sys/fs/cgroup/memory/memory.limit_in_bytes", n = 1, warn = FALSE)) / 1024^2
+            }
+            val
+        }, warning = function(w) Inf, error = function(e) Inf)
+        
+        if (is.finite(mem_limit_mb) && mem_limit_mb > 0) {
+            max_workers <- max(1, floor(mem_limit_mb / 400)) # ~400MB base per worker in multisession
+            if (workers > max_workers) {
+                message(sprintf("--> Cgroups RAM Limit: %d MB. Limitazione workers: %d -> %d per prevenire OOM Killer.", round(mem_limit_mb), workers, max_workers))
+                workers <- max_workers
+            }
+        }
+        
+        # Evita la "Thread Explosion" di OpenBLAS/MKL nei processi paralleli
+        Sys.setenv(OMP_NUM_THREADS = 1, OPENBLAS_NUM_THREADS = 1, MKL_NUM_THREADS = 1)
+        
+        # Passiamo a 'multisession' (PSOCK) per evitare i deadlock da fork post-TensorFlow
         plan(multisession, workers = workers)
-        message("--> Avvio elaborazione parallela su ", workers, " worker...")
+        message("--> Avvio elaborazione parallela su ", workers, " worker (multisession PSOCK)...")
 
         # Una computazione pesante (SVD su grosse matrici ripetuto su ogni core)
         parallel_compute <- function(x) {
+            # Forza i worker a usare un solo thread per l'algebra lineare
+            Sys.setenv(OMP_NUM_THREADS = 1, OPENBLAS_NUM_THREADS = 1, MKL_NUM_THREADS = 1)
+            if (requireNamespace("RhpcBLASctl", quietly = TRUE)) {
+                RhpcBLASctl::blas_set_num_threads(1)
+                RhpcBLASctl::omp_set_num_threads(1)
+            }
             set.seed(x)
             sum(svd(matrix(rnorm(90000), 300, 300))$d)
         }

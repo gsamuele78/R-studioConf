@@ -114,6 +114,11 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: ${NGINX_MEMORY_LIMIT:-256M}
+          cpus: ${NGINX_CPU_LIMIT:-1.0}
     healthcheck:
       test: [ "CMD-SHELL", "curl -k -f -s https://localhost:${HTTPS_PORT:-443}/ || exit 1" ]
       interval: 30s
@@ -146,6 +151,28 @@ services:
     volumes:
       - ${OAUTH2_PROXY_CONFIG:-./config/oauth2-proxy.cfg}:/etc/oauth2-proxy.cfg:ro
     network_mode: "host"
+    deploy:
+      resources:
+        limits:
+          memory: ${OAUTH2_MEMORY_LIMIT:-128M}
+          cpus: ${OAUTH2_CPU_LIMIT:-0.5}
+
+  # --- Docker Socket Proxy (HC-09 Isolation) ---
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: rstudio_socket_proxy
+    restart: unless-stopped
+    network_mode: "host"
+    environment:
+      - CONTAINERS=1   # Allow read-only access to containers API
+      - INFO=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
 
   # --- Telemetry & Metrics API ---
   telemetry-api:
@@ -162,12 +189,19 @@ services:
       # Mount host root filesystem read-only to let psutil examine host disks
       - ${TELEMETRY_HOST_ROOT:-/}:/hostfs:ro
       - ${TELEMETRY_HOST_RUN:-/var/run}:/var/run:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
+      - DOCKER_HOST=tcp://127.0.0.1:2375
       # Tell telemetry to look for disk paths on /hostfs
       - NFS_HOME=${TELEMETRY_NFS_HOME:-/hostfs/nfs/home}
       - PROJECTS_DIR=${TELEMETRY_PROJECTS_DIR:-/hostfs/nfs/projects}
       - TMP_DIR=${TELEMETRY_TMP_DIR:-/hostfs/tmp}
+    deploy:
+      resources:
+        limits:
+          memory: ${TELEMETRY_MEMORY_LIMIT:-512M}
+          cpus: ${TELEMETRY_CPU_LIMIT:-1.0}
+    depends_on:
+      - docker-socket-proxy
     logging:
       driver: "json-file"
       options:

@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # 40_install_telemetry.sh - Setup Telemetry & Metrics (Node Exporter + Custom FastAPI)
 #
 # Fix: Ubuntu 24.04 / PEP 668 — pip3 refuses system-wide installs.

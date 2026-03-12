@@ -1,5 +1,5 @@
 # ==============================================================================
-# %%BIOME_HOST%% SYSTEM PROFILE v%%RPROFILE_VERSION%% — MIGRATION-SAFE STABILITY FIX
+# %%BIOME_HOST%% SYSTEM PROFILE v%%RPROFILE_VERSION%% — CORETYPE + PSOCK WORKER SAFE
 # ==============================================================================
 # VM:      QEMU on Proxmox 9.x (Ceph), x86-64-v4 CPU, %%VM_VCORES%% vCores, ~%%VM_RAM_GB%%GB RAM
 # System:  Ubuntu 24.04, R 4.5.x, bspm enabled
@@ -11,14 +11,109 @@
 #   - Boot-time detection: biome-detect-coretype.service (systemd oneshot)
 #   - Per-session detection: this profile (handles live migration without reboot)
 #   - Thread cap: %%MAX_BLAS_THREADS%% max to prevent QEMU livelock
+#
+# v9.5 CHANGES (from v9.3):
+#   - [Section -2] OPENBLAS_CORETYPE auto-detection at the VERY TOP of file.
+#     Runs for ALL R processes: rsession, Rscript (PSOCK workers), terminal R.
+#     Reads /proc/cpuinfo, selects conservative CORETYPE. Migration-safe.
+#     ROOT CAUSE FIX: workers crashed with SIGILL because rsession-profile
+#     only sets CORETYPE for rsession, not for Rscript. On QEMU without
+#     cpu:host, OpenBLAS auto-detection picks wrong instruction sets.
+#   - [Section -1] PSOCK Worker Fast Path (from v9.4).
+#     BIOME_WORKER_MODE env var: workers apply thread limits and return.
+#   - get_active_users(): pure-R /proc scan (no fork/system2).
+#   - deferred_pkg_init(): future plan creates clean workers via
+#     biome_make_cluster() with BIOME_WORKER_MODE.
+#   - New biome_make_cluster() user-facing tool.
 # ==============================================================================
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION -2: OPENBLAS CORETYPE AUTO-DETECTION (Migration-Safe)
+# ══════════════════════════════════════════════════════════════════════════════
+# This MUST run before ANY package loads or BLAS call happens.
+# It runs for EVERY R process: rsession, Rscript workers, terminal R.
+# On QEMU without cpu:host, OpenBLAS auto-detection picks instruction sets
+# (e.g., AVX-512) that the virtual CPU doesn't support → SIGILL → crash.
+#
+# Detection priority:
+#   1. If already set (by rsession-profile or systemd service), keep it.
+#   2. Read /proc/cpuinfo vendor_id, select conservative CORETYPE.
+#   3. If /proc/cpuinfo unreadable, don't set (let OpenBLAS try auto-detect).
+#
+# Conservative means: pick the safest CORETYPE that won't SIGILL on any
+# recent CPU of that vendor. Performance is ~90-95% of optimal. Users who
+# need peak BLAS performance can override via OPENBLAS_CORETYPE env var
+# or by setting cpu:host in Proxmox VM config.
+# ══════════════════════════════════════════════════════════════════════════════
+if (!nzchar(Sys.getenv("OPENBLAS_CORETYPE", ""))) {
+  local({
+    coretype <- tryCatch({
+      ci <- readLines("/proc/cpuinfo", n = 20, warn = FALSE)
+      vendor_line <- grep("^vendor_id", ci, value = TRUE)[1]
+      if (is.na(vendor_line)) return(NULL)
+      vendor <- trimws(sub(".*:\\s*", "", vendor_line))
+
+      # Also check for flags to pick the best safe CORETYPE
+      flags_line <- grep("^flags", ci, value = TRUE)[1]
+      flags <- if (!is.na(flags_line)) trimws(sub(".*:\\s*", "", flags_line)) else ""
+
+      if (grepl("AMD", vendor, ignore.case = TRUE)) {
+        # AMD: ZEN is safe for EPYC/Ryzen (2017+). BARCELONA for older.
+        # Check for zen-era flags: avx2 is present on all Zen CPUs.
+        if (grepl("\\bavx2\\b", flags)) "ZEN" else "BARCELONA"
+      } else if (grepl("Intel", vendor, ignore.case = TRUE)) {
+        # Intel: HASWELL is safe for anything 2013+.
+        # SKYLAKEX for Xeon Scalable (avx512f present).
+        if (grepl("\\bavx512f\\b", flags)) "SKYLAKEX" else "HASWELL"
+      } else {
+        NULL  # Unknown vendor — let OpenBLAS try auto-detect
+      }
+    }, error = function(e) NULL)
+
+    if (!is.null(coretype)) {
+      Sys.setenv(OPENBLAS_CORETYPE = coretype)
+    }
+  })
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION -1: PSOCK WORKER FAST PATH
+# ══════════════════════════════════════════════════════════════════════════════
+# PSOCK workers are Rscript processes that load this profile on every start.
+# The full profile (bspm, Ollama, callbacks, Smart I/O, etc.) is designed for
+# interactive rsession — NOT for ephemeral compute workers.
+#
+# When the parent creates PSOCK workers, it sets:
+#   BIOME_WORKER_MODE=1          — triggers this fast path
+#   BIOME_WORKER_THREADS=<n>     — per-worker BLAS/OMP thread limit
+#
+# The fast path applies thread limits and returns. Workers get:
+#   - OPENBLAS_CORETYPE from Section -2 above (migration-safe)
+#   - Env vars from Renviron.site (TMPDIR, RETICULATE_PYTHON, etc.)
+# ══════════════════════════════════════════════════════════════════════════════
+if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+  local({
+    wt <- Sys.getenv("BIOME_WORKER_THREADS", "1")
+    Sys.setenv(
+      OMP_NUM_THREADS      = wt,
+      OPENBLAS_NUM_THREADS = wt,
+      MKL_NUM_THREADS      = wt
+    )
+    if (requireNamespace("RhpcBLASctl", quietly = TRUE)) {
+      tryCatch({
+        RhpcBLASctl::blas_set_num_threads(as.integer(wt))
+        RhpcBLASctl::omp_set_num_threads(as.integer(wt))
+      }, error = function(e) NULL)
+    }
+    options(biome.profile.loaded = TRUE)
+  })
+  return(invisible(NULL))
+}
+
 # ── SECTION 0: bspm (Critical Pre-Load) ──
-# Force bspm to use sudo instead of pkexec, and disable version check warnings
 options(bspm.sudo = TRUE, bspm.version.check = FALSE)
 tryCatch({
   if (requireNamespace("bspm", quietly = TRUE)) {
-    # Re-assert the option directly before enabling just to be absolutely sure
     options(bspm.sudo = TRUE)
     suppressMessages(bspm::enable())
   }
@@ -50,43 +145,41 @@ local({
   .C_ITALIC <- paste0(.ESC, "[3m")
 
   # ── Feature Flags ──
-  ENABLE_RESOURCE_MGMT <- TRUE   # Fair-Share RAM/CPU
-  ENABLE_SMART_IO      <- TRUE   # Parquet/CSV auto-switch
-  ENABLE_SMART_ROUTING <- TRUE   # Dynamic Tmpfs Fallback (>180GB)
-  ENABLE_AI_ASSISTANT  <- TRUE   # Ollama (model from %%BIOME_CONF%%/ai_model)
-  ENABLE_SYS_LOGGING   <- TRUE   # Logging to /var/log/biome-log
-  ENABLE_TMP_CLEANUP   <- TRUE   # Smart /tmp cleanup
-  ENABLE_BLAS_MGMT     <- TRUE   # OpenBLAS/OMP
-  ENABLE_TERRA_OPT     <- TRUE   # Geospatial (Terra/GDAL)
-  ENABLE_RGEE_OPT      <- TRUE   # Google Earth Engine dynamic RAM
-  ENABLE_ARROW_OPT     <- TRUE   # Arrow/Parquet
-  ENABLE_FUTURE_OPT    <- TRUE   # Parallel Computing
-  ENABLE_CGROUP_AWARE  <- TRUE   # Proxmox/LXC Awareness
-  ENABLE_TF_MGMT       <- TRUE   # Keras/TensorFlow (CPU Optimized)
-  ENABLE_NUMA_AWARE    <- FALSE  # NUMA optimizations
+  ENABLE_RESOURCE_MGMT <- TRUE
+  ENABLE_SMART_IO      <- TRUE
+  ENABLE_SMART_ROUTING <- TRUE
+  ENABLE_AI_ASSISTANT  <- TRUE
+  ENABLE_SYS_LOGGING   <- TRUE
+  ENABLE_TMP_CLEANUP   <- TRUE
+  ENABLE_BLAS_MGMT     <- TRUE
+  ENABLE_TERRA_OPT     <- TRUE
+  ENABLE_RGEE_OPT      <- TRUE
+  ENABLE_ARROW_OPT     <- TRUE
+  ENABLE_FUTURE_OPT    <- TRUE
+  ENABLE_CGROUP_AWARE  <- TRUE
+  ENABLE_TF_MGMT       <- TRUE
+  ENABLE_NUMA_AWARE    <- FALSE
 
-  # ── Infrastructure (filled by 20_configure_rstudio.sh from setup_nodes.vars.conf) ──
+  # ── Infrastructure ──
   R_HOST       <- "%%BIOME_HOST%%"
   LOG_PATH     <- "%%LOG_FILE%%"
   VM_VCORES    <- %%VM_VCORES%%L
   VM_RAM_GB    <- %%VM_RAM_GB%%L
   RAMDISK_GB   <- tryCatch(as.integer(Sys.getenv("BIOME_RAMDISK_GB", "%%RAMDISK_GB%%")), error=function(e) %%RAMDISK_GB%%L)
-  MAX_THREADS  <- %%MAX_BLAS_THREADS%%L   # Hard cap: prevents QEMU BLAS livelock
+  MAX_THREADS  <- %%MAX_BLAS_THREADS%%L
   
-  # AI Service Config
   OLLAMA_API   <- "http://127.0.0.1:11434/api/generate"
   AI_MODEL     <- tryCatch({
     mf <- "%%BIOME_CONF%%/ai_model"
     if (file.exists(mf)) trimws(readLines(mf, n = 1, warn = FALSE)) else "codellama:7b"
   }, error = function(e) "codellama:7b")
-  AI_CURL_TIMEOUT <- 120   # seconds — hard ceiling for curl to Ollama
+  AI_CURL_TIMEOUT <- 120
 
   # ── User Context ──
   curr_user    <- Sys.info()[["user"]]
   r_ver_short  <- paste0(R.version$major, ".", substr(R.version$minor, 1, 1))
   personal_lib <- file.path(Sys.getenv("HOME"), "R", "x86_64-pc-linux-gnu-library", r_ver_short)
   
-  # ── Portable UID ──
   get_my_uid <- function() {
     tryCatch({
       if (requireNamespace("unix", quietly=TRUE)) return(unix::getuid())
@@ -139,7 +232,6 @@ local({
     }, error = function(e) NULL)
   }
 
-  # ── Smart Timeout Detection ──
   get_session_timeout <- function() {
     conf_file <- "%%RSESSION_CONF_PATH%%"
     timeout_h <- 24 
@@ -226,12 +318,21 @@ local({
     }, error=function(e) 16L)
   }
 
+  # v9.5: Fork-safe active user count (pure R /proc scan, no system2/fork)
   get_active_users <- function() {
     tryCatch({
-      r <- system2("pgrep", args=c("-c","rsession"), stdout=TRUE, stderr=FALSE)
-      n <- suppressWarnings(as.integer(r))
-      if (is.na(n) || n<1L) 1L else n
-    }, warning = function(w) 1L, error = function(e) 1L)
+      pids <- list.dirs("/proc", full.names = FALSE, recursive = FALSE)
+      pids <- pids[grepl("^[0-9]+$", pids)]
+      count <- 0L
+      for (p in pids) {
+        cmdline_file <- file.path("/proc", p, "cmdline")
+        if (file.exists(cmdline_file)) {
+          cmd <- tryCatch(readLines(cmdline_file, n = 1, warn = FALSE), error = function(e) "")
+          if (length(cmd) > 0 && grepl("rsession", cmd[1], fixed = TRUE)) count <- count + 1L
+        }
+      }
+      if (count < 1L) 1L else count
+    }, error = function(e) 1L)
   }
 
   update_resources <- function(quiet = TRUE) {
@@ -246,8 +347,6 @@ local({
       eff_vc <- total_vcores
       if (is.finite(.biome_env$shared_env$cgroup_cpus)) eff_vc <- min(eff_vc, as.integer(ceiling(.biome_env$shared_env$cgroup_cpus)))
       fair_cores <- max(1L, as.integer(floor(eff_vc / n_procs)))
-      
-      # Cap math threads to prevent QEMU livelock
       bt <- min(fair_cores, MAX_THREADS) 
         
       Sys.setenv(OMP_NUM_THREADS=as.character(bt), OPENBLAS_NUM_THREADS=as.character(bt), MKL_NUM_THREADS=as.character(bt))
@@ -260,14 +359,12 @@ local({
         rgee_mem <- floor(quota * 0.3 * 1024) 
         options(rgee.max_memory = rgee_mem, rgee.n_cores = min(4, fair_cores))
       }
-      
       if (ENABLE_TF_MGMT) {
          inter_op <- max(1L, floor(bt / 2))
          Sys.setenv(TF_NUM_INTRAOP_THREADS = as.character(bt))
          Sys.setenv(TF_NUM_INTEROP_THREADS = as.character(inter_op))
          Sys.setenv(TF_ENABLE_ONEDNN_OPTS = "1")
       }
-      
       if (ENABLE_AI_ASSISTANT) Sys.setenv(OLLAMA_NUM_THREADS = as.character(bt))
       
       if (!.biome_env$shared_env$ai_active && ENABLE_AI_ASSISTANT) {
@@ -292,6 +389,31 @@ local({
     }, error=function(e) sys_log("ResMgmt", "FAIL", e$message))
   }
 
+  # ── PSOCK Cluster Factory ──
+  .biome_make_cluster_impl <- function(workers = NULL, worker_threads = 1L) {
+    if (is.null(workers)) {
+      fc <- .biome_env$shared_env$last_cores
+      workers <- max(1L, if (fc > 0) fc - 1L else 3L)
+    }
+    workers <- as.integer(workers)
+    worker_threads <- as.integer(min(worker_threads, MAX_THREADS))
+    coretype <- Sys.getenv("OPENBLAS_CORETYPE", "")
+
+    parallelly::makeClusterPSOCK(
+      workers,
+      revtunnel = FALSE,
+      homogeneous = TRUE,
+      rscript_envs = c(
+        BIOME_WORKER_MODE    = "1",
+        BIOME_WORKER_THREADS = as.character(worker_threads),
+        OMP_NUM_THREADS      = as.character(worker_threads),
+        OPENBLAS_NUM_THREADS = as.character(worker_threads),
+        MKL_NUM_THREADS      = as.character(worker_threads),
+        if (nchar(coretype) > 0) c(OPENBLAS_CORETYPE = coretype) else NULL
+      )
+    )
+  }
+
   # ── Deferred Loading ──
   deferred_pkg_init <- function() {
     if (.biome_env$shared_env$deferred_done) return(invisible(NULL))
@@ -310,7 +432,6 @@ local({
       }, error = function(e) 0)
     }
 
-    # If >= 85% usage on tmpfs OR user explicitly requests NFS fallback
     force_nfs <- Sys.getenv("BIOME_FORCE_NFS_TMP") == "true"
     smart_tmp_base <- if (!ENABLE_SMART_ROUTING) "/tmp" else if (!force_nfs && get_tmp_use_pct() < 85) "/tmp" else file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
     if (!dir.exists(smart_tmp_base)) dir.create(smart_tmp_base, recursive=TRUE, showWarnings=FALSE)
@@ -318,7 +439,6 @@ local({
     if (ENABLE_TERRA_OPT && isNamespaceLoaded("terra")) tryCatch({
       tt <- min(fc, 8L); gc_mb <- as.integer(floor(qr * 0.2 * 1024))
       Sys.setenv(GDAL_NUM_THREADS=as.character(tt), GDAL_CACHEMAX=as.character(gc_mb))
-      
       td <- file.path(smart_tmp_base, paste0("terra_", curr_user))
       if (!dir.exists(td)) dir.create(td, recursive=TRUE, showWarnings=FALSE)
       terra::terraOptions(memfrac=0.6, tempdir=td, verbose=FALSE)
@@ -344,9 +464,7 @@ local({
     if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly"))) tryCatch({
       gt <- file.path(smart_tmp_base, paste0("plot_cache_", curr_user))
       if (!dir.exists(gt)) dir.create(gt, recursive=TRUE, showWarnings=FALSE)
-      # Some graphic devices like ragg and svglite rely on system TEMP
-      Sys.setenv(TMP = gt)
-      Sys.setenv(TEMP = gt)
+      Sys.setenv(TMP = gt, TEMP = gt)
       msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Ggplot [RAMDisk]" else "Ggplot [NFS-Fallback]")
     }, error = function(e) NULL)
     
@@ -357,7 +475,9 @@ local({
     }, error = function(e) NULL)
     
     if (ENABLE_FUTURE_OPT && isNamespaceLoaded("future")) tryCatch({
-      fw <- max(1L, fc - 1L); future::plan(future::multisession, workers=fw)
+      fw <- max(1L, fc - 1L)
+      cl <- .biome_make_cluster_impl(workers = fw, worker_threads = 1L)
+      future::plan(future::cluster, workers = cl)
       .biome_env$shared_env$future_workers <- fw
       msg_parts <- c(msg_parts, "Future")
     }, error = function(e) NULL)
@@ -377,11 +497,9 @@ local({
     .biome_smart_io <- function(file, ...) {
       if (is.character(file) && length(file)==1) {
         pq <- paste0(file, ".parquet")
-        if (file.exists(pq)) {
-          if (interactive() && requireNamespace("arrow", quietly=TRUE)) {
-            message("BIOME-IO: Using .parquet accelerator!")
-            return(arrow::read_parquet(pq))
-          }
+        if (file.exists(pq) && interactive() && requireNamespace("arrow", quietly=TRUE)) {
+          message("BIOME-IO: Using .parquet accelerator!")
+          return(arrow::read_parquet(pq))
         }
       }
       mc <- as.character(sys.call()[1])
@@ -410,7 +528,7 @@ local({
     addTaskCallback(function(...) {
       try({
         deferred_pkg_init()
-        update_resources(quiet = TRUE)  # 30s throttle inside
+        update_resources(quiet = TRUE)
       }, silent = TRUE)
       TRUE
     }, name = "biome_resource_monitor")
@@ -433,7 +551,6 @@ local({
     cat(sprintf("  RAM Quota:    %d GB (fair-share)\n", .biome_env$shared_env$last_quota))
     cat(sprintf("  vCPU Cores:   %d (Allocated)\n", .biome_env$shared_env$last_cores))
     cat(sprintf("  Active Users: %d\n", get_active_users()))
-    
     tmp_str <- tryCatch({
       df <- system2("df", args = c("-BG", "/tmp"), stdout = TRUE, stderr = FALSE)
       if (length(df) >= 2) {
@@ -441,10 +558,10 @@ local({
          sprintf("%s free of %s (Fallback at >=85%% | Current: %s)", p[4], p[2], p[5])
       } else "Unknown"
     }, error = function(e) "Unknown")
-    
     cat(sprintf("  RAMDisk Tmp:  %s\n", tmp_str))
     cat(sprintf("  Tmp Cleanup:  Files >%d hours\n", .biome_env$shared_env$timeout_hours))
-    
+    ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto")
+    cat(sprintf("  BLAS Type:    %s\n", ct))
     cat(paste0("\n  ", .C_BOLD, "Engines & Services:", .C_RESET, "\n"))
     r_sys <- .fmt_eng("Resource Mgmt", ENABLE_RESOURCE_MGMT, TRUE)
     r_sio <- .fmt_eng("Smart I/O", ENABLE_SMART_IO, TRUE)
@@ -455,11 +572,9 @@ local({
     r_fut <- .fmt_eng("Future (Parallel)", ENABLE_FUTURE_OPT, isNamespaceLoaded("future"))
     r_gee <- .fmt_eng("RGEE (Earth Engine)", ENABLE_RGEE_OPT, isNamespaceLoaded("rgee"))
     r_tf  <- .fmt_eng("Keras/TF (CPU)", ENABLE_TF_MGMT, isNamespaceLoaded("tensorflow"))
-
     cat(sprintf("  %s  %s  %s\n", r_sys, r_sio, r_tmp))
     cat(sprintf("  %s  %s  %s\n", r_ter, r_arr, r_gee))
     cat(sprintf("  %s  %s  %s\n", r_ai, r_fut, r_tf))
-    
     cat(paste0("\n  ", .C_GRAY, "[\u2713]=Active  [\u25CB]=Lazy(Standby)  [\u2717]=Disabled", .C_RESET, "\n"))
     invisible(NULL)
   }, envir = tool_env)
@@ -480,7 +595,6 @@ local({
       } else cat("No response from AI service (timeout or connection refused).\n")
       return(invisible(NULL))
     }
-    # Fallback: simple json construction without jsonlite
     clean_prompt <- gsub('"', '\\\\"', prompt)
     json_body <- sprintf('{"model": "%s", "prompt": "%s", "stream": false}', model, clean_prompt)
     res <- suppressWarnings(system2("curl", args = c(
@@ -498,6 +612,10 @@ local({
     } else cat("No response from AI service (timeout or connection refused).\n")
   }, envir = tool_env)
 
+  assign("biome_make_cluster", function(workers = NULL, worker_threads = 1L) {
+    .biome_make_cluster_impl(workers = workers, worker_threads = worker_threads)
+  }, envir = tool_env)
+
   assign("biome_tutorial", function() {
     cat(paste0("\n", .C_CYAN, "=== BIOME-CALC: User Guide ===", .C_RESET, "\n"))
     cat("This system automatically optimizes resources. Services are 'Lazy' [\u25CB] by default\n")
@@ -512,21 +630,21 @@ local({
     cat(paste0(.C_BOLD, "4. Geospatial (Terra/RGEE)", .C_RESET, "\n"))
     cat("   - library(terra); library(rgee) — auto-threads & /tmp cache.\n\n")
     cat(paste0(.C_BOLD, "5. Parallel Computing", .C_RESET, "\n"))
-    cat("   - library(future.apply); future_lapply(1:100, sqrt)\n\n")
+    cat("   - library(future.apply); future_lapply(1:100, sqrt)\n")
+    cat("   - For manual clusters: cl <- biome_make_cluster(workers=4)\n\n")
     cat(paste0(.C_BOLD, "6. Massive Data / Tmpfs Bypass (>180GB)", .C_RESET, "\n"))
-    cat("   - Got a 'Disk Full' error on /tmp? Your calculation is too massive!\n")
-    cat("   - Bypass /tmp completely by running this BEFORE loading terra/raster:\n")
-    cat("     Sys.setenv(BIOME_FORCE_NFS_TMP = \"true\")\n\n")
+    cat("   - Bypass /tmp: Sys.setenv(BIOME_FORCE_NFS_TMP = \"true\")\n\n")
     cat(sprintf("  Support: %s\n", "%%BIOME_CONTACT%%"))
   }, envir = tool_env)
 
   assign("biome_help", function() {
     cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Helper ===", .C_RESET, "\n"))
     cat("  Commands:\n")
-    cat(paste0("  ", .C_BOLD, "status()", .C_RESET, "         - System Dashboard (RAM/CPU/Engines).\n"))
-    cat(paste0("  ", .C_BOLD, "biome_tutorial()", .C_RESET, " - Code examples for all services.\n"))
-    cat(paste0("  ", .C_BOLD, "ask_ai(txt)", .C_RESET, "      - Ask AI a question.\n"))
-    cat(paste0("  ", .C_BOLD, "biome_help()", .C_RESET, "     - This help message.\n"))
+    cat(paste0("  ", .C_BOLD, "status()", .C_RESET, "              - System Dashboard.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_tutorial()", .C_RESET, "      - Code examples.\n"))
+    cat(paste0("  ", .C_BOLD, "ask_ai(txt)", .C_RESET, "           - Ask AI.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_make_cluster()", .C_RESET, "  - Create safe PSOCK cluster.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_help()", .C_RESET, "          - This message.\n"))
     cat(sprintf("\n  Support: %s\n", "%%BIOME_CONTACT%%"))
   }, envir = tool_env)
 
@@ -555,7 +673,7 @@ local({
       message(sprintf("\n   RAM Quota:  %-3d GB  (VM ~%dGB - %dGB tmpfs)", .biome_env$shared_env$last_quota, VM_RAM_GB, RAMDISK_GB))
       message(sprintf("   vCPU:       %-3d / %d  (Adapts to active users)", .biome_env$shared_env$last_cores, total_vcores))
       
-      ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto-detecting")
+      ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto")
       cpuv <- tryCatch({
         ci <- readLines("/proc/cpuinfo", n = 5, warn = FALSE)
         vl <- grep("^vendor_id", ci, value = TRUE)[1]
@@ -569,7 +687,6 @@ local({
       r_ter <- .fmt_eng("Terra", ENABLE_TERRA_OPT, isNamespaceLoaded("terra"))
       r_arr <- .fmt_eng("Arrow", ENABLE_ARROW_OPT, isNamespaceLoaded("arrow"))
       r_tf  <- .fmt_eng("Keras/TF", ENABLE_TF_MGMT, isNamespaceLoaded("tensorflow"))
-      
       message(sprintf("   %s  %s  %s  %s  %s", r_sio, r_ai, r_ter, r_arr, r_tf))
       
       message("----------------------------------------------------------")

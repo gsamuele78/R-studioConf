@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # scripts/12_lib_kerberos_setup.sh
 # Centralized Kerberos Setup Script
 #

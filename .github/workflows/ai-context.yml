@@ -1,0 +1,141 @@
+# .github/workflows/ai-context.yml
+# ══════════════════════════════════════════════════════════════
+# CI pipeline for Infra-IAM-PKI constraint enforcement.
+#
+# Runs on every push and pull request:
+#   1. Validates codebase against hard constraints (validate.sh)
+#   2. Checks generated agent files are up-to-date (generate.sh --check)
+#
+# This ensures:
+#   - No one can merge code that violates the 12 hard constraints
+#   - Generated agent context files stay in sync with actual code
+#   - Image version changes are reflected in all agent files
+# ══════════════════════════════════════════════════════════════
+
+name: "Constraint Validation & Agent Context"
+
+on:
+  push:
+    paths:
+      # Only run when files that affect constraints change
+      - 'infra-*/docker-compose.yml'
+      - 'infra-*/Dockerfile*'
+      - 'scripts/**/*.sh'
+      - 'sandbox/*.yml'
+      - 'infra-*/.env.sandbox'
+      - '.ai/**'
+      - '.cursorrules'
+      - '.clinerules'
+      - '.windsurfrules'
+      - 'CLAUDE.md'
+      - '.github/copilot-instructions.md'
+  pull_request:
+    paths:
+      - 'infra-*/docker-compose.yml'
+      - 'infra-*/Dockerfile*'
+      - 'scripts/**/*.sh'
+      - 'sandbox/*.yml'
+      - '.ai/**'
+
+jobs:
+  # ────────────────────────────────────────────────────────────
+  # Job 1: Validate codebase against hard constraints
+  # ────────────────────────────────────────────────────────────
+  validate-constraints:
+    name: "Validate Hard Constraints"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run constraint validator
+        run: |
+          chmod +x .ai/validate.sh
+          .ai/validate.sh --ci --fix-hint
+
+  # ────────────────────────────────────────────────────────────
+  # Job 2: Check generated agent files are up-to-date
+  # ────────────────────────────────────────────────────────────
+  check-agent-files:
+    name: "Check Agent Files Freshness"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check generated files match current code
+        run: |
+          chmod +x .ai/generate.sh
+          .ai/generate.sh --check
+
+  # ────────────────────────────────────────────────────────────
+  # Job 3: Validate compose syntax (requires Docker)
+  # ────────────────────────────────────────────────────────────
+  validate-compose:
+    name: "Validate Compose Syntax"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate infra-pki compose
+        run: |
+          # Create minimal .env for compose config validation
+          cp infra-pki/.env.sandbox infra-pki/.env
+          docker compose -f infra-pki/docker-compose.yml config > /dev/null
+        continue-on-error: false
+
+      - name: Validate infra-iam compose
+        run: |
+          cp infra-iam/.env.sandbox infra-iam/.env
+          docker compose -f infra-iam/docker-compose.yml config > /dev/null
+        continue-on-error: false
+
+      - name: Validate infra-ood compose
+        run: |
+          # OOD may not have .env.sandbox with all vars — create minimal
+          if [ -f infra-ood/.env.sandbox ]; then
+            cp infra-ood/.env.sandbox infra-ood/.env
+          else
+            touch infra-ood/.env
+          fi
+          docker compose -f infra-ood/docker-compose.yml config > /dev/null
+        continue-on-error: false
+
+  # ────────────────────────────────────────────────────────────
+  # Job 4: Validate shell script syntax
+  # ────────────────────────────────────────────────────────────
+  validate-scripts:
+    name: "Validate Shell Scripts"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check bash syntax
+        run: |
+          ERRORS=0
+          for script in $(find scripts/ -name '*.sh'); do
+            if ! bash -n "$script" 2>/dev/null; then
+              echo "SYNTAX ERROR: $script"
+              bash -n "$script" || true
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::$ERRORS scripts have syntax errors"
+            exit 1
+          fi
+          echo "All scripts pass syntax check"
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck (advisory)
+        run: |
+          # Run shellcheck but don't fail the build — advisory only
+          for script in $(find scripts/ -name '*.sh'); do
+            echo "--- $script ---"
+            shellcheck --severity=warning "$script" || true
+          done
+        continue-on-error: true

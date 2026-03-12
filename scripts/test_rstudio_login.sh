@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # test_rstudio_login.sh
 # Tests RStudio plaintext login using curl with multiple variations
 
