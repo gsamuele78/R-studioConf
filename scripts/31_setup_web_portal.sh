@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+#set -euo pipefail
 # 09_web_portal_setup.sh - Setup Botanical Big Data Calculus Web Portal
 # Deploys the web portal to /var/www/html and configures Nginx/RStudio integration.
 
