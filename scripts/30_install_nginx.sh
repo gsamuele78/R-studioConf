@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+#set -euo pipefail
 
 # =====================================================================
 # NGINX Setup Script (v2.5 - Intelligent Auto-Detection Edition - FINAL)

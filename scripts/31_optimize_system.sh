@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+#set -euo pipefail
 
 # =====================================================================
 # SYSTEM OPTIMIZATION SCRIPT (v1.0)

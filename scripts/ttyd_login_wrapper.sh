@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+#set -euo pipefail
 # /usr/local/bin/ttyd_login_wrapper.sh
 
 # LOGGING: Log to secure_access directory

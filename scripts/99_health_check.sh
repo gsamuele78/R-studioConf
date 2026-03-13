@@ -3,7 +3,7 @@
 # Verifies all services are running, configs are valid, and AD connectivity works
 # Version: 1.0.0
 
-set -euo pipefail
+#set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"

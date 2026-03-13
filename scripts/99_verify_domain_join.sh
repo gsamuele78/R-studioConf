@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+#set -euo pipefail
 #
 # Diagnostic script for Domain Join + Home Directory checks.
 # Supports both SSSD and Samba/Winbind backends.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Improved RStudio Server detection script for correct OS/arch and latest download URL
-set -euo pipefail
+#set -euo pipefail
 
 # Detect OS codename and version
 os_codename="$(lsb_release -cs 2>/dev/null || grep VERSION_CODENAME /etc/os-release | cut -d= -f2)"

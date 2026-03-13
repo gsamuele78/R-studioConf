@@ -4,7 +4,7 @@
 # Installs, configures, and restarts chrony/ntp/systemd-timesyncd as needed
 # Uses process_template and backup logic from common_utils.sh
 
-set -euo pipefail
+#set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"

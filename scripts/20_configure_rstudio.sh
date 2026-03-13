@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+#set -euo pipefail
 # rstudio_setup.sh - RStudio Server Configuration Script
 # This script automates the setup and configuration of RStudio Server,
 # including directory structures, user-specific settings, and global configurations.
