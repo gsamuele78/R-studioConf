@@ -4,7 +4,7 @@
 # integration, including package installation, domain joining, configuration file
 # generation from a template, and a comprehensive suite of tests.
 
-#set -euo pipefail
+set -euo pipefail
 
 # Determine the directory where this script resides
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"

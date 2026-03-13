@@ -2,7 +2,7 @@
 # scripts/03_install_secure_access.sh
 # VERSION 16.1: FIXED. Corrects dependency loading and structure.
 
-#set -euo pipefail
+set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 DEFAULT_CONFIG_FILE="${SCRIPT_DIR}/../config/install_secure_access.vars.conf"

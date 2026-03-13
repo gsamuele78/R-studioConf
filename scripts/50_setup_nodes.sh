@@ -18,7 +18,7 @@
 #
 # ==============================================================================
 
-#set -euo pipefail
+set -euo pipefail
 
 # ── Resolve script location ──
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
