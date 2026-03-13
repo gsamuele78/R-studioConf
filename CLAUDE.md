@@ -26,12 +26,12 @@ COMPOSE FORMAT:
 - Always: deploy, healthcheck, logging, labels, depends_on
 
 PINNED VERSIONS (extracted from code — do not override):
-  ${OAUTH2_PROXY_IMAGE: -quay.io/oauth2-proxy/oauth2-proxy}:${OAUTH2_PROXY_TAG:-v7.6.0}
-  ${OLLAMA_AI_IMAGE: -botanical-ai-ollama}:${IMAGE_TAG:-latest}
-  ${PORTAL_NGINX_IMAGE: -botanical-portal-nginx}:${IMAGE_TAG:-latest}
-  ${RSTUDIO_SAMBA_IMAGE: -rstudio-botanical-samba}:${IMAGE_TAG:-latest}
-  ${RSTUDIO_SSSD_IMAGE: -rstudio-botanical-sssd}:${IMAGE_TAG:-latest}
-  ${TELEMETRY_API_IMAGE: -botanical-telemetry-api}:${IMAGE_TAG:-latest}
+  botanical-ai-ollama: latest
+  botanical-portal-nginx: latest
+  botanical-telemetry-api: latest
+  quay.io/oauth2-proxy/oauth2-proxy: v7.6.0
+  rstudio-botanical-samba: latest
+  rstudio-botanical-sssd: latest
   tecnativa/docker-socket-proxy: 0.3.0
 
 WHEN GENERATING CODE:

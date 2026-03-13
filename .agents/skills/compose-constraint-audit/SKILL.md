@@ -12,7 +12,7 @@ You are auditing a Docker Compose file for the R-studioConf project. This projec
 For EACH service in the compose file, verify:
 
 1. **HC-01 Resource Limits:** Has `deploy.resources.limits` with BOTH `memory` and `cpus`
-   - Keycloak (Java): max 2048M memory, Xmx must be BELOW container limit
+   - RStudio containers: set conservative CPU/RAM caps for stable multi-user sessions
    - PostgreSQL: 512M-1024M typical
    - Init/ephemeral containers: 128M-512M
    - Caddy: 256M

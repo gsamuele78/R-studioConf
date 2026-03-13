@@ -45,7 +45,7 @@ Before modifying what a script READS or PRODUCES, check the dependency chain:
 configure_rstudio.sh → .env → docker-deploy/docker-compose.yml → RStudio Container
 ```
 
-Read `.ai/agents.md` Section 7.1 for the complete dependency graph.
+Cross-check `.ai/agents.md` and `docs/reference/SCRIPT_CATALOG.md` before changing script inputs/outputs.
 
 ### 7. Destructive Operations (HC-10)
 - Reset/destroy scripts MUST require explicit confirmation (`type 'yes'`)

@@ -210,7 +210,7 @@ fi
 # Check if any .env (non-sandbox, non-example) is tracked
 CHECKS=$((CHECKS + 1))
 if command -v git &>/dev/null && [ -d "$PROJECT_ROOT/.git" ]; then
-    tracked_envs=$(git -C "$PROJECT_ROOT" ls-files '*.env' 2>/dev/null | grep -v '.env.sandbox' | grep -v '.env.example' | grep -v '.env.template' || true)
+    tracked_envs=$(git -C "$PROJECT_ROOT" ls-files '*.env' 2>/dev/null | grep -v '.env.sandbox' | grep -v '.env.example' | grep -v '.env.template' | grep -v '^.ai/extracted_versions.env$' || true)
     if [ -n "$tracked_envs" ]; then
         fail "Production .env files tracked in git: $tracked_envs"
         hint "git rm --cached <file> && add to .gitignore"
