@@ -13,10 +13,10 @@ map $remote_user $short_remote_user {
 }
 
 # MAP: Upgrade header mapping for WebSockets
-map $http_upgrade $connection_upgrade {
-    default upgrade;
-    ''      close;
-}
+#map $http_upgrade $connection_upgrade {
+#    default upgrade;
+#    ''      close;
+#}
 
 # ── ADD 1: WebSocket-aware Connection header map (FIX-3) ─────────────────────
 #
@@ -33,10 +33,10 @@ map $http_upgrade $connection_upgrade {
 #   When browser sends a plain HTTP request → $connection_upgrade = ""
 #
 # Used by: /rstudio-inner/ and /terminal-inner/ location blocks.
-#map $http_upgrade $connection_upgrade {
-#    default  upgrade;
-#    ''       "";
-#}
+map $http_upgrade $connection_upgrade {
+    default  upgrade;
+    ''       "";
+}
 
 
 
