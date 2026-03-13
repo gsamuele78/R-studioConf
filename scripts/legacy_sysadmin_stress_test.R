@@ -72,38 +72,9 @@ tryCatch(
     }
 )
 
-# 4. KERAS/TENSORFLOW MULTI-THREAD TEST
-# Verifica che il setup CPU-Only con OneDNN sia funzionante senza crash.
-message("\n[4/5] Inizializzazione Deep Learning (Keras/TF CPU Test)...")
-tryCatch(
-    {
-        suppressMessages(library(tensorflow))
-        tf <- reticulate::import("tensorflow", delay_load = TRUE)
-        message("--> Allocazione tensori massivi e calcolo parallelo OneDNN...")
-        # Forziamo l'uso esclusivo della CPU e disabilitiamo i warning CUDA (cuInit)
-        Sys.setenv(CUDA_VISIBLE_DEVICES = "-1")
-        Sys.setenv(TF_CPP_MIN_LOG_LEVEL = "2")
-
-        # Evitiamo keras_model_sequential() per aggirare bug delle callback di TF 2.16+ in R
-        # Eseguiamo algebra tensoriale pura sforzando tutti i thread CPU disponibili.
-        tf_matrix_a <- tf$random$normal(shape(8000L, 8000L))
-        tf_matrix_b <- tf$random$normal(shape(8000L, 8000L))
-
-        message("--> Moltiplicazione tensoriale e riduzione...")
-        tf_result <- tf$math$reduce_sum(tf$linalg$matmul(tf_matrix_a, tf_matrix_b))
-
-        message("--> Successo! TensorFlow Tensor Algebra eseguita via CPU: ", as.numeric(tf_result))
-        rm(tf_matrix_a, tf_matrix_b, tf_result)
-        gc()
-    },
-    error = function(e) {
-        message("--> ERRORE Keras/TF: ", e$message)
-    }
-)
-
-# 5. PURE R PARALLEL STABILITY TEST (future.apply)
+# 4. PURE R PARALLEL STABILITY TEST (future.apply)
 # Forza l'uso di tutti i core logici per dimostrare la stabilità sotto massimo carico R.
-message("\n[5/6] Test di Stabilità Multi-Core R (future.apply)...")
+message("\n[4/5] Test di Stabilità Multi-Core R (future.apply)...")
 tryCatch(
     {
         suppressMessages(library(future.apply))
@@ -161,28 +132,63 @@ tryCatch(
     }
 )
 
+# 5. KERAS/TENSORFLOW MULTI-THREAD TEST
+# Verifica che il setup CPU-Only con OneDNN sia funzionante senza crash.
+message("\n[5/6] Inizializzazione Deep Learning (Keras/TF CPU Test)...")
+tryCatch(
+    {
+        suppressMessages(library(tensorflow))
+        tf <- reticulate::import("tensorflow", delay_load = TRUE)
+        message("--> Allocazione tensori massivi e calcolo parallelo OneDNN...")
+        # Forziamo l'uso esclusivo della CPU e disabilitiamo i warning CUDA (cuInit)
+        Sys.setenv(CUDA_VISIBLE_DEVICES = "-1")
+        Sys.setenv(TF_CPP_MIN_LOG_LEVEL = "2")
+
+        # Evitiamo keras_model_sequential() per aggirare bug delle callback di TF 2.16+ in R
+        # Eseguiamo algebra tensoriale pura sforzando tutti i thread CPU disponibili.
+        tf_matrix_a <- tf$random$normal(shape(8000L, 8000L))
+        tf_matrix_b <- tf$random$normal(shape(8000L, 8000L))
+
+        message("--> Moltiplicazione tensoriale e riduzione...")
+        tf_result <- tf$math$reduce_sum(tf$linalg$matmul(tf_matrix_a, tf_matrix_b))
+
+        message("--> Successo! TensorFlow Tensor Algebra eseguita via CPU: ", as.numeric(tf_result))
+        # Rimosso gc() forzato per evitare il blocco (deadlock) dei C++ destructors in thread pool Python/OneDNN
+        Sys.sleep(0.5)
+    },
+    error = function(e) {
+        message("--> ERRORE Keras/TF: ", e$message)
+    }
+)
+
 # 6. CPU BURN & WEBSOCKET TIMEOUT TEST (Nginx Bare-Metal)
 # Assicuriamoci che l'Nginx hostato fisicamente non tagli la connessione (proxy_read_timeout).
 message("\n[6/6] Inizio ciclo CPU Burn (150 secondi).")
-message("🚨 ORA PUOI CHIUDERE LA SCHEDA DEL BROWSER O DISCONNETTERTI! 🚨")
-message("Riconnettiti tra qualche minuto per verificare il background daemon.\n")
-message("Attendiamo 8 secondi. Chiudi il tab adesso...")
-Sys.sleep(8) # Finestra temporale per chiudere la scheda
 
 start_time <- Sys.time()
 iterations <- 0
 duration_sec <- 150
 
-# Creazione della barra di progresso
-pb <- txtProgressBar(min = 0, max = duration_sec, style = 3)
+cat("\n[CPU BURN] Attendere... (Target: 150 secondi)\n")
+flush.console()
 
+last_print <- -1
+# Aggiornamento UI RStudio esplicito
+flush.console()
 # Un loop che mima l'addestramento di un modello bloccante (Single-Threaded)
 while (TRUE) {
+    # Yield al thread UI di RStudio per forzare il rendering in console
+    Sys.sleep(0.01)
+
     elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
     if (elapsed >= duration_sec) break
 
-    # Aggiorna la barra di progresso
-    setTxtProgressBar(pb, min(floor(elapsed), duration_sec))
+    current_sec <- floor(elapsed)
+    if (current_sec > last_print && current_sec %% 10 == 0) {
+        message(sprintf("--> Tempo trascorso: %d / %d sec. (Iterazioni: %d)", current_sec, duration_sec, iterations))
+        flush.console()
+        last_print <- current_sec
+    }
 
     # Nessun output testuale (message/print) qui per evitare buffer overflow
     # o SIGPIPE quando il client (browser) disconnette la WebSocket.
@@ -191,7 +197,9 @@ while (TRUE) {
     temp <- eigen(matrix(rnorm(600), 20, 30) %*% t(matrix(rnorm(600), 20, 30)))
     iterations <- iterations + 1
 }
-close(pb)
+
+cat(sprintf("\r--> Tempo trascorso: %d / %d sec. (Iterazioni: %d)\n", duration_sec, duration_sec, iterations))
+flush.console()
 
 message("=== LEGACY SYSADMIN STRESS TEST COMPLETATO ===")
 message("Orario di fine: ", Sys.time())
