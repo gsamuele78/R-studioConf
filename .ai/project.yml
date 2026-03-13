@@ -43,7 +43,7 @@ project:
 constraints:
   - id: "HC-01"
     rule: "Every container MUST have deploy.resources.limits for both memory and cpus"
-    rationale: "Prevents OOM cascades on shared hosts. Keycloak (Java) is the primary offender."
+    rationale: "Prevents OOM cascades on shared hosts. RStudio and companion services must stay within deterministic limits."
     validate: "compose_has_resource_limits"
 
   - id: "HC-02"

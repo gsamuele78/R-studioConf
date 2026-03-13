@@ -49,14 +49,40 @@ echo -e "${BOLD}═════════════════════�
 echo -e "${BLUE}[Phase 1] Extracting data from codebase...${NC}"
 
 # 1a. Extract image versions from production compose files
+parse_image_ref() {
+    local raw="$1"
+
+    # Compose var pattern: ${IMAGE_VAR:-repo/image}:${TAG_VAR:-1.2.3}
+    if [[ "$raw" =~ ^\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]+)\}:\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]+)\}$ ]]; then
+        echo "${BASH_REMATCH[1]}|${BASH_REMATCH[2]}"
+        return 0
+    fi
+
+    # Compose var pattern with default image and literal tag: ${IMAGE_VAR:-repo/image}:1.2.3
+    if [[ "$raw" =~ ^\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]+)\}:([^{}$]+)$ ]]; then
+        echo "${BASH_REMATCH[1]}|${BASH_REMATCH[2]}"
+        return 0
+    fi
+
+    # Plain image:tag form
+    if [[ "$raw" == *:* ]]; then
+        local base="${raw%:*}"
+        local ver="${raw##*:}"
+        echo "$base|$ver"
+    else
+        echo "$raw|untagged"
+    fi
+}
+
 declare -A IMAGES
 for f in "$PROJECT_ROOT"/docker-deploy/docker-compose.yml "$PROJECT_ROOT"/sandbox/*.yml; do
     [ ! -f "$f" ] && continue
     while IFS= read -r line; do
         img=$(echo "$line" | sed 's/.*image:\s*//' | tr -d '"' | tr -d "'" | xargs)
         [ -z "$img" ] && continue
-        base=$(echo "$img" | cut -d: -f1)
-        ver=$(echo "$img" | grep -o ':.*' | sed 's/://' || echo "untagged")
+        parsed=$(parse_image_ref "$img")
+        base="${parsed%%|*}"
+        ver="${parsed##*|}"
         IMAGES["$base"]="$ver"
     done < <(grep -E '^\s+image:' "$f" 2>/dev/null || true)
 done
@@ -67,7 +93,7 @@ VERSIONS_FILE="$AI_DIR/extracted_versions.env"
 for base in $(echo "${!IMAGES[@]}" | tr ' ' '\n' | sort); do
     echo "    $base:${IMAGES[$base]}"
     # Sanitize key for env file (replace / and - with _)
-    key=$(echo "$base" | tr '/-' '__' | tr '[:lower:]' '[:upper:]')
+    key=$(echo "$base" | sed 's/[^A-Za-z0-9]/_/g' | tr '[:lower:]' '[:upper:]')
     echo "${key}=${IMAGES[$base]}" >> "$VERSIONS_FILE"
 done
 
@@ -115,8 +141,8 @@ if [ ! -f "$PROJ_YML" ]; then
 fi
 
 # Extract constraints using grep (avoiding yq dependency for portability)
-CONSTRAINT_COUNT=$(grep -c '  - id: "HC-' "$PROJ_YML" || echo 0)
-BUG_COUNT=$(grep -c '  - id: "TD-' "$PROJ_YML" || echo 0)
+CONSTRAINT_COUNT=$(grep -c '  - id: "HC-' "$PROJ_YML" || true)
+BUG_COUNT=$(grep -c '  - id: "TD-' "$PROJ_YML" || true)
 echo "  $CONSTRAINT_COUNT hard constraints"
 echo "  $BUG_COUNT known issues"
 
