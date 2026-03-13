@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VALIDATOR="$PROJECT_ROOT/.ai/validate.sh"
 
-# Only validate if changed files touch infrastructure code
+# Only validate if changed files touch project operational code
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
 
 NEEDS_VALIDATION=false
@@ -33,7 +33,7 @@ for f in $STAGED_FILES; do
 done
 
 if [ "$NEEDS_VALIDATION" = false ]; then
-    # No infrastructure files changed — skip validation
+    # No relevant project files changed — skip validation
     exit 0
 fi
 

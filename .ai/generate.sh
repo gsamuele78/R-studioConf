@@ -115,8 +115,8 @@ if [ ! -f "$PROJ_YML" ]; then
 fi
 
 # Extract constraints using grep (avoiding yq dependency for portability)
-CONSTRAINT_COUNT=$(grep -c '  - id: "HC-' "$PROJ_YML" || echo 0)
-BUG_COUNT=$(grep -c '  - id: "TD-' "$PROJ_YML" || echo 0)
+CONSTRAINT_COUNT=$(grep -c '  - id: "HC-' "$PROJ_YML" || true)
+BUG_COUNT=$(grep -c '  - id: "TD-' "$PROJ_YML" || true)
 echo "  $CONSTRAINT_COUNT hard constraints"
 echo "  $BUG_COUNT known issues"
 

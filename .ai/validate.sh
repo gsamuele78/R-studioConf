@@ -247,7 +247,7 @@ done
 # ──────────────────────────────────────────────────────────────
 section "HC-11: No external CDN calls in UI themes"
 HC11_ERRORS_BEFORE=$ERRORS
-THEME_FILES=$(find "$PROJECT_ROOT" \( -name '*.css' -o -name '*.ftl' -o -name '*.html' \) -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/R-studioConf/*' 2>/dev/null || true)
+THEME_FILES=$(find "$PROJECT_ROOT" \( -name '*.css' -o -name '*.ftl' -o -name '*.html' \) -not -path '*/.git/*' -not -path '*/node_modules/*' 2>/dev/null || true)
 for f in $THEME_FILES; do
     CHECKS=$((CHECKS + 1))
     rel_path="${f#$PROJECT_ROOT/}"
