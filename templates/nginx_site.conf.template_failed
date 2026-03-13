@@ -1,0 +1,84 @@
+# templates/nginx_site.conf.template
+# =====================================================================
+# FIX (2026-03-13): Connection map changed from 'close' to '' (empty).
+#
+# BEFORE (BROKEN):  '' close;
+#   → Every JSON-RPC heartbeat poll creates a new TCP connection
+#   → During CPU-intensive R workloads, connection storms overwhelm rsession
+#   → Combined with WebSocket starvation, causes "Abnormal Termination"
+#
+# AFTER (FIXED):    '' "";
+#   → HTTP/1.1 keepalive preserved for JSON-RPC polls
+#   → Single persistent connection reused for all non-WebSocket requests
+#   → Dramatically reduces backend connection pressure during heavy compute
+# =====================================================================
+
+# Rate limit zone for public /api/ status endpoint (http-level = correct scope)
+# Shared memory zone: 1m ~ 16,000 IP addresses tracked
+limit_req_zone $binary_remote_addr zone=api_status:1m rate=30r/m;
+
+# MAP: Extract short username (before @) to bypass TTYD 32-char limit
+map $remote_user $short_remote_user {
+    ~^(?P<user>[^@]+)@.*$ $user;
+    default $remote_user;
+}
+
+# MAP: WebSocket-aware Connection header
+#
+# When browser sends "Upgrade: websocket" → $connection_upgrade = "upgrade"
+# When browser sends a plain HTTP request → $connection_upgrade = "" (keepalive)
+#
+# CRITICAL: Using "" (empty) instead of "close" preserves HTTP/1.1 keepalive
+# for RStudio JSON-RPC heartbeat polls. "close" forces a new TCP connection
+# per request, which fails under CPU load when rsession cannot accept
+# connections fast enough.
+map $http_upgrade $connection_upgrade {
+    default  upgrade;
+    ''       "";
+}
+
+server {
+    # Listen on all IPv4 addresses
+    listen 80;
+    # Listen on all IPv6 addresses
+    listen [::]:80;
+    server_name %%DOMAIN_OR_IP%%;
+    
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    # Nextcloud Discovery Redirects
+    location ^~ /.well-known/carddav { return 301 /files/remote.php/dav; }
+    location ^~ /.well-known/caldav  { return 301 /files/remote.php/dav; }
+    location ^~ /.well-known/webfinger { return 301 /files/index.php/.well-known/webfinger; }
+    location ^~ /.well-known/nodeinfo { return 301 /files/index.php/.well-known/nodeinfo; }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# --- Main HTTPS Server Block ---
+server {
+    # Listen on all IPv4 addresses for SSL
+    listen 443 ssl http2;
+    # Listen on all IPv6 addresses for SSL
+    listen [::]:443 ssl http2;
+    server_name %%DOMAIN_OR_IP%%;
+
+    access_log %%LOG_DIR%%/rstudio-access.log;
+    error_log %%LOG_DIR%%/rstudio-error.log;
+
+    # Includes the certificate paths (works for both Self-Signed and Let's Encrypt)
+    include %%NGINX_TEMPLATE_DIR%%/nginx_ssl_certificate.conf;
+    
+    # Includes the hardened SSL/TLS parameters
+    include %%NGINX_TEMPLATE_DIR%%/nginx_ssl_params.conf;
+
+    # Includes the performance optimization configuration
+    include %%NGINX_TEMPLATE_DIR%%/nginx_performance.conf;
+
+    # Includes the reverse proxy definitions for all services
+    include %%NGINX_TEMPLATE_DIR%%/nginx_proxy_location.conf;
+}
