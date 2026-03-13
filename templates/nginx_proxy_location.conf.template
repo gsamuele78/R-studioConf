@@ -55,6 +55,9 @@ location ^~ /rstudio-inner/ {
     proxy_read_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
     proxy_send_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
     # Extended timeout for long-running R sessions and slow VPN/Wi-Fi networks
+    #proxy_connect_timeout 300s;
+    #proxy_read_timeout 300s;
+    #proxy_send_timeout 300s;
 
 
     # Performance & Persistence
@@ -139,9 +142,9 @@ location ^~ /rstudio-inner/ {
     }
     
     # Enforce Secure Cookies on all other RStudio responses
-    # Also force Origin for any other POSTs that might happen
-    proxy_set_header Origin $scheme://$host:443;
-    proxy_set_header Referer $scheme://$host:443$request_uri;
+    # Force Origin/Referer only for requests that have them (preserves JSON-RPC)
+    proxy_set_header Origin $http_origin;
+    proxy_set_header Referer $http_referer;
     
     proxy_cookie_flags ~ secure samesite=none;
 }
@@ -317,45 +320,45 @@ location /api/ {
     #proxy_buffering off;
 }
 
-# --- Public Metrics Endpoint (for API docs and Prometheus) ---
-# Exposes /metrics endpoint publicly with rate limiting
-location /metrics {
-    limit_req zone=api_status burst=5 nodelay;
-    
-    # Allow GET only
-    limit_except GET { deny all; }
-    
-    proxy_pass http://127.0.0.1:8000/metrics;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header Connection "";
-    proxy_buffering off;
-    
-    # Generous timeout
-    proxy_read_timeout 15s;
-    proxy_connect_timeout 5s;
-    proxy_send_timeout 10s;
-    
-    # CORS headers for API docs (restricted to same origin)
-    add_header Access-Control-Allow-Origin "$http_origin" always;
-    add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
-    add_header Access-Control-Allow-Headers "Content-Type" always;
-    add_header Cache-Control "no-store, no-cache" always;
-    
-    # Handle OPTIONS preflight
-    if ($request_method = 'OPTIONS') {
-        add_header Access-Control-Allow-Origin "$http_origin" always;
-        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
-        add_header Access-Control-Allow-Headers "Content-Type" always;
-        add_header Access-Control-Max-Age 1728000;
-        add_header Content-Type "text/plain; charset=utf-8";
-        add_header Content-Length 0;
-        return 204;
-    }
-}
+## --- Public Metrics Endpoint (for API docs and Prometheus) ---
+## Exposes /metrics endpoint publicly with rate limiting
+#location /metrics {
+#    limit_req zone=api_status burst=5 nodelay;
+#    
+#    # Allow GET only
+#    limit_except GET { deny all; }
+#    
+#    proxy_pass http://127.0.0.1:8000/metrics;
+#    proxy_http_version 1.1;
+#    proxy_set_header Host $host;
+#    proxy_set_header X-Real-IP $remote_addr;
+#    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#    proxy_set_header X-Forwarded-Proto $scheme;
+#    proxy_set_header Connection "";
+#    proxy_buffering off;
+#    
+#    # Generous timeout
+#    proxy_read_timeout 15s;
+#    proxy_connect_timeout 5s;
+#    proxy_send_timeout 10s;
+#    
+#    # CORS headers for API docs (restricted to same origin)
+#    add_header Access-Control-Allow-Origin "$http_origin" always;
+#    add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
+#    add_header Access-Control-Allow-Headers "Content-Type" always;
+#    add_header Cache-Control "no-store, no-cache" always;
+#    
+#    # Handle OPTIONS preflight
+#    if ($request_method = 'OPTIONS') {
+#        add_header Access-Control-Allow-Origin "$http_origin" always;
+#        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
+#        add_header Access-Control-Allow-Headers "Content-Type" always;
+#        add_header Access-Control-Max-Age 1728000;
+#        add_header Content-Type "text/plain; charset=utf-8";
+#        add_header Content-Length 0;
+#        return 204;
+#    }
+#}
 
 # --- Server Status Wrapper (full Grafana-style detail page) ---
 # Served at /status/ — links from strip and monitoring tile.
