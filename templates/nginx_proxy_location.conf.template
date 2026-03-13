@@ -143,8 +143,11 @@ location ^~ /rstudio-inner/ {
     
     # Enforce Secure Cookies on all other RStudio responses
     # Force Origin/Referer only for requests that have them (preserves JSON-RPC)
-    proxy_set_header Origin $http_origin;
-    proxy_set_header Referer $http_referer;
+    #proxy_set_header Origin $http_origin;
+    #proxy_set_header Referer $http_referer;
+    # Also force Origin for any other POSTs that might happen
+    proxy_set_header Origin $scheme://$host:443;
+    proxy_set_header Referer $scheme://$host:443$request_uri;
     
     proxy_cookie_flags ~ secure samesite=none;
 }
