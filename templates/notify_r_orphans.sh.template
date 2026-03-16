@@ -7,7 +7,8 @@
 # - Improved email text to explain "Why" clearly.
 # - Explicitly mentions that active sessions are NOT affected.
 #
-# Per BIOME-CALC - 137.204.21.170
+#
+# Per node identity (detected automatically)
 # ============================================================================
 
 CONF_FILE="/etc/biome-calc/conf/r_orphan_cleanup.conf"
@@ -22,8 +23,14 @@ if [ ! -f "$HELPERS" ]; then
     exit 1
 fi
 
+# shellcheck source=/dev/null
 source "$CONF_FILE"
+# shellcheck source=/dev/null
 source "$HELPERS"
+
+# Derive dynamic node identity
+NODE_ID=$(hostname -s | tr '[:lower:]' '[:upper:]')
+[ -z "$NODE_ID" ] && NODE_ID="BIOME-CALC"
 
 if [ ! -x "$SEND_EMAIL_SCRIPT" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') | ERROR | send_email.sh not found: $SEND_EMAIL_SCRIPT" >&2
@@ -65,7 +72,7 @@ for USER_LOG in "${NOTIFY_DIR}"/*.log; do
     {
         echo "Ciao ${USERNAME},"
         echo ""
-        echo "Il sistema di monitoraggio di BIOME-CALC ha liberato risorse"
+        echo "Il sistema di monitoraggio di ${NODE_ID} ha liberato risorse"
         echo "terminando ${N_ORPHANS} processi RIMASTI BLOCCATI (orfani)."
         echo ""
         echo "PERCHE' RICEVI QUESTA MAIL?"
@@ -91,11 +98,11 @@ for USER_LOG in "${NOTIFY_DIR}"/*.log; do
         echo ""
         echo "Per dubbi tecnici, scrivi a: ${SENDER_EMAIL}"
         echo ""
-        echo "-- BIOME-CALC Server Admin"
+        echo "-- ${NODE_ID} Server Admin"
         echo "   $(date '+%Y-%m-%d %H:%M:%S')"
     } > "$BODY_FILE"
 
-    SUBJECT="[BIOME-CALC] Cleanup risorse: ${N_ORPHANS} processi terminati"
+    SUBJECT="[${NODE_ID}] Cleanup risorse: ${N_ORPHANS} processi terminati"
 
     # ── Destinatari ───────────────────────────────────────────────
     ALL_RCPT="$USER_EMAIL"

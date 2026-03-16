@@ -1010,7 +1010,12 @@ setup_nodes_orphan_cleanup() {
   else
     local dns_csv
     dns_csv=$(echo "${SMTP_DNS_SERVERS}" | tr ' ' ',')
-    export SMTP_HOST SMTP_PORT SENDER_EMAIL MAIL_DOMAIN SMTP_DNS_SERVERS="${dns_csv}" KILL_TIMEOUT BIOME_CONF
+    
+    # Derive dynamic node sender (e.g. noreply-biome-calc02@unibo.it)
+    local node_sender
+    node_sender="noreply-$(hostname -s)@${MAIL_DOMAIN}"
+    
+    export SMTP_HOST SMTP_PORT SENDER_EMAIL="${node_sender}" MAIL_DOMAIN SMTP_DNS_SERVERS="${dns_csv}" KILL_TIMEOUT BIOME_CONF
     envsubst "\${SMTP_HOST} \${SMTP_PORT} \${SENDER_EMAIL} \${MAIL_DOMAIN} \${SMTP_DNS_SERVERS} \${KILL_TIMEOUT} \${BIOME_CONF}" < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
     run_cmd chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   fi

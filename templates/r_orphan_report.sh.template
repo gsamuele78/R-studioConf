@@ -8,7 +8,8 @@
 # 2. ALIGNED SAFETY LOGIC: PPID=1 processes are reported as "OK (Detached/Safe)"
 #    if the user has an active session. They are only "ORPHAN" if no session exists.
 #
-# Per BIOME-CALC - 137.204.21.170
+#
+# Per node identity (detected automatically)
 # ============================================================================
 
 CONF_FILE="/etc/biome-calc/conf/r_orphan_cleanup.conf"
@@ -27,6 +28,10 @@ fi
 source "$CONF_FILE"
 # shellcheck source=/dev/null
 source "$HELPERS"
+
+# Derive dynamic node identity
+NODE_ID=$(hostname -s | tr '[:lower:]' '[:upper:]')
+[ -z "$NODE_ID" ] && NODE_ID="BIOME-CALC"
 
 SEND_MAIL=0
 [ "${1:-}" = "--mail" ] && SEND_MAIL=1
@@ -64,7 +69,7 @@ check_is_safe() {
 generate_report() {
 
 echo "================================================================"
-echo "  BIOME-CALC - Report Processi Orfani v4.3"
+echo "  ${NODE_ID} - Report Processi Orfani v4.3"
 echo "  Generato: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "  Server:   $(hostname) ($(hostname -I 2>/dev/null | awk '{print $1}'))"
 echo "  Pattern monitorati: ${#ORPHAN_PATTERNS[@]}"
@@ -207,17 +212,22 @@ if [ -f "$LOG_FILE" ]; then
 
     echo "-- NOTIFICHE PENDENTI -----------------------------------------"
     echo ""
-    PENDING=$(ls -1 "${NOTIFY_DIR}"/*.log 2>/dev/null | grep -v '\.sent' || true)
-    if [ -z "$PENDING" ]; then
+    # Avoid ls | grep for safety and to satisfy shellcheck
+    PENDING_FOUND=0
+    for F in "${NOTIFY_DIR}"/*.log; do
+        [ -e "$F" ] || continue
+        [[ "$F" == *.sent.log ]] && continue # Assuming .sent suffix
+        
+        UNAME=$(basename "$F" .log)
+        [[ "$UNAME" == *"+" ]] && continue
+        
+        UCOUNT=$(grep -c "PROCESSO ORFANO TERMINATO" "$F" 2>/dev/null || echo 0)
+        printf "  %-25s %s orfani pendenti\n" "$UNAME" "$UCOUNT"
+        PENDING_FOUND=1
+    done
+    
+    if [ "$PENDING_FOUND" -eq 0 ]; then
         echo "  Nessuna (OK)"
-    else
-        for F in ${PENDING}; do
-            UNAME=$(basename "$F" .log)
-            # Filter bad filenames
-            if [[ "$UNAME" == *"+" ]]; then continue; fi
-            UCOUNT=$(grep -c "PROCESSO ORFANO TERMINATO" "$F" 2>/dev/null || echo 0)
-            printf "  %-25s %s orfani pendenti\n" "$UNAME" "$UCOUNT"
-        done
     fi
 fi
 
@@ -267,7 +277,7 @@ if [ "$SEND_MAIL" -eq 1 ]; then
         "$SEND_EMAIL_SCRIPT" \
             -s "$SMTP_HOST" -p "$SMTP_PORT" -f "$SENDER_EMAIL" \
             -T "$ADMIN_RESOLVED" \
-            -u "[BIOME-CALC] Report processi orfani $(date '+%Y-%m-%d')" \
+            -u "[${NODE_ID}] Report processi orfani $(date '+%Y-%m-%d')" \
             -m "$REPORT_FILE" -d "$DNS_SERVERS" -L "r-orphan-report" \
         && echo "Report inviato a: ${ADMIN_RESOLVED}" \
         || echo "ERRORE invio report" >&2

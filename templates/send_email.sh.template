@@ -188,6 +188,7 @@ sendemail_cmd_array=("$SENDEMAIL_CMD_PATH"
     -o message-file="$MESSAGE_BODY_FILE"
     -s "$SMTP_SERVER_IP:$SMTP_PORT"
     -o tls=no # As per original requirement "in clear"
+    -o timeout=30 # Prevent long hangs if SMTP is silent
 )
 
 if [[ "$IS_HTML_BODY" -eq 1 ]]; then
