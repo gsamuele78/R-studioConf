@@ -112,7 +112,7 @@ for USER_LOG in "${NOTIFY_DIR}"/*.log; do
         cat "$USER_LOG"
         echo "========================================================"
         echo ""
-        echo "Per dubbi tecnici, scrivi a: ${SENDER_EMAIL}"
+        echo "Per dubbi tecnici, scrivi a: $(echo "${ADMIN_RECIPIENTS}" | sed 's/,/, /g')"
         echo ""
         echo "-- ${NODE_ID} Server Admin"
         echo "   $(date '+%Y-%m-%d %H:%M:%S')"
