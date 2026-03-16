@@ -1009,7 +1009,7 @@ setup_nodes_orphan_cleanup() {
     log_info "[DRY-RUN] envsubst on r_orphan_cleanup.conf.template -> ${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   else
     export SMTP_HOST SMTP_PORT SENDER_EMAIL MAIL_DOMAIN SMTP_DNS_SERVERS KILL_TIMEOUT BIOME_CONF
-    envsubst '${SMTP_HOST} ${SMTP_PORT} ${SENDER_EMAIL} ${MAIL_DOMAIN} ${SMTP_DNS_SERVERS} ${KILL_TIMEOUT} ${BIOME_CONF}' < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
+    envsubst "\${SMTP_HOST} \${SMTP_PORT} \${SENDER_EMAIL} \${MAIL_DOMAIN} \${SMTP_DNS_SERVERS} \${KILL_TIMEOUT} \${BIOME_CONF}" < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
     run_cmd chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   fi
 
@@ -1021,6 +1021,7 @@ setup_nodes_orphan_cleanup() {
     "notify_r_orphans.sh.template:notify_r_orphans.sh"
     "r_orphan_report.sh.template:r_orphan_report.sh"
     "send_email.sh.template:send_email.sh"
+    "orphan_cleanup_helpers.sh.template:orphan_cleanup_helpers.sh"
   )
 
   for pair in "${scripts_to_deploy[@]}"; do
@@ -1065,11 +1066,11 @@ EOF
 # ==============================================================================
 setup_nodes_project_archiver() {
     log_step "Step 11c: BIOME Precision Archiver"
-    local ARCHIVER_LOG_DIR="/var/log/biome_archiver"
+    local ARCHIVE_LOG_DIR="/var/log/biome-log/biome_archive"
 
     # 1. Ensure log structures exist
-    run_cmd mkdir -p "${ARCHIVER_LOG_DIR}"
-    run_cmd chmod 755 "${ARCHIVER_LOG_DIR}"
+    run_cmd mkdir -p "${ARCHIVE_LOG_DIR}"
+    run_cmd chmod 755 "${ARCHIVE_LOG_DIR}"
 
     # 2. Deploy configs
     log_info "Deploying archiver configuration files..."
@@ -1101,7 +1102,7 @@ setup_nodes_project_archiver() {
         else
             # Export variables needed for envsubst
             export BIOME_CONF ARCHIVE_LOG_DIR ARCHIVE_CONF_DIR ARCHIVE_CSV_FILE NFS_HOME ARCHIVE_STORAGE_ROOT
-            envsubst '${BIOME_CONF} ${ARCHIVE_LOG_DIR} ${ARCHIVE_CONF_DIR} ${ARCHIVE_CSV_FILE} ${NFS_HOME} ${ARCHIVE_STORAGE_ROOT}' < "${WORKSPACE_ROOT}/templates/${tpl}" > "${BIOME_CONF}/script/${dest}"
+            envsubst "\${BIOME_CONF} \${ARCHIVE_LOG_DIR} \${ARCHIVE_CONF_DIR} \${ARCHIVE_CSV_FILE} \${NFS_HOME} \${ARCHIVE_STORAGE_ROOT}" < "${WORKSPACE_ROOT}/templates/${tpl}" > "${BIOME_CONF}/script/${dest}"
             run_cmd chmod +x "${BIOME_CONF}/script/${dest}"
             log_success "Deployed ${dest}"
         fi
