@@ -154,6 +154,13 @@ if [[ "$*" == *"--mail"* ]]; then
     # Mapping based on send_email.sh.template:
     # -s: SMTP_HOST, -p: SMTP_PORT, -f: SENDER_EMAIL, -T: RECIPIENTS_STRING
     # -u: SUBJECT, -m: MESSAGE_BODY_FILE, -d: DNS_SERVERS_CSV, -L: LOG_PREFIX
+    
+    # Fallback logic for DNS servers variable name mismatch
+    RESOLVED_DNS="${DNS_SERVERS:-${SMTP_DNS_SERVERS:-}}"
+    if [[ -z "$RESOLVED_DNS" ]]; then
+        log_warn "No DNS servers found in config. Email might fail resolution."
+    fi
+
     if ! "$SEND_EMAIL_SCRIPT" \
         -s "$SMTP_HOST" \
         -p "$SMTP_PORT" \
@@ -161,7 +168,7 @@ if [[ "$*" == *"--mail"* ]]; then
         -T "$RECIPIENTS" \
         -u "[BIOME-CALC] Node Health Report: $(hostname)" \
         -m "$REPORT_FILE" \
-        -d "$SMTP_DNS_SERVERS" \
+        -d "$RESOLVED_DNS" \
         -L "node-health-report"; then
         
         log_error "Email delivery failed (send_email.sh returned error)."
