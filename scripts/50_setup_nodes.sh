@@ -94,6 +94,11 @@ log_success() { log "INFO" "[SUCCESS] $1"; }
 log_error() { log "ERROR" "$1"; }
 log_warn() { log "WARN" "$1"; }
 
+# ── Check if command exists ──
+command_exists() {
+    command -v "$1" &>/dev/null
+}
+
 # ==============================================================================
 # UNINSTALL
 # ==============================================================================
