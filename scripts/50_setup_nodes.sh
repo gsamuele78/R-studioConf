@@ -1055,7 +1055,7 @@ setup_nodes_orphan_cleanup() {
   # 4. Bind to cron
   log_info "Wiring cron schedules..."
   local cron_cleanup="${ORPHAN_CRON_CLEANUP:-15 * * * *} root ${BIOME_CONF}/script/cleanup_r_orphans.sh > /dev/null 2>&1"
-  local cron_notify="${ORPHAN_CRON_NOTIFY:-00 18 * * *} root ${BIOME_CONF}/script/notify_r_orphans.sh > /dev/null 2>&1"
+  local cron_notify="${ORPHAN_CRON_NOTIFY:-00 18 * * *} root ${BIOME_CONF}/script/notify_r_orphans.sh --mail > /dev/null 2>&1"
   local cron_report="${ORPHAN_CRON_REPORT:-00 08 * * 1} root ${BIOME_CONF}/script/r_orphan_report.sh --mail > /dev/null 2>&1"
   
   if [[ "${DRY_RUN}" == "true" ]]; then

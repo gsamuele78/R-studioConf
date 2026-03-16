@@ -8,6 +8,7 @@
 # - Explicitly mentions that active sessions are NOT affected.
 #
 #
+#
 # Per node identity (detected automatically)
 # ============================================================================
 
@@ -31,6 +32,9 @@ source "$HELPERS"
 # Derive dynamic node identity
 NODE_ID=$(hostname -s | tr '[:lower:]' '[:upper:]')
 [ -z "$NODE_ID" ] && NODE_ID="BIOME-CALC"
+
+SEND_MAIL=0
+[ "${1:-}" = "--mail" ] && SEND_MAIL=1
 
 if [ ! -x "$SEND_EMAIL_SCRIPT" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') | ERROR | send_email.sh not found: $SEND_EMAIL_SCRIPT" >&2
@@ -65,11 +69,21 @@ for USER_LOG in "${NOTIFY_DIR}"/*.log; do
     N_ORPHANS=$(grep -c "PROCESSO ORFANO TERMINATO" "$USER_LOG" 2>/dev/null || echo 0)
 
     [ "$N_ORPHANS" -eq 0 ] && continue
+    
+    if [ "$SEND_MAIL" -eq 0 ]; then
+        log_notify "SKIP | Modalità mail disabilitata (usa --mail). user=${USERNAME} | orphans=${N_ORPHANS}"
+        continue
+    fi
 
     # ── Componi body ──────────────────────────────────────────
     BODY_FILE="${TMPDIR}/body_${USERNAME}_$$.txt"
 
     {
+        echo "========================================================"
+        echo "  ${NODE_ID} - Notifica Cleanup Risorse"
+        echo "  Data: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "========================================================"
+        echo ""
         echo "Ciao ${USERNAME},"
         echo ""
         echo "Il sistema di monitoraggio di ${NODE_ID} ha liberato risorse"

@@ -11,7 +11,8 @@
 # 4. SAFETY: Checks if parent is PID 1 (Init) to confirm orphan status.
 # 5. TIMEOUT: Grace period 15s for data flush before SIGKILL.
 #
-# Per BIOME-CALC - 137.204.21.170
+#
+# Per node identity (detected automatically)
 # ============================================================================
 
 CONF_FILE="/etc/biome-calc/conf/r_orphan_cleanup.conf"
