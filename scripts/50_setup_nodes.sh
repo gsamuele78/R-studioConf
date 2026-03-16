@@ -1008,7 +1008,9 @@ setup_nodes_orphan_cleanup() {
   if [[ "${DRY_RUN}" == true ]]; then
     log_info "[DRY-RUN] envsubst on r_orphan_cleanup.conf.template -> ${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   else
-    export SMTP_HOST SMTP_PORT SENDER_EMAIL MAIL_DOMAIN SMTP_DNS_SERVERS KILL_TIMEOUT BIOME_CONF
+    local dns_csv
+    dns_csv=$(echo "${SMTP_DNS_SERVERS}" | tr ' ' ',')
+    export SMTP_HOST SMTP_PORT SENDER_EMAIL MAIL_DOMAIN SMTP_DNS_SERVERS="${dns_csv}" KILL_TIMEOUT BIOME_CONF
     envsubst "\${SMTP_HOST} \${SMTP_PORT} \${SENDER_EMAIL} \${MAIL_DOMAIN} \${SMTP_DNS_SERVERS} \${KILL_TIMEOUT} \${BIOME_CONF}" < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
     run_cmd chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   fi
@@ -1035,12 +1037,21 @@ setup_nodes_orphan_cleanup() {
       log_success "Deployed ${dest}"
     fi
   done
+  
+  # Deploy library for archiver alignment
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    log_info "[DRY-RUN] Deploying common_utils.sh to ${BIOME_CONF}/script/"
+  else
+    run_cmd cp -f "${WORKSPACE_ROOT}/lib/common_utils.sh" "${BIOME_CONF}/script/common_utils.sh"
+    run_cmd chmod +x "${BIOME_CONF}/script/common_utils.sh"
+    log_success "Deployed common_utils.sh library"
+  fi
 
   # 4. Bind to cron
   log_info "Wiring cron schedules..."
   local cron_cleanup="${ORPHAN_CRON_CLEANUP:-15 * * * *} root ${BIOME_CONF}/script/cleanup_r_orphans.sh > /dev/null 2>&1"
   local cron_notify="${ORPHAN_CRON_NOTIFY:-00 18 * * *} root ${BIOME_CONF}/script/notify_r_orphans.sh > /dev/null 2>&1"
-  local cron_report="${ORPHAN_CRON_REPORT:-00 08 * * 1} root ${BIOME_CONF}/script/r_orphan_report.sh > /dev/null 2>&1"
+  local cron_report="${ORPHAN_CRON_REPORT:-00 08 * * 1} root ${BIOME_CONF}/script/r_orphan_report.sh --mail > /dev/null 2>&1"
   
   if [[ "${DRY_RUN}" == "true" ]]; then
     log_info "[DRY-RUN] Sarebbero stati scritti i seguenti job in /etc/cron.d/r_orphan_cleanup:"
