@@ -1273,15 +1273,31 @@ setup_nodes_summary() {
   fi
   echo "    ${BIOME_CONF}/script/tools/ (Diagnostic tools)"
   echo ""
-  
-  # Trigger the post-deployment master report (Full Deployment Only)
-  if [[ "${choice:-}" == "1" ]] && [[ "${DRY_RUN}" == "false" ]]; then
-    log_info "Generating master deployment report and emailing administrators..."
-    if [[ -f "${BIOME_CONF}/script/tools/deployment_summary.sh" ]]; then
-        # Capture the current summary content and pipe it to the summary tool
-        setup_nodes_summary_content | "${BIOME_CONF}/script/tools/deployment_summary.sh" --mail || log_warn "Summary report delivery failed."
+}
+
+# ==============================================================================
+# STEP 11e: MASTER DIAGNOSTIC REPORT
+# ==============================================================================
+setup_nodes_master_report() {
+    log_step "Step 11e: Master Diagnostic Report"
+    
+    local summary_script="${BIOME_CONF}/script/tools/deployment_summary.sh"
+    
+    if [[ ! -f "${summary_script}" ]]; then
+        log_error "Master report script not found: ${summary_script}"
+        log_warn "Please run Step 11d (Setup BIOME Admin Tools) first."
+        return 1
     fi
-  fi
+
+    log_info "Generating comprehensive node report (Hardware + R + Storage)..."
+    
+    # We pipe the setup summary context into the master report tool
+    setup_nodes_summary_content | "${summary_script}" --mail || {
+        log_error "Master report generation or delivery failed."
+        return 1
+    }
+
+    log_success "Master report sent to administrators."
 }
 
 # Helper to provide the summary content as a string
@@ -1322,6 +1338,7 @@ echo "  7) Run Swap Creation only (Step 5b)"
 echo "  8) Setup Orphan Process Cleanup (Step 11b)"
 echo "  9) Setup BIOME Precision Archiver (Step 11c)"
 echo "  T) Setup BIOME Admin Tools (Step 11d)"
+echo "  R) Master Diagnostic Report (Step 11e)"
 echo "  U) Uninstall (remove deployed files)"
 echo "  Q) Quit"
 echo ""
@@ -1350,6 +1367,7 @@ case "${choice}" in
     setup_nodes_admin_tools
     setup_nodes_blas_test
     setup_nodes_summary
+    setup_nodes_master_report
     ;;
   2)
     setup_nodes_preflight
@@ -1385,6 +1403,10 @@ case "${choice}" in
   T)
     setup_nodes_preflight
     setup_nodes_admin_tools
+    ;;
+  R)
+    setup_nodes_preflight
+    setup_nodes_master_report
     ;;
   U)
     setup_nodes_uninstall
