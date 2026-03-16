@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# Find the top 10 largest directories and their owners
+echo "Top 10 largest directories:"
+sudo du -ahx / | sort -rh | head -n 10 | awk '{print $2}' | xargs -I {} stat -c "%s %U %n" {} | numfmt --to=iec-i --suffix=B --padding=7
+
+echo "\nTop 10 largest files:"
+# Find the top 10 largest files and their owners
+sudo find / -type f -exec du -ah {} + 2>/dev/null | sort -rh | head -n 10 | awk '{print $2}' | xargs -I {} stat -c "%s %U %n" {} | numfmt --to=iec-i --suffix=B --padding=7

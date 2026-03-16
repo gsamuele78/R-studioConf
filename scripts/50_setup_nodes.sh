@@ -1146,6 +1146,68 @@ EOF
 }
 
 # ==============================================================================
+# STEP 11d: BIOME ADMIN TOOLS
+# ==============================================================================
+setup_nodes_admin_tools() {
+    log_step "Step 11d: Setup BIOME Admin Tools"
+    
+    local tools_dir="${BIOME_CONF}/script/tools"
+    local source_tools="${WORKSPACE_ROOT}/scripts/tools"
+    
+    if [[ ! -d "${source_tools}" ]]; then
+        log_warn "Tools source directory not found: ${source_tools}. Skipping."
+        return 0
+    fi
+    
+    log_info "Deploying BIOME diagnostic and management tools to ${tools_dir}..."
+    run_cmd mkdir -p "${tools_dir}"
+    
+    # --- Hardware-Aware Dependency Check (Pessimistic) ---
+    log_info "Pessimistic hardware assessment for diagnostic dependencies..."
+    local deps=()
+    
+    # 1. Disk/SMART
+    if lsblk -d -o NAME,TYPE | grep -q "disk"; then
+        command_exists smartctl || deps+=("smartmontools")
+        lsblk -d -o NAME,MODEL | grep -qi "nvme" && { command_exists nvme || deps+=("nvme-cli"); }
+    fi
+    
+    # 2. Network/Ethtool
+    lspci | grep -Ei "ethernet|network|fiber" -q && { command_exists ethtool || deps+=("ethtool"); }
+    
+    # 3. Base Utilities
+    command_exists lsb_release || deps+=("lsb-release")
+    command_exists dmidecode || deps+=("dmidecode")
+    
+    # 4. Network Mount Utilities (NFS/SMB)
+    grep -q "nfs" /proc/mounts && { command_exists mount.nfs || deps+=("nfs-common"); }
+    grep -qE "cifs|smb" /proc/mounts && { command_exists mount.cifs || deps+=("cifs-utils"); }
+
+    if [[ ${#deps[@]} -gt 0 ]]; then
+        log_info "Installing missing hardware utilities: ${deps[*]}"
+        run_cmd apt-get update -qq
+        run_cmd apt-get install -y "${deps[@]}" > /dev/null
+    fi
+
+    # Copy all files from scripts/tools/ maintaining structure
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        log_info "[DRY-RUN] cp -r ${source_tools}/* ${tools_dir}/"
+    else
+        # Iterate over files in tools source
+        for tool in "${source_tools}"/*; do
+            [ -f "$tool" ] || continue
+            local tool_name
+            tool_name=$(basename "$tool")
+            cp "$tool" "${tools_dir}/${tool_name}"
+            chmod 0755 "${tools_dir}/${tool_name}"
+            log_success "Deployed tool: ${tool_name}"
+        done
+    fi
+    
+    log_success "BIOME Admin Tools deployment complete."
+}
+
+# ==============================================================================
 # STEP 12: BLAS SMOKE TEST
 # ==============================================================================
 setup_nodes_blas_test() {
@@ -1209,6 +1271,28 @@ setup_nodes_summary() {
     echo "    ${BIOME_CONF}/ai_model"
     echo "    ${BIOME_CONF}/r-coder.modelfile"
   fi
+  echo "    ${BIOME_CONF}/script/tools/ (Diagnostic tools)"
+  echo ""
+  
+  # Trigger the post-deployment master report (Full Deployment Only)
+  if [[ "${choice:-}" == "1" ]] && [[ "${DRY_RUN}" == "false" ]]; then
+    log_info "Generating master deployment report and emailing administrators..."
+    if [[ -f "${BIOME_CONF}/script/tools/deployment_summary.sh" ]]; then
+        # Capture the current summary content and pipe it to the summary tool
+        setup_nodes_summary_content | "${BIOME_CONF}/script/tools/deployment_summary.sh" --mail || log_warn "Summary report delivery failed."
+    fi
+  fi
+}
+
+# Helper to provide the summary content as a string
+setup_nodes_summary_content() {
+  local current_ct
+  current_ct=$(cat "${BIOME_CONF}/coretype" 2>/dev/null || echo "unknown")
+  echo "--- BIOME-CALC Deployment Success ---"
+  echo "Node:      ${BIOME_HOST}"
+  echo "Coretype:  ${current_ct}"
+  echo "Swap:      ${SWAP_SIZE_GB}GB"
+  echo "Location:  ${BIOME_CONF}"
 }
 
 # ==============================================================================
@@ -1237,6 +1321,7 @@ echo "  6) Run BLAS smoke test only (Step 12)"
 echo "  7) Run Swap Creation only (Step 5b)"
 echo "  8) Setup Orphan Process Cleanup (Step 11b)"
 echo "  9) Setup BIOME Precision Archiver (Step 11c)"
+echo "  T) Setup BIOME Admin Tools (Step 11d)"
 echo "  U) Uninstall (remove deployed files)"
 echo "  Q) Quit"
 echo ""
@@ -1262,6 +1347,7 @@ case "${choice}" in
     setup_nodes_ollama
     setup_nodes_orphan_cleanup
     setup_nodes_project_archiver
+    setup_nodes_admin_tools
     setup_nodes_blas_test
     setup_nodes_summary
     ;;
@@ -1295,6 +1381,10 @@ case "${choice}" in
   9)
     setup_nodes_preflight
     setup_nodes_project_archiver
+    ;;
+  T)
+    setup_nodes_preflight
+    setup_nodes_admin_tools
     ;;
   U)
     setup_nodes_uninstall
