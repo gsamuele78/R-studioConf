@@ -42,14 +42,15 @@ resolve_admin_recipients() {
             return 1
         fi
 
-        # Ritorna come CSV
+        # Ritorna come CSV unico
         local IFS=','
-        echo "${RECIPIENTS[*]}"
+        local CSV="${RECIPIENTS[*]}"
+        echo "${CSV}" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//'
         return 0
     fi
 
     # Modalita' stringa diretta (singolo indirizzo o CSV)
-    echo "$INPUT"
+    echo "$INPUT" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//'
     return 0
 }
 
@@ -75,6 +76,8 @@ resolve_user_email() {
         fi
     fi
 
+    # Fallback al dominio di default (es. studio.unibo.it per studenti)
+    # Se PhD o Staff, dovrebbero essere mappati in user_email_map.txt
     echo "${USERNAME}@${DEFAULT_DOMAIN}"
     return 0
 }

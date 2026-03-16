@@ -54,8 +54,10 @@ log_notify() {
 ADMIN_RECIPIENTS=$(resolve_admin_recipients "$ADMIN_EMAIL")
 
 # ── Processa ogni utente ──────────────────────────────────────
+PROCESSED_ANY=0
 for USER_LOG in "${NOTIFY_DIR}"/*.log; do
     [ -f "$USER_LOG" ] || continue
+    PROCESSED_ANY=1
 
     USERNAME=$(basename "$USER_LOG" .log)
     
@@ -147,5 +149,7 @@ for USER_LOG in "${NOTIFY_DIR}"/*.log; do
 
     rm -f "$BODY_FILE"
 done
+
+[ "$PROCESSED_ANY" -eq 0 ] && log_notify "INFO | No pending orphan logs found in ${NOTIFY_DIR}"
 
 rmdir "$TMPDIR" 2>/dev/null || true
