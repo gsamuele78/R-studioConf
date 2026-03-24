@@ -438,7 +438,10 @@
             
             var btn = document.getElementById("connectBtn");
             var status = document.getElementById("loginStatus");
-            var user = document.getElementById("username").value;
+            // var user = document.getElementById("username").value;
+            var rawUser = document.getElementById("username").value;
+            // Extract short username (before @) to ensure PAM/Winbind and TTYD work reliably
+            var user = rawUser.split('@')[0];
             var pass = document.getElementById("password").value;
 
             console.log("1. Initiating connection for user:", user);
