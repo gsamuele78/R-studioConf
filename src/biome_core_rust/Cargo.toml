@@ -8,3 +8,10 @@ crate-type = ["cdylib"]
 
 [dependencies]
 libc = "0.2"
+
+[profile.release]
+opt-level = "z"        # Optimize tightly for file size
+lto = true             # Enable Link Time Optimization
+codegen-units = 1      # Maximize size reduction
+panic = "abort"        # Remove heavy panic unwinding infrastructure
+strip = true           # Strip all symbols from binary
