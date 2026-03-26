@@ -195,7 +195,7 @@ _setup_rstudio_user_prefs() {
 }
 PREFS_EOF
     printf -v prefs_json "$prefs_json_template" \
-        "${user_specific_projects_dir}" "${user_specific_projects_dir}"
+        "${user_specific_projects_dir}" "${user_specific_projects_dir}" "${user_specific_projects_dir}"
 
     temp_prefs_file=$(mktemp) || { _log_user_setup "Failed to create temp file for prefs."; return 1; }
     
