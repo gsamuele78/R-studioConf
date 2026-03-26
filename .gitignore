@@ -11,3 +11,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Rust
+src/biome_core_rust/target/
+src/biome_core_rust/Cargo.lock

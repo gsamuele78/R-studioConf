@@ -606,6 +606,36 @@ EOF
 }
 
 # ==============================================================================
+# STEP 7B: COMPILE RUST OPTIMIZATIONS
+# ==============================================================================
+setup_nodes_rust_compile() {
+  log_step "Step 7B: Compiling Rust Native Extensions"
+
+  if ! command -v cargo &>/dev/null; then
+    log_info "Installing Rust toolchain (cargo, rustc)..."
+    run_cmd apt-get update -qq
+    run_cmd apt-get install -y -qq cargo rustc
+  fi
+
+  local rust_src="${WORKSPACE_ROOT}/src/biome_core_rust"
+  if [[ -d "${rust_src}" ]]; then
+    log_info "Compiling biome_core_rust via Cargo..."
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      log_info "[DRY-RUN] cargo build --release in ${rust_src}"
+    else
+      (cd "${rust_src}" && cargo build --release) || { log_error "Cargo build failed"; exit 1; }
+      run_cmd mkdir -p /opt/rstudio-tools
+      run_cmd cp "${rust_src}/target/release/libbiome_core_rust.so" "/opt/rstudio-tools/biome_core.so"
+      run_cmd chmod 755 /opt/rstudio-tools/biome_core.so
+      run_cmd chown root:root /opt/rstudio-tools/biome_core.so
+      log_success "Compiled and deployed biome_core.so safely to /opt/rstudio-tools"
+    fi
+  else
+    log_warn "Rust source not found at ${rust_src}"
+  fi
+}
+
+# ==============================================================================
 # STEP 8: DEPLOY SYSTEM CONFIGURATION FILES
 # ==============================================================================
 setup_nodes_config_files() {
@@ -1344,6 +1374,7 @@ echo "  8) Setup Orphan Process Cleanup (Step 11b)"
 echo "  9) Setup BIOME Precision Archiver (Step 11c)"
 echo "  T) Setup BIOME Admin Tools (Step 11d)"
 echo "  R) Master Diagnostic Report (Step 11e)"
+echo "  O) Deploy Optimized Rprofile (Rust plugin + Template)"
 echo "  U) Uninstall (remove deployed files)"
 echo "  Q) Quit"
 echo ""
@@ -1412,6 +1443,12 @@ case "${choice}" in
   R)
     setup_nodes_preflight
     setup_nodes_master_report
+    ;;
+  O)
+    setup_nodes_preflight
+    RPROFILE_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site_optimized.R.template"
+    setup_nodes_rust_compile
+    setup_nodes_config_files
     ;;
   U)
     setup_nodes_uninstall

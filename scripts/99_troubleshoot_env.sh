@@ -272,6 +272,54 @@ check_telemetry() {
     echo ""
 }
 
+check_native_opt() {
+    log "INFO" "=== Troubleshooting Native Rprofile Optimization ==="
+    echo "[Native Module Status]"
+    local so_path="/opt/rstudio-tools/biome_core.so"
+    if [[ -f "$so_path" ]]; then
+        echo "✅ Optimized module exists: $so_path"
+        ls -la "$so_path"
+    else
+        echo "❌ Optimized module missing: $so_path"
+    fi
+    echo ""
+
+    echo "[Active Test: Module Load Latency (microbenchmark)]"
+    if [[ -f "$so_path" ]]; then
+        if command -v Rscript &>/dev/null; then
+            echo "Running latency test via Rscript..."
+            local mb_res
+            mb_res=$(Rscript --vanilla -e "
+              suppressMessages({
+                 if (!requireNamespace('microbenchmark', quietly=TRUE)) {
+                   cat('microbenchmark missing\n')
+                   q('no', status=1)
+                 }
+                 tryCatch(dyn.load('$so_path'), error=function(e) { cat('dyn.load failed\n'); q('no', status=1) })
+                 mb <- microbenchmark::microbenchmark(
+                   users_ffi = .C('biome_get_active_users', out=0L),
+                   ram_ffi = .C('biome_get_system_ram_gb', out=0.0),
+                   tmp_ffi = .C('biome_get_tmp_use_pct', out=0.0),
+                   times = 50
+                 )
+                 print(mb, unit='ms')
+               })
+            " 2>&1) || true
+            if echo "$mb_res" | grep -q "users_ffi"; then
+                echo "$mb_res"
+                echo "✅ Native module executed correctly."
+            else
+                echo "❌ Failed to benchmark: $mb_res"
+            fi
+        else
+            echo "❌ Rscript not found."
+        fi
+    else
+        echo "⚠️ Skipping test as module is missing."
+    fi
+    echo ""
+}
+
 collect_bundle() {
     log "INFO" "=== Generating Debug Bundle ==="
     BUNDLE_NAME="/tmp/rstudio_debug_bundle_$(date +%s).tar.gz"
@@ -328,6 +376,7 @@ usage() {
     echo "  --ollama             Check Ollama service and models"
     echo "  --storage            Check NFS and CIFS mounts"
     echo "  --telemetry          Check Botanical Telemetry and Node Exporter"
+    echo "  --native-opt         Check Native Rust Optimization Module"
     echo "  --all                Run all subsystem checks"
     echo "  --test-user <user>   Run active integration tests (getent, pamtester, storage write) using this username"
     echo "  --collect            Generate a debug bundle tarball of sanitized configs and logs"
@@ -367,10 +416,11 @@ main() {
             --ollama) RUN_CHECK[ollama]=true; shift ;;
             --storage) RUN_CHECK[storage]=true; shift ;;
             --telemetry) RUN_CHECK[telemetry]=true; shift ;;
+            --native-opt) RUN_CHECK[native_opt]=true; shift ;;
             --all)
                 RUN_CHECK[auth]=true; RUN_CHECK[nginx]=true; RUN_CHECK[rstudio]=true
                 RUN_CHECK[ttyd]=true; RUN_CHECK[ollama]=true; RUN_CHECK[storage]=true
-                RUN_CHECK[telemetry]=true
+                RUN_CHECK[telemetry]=true; RUN_CHECK[native_opt]=true
                 shift ;;
             --test-user)
                 if [[ -n "${2:-}" && ! "$2" == --* ]]; then
@@ -404,6 +454,7 @@ main() {
     if [[ "${RUN_CHECK[ollama]:-false}" == true ]]; then check_ollama; echo ""; fi
     if [[ "${RUN_CHECK[storage]:-false}" == true ]]; then check_storage; echo ""; fi
     if [[ "${RUN_CHECK[telemetry]:-false}" == true ]]; then check_telemetry; echo ""; fi
+    if [[ "${RUN_CHECK[native_opt]:-false}" == true ]]; then check_native_opt; echo ""; fi
     
     if [[ "$COLLECT_BUNDLE" == true ]]; then collect_bundle; fi
 }
