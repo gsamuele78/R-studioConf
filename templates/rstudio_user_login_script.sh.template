@@ -247,6 +247,8 @@ if _ensure_command_exists "R" && \
    _ensure_command_exists "mktemp"; then
 if _setup_user_r_environment && _setup_rstudio_user_prefs; then
     _log_user_setup "User R environment and RStudio preferences setup successfully."
+    #Creation of the fast path stamp
+    touch "$_fast_path_stamp" 2>/dev/null || true
 else
     _log_user_setup "Errors occurred during user R environment or RStudio preferences setup."
 fi
