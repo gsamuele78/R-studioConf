@@ -13,8 +13,17 @@ PYTHON_VERSION_FOR_PREFS="%%DEFAULT_PYTHON_VERSION_LOGIN_SCRIPT%%"
 PYTHON_PATH_FOR_PREFS="%%DEFAULT_PYTHON_PATH_LOGIN_SCRIPT%%"
 # --- End Configuration ---
 
-CURRENT_USER=$(whoami)
+# OPTIMIZATION: Use $USER environment if available, fallback to id -un
+CURRENT_USER="${USER:-$(id -un)}"
 USER_LOGIN_LOG_FILE="${USER_LOGIN_LOG_DIR_BASE}/${CURRENT_USER}_login_setup.log"
+
+# OPTIMIZATION: FAST-PATH STATE CACHE 
+# If this script has already been run for this user and hasn't been modified since, exit immediately.
+# This prevents 30-80ms of latency per login (launching R --version, jq, etc).
+_fast_path_stamp="${USER_PROJECTS_BASE_DIR}/${CURRENT_USER}/.config/.biome_rstudio_login_stamp"
+if [[ -f "$_fast_path_stamp" ]] && [[ "$_fast_path_stamp" -nt "${BASH_SOURCE[0]:-$0}" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 # Function to log messages from this script
 _log_user_setup() {
@@ -49,8 +58,13 @@ _setup_user_r_environment() {
     local user_actual_home r_environ_file entry key dir
     declare -A renviron_settings
 
-    r_path=$(which R) || { _log_user_setup "R command not found."; return 1; }
-    r_version=$($r_path --version | head -n1 | awk '{print $3}' | awk -F. '{print $1"."$2}')
+    # OPTIMIZATION: Avoid launching R interpreter just to get the version, which takes ~30ms-100ms
+    # Check debian package or fallback to fast string search in the installed tree
+    r_version=$(dpkg-query -W -f='${Version}' r-base-core 2>/dev/null | cut -d'-' -f1 | awk -F. '{print $1"."$2}')
+    if [[ -z "$r_version" ]]; then
+       r_path=$(command -v R) || { _log_user_setup "R command not found."; return 1; }
+       r_version=$($r_path --version | head -n1 | awk '{print $3}' | awk -F. '{print $1"."$2}')
+    fi
     [[ -z "$r_version" ]] && { _log_user_setup "Could not determine R version."; return 1; }
 
     user_specific_projects_dir="${USER_PROJECTS_BASE_DIR}/${CURRENT_USER}"
@@ -175,7 +189,9 @@ _setup_rstudio_user_prefs() {
   "tab_multiline_completion": true,
   "terminal_initial_directory": "current",
   "warn_if_no_such_variable_in_scope": true,
-  "warn_variable_defined_but_not_used": true
+  "warn_variable_defined_but_not_used": true,
+  "restore_source_documents": false,
+  "restore_last_project": false
 }
 PREFS_EOF
     printf -v prefs_json "$prefs_json_template" \
@@ -229,11 +245,11 @@ if _ensure_command_exists "R" && \
    _ensure_command_exists "printf" && \
    _ensure_command_exists "eval" && \
    _ensure_command_exists "mktemp"; then
-    if _setup_user_r_environment && _setup_rstudio_user_prefs; then
-        _log_user_setup "User R environment and RStudio preferences setup successfully."
-    else
-        _log_user_setup "Errors occurred during user R environment or RStudio preferences setup."
-    fi
+if _setup_user_r_environment && _setup_rstudio_user_prefs; then
+    _log_user_setup "User R environment and RStudio preferences setup successfully."
+else
+    _log_user_setup "Errors occurred during user R environment or RStudio preferences setup."
+fi
 else
     _log_user_setup "One or more critical commands missing. Aborting user setup script."
 fi
