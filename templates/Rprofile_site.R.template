@@ -643,11 +643,31 @@ local({
     cat(sprintf("  Support: %s\n", "%%BIOME_CONTACT%%"))
   }, envir = tool_env)
 
+  assign("biome_save_session", function(file_name = "biome_session_backup.RData") {
+    target <- file.path(Sys.getenv("HOME"), file_name)
+    message(paste0("\n\U0001f4be Saving your workspace to: ", target, " ..."))
+    save.image(file = target)
+    message(paste0(.C_GREEN, "\U00002705 Workspace safely preserved on disk! You may now safely log out.", .C_RESET, "\n"))
+  }, envir = tool_env)
+
+  assign("biome_load_session", function(file_name = "biome_session_backup.RData") {
+    target <- file.path(Sys.getenv("HOME"), file_name)
+    if (file.exists(target)) {
+      message(paste0("\n\U0001f504 Loading workspace from: ", target, " ..."))
+      load(file = target, envir = .GlobalEnv)
+      message(paste0(.C_GREEN, "\U00002705 Workspace successfully restored!", .C_RESET, "\n"))
+    } else {
+      warning(paste0(.C_RED, "\u26a0\ufe0f No backup found at ", target, ". Have you saved it yet?", .C_RESET, "\n"))
+    }
+  }, envir = tool_env)
+
   assign("biome_help", function() {
     cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Helper ===", .C_RESET, "\n"))
     cat("  Commands:\n")
     cat(paste0("  ", .C_BOLD, "status()", .C_RESET, "              - System Dashboard.\n"))
     cat(paste0("  ", .C_BOLD, "biome_tutorial()", .C_RESET, "      - Code examples.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_save_session()", .C_RESET, "  - Save your data safely before logout.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_load_session()", .C_RESET, "  - Restore your saved data.\n"))
     cat(paste0("  ", .C_BOLD, "ask_ai(txt)", .C_RESET, "           - Ask AI.\n"))
     cat(paste0("  ", .C_BOLD, "biome_make_cluster()", .C_RESET, "  - Create safe PSOCK cluster.\n"))
     cat(paste0("  ", .C_BOLD, "biome_help()", .C_RESET, "          - This message.\n"))
