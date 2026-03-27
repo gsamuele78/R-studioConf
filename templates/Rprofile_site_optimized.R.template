@@ -619,6 +619,10 @@ local({
     cat("   - For manual clusters: cl <- biome_make_cluster(workers=4)\n\n")
     cat(paste0(.C_BOLD, "6. Massive Data / Tmpfs Bypass (>180GB)", .C_RESET, "\n"))
     cat("   - Bypass /tmp: Sys.setenv(BIOME_FORCE_NFS_TMP = \"true\")\n\n")
+    cat(paste0(.C_BOLD, "7. Safely Saving & Loading Work", .C_RESET, "\n"))
+    cat("   - Save all variables: biome_save_session()\n")
+    cat("   - Load saved variables: biome_load_session()\n")
+    cat("   - Note: RStudio will NOT auto-save your data on logout!\n\n")
     cat(sprintf("  Support: %s\n", "%%BIOME_CONTACT%%"))
   }, envir = tool_env)
 
