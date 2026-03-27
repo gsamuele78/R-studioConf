@@ -18,9 +18,10 @@ CURRENT_USER="${USER:-$(id -un)}"
 USER_LOGIN_LOG_FILE="${USER_LOGIN_LOG_DIR_BASE}/${CURRENT_USER}_login_setup.log"
 
 # OPTIMIZATION: FAST-PATH STATE CACHE 
-# If this script has already been run for this user and hasn't been modified since, exit immediately.
-# This prevents 30-80ms of latency per login (launching R --version, jq, etc).
-_fast_path_stamp="${USER_PROJECTS_BASE_DIR}/${CURRENT_USER}/.config/.biome_rstudio_login_stamp"
+# If this script has already been run for this user on this node, exit immediately.
+# This prevents 30-80ms of latency per login. We store the stamp in the host's /tmp (tmpfs/RAM)
+# to avoid ANY Network File System (NFS) lookup overhead.
+_fast_path_stamp="/tmp/.biome_rstudio_login_stamp_${CURRENT_USER}"
 if [[ -f "$_fast_path_stamp" ]] && [[ "$_fast_path_stamp" -nt "${BASH_SOURCE[0]:-$0}" ]]; then
     return 0 2>/dev/null || exit 0
 fi
