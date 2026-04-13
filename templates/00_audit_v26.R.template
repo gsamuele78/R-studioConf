@@ -349,9 +349,9 @@ run_audit("4.1", "/tmp Usage (RAMDisk)", {
   free_gb <- as.numeric(sub("G", "", parts[4]))
   pct <- as.numeric(sub("%", "", parts[5]))
   
-  # v27: Use v9.6 thresholds if available
-  warn_pct <- tryCatch(TMP_WARN_PCT, error = function(e) 60L)
-  redirect_pct <- tryCatch(TMP_REDIRECT_PCT, error = function(e) 75L)
+  # v27: Use v9.6 thresholds from .biome_env (they're local to Rprofile's local({}))
+  warn_pct <- tryCatch(.biome_env$TMP_WARN_PCT, error = function(e) 60L)
+  redirect_pct <- tryCatch(.biome_env$TMP_REDIRECT_PCT, error = function(e) 75L)
   
   if (pct >= 95) stop(sprintf("CRITICAL: /tmp at %d%%. System unstable.", pct))
   if (pct >= redirect_pct) warning(sprintf("NFS redirect active: %d%% (threshold: %d%%)", pct, redirect_pct))
@@ -403,13 +403,13 @@ run_audit("4.5", "System Log Permissions", {
 }, fix_hint = "Run: sudo chmod 666 %%LOG_FILE%% (or redeploy with 50_setup_nodes.sh)")
 
 run_audit("4.6", "Dynamic Smart Routing Active Test", {
-  smart_routing_enabled <- tryCatch(ENABLE_SMART_ROUTING, error = function(e) TRUE)
-  if (!smart_routing_enabled) return("Skipped (Feature disabled in Rprofile.site)")
+  smart_routing_enabled <- tryCatch(.biome_env$shared_env$deferred_done, error = function(e) FALSE)
+  if (!smart_routing_enabled) return("Skipped (deferred init not yet triggered)")
 
   force_nfs <- Sys.getenv("BIOME_FORCE_NFS_TMP") == "true"
   df_line <- system("df /tmp | tail -1", intern = TRUE)
   pct <- as.numeric(sub("%", "", strsplit(trimws(df_line), "\\s+")[[1]][5]))
-  redirect_pct <- tryCatch(TMP_REDIRECT_PCT, error = function(e) 75L)
+  redirect_pct <- tryCatch(.biome_env$TMP_REDIRECT_PCT, error = function(e) 75L)
   expected_base <- if (!force_nfs && pct < redirect_pct) "/tmp" else file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
   
   status_msgs <- c()
@@ -519,8 +519,10 @@ run_audit("5.6", "read.csv() Original Preserved", {
 audit_cat("\n[6.0] TMPFS HEURISTIC (v9.6)\n")
 
 run_audit("6.1", "biome_tmpfs_safe() Function", {
-  if (!exists("biome_tmpfs_safe", inherits = TRUE)) stop("biome_tmpfs_safe() not found")
-  result <- biome_tmpfs_safe()
+  # biome_tmpfs_safe is exported to tools:biome_calc environment
+  bts <- tryCatch(get("biome_tmpfs_safe", envir = as.environment("tools:biome_calc")), error = function(e) NULL)
+  if (is.null(bts)) stop("biome_tmpfs_safe() not found in tools:biome_calc")
+  result <- bts()
   if (!is.list(result) || is.null(result$safe) || is.null(result$warn) || is.null(result$pct)) {
     stop("biome_tmpfs_safe() returned invalid structure")
   }
@@ -531,13 +533,16 @@ run_audit("6.1", "biome_tmpfs_safe() Function", {
 }, fix_hint = "Deploy Rprofile v9.6")
 
 run_audit("6.2", "Dual-Threshold Configuration", {
-  warn_ok <- tryCatch({TMP_WARN_PCT; TRUE}, error = function(e) FALSE)
-  redir_ok <- tryCatch({TMP_REDIRECT_PCT; TRUE}, error = function(e) FALSE)
-  big_ok <- tryCatch({BIG_DATA_THRESHOLD_GB; TRUE}, error = function(e) FALSE)
-  if (!warn_ok || !redir_ok || !big_ok) stop("Missing threshold variables")
-  if (TMP_WARN_PCT >= TMP_REDIRECT_PCT) stop(sprintf("Warn(%d) >= Redirect(%d) — invalid", TMP_WARN_PCT, TMP_REDIRECT_PCT))
-  if (TMP_REDIRECT_PCT > 95) warning(sprintf("Redirect threshold %d%% is very high — OOM risk", TMP_REDIRECT_PCT))
-  sprintf("Warn@%d%% Redirect@%d%% BigData@%dGB", TMP_WARN_PCT, TMP_REDIRECT_PCT, BIG_DATA_THRESHOLD_GB)
+  warn_ok <- tryCatch({.biome_env$TMP_WARN_PCT; TRUE}, error = function(e) FALSE)
+  redir_ok <- tryCatch({.biome_env$TMP_REDIRECT_PCT; TRUE}, error = function(e) FALSE)
+  big_ok <- tryCatch({.biome_env$BIG_DATA_THRESHOLD_GB; TRUE}, error = function(e) FALSE)
+  if (!warn_ok || !redir_ok || !big_ok) stop("Missing threshold variables in .biome_env")
+  wp <- .biome_env$TMP_WARN_PCT
+  rp <- .biome_env$TMP_REDIRECT_PCT
+  bd <- .biome_env$BIG_DATA_THRESHOLD_GB
+  if (wp >= rp) stop(sprintf("Warn(%d) >= Redirect(%d) — invalid", wp, rp))
+  if (rp > 95) warning(sprintf("Redirect threshold %d%% is very high — OOM risk", rp))
+  sprintf("Warn@%d%% Redirect@%d%% BigData@%dGB", wp, rp, bd)
 }, fix_hint = "Check setup_nodes.vars.conf threshold values")
 
 run_audit("6.3", "Per-User Tmp Isolation", {

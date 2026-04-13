@@ -692,6 +692,9 @@ BSPM_SUDO=true
 # RAMDisk size (read by Rprofile.site)
 BIOME_RAMDISK_GB=${RAMDISK_GB}
 
+# Font configuration for ragg/systemfonts (v9.6)
+FONTCONFIG_PATH=/etc/fonts
+
 # Threading: managed DYNAMICALLY by Rprofile.site. Do NOT set here.
 RENVEOF
   run_cmd chmod 644 "${renviron}"
@@ -801,6 +804,18 @@ WEOF
       sed -i 's|//opt/r-geospatial|/opt/r-geospatial|g' "${prefs}"
       sed -i 's|"/usr/bin/python3"|"'"${PYTHON_ENV}"'/bin/python"|g' "${prefs}"
       log_success "  rstudio-prefs.json migrated for ${username}"
+    fi
+
+    # ── Create NFS fallback tmp directory (v9.6) ──
+    local fb_dir="${user_home}/.r_tmp_fallback"
+    if [[ ! -d "${fb_dir}" ]]; then
+      mkdir -p "${fb_dir}"
+      # Set ownership to the user (resolve uid from directory owner)
+      local dir_owner
+      dir_owner=$(stat -c '%U' "${user_home}" 2>/dev/null || echo "${username}")
+      chown "${dir_owner}:${dir_owner}" "${fb_dir}" 2>/dev/null || true
+      chmod 750 "${fb_dir}"
+      log_success "  .r_tmp_fallback created for ${username}"
     fi
   done
 

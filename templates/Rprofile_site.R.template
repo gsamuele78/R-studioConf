@@ -241,6 +241,10 @@ local({
   se$deferred_done <- FALSE
   se$last_cgroup_check <- 0   # v9.6: periodic cgroup re-read
   .biome_env$VERSION <- VERSION
+  # v9.6: Store thresholds in .biome_env for audit/diagnostic access
+  .biome_env$TMP_WARN_PCT <- TMP_WARN_PCT
+  .biome_env$TMP_REDIRECT_PCT <- TMP_REDIRECT_PCT
+  .biome_env$BIG_DATA_THRESHOLD_GB <- BIG_DATA_THRESHOLD_GB
   rm(se)
 
   # ── Logging Utility ──
@@ -1235,6 +1239,10 @@ local({
     cat(paste0("  ", .C_BOLD, "biome_help()", .C_RESET, "          - This message.\n"))
     cat(sprintf("\n  Support: %s\n", "%%BIOME_CONTACT%%"))
   }, envir = tool_env)
+
+  # v9.6: Export diagnostic functions to tools:biome_calc for audit access
+  assign("biome_tmpfs_safe", biome_tmpfs_safe, envir = tool_env)
+  assign("get_tmp_use_pct", get_tmp_use_pct, envir = tool_env)
 
   assign("biome_restore", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
   assign("show_quota", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
