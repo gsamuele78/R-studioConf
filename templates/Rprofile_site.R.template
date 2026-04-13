@@ -247,6 +247,10 @@ local({
   .biome_env$BIG_DATA_THRESHOLD_GB <- BIG_DATA_THRESHOLD_GB
   rm(se)
 
+  # Export .biome_env to .GlobalEnv so audit/diagnostic tools can access it.
+  # Dot-prefix makes it invisible to ls() but accessible via .biome_env$...
+  assign(".biome_env", .biome_env, envir = .GlobalEnv)
+
   # ── Logging Utility ──
   sys_log <- function(section, status, msg = "") {
     tryCatch({
@@ -661,6 +665,35 @@ local({
       msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Raster [RAMDisk]" else "Raster [NFS-Fallback]")
     }, error = function(e) NULL)
 
+    # v9.6: stars — uses terra's GDAL backend, ensure tmpdir is set
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("stars")) tryCatch({
+      st <- file.path(user_tmp_root, "stars")
+      if (!dir.exists(st)) dir.create(st, recursive=TRUE, showWarnings=FALSE)
+      Sys.setenv(GDAL_PAM_PROXY_DIR = st)
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Stars [RAMDisk]" else "Stars [NFS-Fallback]")
+    }, error = function(e) NULL)
+
+    # v9.6: ncdf4 — climate NetCDF files can be 1-50 GB, route temp I/O
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("ncdf4")) tryCatch({
+      nc_tmp <- file.path(user_tmp_root, "ncdf4")
+      if (!dir.exists(nc_tmp)) dir.create(nc_tmp, recursive=TRUE, showWarnings=FALSE)
+      # ncdf4 uses tempfile() for scratch — route via TMPDIR
+      # (TMPDIR is already set for the session, but ensure per-package dir exists)
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "NetCDF [RAMDisk]" else "NetCDF [NFS-Fallback]")
+    }, error = function(e) NULL)
+
+    # v9.6: Spatial statistics packages — ensure tmpdir for kriging/variogram scratch
+    if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("gstat") || isNamespaceLoaded("fields") ||
+                                  isNamespaceLoaded("spatstat"))) tryCatch({
+      sp_tmp <- file.path(user_tmp_root, "spatial_stats")
+      if (!dir.exists(sp_tmp)) dir.create(sp_tmp, recursive=TRUE, showWarnings=FALSE)
+      loaded <- c(if (isNamespaceLoaded("gstat")) "Gstat",
+                  if (isNamespaceLoaded("fields")) "Fields",
+                  if (isNamespaceLoaded("spatstat")) "Spatstat")
+      msg_parts <- c(msg_parts, sprintf("%s [%s]", paste(loaded, collapse="+"),
+                     if (smart_tmp_base == "/tmp") "RAMDisk" else "NFS-Fallback"))
+    }, error = function(e) NULL)
+
     if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("keras") || isNamespaceLoaded("tensorflow"))) tryCatch({
       kt <- file.path(user_tmp_root, "keras_cache")
       if (!dir.exists(kt)) dir.create(kt, recursive=TRUE, showWarnings=FALSE)
@@ -669,8 +702,9 @@ local({
       msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Keras [RAMDisk]" else "Keras [NFS-Fallback]")
     }, error = function(e) NULL)
 
-    # v9.6: ggplot2 with ragg backend
-    if (ENABLE_GGPLOT_OPT && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly"))) tryCatch({
+    # v9.6: ggplot2/tmap/mapview with ragg backend
+    if (ENABLE_GGPLOT_OPT && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly") ||
+                               isNamespaceLoaded("tmap") || isNamespaceLoaded("mapview"))) tryCatch({
       gt <- file.path(user_tmp_root, "plot_cache")
       if (!dir.exists(gt)) dir.create(gt, recursive = TRUE, showWarnings = FALSE)
       Sys.setenv(TMP = gt, TEMP = gt)
@@ -684,7 +718,10 @@ local({
       }
       backend_label <- if (has_ragg) "ragg" else "cairo"
       tmp_label <- if (smart_tmp_base == "/tmp") "RAMDisk" else "NFS-Fallback"
-      msg_parts <- c(msg_parts, sprintf("Ggplot [%s/%s]", backend_label, tmp_label))
+      vis_pkgs <- c("Ggplot", if (isNamespaceLoaded("tmap")) "Tmap",
+                    if (isNamespaceLoaded("mapview")) "Mapview")
+      msg_parts <- c(msg_parts, sprintf("%s [%s/%s]", paste(vis_pkgs, collapse="+"),
+                                         backend_label, tmp_label))
     }, error = function(e) NULL)
     
     if (ENABLE_ARROW_OPT && isNamespaceLoaded("arrow")) tryCatch({
@@ -959,6 +996,9 @@ local({
 
   # ── CALLBACKS ──
   .biome_env$shared_env$last_update <- 0
+  # v9.6: Store deferred_pkg_init in .biome_env for audit/diagnostic access
+  # Task callbacks don't fire during source(), so the audit needs to call this directly
+  .biome_env$deferred_pkg_init <- deferred_pkg_init
   update_resources(quiet = TRUE)
   tryCatch({
     addTaskCallback(function(...) {

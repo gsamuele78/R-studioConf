@@ -177,6 +177,7 @@ setup_nodes_dependencies() {
     libudunits2-dev cmake build-essential \
     libopenblas-dev libomp-dev gfortran \
     libfreetype-dev libharfbuzz-dev libfribidi-dev libtiff-dev libpng-dev \
+    libnetcdf-dev libhdf5-dev \
     libgoogle-perftools-dev sendemail dnsutils \
     samba-common-bin winbind rsync tree
   log_success "Base dependencies installed"

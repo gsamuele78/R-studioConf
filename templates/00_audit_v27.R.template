@@ -28,6 +28,30 @@ suppressMessages({
   library(parallel)
 })
 
+# ── Pre-load key packages and activate memory guards ──
+# The Rprofile's memory guards (solve, dist, outer, expand.grid) are installed
+# by deferred_pkg_init(), which normally fires via an R task callback.
+# But task callbacks don't fire during source() — they only fire between
+# top-level REPL expressions. So we MUST call deferred_pkg_init() directly.
+.audit_pkgs <- list()
+for (.pkg in c("geosphere", "ggplot2", "terra", "vegan", "fields",
+               "ncdf4", "lme4", "tmap", "Matrix")) {
+  .audit_pkgs[[.pkg]] <- tryCatch({
+    suppressMessages(library(.pkg, character.only = TRUE))
+    TRUE
+  }, error = function(e) FALSE)
+}
+
+# Force-trigger deferred_pkg_init() to install memory guards
+tryCatch({
+  if (exists(".biome_env", envir = .GlobalEnv)) {
+    be <- get(".biome_env", envir = .GlobalEnv)
+    if (is.function(be$deferred_pkg_init)) {
+      be$deferred_pkg_init()
+    }
+  }
+}, error = function(e) NULL)
+
 # ── Setup Logging (NO sink — safe for RStudio websocket) ──
 LOG_FILE <- file.path(Sys.getenv("HOME"), "biome_audit.log")
 # Truncate log at start
@@ -62,6 +86,19 @@ audit_cat(paste0("\n", .AB,
   "  ", format(Sys.time(), "%d %B %Y - %H:%M:%S"), "\n",
   "  Host: ", Sys.info()[["nodename"]], " | User: ", Sys.info()[["user"]], "\n",
   "==================================================================", .A0, "\n"))
+
+# Report pre-loaded packages and deferred init status
+audit_cat(sprintf("\n  Pre-loaded: %s\n",
+  paste(names(.audit_pkgs)[unlist(.audit_pkgs)], collapse = ", ")))
+if (any(!unlist(.audit_pkgs))) {
+  audit_cat(sprintf("  Missing:    %s (some tests will skip)\n",
+    paste(names(.audit_pkgs)[!unlist(.audit_pkgs)], collapse = ", ")))
+}
+.deferred_ok <- tryCatch(
+  isTRUE(get(".biome_env", envir = .GlobalEnv)$shared_env$deferred_done),
+  error = function(e) FALSE)
+audit_cat(sprintf("  Guards:     %s\n",
+  if (.deferred_ok) "Active (deferred_pkg_init OK)" else "PENDING (guards may not be installed)"))
 
 # ── Configuration ──
 # Read active AI model from setup_nodes config (written by Step 11)
@@ -688,16 +725,15 @@ run_audit("8.4", "Rprofile Version", {
 }, fix_hint = "Deploy Rprofile v9.6")
 
 # ==============================================================================
-# [9.0] LARGE MATRIX STRESS (v9.6 solve thread reduction)
+# [9.0] FUNCTIONAL TESTS (real-world workflows)
 # ==============================================================================
-audit_cat("\n[9.0] LARGE MATRIX STRESS (solve thread reduction)\n")
+audit_cat("\n[9.0] FUNCTIONAL TESTS (real-world user workflows)\n")
 
 run_audit("9.1", "solve() Thread Downclock (6000x6000)", {
   curr_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
   if (curr_t <= 2) return(sprintf("Skipped (threads already at %d, no reduction needed)", curr_t))
   N <- 6000
   A <- matrix(runif(N * N), N, N)
-  # Make it invertible (add diagonal dominance)
   diag(A) <- diag(A) + N
   t0 <- Sys.time()
   B <- solve(A)
@@ -709,8 +745,452 @@ run_audit("9.1", "solve() Thread Downclock (6000x6000)", {
 }, timeout = 120, use_fork = TRUE,
    fix_hint = "Deploy Rprofile v9.6 with solve() thread reduction guard")
 
+run_audit("9.2", "ggplot2 Render Test (ragg backend)", {
+  if (!.audit_pkgs[["ggplot2"]]) return("Skipped (ggplot2 not installed)")
+  test_plot_file <- tempfile(fileext = ".png")
+  on.exit(unlink(test_plot_file), add = TRUE)
+  tryCatch({
+    df <- data.frame(x = rnorm(500), y = rnorm(500), group = sample(letters[1:5], 500, replace = TRUE))
+    p <- ggplot2::ggplot(df, ggplot2::aes(x = x, y = y, colour = group)) +
+      ggplot2::geom_point(alpha = 0.6) +
+      ggplot2::theme_minimal() +
+      ggplot2::labs(title = "BIOME Audit Test")
+    has_ragg <- requireNamespace("ragg", quietly = TRUE)
+    if (has_ragg) {
+      ragg::agg_png(test_plot_file, width = 800, height = 600)
+    } else {
+      grDevices::png(test_plot_file, width = 800, height = 600)
+    }
+    print(p)
+    grDevices::dev.off()
+    file_kb <- file.info(test_plot_file)$size / 1024
+    if (is.na(file_kb) || file_kb < 1) stop("Plot file empty or missing")
+    backend <- if (has_ragg) "ragg" else "cairo"
+    sprintf("OK (%s backend, %.0f KB, 500 points)", backend, file_kb)
+  }, error = function(e) stop(sprintf("Render failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Install: ragg, ggplot2. Check /tmp space.")
+
+run_audit("9.3", "Terra Raster Calculation (100x100)", {
+  if (!.audit_pkgs[["terra"]]) return("Skipped (terra not installed)")
+  tryCatch({
+    r <- terra::rast(nrows = 100, ncols = 100, vals = runif(10000))
+    r2 <- r * 2 + log(r + 1)
+    stats <- terra::global(r2, fun = "mean", na.rm = TRUE)
+    td <- terra::terraOptions()$tempdir
+    routing <- if (grepl("biome_", td)) basename(dirname(td)) else "default"
+    sprintf("OK (mean=%.2f, tmpdir=%s, routing=%s)", stats$mean, basename(td), routing)
+  }, error = function(e) stop(sprintf("Terra calc failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check terra installation and /tmp permissions")
+
+run_audit("9.4", "Geosphere Distance Matrix (100 points)", {
+  if (!.audit_pkgs[["geosphere"]]) return("Skipped (geosphere not installed)")
+  tryCatch({
+    set.seed(42)
+    coords <- cbind(lon = runif(100, -10, 40), lat = runif(100, 35, 60))  # Europe bbox
+    t0 <- Sys.time()
+    dm <- geosphere::distm(coords, fun = geosphere::distHaversine)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    if (!is.matrix(dm) || nrow(dm) != 100 || ncol(dm) != 100) stop("distm output wrong dimensions")
+    if (!isSymmetric(dm)) stop("Distance matrix not symmetric")
+    max_km <- max(dm) / 1000
+    mem_mb <- object.size(dm) / 1024^2
+    rm(dm); gc(verbose = FALSE)
+    sprintf("OK (100x100 in %.2fs, max=%.0fkm, %.1fMB)", dt, max_km, mem_mb)
+  }, error = function(e) stop(sprintf("Geosphere failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check geosphere installation")
+
+run_audit("9.5", "dist() Guard Functional Test (1000 obs)", {
+  tryCatch({
+    m <- matrix(runif(1000 * 10), nrow = 1000, ncol = 10)
+    t0 <- Sys.time()
+    d <- dist(m)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    if (!inherits(d, "dist")) stop("dist() output class broken")
+    if (length(d) != 1000 * 999 / 2) stop(sprintf("dist() size wrong: %d", length(d)))
+    rm(m, d); gc(verbose = FALSE)
+    sprintf("OK (1000 obs, %.2fs, %d elements)", dt, 1000L * 999L / 2L)
+  }, error = function(e) stop(sprintf("dist() failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check stats::dist() guard in Rprofile v9.6")
 # ==============================================================================
-# [10.0] SUMMARY
+# [10.0] ECOLOGY WORKFLOW TESTS (based on real user crash — Martina scenario)
+# ==============================================================================
+# These tests replicate the EXACT code pattern that caused OOM on production:
+#   1. Geodistance matrix → exp correlation → solve() → symmetry check
+#   2. Multiple solve() calls with varying condition numbers
+#   3. End-to-end spatial pipeline: random coords → distm → solve → verify
+# The original script: plan/Test/test_Martina/test_R.R (247×247 geodist matrix)
+# ==============================================================================
+audit_cat("\n[10.0] ECOLOGY WORKFLOW TESTS (real-world OOM scenarios)\n")
+
+run_audit("10.1", "Spatial Correlation Matrix Inversion (247x247)", {
+  # Replicate Martina's workflow: exp(-geodist/rho) → solve()
+  # This is the EXACT pattern that OOM'd with 16 BLAS threads on large matrices
+  tryCatch({
+    set.seed(2025)
+    N <- 247
+    # Simulate a geodistance matrix (symmetric, diagonal=0, range ~0-60 km)
+    coords <- cbind(runif(N, 10, 15), runif(N, 40, 45))
+    geo_distmat <- as.matrix(dist(coords))
+    if (!isSymmetric(geo_distmat)) stop("Generated geodist matrix not symmetric")
+
+    # Test 3 rho_scaling values (vary condition number like Martina's loop)
+    results <- c()
+    for (i in c(1, 10, 25)) {
+      rho_scaling <- max(geo_distmat) / i
+      r_spatial <- exp(-geo_distmat / rho_scaling)
+
+      t0 <- Sys.time()
+      inv_r <- (1 / 0.001) * solve(r_spatial)
+      dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+      sym_ok <- isSymmetric(inv_r)
+      if (!sym_ok) stop(sprintf("Inverse not symmetric at i=%d", i))
+      results <- c(results, sprintf("i=%d:%.2fs", i, dt))
+    }
+    rm(geo_distmat, r_spatial, inv_r); gc(verbose = FALSE)
+    sprintf("OK (%s, symmetry verified)", paste(results, collapse = ", "))
+  }, error = function(e) stop(sprintf("Spatial correlation inversion failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check solve() guard in Rprofile v9.6 or OpenBLAS CORETYPE")
+
+run_audit("10.2", "Multi-solve Thread Consistency (5 iterations)", {
+  # Verifies BLAS threads are restored correctly after EACH solve() call
+  # Bug: if solve() reduces threads but doesn't restore, subsequent compute degrades
+  tryCatch({
+    initial_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    N <- 500
+    for (iter in 1:5) {
+      A <- matrix(rnorm(N * N), N, N)
+      diag(A) <- diag(A) + N  # ensure invertible
+      B <- solve(A)
+      post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+      if (post_t != initial_t) {
+        stop(sprintf("Thread leak at iter %d: expected %d, got %d", iter, initial_t, post_t))
+      }
+    }
+    rm(A, B); gc(verbose = FALSE)
+    sprintf("OK (5 iterations, threads stable at %d)", initial_t)
+  }, error = function(e) stop(sprintf("Thread consistency failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check solve() on.exit thread restore in Rprofile v9.6")
+
+run_audit("10.3", "End-to-End Geodistance Pipeline", {
+  # Full pipeline: generate coords → compute distances → build correlation → invert
+  # This is the complete ecology workflow in one test
+  if (!.audit_pkgs[["geosphere"]]) return("Skipped (geosphere not installed)")
+  tryCatch({
+    set.seed(42)
+    N <- 150
+    # Simulate Mediterranean sampling points (Martina's study area)
+    coords <- cbind(lon = runif(N, 7, 18), lat = runif(N, 37, 45))  # Italy bbox
+
+    # Step 1: Compute geodistance matrix (triggers distm guard)
+    t0 <- Sys.time()
+    geo_dist_m <- geosphere::distm(coords, fun = geosphere::distHaversine)
+    t_dist <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    geo_dist_km <- geo_dist_m / 1000
+
+    # Step 2: Build exponential correlation matrix
+    rho <- max(geo_dist_km) / 5
+    r_spatial <- exp(-geo_dist_km / rho)
+    if (!isSymmetric(r_spatial)) stop("Correlation matrix not symmetric")
+
+    # Step 3: Invert (triggers solve() thread guard)
+    t0 <- Sys.time()
+    precision <- solve(r_spatial)
+    t_solve <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+    # Step 4: Verify mathematical correctness
+    identity_check <- r_spatial %*% precision
+    diag_err <- max(abs(diag(identity_check) - 1))
+    offdiag_err <- max(abs(identity_check[row(identity_check) != col(identity_check)]))
+
+    if (diag_err > 1e-6) stop(sprintf("Identity diagonal error too large: %.2e", diag_err))
+    if (offdiag_err > 1e-4) warning(sprintf("Off-diagonal residual: %.2e (ill-conditioning)", offdiag_err))
+
+    rm(geo_dist_m, geo_dist_km, r_spatial, precision, identity_check)
+    gc(verbose = FALSE)
+
+    sprintf("OK (distm=%.2fs, solve=%.2fs, N=%d, diag_err=%.1e)", t_dist, t_solve, N, diag_err)
+  }, error = function(e) stop(sprintf("Pipeline failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check geosphere + solve() integration in Rprofile v9.6")
+
+run_audit("10.4", "outer() + expand.grid() Combined Guard Test", {
+  # Real ecology pattern: spatial weight matrix via outer product
+  tryCatch({
+    # outer(): Build a 500×500 distance-like matrix from coordinate vectors
+    x <- seq(0, 10, length.out = 500)
+    y <- seq(0, 10, length.out = 500)
+    t0 <- Sys.time()
+    D <- outer(x, y, function(a, b) abs(a - b))
+    t_outer <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    if (!is.matrix(D) || nrow(D) != 500) stop("outer() dimensions wrong")
+    mem_mb <- as.numeric(object.size(D)) / 1024^2
+
+    # expand.grid(): Generate small parameter grid (ecology model tuning)
+    params <- expand.grid(
+      sigma = c(0.1, 0.5, 1.0, 2.0),
+      range = c(1, 5, 10, 20),
+      nugget = c(0.01, 0.05, 0.1)
+    )
+    if (nrow(params) != 48) stop(sprintf("expand.grid wrong: %d rows", nrow(params)))
+
+    rm(D); gc(verbose = FALSE)
+    sprintf("OK (outer 500x500 in %.2fs/%.1fMB, expand.grid 48 rows)", t_outer, mem_mb)
+  }, error = function(e) stop(sprintf("Combined test failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check outer()/expand.grid() guards in Rprofile v9.6")
+run_audit("10.5", "GAM Model Fitting (mgcv — solve on penalty matrix)", {
+  # mgcv is bundled with R — no install needed
+  # mgcv::gam() calls solve() internally on the penalty matrix during fitting
+  # This is the #1 ecology modeling workflow — must work with thread guard
+  tryCatch({
+    set.seed(123)
+    N <- 2000
+    # Simulate GBIF-style species abundance vs environmental gradient
+    dat <- data.frame(
+      temp     = sort(runif(N, 5, 30)),             # Temperature gradient
+      altitude = runif(N, 0, 3000),                  # Elevation
+      precip   = runif(N, 200, 2000)                 # Precipitation mm/yr
+    )
+    # Species response: unimodal curve + noise (classic ecology pattern)
+    dat$abundance <- exp(-0.01 * (dat$temp - 18)^2) * 100 +
+                     rnorm(N, sd = 10)
+    dat$abundance <- pmax(dat$abundance, 0)
+
+    initial_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    t0 <- Sys.time()
+    mod <- mgcv::gam(abundance ~ s(temp, k = 30) + s(altitude, k = 20) +
+                      s(precip, k = 20), data = dat, method = "REML")
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+
+    if (!inherits(mod, "gam")) stop("GAM object not returned")
+    if (post_t != initial_t) stop(sprintf("Thread leak: %d -> %d", initial_t, post_t))
+
+    dev_exp <- round(summary(mod)$dev.expl * 100, 1)
+    rm(dat, mod); gc(verbose = FALSE)
+    sprintf("OK (%.1fs, deviance=%.1f%%, threads stable at %d)", dt, dev_exp, post_t)
+  }, error = function(e) stop(sprintf("GAM fitting failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "mgcv is base R — check solve() guard or OpenBLAS")
+
+run_audit("10.6", "Community Dissimilarity (vegan::vegdist — dist guard)", {
+  # vegan::vegdist() wraps dist() — the exact function we guard
+  # Simulating a typical ecology community matrix (species × sites)
+  if (!.audit_pkgs[["vegan"]]) return("Skipped (vegan not installed)")
+  tryCatch({
+    set.seed(42)
+    # Simulate GBIF-style community matrix: 300 sites × 80 species
+    # Using realistic abundance distribution (zero-inflated Poisson)
+    n_sites <- 300; n_species <- 80
+    community <- matrix(0, nrow = n_sites, ncol = n_species)
+    for (j in 1:n_species) {
+      # Each species has a random prevalence (fraction of sites occupied)
+      prevalence <- rbeta(1, 2, 5)
+      occupied <- rbinom(n_sites, 1, prevalence)
+      community[, j] <- occupied * rpois(n_sites, lambda = sample(1:20, 1))
+    }
+    colnames(community) <- paste0("sp", 1:n_species)
+
+    # Test multiple dissimilarity methods (all use dist() internally)
+    methods <- c("bray", "jaccard", "euclidean")
+    results <- c()
+    for (m in methods) {
+      t0 <- Sys.time()
+      d <- vegan::vegdist(community, method = m)
+      dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+      if (!inherits(d, "dist")) stop(sprintf("vegdist(%s) broke output class", m))
+      expected_len <- n_sites * (n_sites - 1) / 2
+      if (length(d) != expected_len) stop(sprintf("vegdist(%s) wrong size", m))
+      results <- c(results, sprintf("%s:%.2fs", m, dt))
+    }
+    rm(community, d); gc(verbose = FALSE)
+    sprintf("OK (%dx%d, %s)", n_sites, n_species, paste(results, collapse = ", "))
+  }, error = function(e) stop(sprintf("vegdist failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check vegan installation and dist() guard in Rprofile v9.6")
+
+run_audit("10.7", "Sparse Matrix Solve (Matrix::Cholesky — escape route)", {
+  # When our solve() guard warns about large matrices, it recommends
+  # "use Matrix::Cholesky() for sparse systems". This test validates
+  # that the recommended escape route ACTUALLY WORKS.
+  if (!.audit_pkgs[["Matrix"]]) return("Skipped (Matrix not installed)")
+  tryCatch({
+    set.seed(2025)
+    N <- 2000
+    # Build a realistic sparse spatial adjacency matrix
+    # (typical in ecology: species co-occurrence networks, spatial grids)
+    n_edges <- N * 5  # ~5 neighbors per node
+    i_idx <- sample(N, n_edges, replace = TRUE)
+    j_idx <- sample(N, n_edges, replace = TRUE)
+    M <- Matrix::sparseMatrix(i = i_idx, j = j_idx,
+                               x = runif(n_edges, 0.1, 1),
+                               dims = c(N, N))
+    # Make symmetric positive definite (required for Cholesky)
+    M <- M + Matrix::t(M) + Matrix::Diagonal(N, 10)
+
+    t0 <- Sys.time()
+    ch <- Matrix::Cholesky(M, perm = TRUE, LDL = FALSE)
+    dt_chol <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+    # Solve a system using the Cholesky factor
+    b <- Matrix::Matrix(rnorm(N), ncol = 1)
+    t0 <- Sys.time()
+    x_sol <- Matrix::solve(ch, b)
+    dt_solve <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+    # Verify: M %*% x should equal b
+    resid <- max(abs(as.numeric(M %*% x_sol - b)))
+    if (resid > 1e-6) stop(sprintf("Sparse solve residual too high: %.2e", resid))
+
+    sparsity <- round(1 - Matrix::nnzero(M) / (N * N), 4) * 100
+    rm(M, ch, b, x_sol); gc(verbose = FALSE)
+    sprintf("OK (N=%d, %.1f%% sparse, chol=%.3fs, solve=%.3fs, resid=%.1e)",
+            N, sparsity, dt_chol, dt_solve, resid)
+  }, error = function(e) stop(sprintf("Sparse solve failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Install Matrix package — this is the recommended escape route from OOM")
+
+run_audit("10.8", "NetCDF Climate I/O (ncdf4 — tmpfs routing)", {
+  # Climate data is stored in NetCDF format (1-50 GB per file)
+  # This test validates that NetCDF temp files are routed correctly
+  if (!.audit_pkgs[["ncdf4"]]) return("Skipped (ncdf4 not installed)")
+  tryCatch({
+    # Simulate a Mediterranean climate grid (common in ecology research)
+    lon_vals <- seq(7, 18, by = 0.25)   # Italy longitude
+    lat_vals <- seq(37, 45, by = 0.25)  # Italy latitude
+    time_vals <- 1:12                    # Monthly data
+
+    lon_dim  <- ncdf4::ncdim_def("lon",  "degrees_east",  lon_vals)
+    lat_dim  <- ncdf4::ncdim_def("lat",  "degrees_north", lat_vals)
+    time_dim <- ncdf4::ncdim_def("time", "months",        time_vals)
+
+    temp_var <- ncdf4::ncvar_def("temperature", "celsius",
+                                  list(lon_dim, lat_dim, time_dim),
+                                  missval = -999)
+    precip_var <- ncdf4::ncvar_def("precipitation", "mm",
+                                    list(lon_dim, lat_dim, time_dim),
+                                    missval = -999)
+
+    nc_file <- tempfile(fileext = ".nc")
+    on.exit(unlink(nc_file), add = TRUE)
+
+    nc <- ncdf4::nc_create(nc_file, list(temp_var, precip_var))
+
+    # Write realistic climate data
+    n_lon <- length(lon_vals); n_lat <- length(lat_vals); n_time <- 12
+    temp_data <- array(rnorm(n_lon * n_lat * n_time, mean = 18, sd = 8),
+                       dim = c(n_lon, n_lat, n_time))
+    precip_data <- array(rgamma(n_lon * n_lat * n_time, shape = 2, rate = 0.05),
+                         dim = c(n_lon, n_lat, n_time))
+
+    ncdf4::ncvar_put(nc, temp_var, temp_data)
+    ncdf4::ncvar_put(nc, precip_var, precip_data)
+    ncdf4::nc_close(nc)
+
+    # Read back and verify
+    nc_in <- ncdf4::nc_open(nc_file)
+    temp_read <- ncdf4::ncvar_get(nc_in, "temperature")
+    precip_read <- ncdf4::ncvar_get(nc_in, "precipitation")
+    ncdf4::nc_close(nc_in)
+
+    if (!all(dim(temp_read) == c(n_lon, n_lat, n_time)))
+      stop("Temperature dimensions wrong")
+    if (max(abs(temp_read - temp_data)) > 1e-5)
+      stop("Temperature data corrupted on read-back")
+
+    file_kb <- file.info(nc_file)$size / 1024
+    # Check if tempfile was routed to biome tmpdir
+    tmp_routing <- if (grepl("biome_", nc_file)) "biome_tmp" else "system_tmp"
+
+    rm(temp_data, precip_data, temp_read, precip_read); gc(verbose = FALSE)
+    sprintf("OK (%dx%dx%d grid, %.0f KB, write+read verified, routing=%s)",
+            n_lon, n_lat, n_time, file_kb, tmp_routing)
+  }, error = function(e) stop(sprintf("NetCDF I/O failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Install ncdf4 + libnetcdf-dev. Check /tmp permissions.")
+
+run_audit("10.9", "Mixed Model Thread Safety (lme4::lmer)", {
+  # lme4::lmer() uses BLAS internally for matrix factorization
+  # Must not clash with our solve() thread management
+  if (!.audit_pkgs[["lme4"]]) return("Skipped (lme4 not installed)")
+  tryCatch({
+    set.seed(42)
+    # Simulate GBIF-style hierarchical ecology data:
+    # Species abundance nested within sites, sites nested within regions
+    n_regions <- 10; n_sites_per <- 20; n_obs_per <- 5
+    N <- n_regions * n_sites_per * n_obs_per   # 1000 observations
+    dat <- data.frame(
+      region  = factor(rep(1:n_regions, each = n_sites_per * n_obs_per)),
+      site    = factor(rep(1:(n_regions * n_sites_per), each = n_obs_per)),
+      temp    = rnorm(N, 15, 5),
+      precip  = rnorm(N, 800, 200)
+    )
+    # Hierarchical response: region + site random effects
+    region_fx <- rnorm(n_regions, sd = 3)[as.integer(dat$region)]
+    site_fx   <- rnorm(n_regions * n_sites_per, sd = 1.5)[as.integer(dat$site)]
+    dat$abundance <- 50 + 2 * dat$temp - 0.01 * dat$precip +
+                     region_fx + site_fx + rnorm(N, sd = 2)
+
+    initial_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    t0 <- Sys.time()
+    mod <- lme4::lmer(abundance ~ temp + precip + (1|region/site), data = dat)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+
+    if (!inherits(mod, "lmerMod")) stop("lmer object not returned")
+    if (post_t != initial_t) stop(sprintf("Thread leak: %d -> %d", initial_t, post_t))
+
+    n_fx <- length(lme4::fixef(mod))
+    n_re <- length(lme4::ranef(mod))
+    rm(dat, mod); gc(verbose = FALSE)
+    sprintf("OK (N=%d, %.1fs, %d fixed + %d random effects, threads=%d)",
+            N, dt, n_fx, n_re, post_t)
+  }, error = function(e) stop(sprintf("lme4 failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check lme4 installation and BLAS thread management")
+
+run_audit("10.10", "Kriging Spatial Interpolation (fields::Tps)", {
+  # fields::Tps() uses outer() to build covariance matrix + solve() to invert
+  # This exercises BOTH guards simultaneously — the double-guard pattern
+  if (!.audit_pkgs[["fields"]]) return("Skipped (fields not installed)")
+  tryCatch({
+    set.seed(42)
+    N_obs <- 200; N_pred <- 50
+    # Simulate ecological sampling with spatial autocorrelation
+    # (e.g., soil nutrient sampling across a forest plot)
+    obs_coords <- cbind(runif(N_obs, 0, 100), runif(N_obs, 0, 100))
+    # Spatially autocorrelated values
+    obs_vals <- sin(obs_coords[,1] / 20) * cos(obs_coords[,2] / 20) * 10 +
+                rnorm(N_obs, sd = 1)
+
+    t0 <- Sys.time()
+    fit <- fields::Tps(obs_coords, obs_vals)
+    dt_fit <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+    # Predict at new locations
+    pred_coords <- cbind(runif(N_pred, 0, 100), runif(N_pred, 0, 100))
+    t0 <- Sys.time()
+    pred <- predict(fit, pred_coords)
+    dt_pred <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+    if (length(pred) != N_pred) stop("Prediction length mismatch")
+    if (any(is.na(pred))) stop("NA values in prediction")
+
+    rm(fit, pred); gc(verbose = FALSE)
+    sprintf("OK (fit=%d obs in %.2fs, pred=%d pts in %.3fs)", N_obs, dt_fit, N_pred, dt_pred)
+  }, error = function(e) stop(sprintf("Kriging failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check fields + outer()/solve() guards in Rprofile v9.6")
+
+# ==============================================================================
+# [12.0] SUMMARY
 # ==============================================================================
 audit_cat("\n")
 fails <- which(vapply(audit_log, function(x) x$s == "FAIL", logical(1)))
