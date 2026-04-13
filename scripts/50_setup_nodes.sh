@@ -8,7 +8,7 @@
 # Part of: R-studioConf legacy deployment suite
 # Requires: lib/common_utils.sh, config/setup_nodes.vars.conf
 #           templates/Rprofile_site.R.template
-#           templates/00_audit_v26.R.template
+#           templates/00_audit_v27.R.template
 #
 # Usage:
 #   sudo ./50_setup_nodes.sh                 (interactive menu)
@@ -44,7 +44,7 @@ source "${VARS_CONF}"
 
 # ── Template paths ──
 RPROFILE_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site.R.template"
-AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v26.R.template"
+AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v27.R.template"
 
 # ── Args ──
 SKIP_OLLAMA="${SKIP_OLLAMA:-false}"
@@ -176,6 +176,7 @@ setup_nodes_dependencies() {
     libpython3-dev python3-venv python3-pip \
     libudunits2-dev cmake build-essential \
     libopenblas-dev libomp-dev gfortran \
+    libfreetype-dev libharfbuzz-dev libfribidi-dev libtiff-dev libpng-dev \
     libgoogle-perftools-dev sendemail dnsutils \
     samba-common-bin winbind rsync tree
   log_success "Base dependencies installed"
@@ -411,12 +412,15 @@ OMPEOF
 setup_nodes_ramdisk() {
   log_step "Step 5: RAMDisk (${RAMDISK_SIZE} on /tmp)"
 
-  local fstab_entry="tmpfs /tmp tmpfs rw,nosuid,nodev,size=${RAMDISK_SIZE},mode=1777 0 0"
+  local fstab_entry="tmpfs /tmp tmpfs rw,nosuid,nodev,noatime,nodiratime,size=${RAMDISK_SIZE},mode=1777 0 0"
   if ! grep -q "^tmpfs /tmp" /etc/fstab 2>/dev/null; then
     echo "${fstab_entry}" >> /etc/fstab
+  else
+    # Update existing entry to ensure noatime,nodiratime (v9.6 hardening)
+    sed -i 's|^tmpfs /tmp tmpfs.*|'"${fstab_entry}"'|' /etc/fstab
   fi
   run_cmd systemctl daemon-reload
-  run_cmd mount -o "remount,size=${RAMDISK_SIZE}" /tmp 2>/dev/null || mount /tmp 2>/dev/null || true
+  run_cmd mount -o "remount,size=${RAMDISK_SIZE},noatime,nodiratime" /tmp 2>/dev/null || mount /tmp 2>/dev/null || true
   log_success "RAMDisk: $(df -h /tmp | tail -1 | awk '{print $2}')"
 }
 
@@ -713,7 +717,10 @@ RENVEOF
     BIOME_CONF="${BIOME_CONF}" \
     LOG_FILE="${LOG_FILE}" \
     RAMDISK_GB="${RAMDISK_GB}" \
-    RSESSION_CONF_PATH="${RSESSION_CONF_PATH}"
+    RSESSION_CONF_PATH="${RSESSION_CONF_PATH}" \
+    TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-60}" \
+    TMP_REDIRECT_THRESHOLD_PCT="${TMP_REDIRECT_THRESHOLD_PCT:-75}" \
+    BIG_DATA_THRESHOLD_GB="${BIG_DATA_THRESHOLD_GB:-5}"
 
   printf "%s" "$generated_profile" > "${tmp_profile}"
   run_cmd cp "${tmp_profile}" "${rprofile}"
@@ -814,6 +821,11 @@ XDG_CONFIG_HOME=\${HOME}/.config
 SKELEOF
   run_cmd chmod 644 /etc/skel/.Renviron
   log_success "New-user /etc/skel/.Renviron template created"
+
+  # NFS fallback tmp directory for tmpfs overflow (v9.6)
+  mkdir -p /etc/skel/.r_tmp_fallback
+  run_cmd chmod 750 /etc/skel/.r_tmp_fallback
+  log_success "New-user /etc/skel/.r_tmp_fallback created (NFS tmpfs overflow dir)"
 }
 
 # ==============================================================================
@@ -827,7 +839,7 @@ setup_nodes_logging() {
 
   # Deploy audit script from template
   local tmp_audit
-  tmp_audit=$(mktemp /tmp/00_audit_v26.R.deploy.XXXXXX)
+  tmp_audit=$(mktemp /tmp/00_audit_v27.R.deploy.XXXXXX)
   local generated_audit
   process_template "${AUDIT_TEMPLATE}" generated_audit \
     BIOME_CONF="${BIOME_CONF}" \
@@ -838,10 +850,10 @@ setup_nodes_logging() {
     PYTHON_ENV="${PYTHON_ENV}"
 
   printf "%s" "$generated_audit" > "${tmp_audit}"
-  run_cmd cp "${tmp_audit}" "${BIOME_CONF}/00_audit_v26.R"
+  run_cmd cp "${tmp_audit}" "${BIOME_CONF}/00_audit_v27.R"
   rm -f "${tmp_audit}"
-  run_cmd chmod 644 "${BIOME_CONF}/00_audit_v26.R"
-  log_success "Audit: ${BIOME_CONF}/00_audit_v26.R"
+  run_cmd chmod 644 "${BIOME_CONF}/00_audit_v27.R"
+  log_success "Audit: ${BIOME_CONF}/00_audit_v27.R"
 
   # System log
   mkdir -p "$(dirname "${LOG_FILE}")"
@@ -856,7 +868,7 @@ setup_nodes_logging() {
     run_cmd chmod 775 /var/log/biome_converter
   fi
 
-  # Audit config (read by 00_audit_v26.R and 99_audit_r_environment.sh)
+  # Audit config (read by 00_audit_v27.R and 99_audit_r_environment.sh)
   cat > "${BIOME_CONF}/audit.conf" <<ACONF
 # BIOME-CALC Audit Config — Generated: $(date -Iseconds)
 nfs_home       <- "${NFS_HOME}"
@@ -1290,7 +1302,7 @@ setup_nodes_summary() {
   echo ""
   echo "  Next steps:"
   echo "    1. sudo systemctl restart rstudio-server"
-  echo "    2. In R: source('${BIOME_CONF}/00_audit_v26.R')"
+  echo "    2. In R: source('${BIOME_CONF}/00_audit_v27.R')"
   echo "    3. In R: status()"
   echo ""
   echo "  Key files deployed:"
@@ -1298,7 +1310,7 @@ setup_nodes_summary() {
   echo "    /etc/R/Renviron.site"
   echo "    /etc/profile.d/biome-coretype.sh"
   echo "    /etc/rstudio/rsession-profile"
-  echo "    ${BIOME_CONF}/00_audit_v26.R"
+  echo "    ${BIOME_CONF}/00_audit_v27.R"
   echo "    ${BIOME_CONF}/audit.conf"
   echo "    ${LOG_FILE}"
   echo "    ${SWAP_FILE} (${SWAP_SIZE_GB}GB)"
