@@ -951,6 +951,60 @@ local({
       msg_parts <- c(msg_parts, "Future")
     }, error = function(e) NULL)
 
+    # v9.6: doParallel — use our thread-safe PSOCK factory instead of default
+    # CRITICAL: doParallel::registerDoParallel() creates workers with UNCAPPED BLAS threads.
+    # With 8 workers × 16 threads = 128 concurrent BLAS threads → instant OOM.
+    # Fix: Hook registerDoParallel to use our biome_make_cluster_impl.
+    if (isNamespaceLoaded("doParallel")) tryCatch({
+      dp_env <- asNamespace("doParallel")
+      .biome_env$original_registerDoParallel <- doParallel::registerDoParallel
+      safe_registerDoParallel <- function(cl = NULL, cores = NULL, ...) {
+        if (is.null(cl) && !is.null(cores)) {
+          # User requested N cores — create a thread-safe PSOCK cluster
+          cl <- .biome_make_cluster_impl(workers = as.integer(cores), worker_threads = 1L)
+          if (interactive()) {
+            message(sprintf(paste0(.C_GREEN,
+              "\U0001F6E1\ufe0f BIOME-CALC: doParallel registered with %d workers (BLAS threads capped at 1/worker).",
+              .C_RESET), as.integer(cores)))
+          }
+        } else if (is.null(cl)) {
+          fw <- max(1L, .biome_env$shared_env$last_cores - 1L)
+          cl <- .biome_make_cluster_impl(workers = fw, worker_threads = 1L)
+        }
+        .biome_env$original_registerDoParallel(cl, ...)
+      }
+      if (bindingIsLocked("registerDoParallel", dp_env))
+        unlockBinding("registerDoParallel", dp_env)
+      assign("registerDoParallel", safe_registerDoParallel, envir = dp_env)
+      lockBinding("registerDoParallel", dp_env)
+      msg_parts <- c(msg_parts, "DoParallel [SafeGuard]")
+    }, error = function(e) NULL)
+
+    # v9.6: TMB — cap OpenMP threads for compiled templates + route compilation to user tmpdir
+    # TMB compiles C++ code at runtime which uses BLAS threads via OpenMP.
+    # The compiled code inherits OPENBLAS_NUM_THREADS but TMB.threads controls
+    # parallel gradient computation (AD tape evaluation).
+    if (isNamespaceLoaded("TMB") || isNamespaceLoaded("glmmTMB")) tryCatch({
+      bt <- .biome_env$shared_env$last_threads
+      tmb_threads <- max(1L, min(4L, as.integer(bt)))
+      options(TMB.threads = tmb_threads)
+      # Route TMB C++ compilation output to user tmpdir (can be large)
+      tmb_tmp <- file.path(user_tmp_root, "tmb_compile")
+      if (!dir.exists(tmb_tmp)) dir.create(tmb_tmp, recursive = TRUE, showWarnings = FALSE)
+      Sys.setenv(TMB_COMPILE_DIR = tmb_tmp)
+      tmb_label <- if (isNamespaceLoaded("glmmTMB")) "TMB+glmmTMB" else "TMB"
+      msg_parts <- c(msg_parts, sprintf("%s [%d threads]", tmb_label, tmb_threads))
+    }, error = function(e) NULL)
+
+    # v9.6: rJava — set Java heap for climate4R and other Java-dependent packages
+    # climate4R's loadeR uses NetCDF-Java which needs significant heap for large datasets
+    if (isNamespaceLoaded("rJava")) tryCatch({
+      # Set Java heap to 25% of user's RAM quota (minimum 2GB)
+      java_heap_gb <- max(2L, as.integer(floor(qr * 0.25)))
+      options(java.parameters = sprintf("-Xmx%dg", java_heap_gb))
+      msg_parts <- c(msg_parts, sprintf("rJava [Xmx%dg]", java_heap_gb))
+    }, error = function(e) NULL)
+
     if (ENABLE_AI_ASSISTANT && isNamespaceLoaded("chattr")) tryCatch({
       options(chattr.model = AI_MODEL, chattr.provider = "ollama")
       msg_parts <- c(msg_parts, "Chattr")

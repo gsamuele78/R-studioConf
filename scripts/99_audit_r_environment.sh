@@ -7,7 +7,7 @@
 #
 # Part of: R-studioConf legacy deployment suite
 # Depends: lib/common_utils.sh, config/setup_nodes.vars.conf
-#          templates/00_audit_v26.R.template
+#          templates/00_audit_v27.R.template
 #
 # Usage:
 #   sudo ./99_audit_r_environment.sh            (deploy + run as root)
@@ -15,7 +15,7 @@
 #   ./99_audit_r_environment.sh --run-only      (run already-deployed audit)
 #
 # In RStudio console, run the audit interactively:
-#   source("/etc/biome-calc/00_audit_v26.R")
+#   source("/etc/biome-calc/00_audit_v27.R")
 #   # or after script runs:
 #   status()
 #
@@ -44,8 +44,8 @@ fi
 # shellcheck source=../config/setup_nodes.vars.conf disable=SC1091
 source "${VARS_CONF}"
 
-AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v26.R.template"
-AUDIT_DEST="${BIOME_CONF}/00_audit_v26.R"
+AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v27.R.template"
+AUDIT_DEST="${BIOME_CONF}/00_audit_v27.R"
 
 # ── Args ──
 DEPLOY_ONLY=false
@@ -63,7 +63,7 @@ for arg in "$@"; do
       echo "  --run-only    Run the already-deployed audit (skips template step)"
       echo ""
       echo "  In RStudio, run audit interactively:"
-      echo "    source(\"${BIOME_CONF}/00_audit_v26.R\")"
+      echo "    source(\"${BIOME_CONF}/00_audit_v27.R\")"
       exit 0
       ;;
   esac
@@ -90,7 +90,7 @@ deploy_audit() {
 
   # Process template (substitutes all %%PLACEHOLDER%% values from vars.conf)
   local tmp_audit
-  tmp_audit=$(mktemp /tmp/00_audit_v26.R.deploy.XXXXXX)
+  tmp_audit=$(mktemp /tmp/00_audit_v27.R.deploy.XXXXXX)
   process_template "${AUDIT_TEMPLATE}" "${tmp_audit}"
   execute_command cp "${tmp_audit}" "${AUDIT_DEST}"
   rm -f "${tmp_audit}"

@@ -35,7 +35,8 @@ suppressMessages({
 # top-level REPL expressions. So we MUST call deferred_pkg_init() directly.
 .audit_pkgs <- list()
 for (.pkg in c("geosphere", "ggplot2", "terra", "vegan", "fields",
-               "ncdf4", "lme4", "tmap", "Matrix")) {
+               "ncdf4", "lme4", "tmap", "Matrix",
+               "glmmTMB", "doParallel", "igraph", "caret")) {
   .audit_pkgs[[.pkg]] <- tryCatch({
     suppressMessages(library(.pkg, character.only = TRUE))
     TRUE
@@ -1188,9 +1189,145 @@ run_audit("10.10", "Kriging Spatial Interpolation (fields::Tps)", {
   }, error = function(e) stop(sprintf("Kriging failed: %s", e$message)))
 }, timeout = 60, use_fork = TRUE,
    fix_hint = "Check fields + outer()/solve() guards in Rprofile v9.6")
+# ==============================================================================
+# [11.0] ADVANCED ECOLOGY TESTS (TMB, parallel, network, ML)
+# ==============================================================================
+audit_cat("\n[11.0] ADVANCED ECOLOGY TESTS (TMB, parallel, network, ML)\n")
+
+run_audit("11.1", "glmmTMB Hessian Inversion (Poisson GLMM)", {
+  # glmmTMB builds a Hessian matrix via TMB C++ automatic differentiation,
+  # then inverts it with solve(). This is the #1 OOM pattern for Bayesian ecologists.
+  if (!.audit_pkgs[["glmmTMB"]]) return("Skipped (glmmTMB not installed)")
+  tryCatch({
+    set.seed(42)
+    # Simulate GBIF-style species count data (Poisson family)
+    N <- 1000; n_sites <- 50
+    dat <- data.frame(
+      count    = rpois(N, lambda = 5),
+      habitat  = rnorm(N, 10, 3),
+      elevation = rnorm(N, 500, 200),
+      site     = factor(rep(1:n_sites, each = N / n_sites))
+    )
+    # Add zero-inflation (common in ecology — 30% structural zeros)
+    dat$count[rbinom(N, 1, 0.3) == 1] <- 0L
+
+    initial_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    t0 <- Sys.time()
+    mod <- glmmTMB::glmmTMB(count ~ habitat + elevation + (1|site),
+                             data = dat, family = poisson())
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+
+    if (!inherits(mod, "glmmTMB")) stop("glmmTMB object not returned")
+    if (post_t != initial_t) stop(sprintf("Thread leak: %d -> %d", initial_t, post_t))
+
+    n_fx <- length(glmmTMB::fixef(mod)$cond)
+    aic <- round(AIC(mod), 1)
+    rm(dat, mod); gc(verbose = FALSE)
+    sprintf("OK (%.1fs, %d fixed effects, AIC=%.0f, threads=%d)", dt, n_fx, aic, post_t)
+  }, error = function(e) stop(sprintf("glmmTMB failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check TMB/glmmTMB + solve() thread management in Rprofile v9.6")
+
+run_audit("11.2", "doParallel Worker Thread Isolation", {
+  # Verifies that doParallel workers inherit thread-safe env vars
+  # (OMP_NUM_THREADS=1, OPENBLAS_NUM_THREADS=1) via our registerDoParallel hook
+  if (!.audit_pkgs[["doParallel"]]) return("Skipped (doParallel not installed)")
+  tryCatch({
+    suppressMessages(library(foreach))
+    # Register with 2 workers (minimal for testing)
+    doParallel::registerDoParallel(cores = 2)
+
+    # Each worker checks its own BLAS thread count
+    worker_threads <- foreach::foreach(i = 1:2, .combine = c) %dopar% {
+      as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "-1"))
+    }
+
+    # Clean up
+    doParallel::stopImplicitCluster()
+
+    # Verify workers had capped threads
+    if (any(worker_threads > 2)) {
+      stop(sprintf("Workers had uncapped BLAS threads: %s (expected 1)",
+                   paste(worker_threads, collapse = ", ")))
+    }
+    sprintf("OK (2 workers, BLAS threads per worker: %s)",
+            paste(worker_threads, collapse = ", "))
+  }, error = function(e) stop(sprintf("doParallel isolation failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check doParallel registerDoParallel hook in Rprofile v9.6")
+
+run_audit("11.3", "igraph Large Graph Community Detection", {
+  # igraph on large graphs uses significant RAM — tests memory limits
+  if (!.audit_pkgs[["igraph"]]) return("Skipped (igraph not installed)")
+  tryCatch({
+    set.seed(42)
+    # Simulate ecological network: 5000 species, ~25k interactions
+    N <- 5000; n_edges <- 25000
+    edges <- cbind(sample(N, n_edges, replace = TRUE),
+                   sample(N, n_edges, replace = TRUE))
+    t0 <- Sys.time()
+    g <- igraph::graph_from_edgelist(edges, directed = FALSE)
+    g <- igraph::simplify(g)
+    dt_build <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+    # Community detection (Louvain — most common in ecology networks)
+    t0 <- Sys.time()
+    comm <- igraph::cluster_louvain(g)
+    dt_comm <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+    n_communities <- length(igraph::communities(comm))
+    modularity <- round(igraph::modularity(comm), 3)
+    mem_mb <- as.numeric(object.size(g)) / 1024^2
+
+    rm(g, comm, edges); gc(verbose = FALSE)
+    sprintf("OK (%d nodes, build=%.2fs, Louvain=%.2fs, %d communities, Q=%.3f, %.1fMB)",
+            N, dt_build, dt_comm, n_communities, modularity, mem_mb)
+  }, error = function(e) stop(sprintf("igraph failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check igraph installation and available RAM")
+
+run_audit("11.4", "Caret Hyperparameter Grid (expand.grid guard)", {
+  # caret::train() uses expand.grid() for hyperparameter tuning.
+  # With 5+ hyperparameters × 10+ levels, this can create millions of rows.
+  # This test verifies expand.grid() guard doesn't break caret's workflow.
+  if (!.audit_pkgs[["caret"]]) return("Skipped (caret not installed)")
+  tryCatch({
+    set.seed(42)
+    # Create small ecology dataset for fast model training
+    dat <- data.frame(
+      species_richness = rpois(200, lambda = 15),
+      temp = rnorm(200, 18, 5),
+      precip = rnorm(200, 800, 200),
+      ndvi = runif(200, 0.2, 0.9)
+    )
+
+    # Use a fast method (glm) with small grid — tests expand.grid path
+    ctrl <- caret::trainControl(method = "cv", number = 3)
+    t0 <- Sys.time()
+    mod <- caret::train(species_richness ~ ., data = dat, method = "glm",
+                        trControl = ctrl, family = "poisson")
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+    if (!inherits(mod, "train")) stop("caret train object not returned")
+
+    # Also test expand.grid explicitly with ecology-style parameter sweep
+    grid <- expand.grid(
+      shrinkage = c(0.01, 0.05, 0.1),
+      interaction.depth = c(1, 2, 3, 5),
+      n.minobsinnode = c(5, 10, 20),
+      n.trees = c(100, 500, 1000)
+    )
+    if (nrow(grid) != 108) stop(sprintf("expand.grid wrong: %d rows (expected 108)", nrow(grid)))
+
+    rm(dat, mod, grid); gc(verbose = FALSE)
+    sprintf("OK (GLM CV in %.1fs, expand.grid 108 rows verified)", dt)
+  }, error = function(e) stop(sprintf("caret failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check caret + expand.grid() guard in Rprofile v9.6")
 
 # ==============================================================================
-# [12.0] SUMMARY
+# [13.0] SUMMARY
 # ==============================================================================
 audit_cat("\n")
 fails <- which(vapply(audit_log, function(x) x$s == "FAIL", logical(1)))

@@ -160,12 +160,12 @@ else
 fi
 
 # Compile Audit Script
-if [ -f "${TEMPLATE_DIR}/00_audit_v26.R.template" ]; then
-    log "INFO" "Processing 00_audit_v26.R.template..."
+if [ -f "${TEMPLATE_DIR}/00_audit_v27.R.template" ]; then
+    log "INFO" "Processing 00_audit_v27.R.template..."
     mkdir -p "${BIOME_CONF:-/etc/biome-calc}"
     tmp_audit=$(mktemp /tmp/00_audit.XXXXXX)
     
-    process_template "${TEMPLATE_DIR}/00_audit_v26.R.template" generated_audit \
+    process_template "${TEMPLATE_DIR}/00_audit_v27.R.template" generated_audit \
         BIOME_CONF="${BIOME_CONF:-/etc/biome-calc}" \
         LOG_FILE="/var/log/r_biome_system.log" \
         MAX_THREADS="${MAX_BLAS_THREADS:-16}" \
@@ -175,8 +175,8 @@ if [ -f "${TEMPLATE_DIR}/00_audit_v26.R.template" ]; then
         
     # shellcheck disable=SC2154
     printf "%s" "$generated_audit" > "${tmp_audit}"
-    cp "${tmp_audit}" "${BIOME_CONF:-/etc/biome-calc}/00_audit_v26.R"
-    chmod 644 "${BIOME_CONF:-/etc/biome-calc}/00_audit_v26.R"
+    cp "${tmp_audit}" "${BIOME_CONF:-/etc/biome-calc}/00_audit_v27.R"
+    chmod 644 "${BIOME_CONF:-/etc/biome-calc}/00_audit_v27.R"
     rm -f "${tmp_audit}"
     
     # Ensure log is writable
@@ -184,7 +184,7 @@ if [ -f "${TEMPLATE_DIR}/00_audit_v26.R.template" ]; then
     chmod 666 /var/log/r_biome_system.log
     log "INFO" "System Audit Script compiled successfully."
 else
-    log "WARN" "MISSING: ${TEMPLATE_DIR}/00_audit_v26.R.template"
+    log "WARN" "MISSING: ${TEMPLATE_DIR}/00_audit_v27.R.template"
 fi
 
 # 2. Authentication Configuration

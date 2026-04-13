@@ -178,9 +178,12 @@ setup_nodes_dependencies() {
     libopenblas-dev libomp-dev gfortran \
     libfreetype-dev libharfbuzz-dev libfribidi-dev libtiff-dev libpng-dev \
     libnetcdf-dev libhdf5-dev \
+    default-jdk \
+    libnlopt-dev \
     libgoogle-perftools-dev sendemail dnsutils \
     samba-common-bin winbind rsync tree
   log_success "Base dependencies installed"
+  # NOTE: R CMD javareconf + rJava source install handled by r_env_manager.sh configure_java_for_r()
 }
 
 # ==============================================================================
@@ -544,7 +547,13 @@ setup_nodes_python() {
   fi
 
   run_cmd "${PYTHON_ENV}/bin/pip" install --quiet --upgrade pip
-  run_cmd "${PYTHON_ENV}/bin/pip" install --quiet "$(printf "'%s' " "${PYTHON_PACKAGES[@]}")"
+  # Install Python packages individually to handle version constraints properly
+  for py_pkg in "${PYTHON_PACKAGES[@]}"; do
+    log_info "  pip install: ${py_pkg}"
+    "${PYTHON_ENV}/bin/pip" install --quiet "${py_pkg}" || {
+      log_warn "  pip install failed: ${py_pkg} — continuing"
+    }
+  done
   log_success "Python: $("${PYTHON_ENV}/bin/python" --version 2>&1)"
 }
 
