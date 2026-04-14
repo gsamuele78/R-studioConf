@@ -43,12 +43,17 @@ for (.pkg in c("geosphere", "ggplot2", "terra", "vegan", "fields",
   }, error = function(e) FALSE)
 }
 
-# Force-trigger deferred_pkg_init() to install memory guards
+# Force-trigger deferred_pkg_init() + deferred_pkg_hooks() to install all guards
+# v9.7: deferred_pkg_init installs memory guards, deferred_pkg_hooks installs
+# package-specific guards (geosphere distm, doParallel hook, terra routing, etc.)
 tryCatch({
   if (exists(".biome_env", envir = .GlobalEnv)) {
     be <- get(".biome_env", envir = .GlobalEnv)
     if (is.function(be$deferred_pkg_init)) {
       be$deferred_pkg_init()
+    }
+    if (is.function(be$deferred_pkg_hooks)) {
+      be$deferred_pkg_hooks()
     }
   }
 }, error = function(e) NULL)
@@ -1049,7 +1054,9 @@ run_audit("10.7", "Sparse Matrix Solve (Matrix::Cholesky — escape route)", {
     dt_chol <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
 
     # Solve a system using the Cholesky factor
-    b <- Matrix::Matrix(rnorm(N), ncol = 1)
+    # v27-fix: CHMfactor solve requires sparse RHS or plain numeric vector;
+    # dense dgeMatrix causes "no method for coercing this S4 class to a vector"
+    b <- Matrix::Matrix(rnorm(N), ncol = 1, sparse = TRUE)
     t0 <- Sys.time()
     x_sol <- Matrix::solve(ch, b)
     dt_solve <- as.numeric(difftime(Sys.time(), t0, units = "secs"))

@@ -584,9 +584,23 @@ local({
     }, error = function(e) 0)
   }
 
-  # v9.6: Multi-signal tmpfs safety heuristic (pessimistic)
+  # v9.6/v9.7: Multi-signal tmpfs safety heuristic (pessimistic)
+  # v9.7: Reads thresholds from .biome_env instead of closed-over lexical vars,
+  # so the exported copy in tools:biome_calc resolves correctly.
   biome_tmpfs_safe <- function() {
     tryCatch({
+      # Read thresholds from .biome_env (robust — works from any calling environment)
+      .be <- tryCatch(get(".biome_env", envir = .GlobalEnv), error = function(e) NULL)
+      .warn_pct <- tryCatch(.be$TMP_WARN_PCT, error = function(e) 60L)
+      .redir_pct <- tryCatch(.be$TMP_REDIRECT_PCT, error = function(e) 75L)
+      .ramdisk_gb <- tryCatch(.be$BIG_DATA_THRESHOLD_GB, error = function(e) 5L)
+      # Use Sys.info() for user — safe from any context
+      .user <- Sys.info()[["user"]]
+      # Resolve ramdisk size from .biome_env or environment variable
+      .ramdisk_total_gb <- tryCatch(
+        as.integer(Sys.getenv("BIOME_RAMDISK_GB", "100")),
+        error = function(e) 100L)
+
       s1_pct <- get_tmp_use_pct()
       s2_mem_avail_gb <- tryCatch({
         mi <- readLines("/proc/meminfo", warn = FALSE)
@@ -595,24 +609,24 @@ local({
         else Inf
       }, error = function(e) Inf)
       s3_cgroup_headroom_gb <- tryCatch({
-        cg_ram <- .biome_env$shared_env$cgroup_ram_gb
-        if (is.finite(cg_ram)) cg_ram - (RAMDISK_GB + 4) else Inf
+        cg_ram <- .be$shared_env$cgroup_ram_gb
+        if (is.finite(cg_ram)) cg_ram - (.ramdisk_total_gb + 4) else Inf
       }, error = function(e) Inf)
       s4_user_pct <- tryCatch({
-        user_root <- file.path("/tmp", paste0("biome_", curr_user))
+        user_root <- file.path("/tmp", paste0("biome_", .user))
         if (!dir.exists(user_root)) return(0)
         user_bytes <- sum(file.info(
           list.files(user_root, all.files = TRUE, full.names = TRUE, recursive = TRUE)
         )$size, na.rm = TRUE)
-        as.numeric(user_bytes / (RAMDISK_GB * 1024^3) * 100)
+        as.numeric(user_bytes / (.ramdisk_total_gb * 1024^3) * 100)
       }, error = function(e) 0)
       reasons <- c()
-      if (s1_pct >= TMP_REDIRECT_PCT) reasons <- c(reasons, sprintf("tmpfs at %d%%", as.integer(s1_pct)))
-      if (s2_mem_avail_gb < (RAMDISK_GB * 2)) reasons <- c(reasons, sprintf("MemAvail=%.0fGB", s2_mem_avail_gb))
+      if (s1_pct >= .redir_pct) reasons <- c(reasons, sprintf("tmpfs at %d%%", as.integer(s1_pct)))
+      if (s2_mem_avail_gb < (.ramdisk_total_gb * 2)) reasons <- c(reasons, sprintf("MemAvail=%.0fGB", s2_mem_avail_gb))
       if (s3_cgroup_headroom_gb < 0) reasons <- c(reasons, "cgroup limit near")
       if (s4_user_pct > 30) reasons <- c(reasons, sprintf("user at %d%% of tmpfs", as.integer(s4_user_pct)))
       warn_reasons <- c()
-      if (s1_pct >= TMP_WARN_PCT && s1_pct < TMP_REDIRECT_PCT) {
+      if (s1_pct >= .warn_pct && s1_pct < .redir_pct) {
         warn_reasons <- c(warn_reasons, sprintf("tmpfs at %d%%", as.integer(s1_pct)))
       }
       list(safe = length(reasons) == 0, warn = length(warn_reasons) > 0,
@@ -810,43 +824,70 @@ local({
     # v9.6-fix: Set deferred_done AFTER all guards are installed (belt-and-suspenders)
     .biome_env$shared_env$deferred_done <- TRUE
 
-    # ══ Tmpfs routing + package config (wrapped — failure here cannot lose guards) ══
+    # ══ Tmpfs routing base setup (one-time, wrapped — failure cannot lose guards) ══
     tryCatch({
-    # v9.6: Determine tmp routing via multi-signal heuristic
-    force_nfs <- Sys.getenv("BIOME_FORCE_NFS_TMP") == "true"
-    force_tmpfs <- Sys.getenv("BIOME_FORCE_TMPFS") == "true"
-    safety <- biome_tmpfs_safe()
-    smart_tmp_base <- if (!ENABLE_SMART_ROUTING) "/tmp"
-                      else if (force_tmpfs) "/tmp"
-                      else if (force_nfs || !safety$safe) file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
-                      else "/tmp"
-    if (!dir.exists(smart_tmp_base)) dir.create(smart_tmp_base, recursive=TRUE, showWarnings=FALSE)
+      # v9.6: Determine tmp routing via multi-signal heuristic
+      force_nfs <- Sys.getenv("BIOME_FORCE_NFS_TMP") == "true"
+      force_tmpfs <- Sys.getenv("BIOME_FORCE_TMPFS") == "true"
+      safety <- biome_tmpfs_safe()
+      smart_tmp_base <- if (!ENABLE_SMART_ROUTING) "/tmp"
+                        else if (force_tmpfs) "/tmp"
+                        else if (force_nfs || !safety$safe) file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
+                        else "/tmp"
+      if (!dir.exists(smart_tmp_base)) dir.create(smart_tmp_base, recursive=TRUE, showWarnings=FALSE)
 
-    # v9.6: Per-user consolidated tmp root
-    user_tmp_root <- file.path(smart_tmp_base, paste0("biome_", curr_user))
-    if (!dir.exists(user_tmp_root)) dir.create(user_tmp_root, recursive = TRUE, showWarnings = FALSE)
+      # v9.6: Per-user consolidated tmp root
+      user_tmp_root <- file.path(smart_tmp_base, paste0("biome_", curr_user))
+      if (!dir.exists(user_tmp_root)) dir.create(user_tmp_root, recursive = TRUE, showWarnings = FALSE)
 
-    # NFS redirect warning
-    if (!safety$safe && !force_tmpfs && interactive()) {
-      sys_log("TmpOverflow", "WARN", sprintf("Redirected to NFS: %s", safety$reason))
-      warning(sprintf(
-        paste0("BIOME-CALC: tmpfs unsafe (%s). Temp files redirected to NFS (%s).\n",
-               "  This is slower but prevents OOM. Override: Sys.setenv(BIOME_FORCE_TMPFS = \"true\")"),
-        safety$reason, smart_tmp_base
-      ), call. = FALSE, immediate. = TRUE)
-    } else if (safety$warn && !force_tmpfs && interactive()) {
-      if (!isTRUE(getOption("biome_tmp_warn_shown"))) {
-        options(biome_tmp_warn_shown = TRUE)
-        message(sprintf(paste0(.C_YELLOW,
-          "\n\U0001F4A1 BIOME-CALC: /tmp at %d%% capacity.",
-          "\n   For large computations (>%d GB temp), consider:",
-          "\n   Sys.setenv(BIOME_FORCE_NFS_TMP = 'true') before starting.",
-          .C_RESET), as.integer(safety$pct), BIG_DATA_THRESHOLD_GB))
+      # NFS redirect warning
+      if (!safety$safe && !force_tmpfs && interactive()) {
+        sys_log("TmpOverflow", "WARN", sprintf("Redirected to NFS: %s", safety$reason))
+        warning(sprintf(
+          paste0("BIOME-CALC: tmpfs unsafe (%s). Temp files redirected to NFS (%s).\n",
+                 "  This is slower but prevents OOM. Override: Sys.setenv(BIOME_FORCE_TMPFS = \"true\")"),
+          safety$reason, smart_tmp_base
+        ), call. = FALSE, immediate. = TRUE)
+      } else if (safety$warn && !force_tmpfs && interactive()) {
+        if (!isTRUE(getOption("biome_tmp_warn_shown"))) {
+          options(biome_tmp_warn_shown = TRUE)
+          message(sprintf(paste0(.C_YELLOW,
+            "\n\U0001F4A1 BIOME-CALC: /tmp at %d%% capacity.",
+            "\n   For large computations (>%d GB temp), consider:",
+            "\n   Sys.setenv(BIOME_FORCE_NFS_TMP = 'true') before starting.",
+            .C_RESET), as.integer(safety$pct), BIG_DATA_THRESHOLD_GB))
+        }
       }
+
+      # v9.7: Store routing base in .biome_env so deferred_pkg_hooks can access it
+      .biome_env$shared_env$smart_tmp_base <- smart_tmp_base
+      .biome_env$shared_env$user_tmp_root <- user_tmp_root
+
+    }, error = function(e) sys_log("DeferredInit", "FAIL", e$message))
+  }
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # v9.7: DEFERRED PACKAGE HOOKS — runs on EVERY callback (not just once)
+  # ═══════════════════════════════════════════════════════════════════════════
+  deferred_pkg_hooks <- function() {
+    if (!.biome_env$shared_env$deferred_done) return(invisible(NULL))
+    fc <- .biome_env$shared_env$last_cores
+    qr <- .biome_env$shared_env$last_quota
+    msg_parts <- c()
+
+    # Resolve tmpfs routing from deferred_init (set once, used by all hooks)
+    user_tmp_root <- .biome_env$shared_env$user_tmp_root
+    if (is.null(user_tmp_root)) {
+      smart_tmp_base <- "/tmp"
+      user_tmp_root <- file.path(smart_tmp_base, paste0("biome_", curr_user))
+      if (!dir.exists(user_tmp_root)) dir.create(user_tmp_root, recursive = TRUE, showWarnings = FALSE)
     }
+    smart_tmp_base <- .biome_env$shared_env$smart_tmp_base
+    if (is.null(smart_tmp_base)) smart_tmp_base <- "/tmp"
 
     # v9.6: Terra with size-aware routing
-    if (ENABLE_TERRA_OPT && isNamespaceLoaded("terra")) tryCatch({
+    if (ENABLE_TERRA_OPT && isNamespaceLoaded("terra") &&
+        .biome_env$shared_env$terra_threads == 0L) tryCatch({
       tt <- min(fc, 8L); gc_mb <- as.integer(floor(qr * 0.2 * 1024))
       Sys.setenv(GDAL_NUM_THREADS = as.character(tt), GDAL_CACHEMAX = as.character(gc_mb))
 
@@ -860,7 +901,7 @@ local({
             else sum(file.info(files, extra_cols = FALSE)$size, na.rm = TRUE) / 1024^3
           }
         }, error = function(e) 0)
-        if (terra_use_gb >= BIG_DATA_THRESHOLD_GB || safety$pct >= TMP_WARN_PCT) {
+        if (terra_use_gb >= BIG_DATA_THRESHOLD_GB || biome_tmpfs_safe()$pct >= TMP_WARN_PCT) {
           terra_fallback <- file.path(Sys.getenv("HOME"), ".r_tmp_fallback",
                                       paste0("biome_", curr_user), "terra")
           if (!dir.exists(terra_fallback)) dir.create(terra_fallback, recursive = TRUE, showWarnings = FALSE)
@@ -880,53 +921,58 @@ local({
       msg_parts <- c(msg_parts, sprintf("Terra [%s]", routing_label))
     }, error = function(e) NULL)
 
-    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("raster")) tryCatch({
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("raster") &&
+        !isTRUE(.biome_env$shared_env$.raster_hook_done)) tryCatch({
       rt <- file.path(user_tmp_root, "raster")
       if (!dir.exists(rt)) dir.create(rt, recursive=TRUE, showWarnings=FALSE)
       raster::rasterOptions(tmpdir = rt)
+      .biome_env$shared_env$.raster_hook_done <- TRUE
       msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Raster [RAMDisk]" else "Raster [NFS-Fallback]")
     }, error = function(e) NULL)
 
-    # v9.6: stars — uses terra's GDAL backend, ensure tmpdir is set
-    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("stars")) tryCatch({
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("stars") &&
+        !isTRUE(.biome_env$shared_env$.stars_hook_done)) tryCatch({
       st <- file.path(user_tmp_root, "stars")
       if (!dir.exists(st)) dir.create(st, recursive=TRUE, showWarnings=FALSE)
       Sys.setenv(GDAL_PAM_PROXY_DIR = st)
+      .biome_env$shared_env$.stars_hook_done <- TRUE
       msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Stars [RAMDisk]" else "Stars [NFS-Fallback]")
     }, error = function(e) NULL)
 
-    # v9.6: ncdf4 — climate NetCDF files can be 1-50 GB, route temp I/O
-    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("ncdf4")) tryCatch({
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("ncdf4") &&
+        !isTRUE(.biome_env$shared_env$.ncdf4_hook_done)) tryCatch({
       nc_tmp <- file.path(user_tmp_root, "ncdf4")
       if (!dir.exists(nc_tmp)) dir.create(nc_tmp, recursive=TRUE, showWarnings=FALSE)
-      # ncdf4 uses tempfile() for scratch — route via TMPDIR
-      # (TMPDIR is already set for the session, but ensure per-package dir exists)
+      .biome_env$shared_env$.ncdf4_hook_done <- TRUE
       msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "NetCDF [RAMDisk]" else "NetCDF [NFS-Fallback]")
     }, error = function(e) NULL)
 
-    # v9.6: Spatial statistics packages — ensure tmpdir for kriging/variogram scratch
     if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("gstat") || isNamespaceLoaded("fields") ||
-                                  isNamespaceLoaded("spatstat"))) tryCatch({
+                                  isNamespaceLoaded("spatstat")) &&
+        !isTRUE(.biome_env$shared_env$.spatial_stats_hook_done)) tryCatch({
       sp_tmp <- file.path(user_tmp_root, "spatial_stats")
       if (!dir.exists(sp_tmp)) dir.create(sp_tmp, recursive=TRUE, showWarnings=FALSE)
       loaded <- c(if (isNamespaceLoaded("gstat")) "Gstat",
                   if (isNamespaceLoaded("fields")) "Fields",
                   if (isNamespaceLoaded("spatstat")) "Spatstat")
+      .biome_env$shared_env$.spatial_stats_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("%s [%s]", paste(loaded, collapse="+"),
                      if (smart_tmp_base == "/tmp") "RAMDisk" else "NFS-Fallback"))
     }, error = function(e) NULL)
 
-    if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("keras") || isNamespaceLoaded("tensorflow"))) tryCatch({
+    if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("keras") || isNamespaceLoaded("tensorflow")) &&
+        !isTRUE(.biome_env$shared_env$.keras_hook_done)) tryCatch({
       kt <- file.path(user_tmp_root, "keras_cache")
       if (!dir.exists(kt)) dir.create(kt, recursive=TRUE, showWarnings=FALSE)
       Sys.setenv(KERAS_CACHE_DIR = kt)
       Sys.setenv(TF_XLA_FLAGS = paste0("--tf_xla_enable_xla_devices --tf_xla_cpu_global_jit --tf_xla_auto_jit=2 --tf_xla_fallback_tmpdir=", kt))
+      .biome_env$shared_env$.keras_hook_done <- TRUE
       msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Keras [RAMDisk]" else "Keras [NFS-Fallback]")
     }, error = function(e) NULL)
 
-    # v9.6: ggplot2/tmap/mapview with ragg backend
     if (ENABLE_GGPLOT_OPT && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly") ||
-                               isNamespaceLoaded("tmap") || isNamespaceLoaded("mapview"))) tryCatch({
+                               isNamespaceLoaded("tmap") || isNamespaceLoaded("mapview")) &&
+        !isTRUE(.biome_env$shared_env$.ggplot_hook_done)) tryCatch({
       gt <- file.path(user_tmp_root, "plot_cache")
       if (!dir.exists(gt)) dir.create(gt, recursive = TRUE, showWarnings = FALSE)
       Sys.setenv(TMP = gt, TEMP = gt)
@@ -942,24 +988,25 @@ local({
       tmp_label <- if (smart_tmp_base == "/tmp") "RAMDisk" else "NFS-Fallback"
       vis_pkgs <- c("Ggplot", if (isNamespaceLoaded("tmap")) "Tmap",
                     if (isNamespaceLoaded("mapview")) "Mapview")
+      .biome_env$shared_env$.ggplot_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("%s [%s/%s]", paste(vis_pkgs, collapse="+"),
                                          backend_label, tmp_label))
     }, error = function(e) NULL)
     
-    if (ENABLE_ARROW_OPT && isNamespaceLoaded("arrow")) tryCatch({
+    if (ENABLE_ARROW_OPT && isNamespaceLoaded("arrow") &&
+        .biome_env$shared_env$arrow_threads == 0L) tryCatch({
       at <- min(fc, 16L); arrow::set_cpu_count(at); arrow::set_io_thread_count(min(at,8L))
       .biome_env$shared_env$arrow_threads <- at
       msg_parts <- c(msg_parts, "Arrow")
     }, error = function(e) NULL)
 
-    # v9.6: geosphere distm() safety hook — prevents accidental OOM on large matrices
-    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("geosphere")) tryCatch({
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("geosphere") &&
+        !exists("original_distm", envir = .biome_env)) tryCatch({
       .biome_env$original_distm <- geosphere::distm
       safe_distm <- function(x, y = x, fun = geosphere::distHaversine) {
         n1 <- if (is.matrix(x) || is.data.frame(x)) nrow(x) else length(x) / 2
         n2 <- if (is.matrix(y) || is.data.frame(y)) nrow(y) else length(y) / 2
         matrix_gb <- (n1 * n2 * 8) / 1024^3
-        # M3: Use centralized RAM helper instead of inline /proc/meminfo read
         ram_avail_gb <- .biome_env$.get_ram_gb()
         if (matrix_gb > 5 && interactive()) {
           message(sprintf(paste0(.C_YELLOW,
@@ -985,7 +1032,8 @@ local({
       msg_parts <- c(msg_parts, "Geosphere [SafeGuard]")
     }, error = function(e) NULL)
 
-    if (ENABLE_FUTURE_OPT && isNamespaceLoaded("future")) tryCatch({
+    if (ENABLE_FUTURE_OPT && isNamespaceLoaded("future") &&
+        .biome_env$shared_env$future_workers == 0L) tryCatch({
       fw <- max(1L, fc - 1L)
       cl <- .biome_make_cluster_impl(workers = fw, worker_threads = 1L)
       future::plan(future::cluster, workers = cl)
@@ -993,16 +1041,12 @@ local({
       msg_parts <- c(msg_parts, "Future")
     }, error = function(e) NULL)
 
-    # v9.6: doParallel — use our thread-safe PSOCK factory instead of default
-    # CRITICAL: doParallel::registerDoParallel() creates workers with UNCAPPED BLAS threads.
-    # With 8 workers × 16 threads = 128 concurrent BLAS threads → instant OOM.
-    # Fix: Hook registerDoParallel to use our biome_make_cluster_impl.
-    if (isNamespaceLoaded("doParallel")) tryCatch({
+    if (isNamespaceLoaded("doParallel") &&
+        !exists("original_registerDoParallel", envir = .biome_env)) tryCatch({
       dp_env <- asNamespace("doParallel")
       .biome_env$original_registerDoParallel <- doParallel::registerDoParallel
       safe_registerDoParallel <- function(cl = NULL, cores = NULL, ...) {
         if (is.null(cl) && !is.null(cores)) {
-          # User requested N cores — create a thread-safe PSOCK cluster
           cl <- .biome_make_cluster_impl(workers = as.integer(cores), worker_threads = 1L)
           if (interactive()) {
             message(sprintf(paste0(.C_GREEN,
@@ -1022,37 +1066,34 @@ local({
       msg_parts <- c(msg_parts, "DoParallel [SafeGuard]")
     }, error = function(e) NULL)
 
-    # v9.6: TMB — cap OpenMP threads for compiled templates + route compilation to user tmpdir
-    # TMB compiles C++ code at runtime which uses BLAS threads via OpenMP.
-    # The compiled code inherits OPENBLAS_NUM_THREADS but TMB.threads controls
-    # parallel gradient computation (AD tape evaluation).
-    if (isNamespaceLoaded("TMB") || isNamespaceLoaded("glmmTMB")) tryCatch({
+    if ((isNamespaceLoaded("TMB") || isNamespaceLoaded("glmmTMB")) &&
+        !isTRUE(.biome_env$shared_env$.tmb_hook_done)) tryCatch({
       bt <- .biome_env$shared_env$last_threads
       tmb_threads <- max(1L, min(4L, as.integer(bt)))
       options(TMB.threads = tmb_threads)
-      # Route TMB C++ compilation output to user tmpdir (can be large)
       tmb_tmp <- file.path(user_tmp_root, "tmb_compile")
       if (!dir.exists(tmb_tmp)) dir.create(tmb_tmp, recursive = TRUE, showWarnings = FALSE)
       Sys.setenv(TMB_COMPILE_DIR = tmb_tmp)
       tmb_label <- if (isNamespaceLoaded("glmmTMB")) "TMB+glmmTMB" else "TMB"
+      .biome_env$shared_env$.tmb_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("%s [%d threads]", tmb_label, tmb_threads))
     }, error = function(e) NULL)
 
     # v9.6: rJava — set Java heap for climate4R and other Java-dependent packages
-    # climate4R's loadeR uses NetCDF-Java which needs significant heap for large datasets
-    if (isNamespaceLoaded("rJava")) tryCatch({
-      # Set Java heap to 25% of user's RAM quota (minimum 2GB)
+    if (isNamespaceLoaded("rJava") &&
+        !isTRUE(.biome_env$shared_env$.rjava_hook_done)) tryCatch({
       java_heap_gb <- max(2L, as.integer(floor(qr * 0.25)))
       options(java.parameters = sprintf("-Xmx%dg", java_heap_gb))
+      .biome_env$shared_env$.rjava_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("rJava [Xmx%dg]", java_heap_gb))
     }, error = function(e) NULL)
 
-    if (ENABLE_AI_ASSISTANT && isNamespaceLoaded("chattr")) tryCatch({
+    if (ENABLE_AI_ASSISTANT && isNamespaceLoaded("chattr") &&
+        !isTRUE(.biome_env$shared_env$.chattr_hook_done)) tryCatch({
       options(chattr.model = AI_MODEL, chattr.provider = "ollama")
+      .biome_env$shared_env$.chattr_hook_done <- TRUE
       msg_parts <- c(msg_parts, "Chattr")
     }, error = function(e) NULL)
-
-    }, error = function(e) sys_log("DeferredInit", "FAIL", e$message))
 
     if (length(msg_parts) > 0 && interactive()) {
       message(paste0(.C_GREEN, "   \U0001F680 BIOME-CALC: Engines Initialized: ", paste(msg_parts, collapse=", "), .C_RESET))
@@ -1094,15 +1135,17 @@ local({
 
   # ── CALLBACKS ──
   .biome_env$shared_env$last_update <- 0
-  # v9.6: Store deferred_pkg_init in .biome_env for audit/diagnostic access
-  # Task callbacks don't fire during source(), so the audit needs to call this directly
+  # v9.7: Store both functions in .biome_env for audit/diagnostic access
+  # Task callbacks don't fire during source(), so the audit needs to call these directly
   .biome_env$deferred_pkg_init <- deferred_pkg_init
+  .biome_env$deferred_pkg_hooks <- deferred_pkg_hooks
   update_resources(quiet = TRUE)
   # C1: Callback with fallback — if addTaskCallback fails, sessionInit hook fires guards once
   tryCatch({
     addTaskCallback(function(...) {
       try({
         deferred_pkg_init()
+        deferred_pkg_hooks()
         update_resources(quiet = TRUE)
       }, silent = TRUE)
       TRUE
@@ -1118,8 +1161,9 @@ local({
       if (!.biome_env$shared_env$deferred_done) {
         tryCatch(deferred_pkg_init(), error = function(e)
           sys_log("DeferredFallback", "FAIL", e$message))
-        tryCatch(update_resources(quiet = TRUE), error = function(e) NULL)
       }
+      tryCatch(deferred_pkg_hooks(), error = function(e) NULL)
+      tryCatch(update_resources(quiet = TRUE), error = function(e) NULL)
     }, action = "append")
   })
 
