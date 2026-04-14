@@ -169,7 +169,7 @@ setup_nodes_dependencies() {
     libgdal-dev libgeos-dev libproj-dev \
     libpython3-dev python3-venv python3-pip \
     libudunits2-dev cmake build-essential \
-    libopenblas-dev libomp-dev gfortran \
+    libopenblas-serial-dev libomp-dev gfortran \
     libfreetype-dev libharfbuzz-dev libfribidi-dev libtiff-dev libpng-dev \
     libnetcdf-dev libhdf5-dev \
     default-jdk \
@@ -319,21 +319,40 @@ RSTEOF
 
   log_success "OS-level OPENBLAS_CORETYPE wrappers installed (/etc/profile.d & rsession-profile)"
 
-  # ── BLAS/LAPACK alternatives: force OpenBLAS-pthread ──
+  # ── BLAS/LAPACK alternatives: force OpenBLAS-serial ──
+  # OpenBLAS-pthread's internal thread pool conflicts with RStudio rsession's
+  # own pthreads (event loop, HTTP, watchdog), causing SIGSEGV in
+  # blas_thread_server during solve()/crossprod(). See: rstudio/rstudio#7031
+  # Fix: use openblas-serial (no internal thread pool, no collision).
+
+  # Ensure serial variant is installed
+  if ! dpkg -l libopenblas0-serial 2>/dev/null | grep -q '^ii'; then
+    log_info "Installing libopenblas0-serial..."
+    run_cmd apt-get install -y -qq libopenblas0-serial
+  fi
+
+  # Remove pthread variant to prevent alternatives from reverting
+  if dpkg -l libopenblas0-pthread 2>/dev/null | grep -q '^ii'; then
+    log_info "Removing libopenblas0-pthread (conflicts with RStudio rsession pthreads)"
+    run_cmd apt-get remove -y libopenblas0-pthread 2>/dev/null || true
+  fi
+
+  # Set BLAS alternative → serial
   if [[ -f "${OPENBLAS_BLAS_PATH}" ]]; then
     run_cmd update-alternatives --set libblas.so.3-x86_64-linux-gnu "${OPENBLAS_BLAS_PATH}" 2>/dev/null || \
       log_warn "Could not set BLAS alternative (may need: update-alternatives --config libblas.so.3-x86_64-linux-gnu)"
-    log_success "BLAS alternative: openblas-pthread"
+    log_success "BLAS alternative: openblas-serial"
   else
-    log_warn "OpenBLAS pthread BLAS not found at: ${OPENBLAS_BLAS_PATH}"
+    log_warn "OpenBLAS serial BLAS not found at: ${OPENBLAS_BLAS_PATH}"
   fi
 
+  # Set LAPACK alternative → serial
   if [[ -f "${OPENBLAS_LAPACK_PATH}" ]]; then
     run_cmd update-alternatives --set liblapack.so.3-x86_64-linux-gnu "${OPENBLAS_LAPACK_PATH}" 2>/dev/null || \
       log_warn "Could not set LAPACK alternative"
-    log_success "LAPACK alternative: openblas-pthread"
+    log_success "LAPACK alternative: openblas-serial"
   else
-    log_warn "OpenBLAS pthread LAPACK not found at: ${OPENBLAS_LAPACK_PATH}"
+    log_warn "OpenBLAS serial LAPACK not found at: ${OPENBLAS_LAPACK_PATH}"
   fi
 
   # ── OpenMP pkg-config ──
@@ -699,7 +718,14 @@ BIOME_RAMDISK_GB=${RAMDISK_GB}
 # Font configuration for ragg/systemfonts (v9.6)
 FONTCONFIG_PATH=/etc/fonts
 
+# Belt-and-suspenders: Force single-threaded BLAS at the environment level.
+# With openblas-serial this is a no-op (serial ignores it). But if someone
+# accidentally reinstalls openblas-pthread, this prevents the SIGSEGV by
+# stopping the internal thread pool from spawning. See: rstudio/rstudio#7031
+OPENBLAS_NUM_THREADS=1
+
 # Threading: managed DYNAMICALLY by Rprofile.site. Do NOT set here.
+# (OMP_NUM_THREADS, MKL_NUM_THREADS are set per-session by the profile)
 RENVEOF
   run_cmd chmod 644 "${renviron}"
   log_success "Renviron.site deployed (dynamic CORETYPE, no static thread vars)"

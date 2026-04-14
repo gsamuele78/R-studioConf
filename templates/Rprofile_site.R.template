@@ -36,6 +36,16 @@
 #   - [M2]  API_VERSION contract for audit interoperability
 #   - [M3]  geosphere::distm guard uses centralized .get_ram_gb
 #   - [M4]  Sys.sleep(2) in solve guard gated on interactive()
+#
+# v9.8 CHANGES (from v9.7) — OpenBLAS Serial Safety:
+#   - [B1]  SECTION -1.5: BLAS serial/pthread safety check at profile load
+#           Detects pthread variant → warns + forces OPENBLAS_NUM_THREADS=1
+#   - [B2]  .biome_env$blas_is_serial: pessimistic flag (FALSE unless proven serial)
+#   - [B3]  solve() guard: serial-aware, skips thread manipulation when serial confirmed
+#   - [B4]  API_VERSION bumped 3→4 (blas_is_serial field added)
+#   - Infrastructure: openblas-serial replaces openblas-pthread in all scripts
+#           (50_setup_nodes.sh, r_env_manager.sh, setup_nodes.vars.conf)
+#   - Belt-and-suspenders: OPENBLAS_NUM_THREADS=1 in Renviron.site
 # ==============================================================================
 
 # ── L2: Template Integrity Self-Check ──
@@ -98,6 +108,46 @@ if (!nzchar(Sys.getenv("OPENBLAS_CORETYPE", ""))) {
     }
   })
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION -1.5: BLAS SERIAL/PTHREAD SAFETY CHECK (v9.8)
+# ══════════════════════════════════════════════════════════════════════════════
+# OpenBLAS-pthread's internal thread pool conflicts with RStudio rsession's
+# own pthreads, causing SIGSEGV in blas_thread_server during solve()/crossprod().
+# See: https://github.com/rstudio/rstudio/issues/7031
+#
+# This section detects which OpenBLAS variant is loaded and:
+#   - If pthread: warns loudly + forces OPENBLAS_NUM_THREADS=1 (emergency mitigation)
+#   - If serial:  sets a flag so memory guards can skip unnecessary thread manipulation
+# ══════════════════════════════════════════════════════════════════════════════
+local({
+  blas_path <- tryCatch({
+    si <- sessionInfo()
+    si$BLAS
+  }, error = function(e) "")
+
+  lapack_path <- tryCatch({
+    si <- sessionInfo()
+    si$LAPACK
+  }, error = function(e) "")
+
+  if (grepl("openblas-pthread", blas_path, fixed = TRUE) ||
+      grepl("openblas-pthread", lapack_path, fixed = TRUE)) {
+    # CRITICAL: pthread variant detected — emergency mitigation
+    Sys.setenv(OPENBLAS_NUM_THREADS = "1")
+    warning(paste0(
+      "BIOME-CALC CRITICAL: OpenBLAS-pthread detected!\n",
+      "  BLAS:   ", blas_path, "\n",
+      "  LAPACK: ", lapack_path, "\n",
+      "  This WILL cause SIGSEGV in RStudio rsession during solve()/crossprod().\n",
+      "  Emergency mitigation: OPENBLAS_NUM_THREADS forced to 1.\n",
+      "  Fix: sudo apt-get install libopenblas0-serial && ",
+      "sudo apt-get remove libopenblas0-pthread\n",
+      "  See: https://github.com/rstudio/rstudio/issues/7031"),
+      call. = FALSE, immediate. = TRUE)
+  }
+})
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION -1: PSOCK WORKER FAST PATH
@@ -259,11 +309,21 @@ local({
   .biome_env$VERSION <- VERSION
   # v9.7: Machine-readable API version for audit interop (M2)
   # Bump this when .biome_env structure changes (fields added/renamed/removed)
-  .biome_env$API_VERSION <- 3L
+  # v9.8: bumped 3→4 for blas_is_serial field
+  .biome_env$API_VERSION <- 4L
   # v9.6: Store thresholds in .biome_env for audit/diagnostic access
   .biome_env$TMP_WARN_PCT <- TMP_WARN_PCT
   .biome_env$TMP_REDIRECT_PCT <- TMP_REDIRECT_PCT
   .biome_env$BIG_DATA_THRESHOLD_GB <- BIG_DATA_THRESHOLD_GB
+  # v9.8: BLAS variant detection — pessimistic: assume pthread unless proven serial
+  # This flag lets memory guards skip thread manipulation when serial BLAS is active
+  # (serial OpenBLAS ignores OPENBLAS_NUM_THREADS entirely)
+  .biome_env$blas_is_serial <- tryCatch({
+    blas_path <- sessionInfo()$BLAS
+    lapack_path <- sessionInfo()$LAPACK
+    grepl("openblas-serial", blas_path, fixed = TRUE) &&
+    grepl("openblas-serial", lapack_path, fixed = TRUE)
+  }, error = function(e) FALSE)  # Pessimistic: if we can't detect, assume pthread
   rm(se)
 
   # Export .biome_env to .GlobalEnv so audit/diagnostic tools can access it.
@@ -647,10 +707,14 @@ local({
     # v9.7: Use centralized RAM helper from .biome_env (M1/M3 — single implementation)
     .biome_get_ram_gb <- .biome_env$.get_ram_gb
 
+    # v9.8: Cache BLAS variant flag — pessimistic: FALSE means pthread or unknown
+    .blas_serial <- isTRUE(.biome_env$blas_is_serial)
+
     # v9.6: solve() memory guard — reduces BLAS threads for large matrices (OOM prevention)
-    # ROOT CAUSE: Multi-threaded OpenBLAS (16 threads) uses ~3× workspace vs serial.
-    # For a 100k×100k matrix: 16 threads → ~224 GB workspace; 2 threads → ~160 GB.
-    # This is WHY BIOME-CALC OOMs on large solve() but vanilla RStudio (1 thread) does not.
+    # v9.8: Serial-aware — skips thread manipulation when openblas-serial is confirmed
+    #       (serial OpenBLAS ignores OPENBLAS_NUM_THREADS entirely).
+    #       Pessimistic: thread reduction still runs if variant is unknown.
+    #       OOM size warning always runs regardless of BLAS variant.
     # C2: Idempotent guard — only install if not already wrapped (prevents recursion bomb on re-source)
     if (ENABLE_SMART_ROUTING && !isTRUE(attr(base::solve, "biome_guard"))) tryCatch({
       .biome_env$original_solve <- base::solve
@@ -660,62 +724,85 @@ local({
           matrix_gb <- (n * n * 8) / 1024^3
           ram_avail_gb <- .biome_get_ram_gb()
 
-          # Estimate memory need based on current thread count
-          curr_threads <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
-          # Multi-threaded LAPACK workspace: ~(2 + 0.06*threads)× matrix size
-          total_need_gb <- matrix_gb * (2 + 0.06 * curr_threads)
+          # v9.8: Check if serial BLAS is active (thread manipulation is a no-op for serial)
+          blas_serial <- isTRUE(.biome_env$blas_is_serial)
 
-          if (is.finite(ram_avail_gb) && total_need_gb > ram_avail_gb * 0.8) {
-            # CRITICAL: OOM likely — warn and offer to reduce threads
-            warning(sprintf(paste0(
-              "BIOME-CALC: solve() on %d x %d matrix (~%.0f GB) with %d BLAS threads needs ~%.0f GB.\n",
-              "  Available RAM: ~%.0f GB. OOM risk is HIGH.\n",
-              "  Alternatives: Matrix::Cholesky() for SPD, or sparse methods.\n",
-              "  Proceeding with 2 BLAS threads to reduce workspace (use Ctrl+C to cancel)..."),
-              n, n, matrix_gb, curr_threads, total_need_gb, ram_avail_gb),
-              call. = FALSE, immediate. = TRUE)
-            if (interactive()) Sys.sleep(2)  # M4: Only block interactive sessions for Ctrl+C
-          }
-
-          # AUTO-FIX: Reduce BLAS threads for large dense matrices to save workspace RAM
-          # For matrices > 10k×10k, reduce to 2 threads (saves ~60% workspace)
-          # For matrices > 5k×5k, reduce to max(4, curr_threads/2)
-          reduced_threads <- if (n > 10000) 2L
-                             else if (n > 5000) max(4L, as.integer(curr_threads / 2))
-                             else curr_threads
-          if (reduced_threads < curr_threads) {
-            if (interactive() && matrix_gb > 1) {
+          if (blas_serial) {
+            # ── Serial BLAS path: no thread pool, no thread manipulation needed ──
+            # Only warn about OOM for truly massive matrices
+            if (is.finite(ram_avail_gb) && matrix_gb * 2.06 > ram_avail_gb * 0.8) {
+              warning(sprintf(paste0(
+                "BIOME-CALC: solve() on %d x %d matrix (~%.0f GB) needs ~%.0f GB.\n",
+                "  Available RAM: ~%.0f GB. OOM risk is HIGH.\n",
+                "  BLAS: serial (no thread reduction available).\n",
+                "  Alternatives: Matrix::Cholesky() for SPD, or sparse methods."),
+                n, n, matrix_gb, matrix_gb * 2.06, ram_avail_gb),
+                call. = FALSE, immediate. = TRUE)
+            } else if (matrix_gb > 5 && interactive()) {
               message(sprintf(paste0(.C_YELLOW,
-                "\U0001F4A1 BIOME-CALC: Temporarily reducing BLAS threads %d \u2192 %d for solve(%d\u00d7%d)",
-                " to save ~%.0f GB workspace.", .C_RESET),
-                curr_threads, reduced_threads, n, n,
-                matrix_gb * 0.06 * (curr_threads - reduced_threads)))
+                "\U0001F4A1 BIOME-CALC: solve() on %d\u00d7%d matrix (~%.1f GB). ",
+                "BLAS: serial (safe, no thread conflict).", .C_RESET),
+                n, n, matrix_gb))
             }
-            # Temporarily set reduced threads
-            Sys.setenv(OPENBLAS_NUM_THREADS = as.character(reduced_threads),
-                       OMP_NUM_THREADS = as.character(reduced_threads))
-            if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
-              RhpcBLASctl::blas_set_num_threads(reduced_threads)
-              RhpcBLASctl::omp_set_num_threads(reduced_threads)
-            }, error = function(e) NULL)
+          } else {
+            # ── Pthread / unknown BLAS path: full thread reduction logic ──
+            # Estimate memory need based on current thread count
+            curr_threads <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+            # Multi-threaded LAPACK workspace: ~(2 + 0.06*threads)× matrix size
+            total_need_gb <- matrix_gb * (2 + 0.06 * curr_threads)
 
-            # Run solve with reduced threads and restore after
-            on.exit({
-              Sys.setenv(OPENBLAS_NUM_THREADS = as.character(curr_threads),
-                         OMP_NUM_THREADS = as.character(curr_threads))
-              if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
-                RhpcBLASctl::blas_set_num_threads(curr_threads)
-                RhpcBLASctl::omp_set_num_threads(curr_threads)
-              }, error = function(e) NULL)
+            if (is.finite(ram_avail_gb) && total_need_gb > ram_avail_gb * 0.8) {
+              # CRITICAL: OOM likely — warn and offer to reduce threads
+              warning(sprintf(paste0(
+                "BIOME-CALC: solve() on %d x %d matrix (~%.0f GB) with %d BLAS threads needs ~%.0f GB.\n",
+                "  Available RAM: ~%.0f GB. OOM risk is HIGH.\n",
+                "  Alternatives: Matrix::Cholesky() for SPD, or sparse methods.\n",
+                "  Proceeding with 2 BLAS threads to reduce workspace (use Ctrl+C to cancel)..."),
+                n, n, matrix_gb, curr_threads, total_need_gb, ram_avail_gb),
+                call. = FALSE, immediate. = TRUE)
+              if (interactive()) Sys.sleep(2)  # M4: Only block interactive sessions for Ctrl+C
+            }
+
+            # AUTO-FIX: Reduce BLAS threads for large dense matrices to save workspace RAM
+            # For matrices > 10k×10k, reduce to 2 threads (saves ~60% workspace)
+            # For matrices > 5k×5k, reduce to max(4, curr_threads/2)
+            reduced_threads <- if (n > 10000) 2L
+                               else if (n > 5000) max(4L, as.integer(curr_threads / 2))
+                               else curr_threads
+            if (reduced_threads < curr_threads) {
               if (interactive() && matrix_gb > 1) {
-                message(sprintf(paste0(.C_GREEN,
-                  "\u2705 BLAS threads restored: %d", .C_RESET), curr_threads))
+                message(sprintf(paste0(.C_YELLOW,
+                  "\U0001F4A1 BIOME-CALC: Temporarily reducing BLAS threads %d \u2192 %d for solve(%d\u00d7%d)",
+                  " to save ~%.0f GB workspace.", .C_RESET),
+                  curr_threads, reduced_threads, n, n,
+                  matrix_gb * 0.06 * (curr_threads - reduced_threads)))
               }
-            }, add = TRUE)
-          } else if (matrix_gb > 5 && interactive()) {
-            message(sprintf(paste0(.C_YELLOW,
-              "\U0001F4A1 BIOME-CALC: solve() on %d\u00d7%d matrix (~%.1f GB). This may take a while.", .C_RESET),
-              n, n, matrix_gb))
+              # Temporarily set reduced threads
+              Sys.setenv(OPENBLAS_NUM_THREADS = as.character(reduced_threads),
+                         OMP_NUM_THREADS = as.character(reduced_threads))
+              if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
+                RhpcBLASctl::blas_set_num_threads(reduced_threads)
+                RhpcBLASctl::omp_set_num_threads(reduced_threads)
+              }, error = function(e) NULL)
+
+              # Run solve with reduced threads and restore after
+              on.exit({
+                Sys.setenv(OPENBLAS_NUM_THREADS = as.character(curr_threads),
+                           OMP_NUM_THREADS = as.character(curr_threads))
+                if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
+                  RhpcBLASctl::blas_set_num_threads(curr_threads)
+                  RhpcBLASctl::omp_set_num_threads(curr_threads)
+                }, error = function(e) NULL)
+                if (interactive() && matrix_gb > 1) {
+                  message(sprintf(paste0(.C_GREEN,
+                    "\u2705 BLAS threads restored: %d", .C_RESET), curr_threads))
+                }
+              }, add = TRUE)
+            } else if (matrix_gb > 5 && interactive()) {
+              message(sprintf(paste0(.C_YELLOW,
+                "\U0001F4A1 BIOME-CALC: solve() on %d\u00d7%d matrix (~%.1f GB). This may take a while.", .C_RESET),
+                n, n, matrix_gb))
+            }
           }
         }
         .biome_env$original_solve(a, b, ...)

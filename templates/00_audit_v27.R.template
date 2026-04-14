@@ -21,6 +21,13 @@
 #   - [9.x] Large Matrix Stress Test (solve thread downclock verification)
 #   - [4.1] Updated tmpfs check with v9.6 threshold references
 #   - [4.6] Updated smart routing check for per-user biome_ dirs
+#
+# CHANGES v27 → v27.1 (OpenBLAS Serial Safety):
+#   - [1.4] BLAS check now flags openblas-pthread as CRITICAL (SIGSEGV risk)
+#   - [1.5] Added OPENBLAS_NUM_THREADS belt-and-suspenders validation
+#   - [8.5] API_VERSION expected >= 4 (blas_is_serial field)
+#   - [8.6] NEW: BLAS Serial Detection Flag validation
+#   - [9.1] solve() test now serial-aware (verifies no SIGSEGV on serial path)
 # ==============================================================================
 
 suppressMessages({
@@ -235,17 +242,31 @@ run_audit("1.3", "CPU Model Detection", {
 run_audit("1.4", "BLAS Library Check", {
   si <- sessionInfo()
   blas <- si$BLAS
+  lapack <- si$LAPACK
   blas_base <- basename(blas)
   if (grepl("openblas", blas, ignore.case = TRUE)) {
-    variant <- if (grepl("pthread", blas)) "pthread" else
+    # v27.1: Flag pthread as CRITICAL — causes SIGSEGV in RStudio rsession
+    if (grepl("openblas-pthread", blas, fixed = TRUE)) {
+      stop(sprintf(paste0(
+        "CRITICAL: OpenBLAS-pthread detected (%s).\n",
+        "  This WILL cause SIGSEGV during solve()/crossprod() in RStudio.\n",
+        "  Fix: sudo apt-get install libopenblas0-serial && ",
+        "sudo apt-get remove libopenblas0-pthread"), blas_base))
+    }
+    variant <- if (grepl("serial", blas)) "serial (safe)" else
                if (grepl("openmp", blas)) "openmp" else "unknown-variant"
-    sprintf("OpenBLAS (%s)", variant)
+    # Also check LAPACK
+    lapack_ok <- grepl("openblas-serial", lapack, fixed = TRUE)
+    if (!lapack_ok && grepl("openblas-pthread", lapack, fixed = TRUE)) {
+      stop(sprintf("CRITICAL: LAPACK uses pthread variant (%s)", basename(lapack)))
+    }
+    sprintf("OpenBLAS (%s) | LAPACK: %s", variant, if (lapack_ok) "serial" else basename(lapack))
   } else if (grepl("/blas/", blas)) {
     stop(sprintf("Reference BLAS active (%s) — 10-50x slower!", blas_base))
   } else {
     warning(sprintf("Non-OpenBLAS: %s — verify performance", blas_base))
   }
-}, fix_hint = "Run 50_setup_nodes.sh (sets BLAS alternative)")
+}, fix_hint = "Run 50_setup_nodes.sh (sets BLAS/LAPACK alternative to openblas-serial)")
 
 run_audit("1.5", "Stale Env Vars (/etc/environment)", {
   env_file <- "/etc/environment"
@@ -258,6 +279,11 @@ run_audit("1.5", "Stale Env Vars (/etc/environment)", {
   }
   if (length(found) > 0) {
     stop(sprintf("Static thread vars found: %s — conflicts with dynamic Rprofile", paste(found, collapse = ", ")))
+  }
+  # Belt-and-suspenders: OPENBLAS_NUM_THREADS=1 should be in Renviron.site
+  openblas_nt <- Sys.getenv("OPENBLAS_NUM_THREADS", "")
+  if (nchar(openblas_nt) == 0) {
+    warning("OPENBLAS_NUM_THREADS not set in Renviron.site (missing belt-and-suspenders for serial BLAS)")
   }
   "Clean (no static thread vars)"
 }, fix_hint = "Run: sudo sed -i '/^OPENBLAS_NUM_THREADS\\|^OMP_NUM_THREADS\\|^MKL_NUM_THREADS/d' /etc/environment")
@@ -730,34 +756,63 @@ run_audit("8.4", "Rprofile Version", {
   sprintf("v%s", v)
 }, fix_hint = "Deploy Rprofile v9.7")
 
-run_audit("8.5", "API Version Contract (v9.7)", {
+run_audit("8.5", "API Version Contract (v9.8)", {
   # M2: Machine-readable API version check — warns on mismatch, does not hard-fail
+  # v9.8: bumped expected to 4 (blas_is_serial field added)
   api_v <- tryCatch(.biome_env$API_VERSION, error = function(e) 0L)
   if (api_v == 0L) warning("API_VERSION not found in .biome_env — Rprofile may be pre-v9.7")
-  else if (api_v < 3L) warning(sprintf("API_VERSION=%d, audit v27 expects >= 3 — some tests may fail on missing fields", api_v))
-  sprintf("API_VERSION=%d (expected >= 3)", api_v)
-}, fix_hint = "Deploy Rprofile v9.7")
+  else if (api_v < 4L) warning(sprintf("API_VERSION=%d, audit v27.1 expects >= 4 — missing blas_is_serial field", api_v))
+  sprintf("API_VERSION=%d (expected >= 4)", api_v)
+}, fix_hint = "Deploy Rprofile v9.8")
+
+run_audit("8.6", "BLAS Serial Detection Flag (v9.8)", {
+  blas_serial <- tryCatch(.biome_env$blas_is_serial, error = function(e) NULL)
+  if (is.null(blas_serial)) {
+    warning("blas_is_serial not in .biome_env — Rprofile may be pre-v9.8")
+  } else if (isTRUE(blas_serial)) {
+    "Serial BLAS confirmed (solve guard thread reduction disabled — safe)"
+  } else {
+    # Pessimistic: pthread or unknown — solve guard thread reduction active
+    blas_path <- tryCatch(sessionInfo()$BLAS, error = function(e) "unknown")
+    warning(sprintf("blas_is_serial=FALSE — solve guard runs full thread logic (BLAS: %s)", basename(blas_path)))
+  }
+}, fix_hint = "Deploy Rprofile v9.8 + switch to openblas-serial")
 
 # ==============================================================================
 # [9.0] FUNCTIONAL TESTS (real-world workflows)
 # ==============================================================================
 audit_cat("\n[9.0] FUNCTIONAL TESTS (real-world user workflows)\n")
 
-run_audit("9.1", "solve() Thread Downclock (6000x6000)", {
+run_audit("9.1", "solve() Safety Test (6000x6000)", {
+  blas_serial <- isTRUE(tryCatch(.biome_env$blas_is_serial, error = function(e) FALSE))
   curr_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
-  if (curr_t <= 2) return(sprintf("Skipped (threads already at %d, no reduction needed)", curr_t))
-  N <- 6000
-  A <- matrix(runif(N * N), N, N)
-  diag(A) <- diag(A) + N
-  t0 <- Sys.time()
-  B <- solve(A)
-  dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
-  post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
-  rm(A, B); gc(verbose = FALSE)
-  if (post_t != curr_t) stop(sprintf("Threads not restored: was %d, now %d", curr_t, post_t))
-  sprintf("OK (%.1fs, threads %d->reduced->%d restored)", dt, curr_t, post_t)
+
+  if (blas_serial) {
+    # Serial BLAS: no thread reduction, just verify solve() completes without SIGSEGV
+    N <- 6000
+    A <- matrix(runif(N * N), N, N)
+    diag(A) <- diag(A) + N
+    t0 <- Sys.time()
+    B <- solve(A)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    rm(A, B); gc(verbose = FALSE)
+    sprintf("OK (%.1fs, serial BLAS — no thread reduction needed, no SIGSEGV)", dt)
+  } else {
+    # Pthread/unknown: test thread downclock
+    if (curr_t <= 2) return(sprintf("Skipped (threads already at %d, no reduction needed)", curr_t))
+    N <- 6000
+    A <- matrix(runif(N * N), N, N)
+    diag(A) <- diag(A) + N
+    t0 <- Sys.time()
+    B <- solve(A)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    rm(A, B); gc(verbose = FALSE)
+    if (post_t != curr_t) stop(sprintf("Threads not restored: was %d, now %d", curr_t, post_t))
+    sprintf("OK (%.1fs, threads %d->reduced->%d restored)", dt, curr_t, post_t)
+  }
 }, timeout = 120, use_fork = TRUE,
-   fix_hint = "Deploy Rprofile v9.6 with solve() thread reduction guard")
+   fix_hint = "Deploy Rprofile v9.8 with serial-aware solve() guard")
 
 run_audit("9.2", "ggplot2 Render Test (ragg backend)", {
   if (!.audit_pkgs[["ggplot2"]]) return("Skipped (ggplot2 not installed)")

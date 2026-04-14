@@ -430,13 +430,20 @@ install_r() {
 }
 
 install_openblas_openmp() {
-    log "INFO" "Installing OpenBLAS and OpenMP for performance..."
-    # Install OpenBLAS/OpenMP using the centralized run_command wrapper which
-    # ensures apt runs in noninteractive mode and applies safe dpkg options.
-    if run_command "Install OpenBLAS and OpenMP" "apt-get install -y libopenblas-dev libomp-dev"; then
-        log "INFO" "SUCCESS: OpenBLAS and OpenMP installed."
+    log "INFO" "Installing OpenBLAS (serial) and OpenMP for performance..."
+    # CRITICAL: Use serial variant, NOT pthread. OpenBLAS-pthread's internal
+    # thread pool causes SIGSEGV in RStudio rsession (blas_thread_server crash).
+    # See: https://github.com/rstudio/rstudio/issues/7031
+    if run_command "Install OpenBLAS (serial) and OpenMP" "apt-get install -y libopenblas-serial-dev libomp-dev"; then
+        log "INFO" "SUCCESS: OpenBLAS (serial) and OpenMP installed."
     else
         handle_error $? "Failed to install OpenBLAS/OpenMP packages."; return 1
+    fi
+
+    # Remove pthread variant if present (prevents alternatives from reverting)
+    if dpkg -l libopenblas0-pthread 2>/dev/null | grep -q '^ii'; then
+        log "INFO" "Removing libopenblas0-pthread (conflicts with RStudio rsession)..."
+        run_command "Remove OpenBLAS pthread" "apt-get remove -y libopenblas0-pthread" || true
     fi
 }
 
