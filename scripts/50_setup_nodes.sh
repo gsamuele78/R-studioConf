@@ -70,9 +70,6 @@ done
 [[ -z "${BIOME_HOST}" ]] && BIOME_HOST=$(hostname)
 [[ -z "${BIOME_IP}" ]] && BIOME_IP=$(hostname -I | awk '{print $1}')
 
-# ── Timestamp for backups ──
-TS=$(date +%Y%m%d_%H%M%S)
-
 # ── run_cmd wrapper: respects DRY_RUN ──
 run_cmd() {
   if [[ "${DRY_RUN}" == true ]]; then
@@ -120,14 +117,11 @@ setup_nodes_uninstall() {
     fi
   done
   
-  # Restore Rprofile/Renviron backups
+  # Restore Rprofile/Renviron backups (fixed .bak suffix)
   for f in /etc/R/Rprofile.site /etc/R/Renviron.site; do
-    local newest_backup
-    # shellcheck disable=SC2012
-    newest_backup=$(ls -t "${f}.bak."* 2>/dev/null | head -1 || true)
-    if [[ -n "${newest_backup}" ]]; then
-      run_cmd cp "${newest_backup}" "${f}"
-      log_success "Restored: ${f} from ${newest_backup}"
+    if [[ -f "${f}.bak" ]]; then
+      run_cmd cp "${f}.bak" "${f}"
+      log_success "Restored: ${f} from ${f}.bak"
     fi
   done
   
@@ -662,7 +656,7 @@ setup_nodes_config_files() {
 
   # ── Renviron.site ──
   local renviron="/etc/R/Renviron.site"
-  [[ -f "${renviron}" ]] && run_cmd cp "${renviron}" "${renviron}.bak.${TS}"
+  [[ -f "${renviron}" ]] && run_cmd cp "${renviron}" "${renviron}.bak"
 
   cat > "${renviron}" <<RENVEOF
 # ${BIOME_HOST} Renviron.site — Generated: $(date -Iseconds)
@@ -712,7 +706,7 @@ RENVEOF
 
   # ── Rprofile.site (from template) ──
   local rprofile="/etc/R/Rprofile.site"
-  [[ -f "${rprofile}" ]] && run_cmd cp "${rprofile}" "${rprofile}.bak.${TS}"
+  [[ -f "${rprofile}" ]] && run_cmd cp "${rprofile}" "${rprofile}.bak"
   rm -f /etc/R/Rprofile.site.bspm  # remove orphan bspm file from v6
 
   # Process the template using common_utils process_template
@@ -752,7 +746,7 @@ tryCatch({parse(file='${rprofile}');cat('PARSE_OK')},
   else
     log_error "Parse error: ${parse_result}"
     log_warn "Restoring backup..."
-    cp "${rprofile}.bak.${TS}" "${rprofile}"
+    cp "${rprofile}.bak" "${rprofile}"
     exit 1
   fi
 }
@@ -772,7 +766,7 @@ setup_nodes_migrate_users() {
     # ── Fix .Renviron ──
     local re_file="${user_home}/.Renviron"
     if [[ -f "${re_file}" ]]; then
-      cp "${re_file}" "${re_file}.bak.$(date +%Y%m%d)" 2>/dev/null || true
+      cp "${re_file}" "${re_file}.bak" 2>/dev/null || true
       # Fix legacy Python paths
       sed -i 's|^EARTHENGINE_PYTHON=.*|EARTHENGINE_PYTHON="'"${PYTHON_ENV}"'/bin/python"|' "${re_file}"
       sed -i 's|^RETICULATE_PYTHON=.*|RETICULATE_PYTHON="'"${PYTHON_ENV}"'/bin/python"|' "${re_file}"
