@@ -14,33 +14,41 @@
 #
 # v9.5 CHANGES (from v9.3):
 #   - [Section -2] OPENBLAS_CORETYPE auto-detection at the VERY TOP of file.
-#     Runs for ALL R processes: rsession, Rscript (PSOCK workers), terminal R.
-#     Reads /proc/cpuinfo, selects conservative CORETYPE. Migration-safe.
-#     ROOT CAUSE FIX: workers crashed with SIGILL because rsession-profile
-#     only sets CORETYPE for rsession, not for Rscript. On QEMU without
-#     cpu:host, OpenBLAS auto-detection picks wrong instruction sets.
 #   - [Section -1] PSOCK Worker Fast Path (from v9.4).
-#     BIOME_WORKER_MODE env var: workers apply thread limits and return.
 #   - get_active_users(): pure-R /proc scan (no fork/system2).
-#   - deferred_pkg_init(): future plan creates clean workers via
-#     biome_make_cluster() with BIOME_WORKER_MODE.
-#   - New biome_make_cluster() user-facing tool.
+#   - deferred_pkg_init() + biome_make_cluster() user-facing tool.
 #
 # v9.6 CHANGES (from v9.5):
-#   - Multi-signal tmpfs heuristic (df + MemAvailable + cgroup + per-user)
-#   - Dual-threshold: 60% warn / 75% hard redirect (configurable)
-#   - Per-user tmp consolidation: /tmp/biome_<user>/{terra,raster,...}
+#   - Multi-signal tmpfs heuristic, dual-threshold, per-user tmp consolidation
 #   - Automatic NFS fallback (permanent within session, never reverts)
-#   - Terra size-aware routing: ops > BIG_DATA_THRESHOLD_GB always NFS
-#   - ragg rendering backend for ggplot2 (2-4x faster than cairo)
-#   - Hardened biome_save_session (excludes SpatRaster from size scan)
-#   - Hardened biome_load_session (RAM check, file size warning)
-#   - biome_plot_budget() diagnostic tool
-#   - get_active_users() capped at 2000 PIDs
-#   - read.csv override saves original for safe fallback
-#   - Periodic cgroup refresh (every 5 minutes)
-#   - NFS fallback dir cleanup (~/.r_tmp_fallback)
+#   - ragg rendering backend, hardened save/load, biome_plot_budget()
+#   - Memory sentinels: solve/dist/outer/expand.grid guards
+#
+# v9.7 CHANGES (from v9.6) — Pessimistic Engineering Hardening:
+#   - [L2]  Template integrity self-check (unsubstituted placeholder detection)
+#   - [C1]  Callback fallback: if addTaskCallback fails, sessionInit hook fires guards
+#   - [C2]  Idempotent guard installation (safe on re-source, attr-tagged wrappers)
+#   - [H1]  Re-source protection: .biome_env in .GlobalEnv preserved on re-load
+#   - [H2]  NFS split-brain marker file per session PID
+#   - [H3]  tool_env reuse instead of detach/attach race
+#   - [H4]  diag_logs bounded at 500 entries (prevents memory leak on long sessions)
+#   - [M1]  Unified RAM helper: .biome_get_ram_gb stored in .biome_env
+#   - [M2]  API_VERSION contract for audit interoperability
+#   - [M3]  geosphere::distm guard uses centralized .get_ram_gb
+#   - [M4]  Sys.sleep(2) in solve guard gated on interactive()
 # ==============================================================================
+
+# ── L2: Template Integrity Self-Check ──
+# If template placeholders were not substituted, abort early to prevent
+# syntax errors and silent profile failure.
+local({
+  sentinel <- "%%RPROFILE_VERSION%%"
+  if (grepl("^%%", sentinel)) {
+    warning("BIOME-CALC: Rprofile_site.R was not rendered from template (unsubstituted placeholders). Aborting.",
+            call. = FALSE, immediate. = TRUE)
+    return(invisible(NULL))
+  }
+})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION -2: OPENBLAS CORETYPE AUTO-DETECTION (Migration-Safe)
@@ -137,8 +145,16 @@ tryCatch({
 # ── SECTION 1: Santander Fixes ──
 options(java.parameters = c("-Xmx4g"))
 
-# ── GUARD: Prevent double-init ──
+# ── GUARD: Prevent double-init (H1: also checks .biome_env in .GlobalEnv) ──
 if (isTRUE(getOption("biome.profile.loaded"))) return(invisible(NULL))
+if (exists(".biome_env", envir = .GlobalEnv, inherits = FALSE)) {
+  .existing_be <- tryCatch(get(".biome_env", envir = .GlobalEnv), error = function(e) NULL)
+  if (is.environment(.existing_be) && !is.null(.existing_be$VERSION)) {
+    options(biome.profile.loaded = TRUE)
+    return(invisible(NULL))
+  }
+  rm(.existing_be)
+}
 options(biome.profile.loaded = TRUE)
 
 # ── MAIN BLOCK ──
@@ -241,6 +257,9 @@ local({
   se$deferred_done <- FALSE
   se$last_cgroup_check <- 0   # v9.6: periodic cgroup re-read
   .biome_env$VERSION <- VERSION
+  # v9.7: Machine-readable API version for audit interop (M2)
+  # Bump this when .biome_env structure changes (fields added/renamed/removed)
+  .biome_env$API_VERSION <- 3L
   # v9.6: Store thresholds in .biome_env for audit/diagnostic access
   .biome_env$TMP_WARN_PCT <- TMP_WARN_PCT
   .biome_env$TMP_REDIRECT_PCT <- TMP_REDIRECT_PCT
@@ -251,9 +270,15 @@ local({
   # Dot-prefix makes it invisible to ls() but accessible via .biome_env$...
   assign(".biome_env", .biome_env, envir = .GlobalEnv)
 
-  # ── Logging Utility ──
+  # ── Logging Utility (H4: bounded diag_logs — max 500 entries) ──
   sys_log <- function(section, status, msg = "") {
     tryCatch({
+      logs <- .biome_env$shared_env$diag_logs
+      if (length(logs) > 500L) {
+        # Evict oldest entries, keep newest 400 (pessimistic: prevent memory leak on 168h sessions)
+        keep_from <- max(1L, length(logs) - 399L)
+        .biome_env$shared_env$diag_logs <- logs[seq(keep_from, length(logs))]
+      }
       .biome_env$shared_env$diag_logs[[section]] <- list(status = status, msg = msg, ts = Sys.time())
     }, error = function(e) NULL)
     if (ENABLE_SYS_LOGGING) tryCatch({
@@ -352,20 +377,29 @@ local({
     }
   }, error = function(e) sys_log("Cgroup", "WARN", e$message))
 
-  # ── Resource Engine ──
-  get_system_ram_gb <- function() {
+  # ── Resource Engine (M1: unified RAM helper) ──
+  # Core meminfo reader — shared by resource engine AND memory guards (M1/M3)
+  # Returns raw available RAM in GB (no ramdisk subtraction, no cgroup cap)
+  .biome_raw_ram_gb <- function() {
     tryCatch({
-      mi <- readLines("/proc/meminfo", warn=FALSE)
-      al <- grep("^MemAvailable:", mi, value=TRUE)
+      mi <- readLines("/proc/meminfo", warn = FALSE)
+      al <- grep("^MemAvailable:", mi, value = TRUE)
       if (length(al) > 0) {
-        kb <- as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1]))
+        as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1])) / 1024 / 1024
       } else {
         f <- as.numeric(sub(".*:\\s+(\\d+).*","\\1",grep("^MemFree:",mi,value=TRUE)[1]))
         b <- as.numeric(sub(".*:\\s+(\\d+).*","\\1",grep("^Buffers:",mi,value=TRUE)[1]))
         c <- as.numeric(sub(".*:\\s+(\\d+).*","\\1",grep("^Cached:", mi,value=TRUE)[1]))
-        kb <- sum(c(f,b,c), na.rm=TRUE)
+        sum(c(f,b,c), na.rm=TRUE) / 1024 / 1024
       }
-      ra <- floor(kb/1024/1024) - RAMDISK_GB
+    }, error = function(e) Inf)
+  }
+  # Store in .biome_env so memory guards can access it (M3)
+  .biome_env$.get_ram_gb <- .biome_raw_ram_gb
+
+  get_system_ram_gb <- function() {
+    tryCatch({
+      ra <- floor(.biome_raw_ram_gb()) - RAMDISK_GB
       if (is.finite(.biome_env$shared_env$cgroup_ram_gb)) ra <- min(ra, floor(.biome_env$shared_env$cgroup_ram_gb))
       max(2L, as.integer(ra))
     }, error=function(e) 16L)
@@ -467,6 +501,9 @@ local({
             user_fb <- file.path(fallback, paste0("biome_", curr_user))
             if (!dir.exists(user_fb)) dir.create(user_fb, recursive = TRUE, showWarnings = FALSE)
             Sys.setenv(BIOME_FORCE_NFS_TMP = "true", TMP = user_fb, TEMP = user_fb, TMPDIR = user_fb)
+            # H2: Write NFS session marker (split-brain detection for biome_load_session)
+            tryCatch(writeLines(as.character(Sys.getpid()),
+              file.path(user_fb, sprintf(".biome_nfs_session_%d", Sys.getpid()))), error = function(e) NULL)
             sys_log("TmpOverflow", "WARN", sprintf("Mid-session redirect: %s", safety$reason))
             if (interactive()) message(sprintf(paste0(.C_YELLOW,
               "\n\u26a0\ufe0f  BIOME-CALC: /tmp at %d%% \u2014 auto-redirected to NFS (%s).",
@@ -593,21 +630,15 @@ local({
     # These guards do NOT depend on tmpfs variables. They MUST be installed even
     # if the tmpfs/routing section below errors out.
 
-    # v9.6: Helper — get available RAM in GB (reused by all heap guards)
-    .biome_get_ram_gb <- function() {
-      tryCatch({
-        mi <- readLines("/proc/meminfo", warn = FALSE)
-        al <- grep("^MemAvailable:", mi, value = TRUE)
-        if (length(al) > 0) as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1])) / 1024 / 1024
-        else Inf
-      }, error = function(e) Inf)
-    }
+    # v9.7: Use centralized RAM helper from .biome_env (M1/M3 — single implementation)
+    .biome_get_ram_gb <- .biome_env$.get_ram_gb
 
     # v9.6: solve() memory guard — reduces BLAS threads for large matrices (OOM prevention)
     # ROOT CAUSE: Multi-threaded OpenBLAS (16 threads) uses ~3× workspace vs serial.
     # For a 100k×100k matrix: 16 threads → ~224 GB workspace; 2 threads → ~160 GB.
     # This is WHY BIOME-CALC OOMs on large solve() but vanilla RStudio (1 thread) does not.
-    if (ENABLE_SMART_ROUTING) tryCatch({
+    # C2: Idempotent guard — only install if not already wrapped (prevents recursion bomb on re-source)
+    if (ENABLE_SMART_ROUTING && !isTRUE(attr(base::solve, "biome_guard"))) tryCatch({
       .biome_env$original_solve <- base::solve
       safe_solve <- function(a, b, ...) {
         if (is.matrix(a) && nrow(a) > 5000 && ncol(a) == nrow(a)) {
@@ -629,7 +660,7 @@ local({
               "  Proceeding with 2 BLAS threads to reduce workspace (use Ctrl+C to cancel)..."),
               n, n, matrix_gb, curr_threads, total_need_gb, ram_avail_gb),
               call. = FALSE, immediate. = TRUE)
-            Sys.sleep(2)  # Give user time to Ctrl+C
+            if (interactive()) Sys.sleep(2)  # M4: Only block interactive sessions for Ctrl+C
           }
 
           # AUTO-FIX: Reduce BLAS threads for large dense matrices to save workspace RAM
@@ -675,6 +706,7 @@ local({
         }
         .biome_env$original_solve(a, b, ...)
       }
+      attr(safe_solve, "biome_guard") <- TRUE  # C2: tag for idempotency check
       be <- baseenv()
       if (bindingIsLocked("solve", be)) unlockBinding("solve", be)
       assign("solve", safe_solve, envir = be)
@@ -682,7 +714,8 @@ local({
     }, error = function(e) NULL)
 
     # v9.6: dist() guard — O(n²) output, common in ecology (vegan::vegdist wraps this)
-    if (ENABLE_SMART_ROUTING) tryCatch({
+    # C2: Idempotent dist() guard
+    if (ENABLE_SMART_ROUTING && !isTRUE(attr(stats::dist, "biome_guard"))) tryCatch({
       .biome_env$original_dist <- stats::dist
       safe_dist <- function(x, ...) {
         if (is.matrix(x) || is.data.frame(x)) {
@@ -706,6 +739,7 @@ local({
         }
         .biome_env$original_dist(x, ...)
       }
+      attr(safe_dist, "biome_guard") <- TRUE  # C2: idempotency tag
       se <- asNamespace("stats")
       if (bindingIsLocked("dist", se)) unlockBinding("dist", se)
       assign("dist", safe_dist, envir = se)
@@ -713,7 +747,8 @@ local({
     }, error = function(e) NULL)
 
     # v9.6: outer() guard — creates n×m matrix from two vectors
-    if (ENABLE_SMART_ROUTING) tryCatch({
+    # C2: Idempotent outer() guard
+    if (ENABLE_SMART_ROUTING && !isTRUE(attr(base::outer, "biome_guard"))) tryCatch({
       .biome_env$original_outer <- base::outer
       safe_outer <- function(X, Y = X, FUN = "*", ...) {
         n1 <- length(X); n2 <- length(Y)
@@ -733,6 +768,7 @@ local({
         }
         .biome_env$original_outer(X, Y, FUN, ...)
       }
+      attr(safe_outer, "biome_guard") <- TRUE  # C2: idempotency tag
       be <- baseenv()
       if (bindingIsLocked("outer", be)) unlockBinding("outer", be)
       assign("outer", safe_outer, envir = be)
@@ -740,7 +776,8 @@ local({
     }, error = function(e) NULL)
 
     # v9.6: expand.grid() guard — exponential growth (product of all vector lengths)
-    if (ENABLE_SMART_ROUTING) tryCatch({
+    # C2: Idempotent expand.grid() guard
+    if (ENABLE_SMART_ROUTING && !isTRUE(attr(base::expand.grid, "biome_guard"))) tryCatch({
       .biome_env$original_expand_grid <- base::expand.grid
       safe_expand_grid <- function(...) {
         args <- list(...)
@@ -763,6 +800,7 @@ local({
         }
         .biome_env$original_expand_grid(...)
       }
+      attr(safe_expand_grid, "biome_guard") <- TRUE  # C2: idempotency tag
       be <- baseenv()
       if (bindingIsLocked("expand.grid", be)) unlockBinding("expand.grid", be)
       assign("expand.grid", safe_expand_grid, envir = be)
@@ -921,12 +959,8 @@ local({
         n1 <- if (is.matrix(x) || is.data.frame(x)) nrow(x) else length(x) / 2
         n2 <- if (is.matrix(y) || is.data.frame(y)) nrow(y) else length(y) / 2
         matrix_gb <- (n1 * n2 * 8) / 1024^3
-        ram_avail_gb <- tryCatch({
-          mi <- readLines("/proc/meminfo", warn = FALSE)
-          al <- grep("^MemAvailable:", mi, value = TRUE)
-          if (length(al) > 0) as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1])) / 1024 / 1024
-          else Inf
-        }, error = function(e) Inf)
+        # M3: Use centralized RAM helper instead of inline /proc/meminfo read
+        ram_avail_gb <- .biome_env$.get_ram_gb()
         if (matrix_gb > 5 && interactive()) {
           message(sprintf(paste0(.C_YELLOW,
             "\n\u26a0\ufe0f  BIOME-CALC: geosphere::distm() will create a %.0f x %.0f matrix (%.1f GB).",
@@ -1064,6 +1098,7 @@ local({
   # Task callbacks don't fire during source(), so the audit needs to call this directly
   .biome_env$deferred_pkg_init <- deferred_pkg_init
   update_resources(quiet = TRUE)
+  # C1: Callback with fallback — if addTaskCallback fails, sessionInit hook fires guards once
   tryCatch({
     addTaskCallback(function(...) {
       try({
@@ -1072,12 +1107,29 @@ local({
       }, silent = TRUE)
       TRUE
     }, name = "biome_resource_monitor")
-  }, error = function(e) NULL)
+    # C1: Verify registration succeeded
+    if (!"biome_resource_monitor" %in% getTaskCallbackNames()) {
+      sys_log("Callback", "FAIL", "addTaskCallback returned but name not found in getTaskCallbackNames()")
+    }
+  }, error = function(e) {
+    sys_log("Callback", "FAIL", paste("addTaskCallback failed:", e$message))
+    # C1 FALLBACK: run guards once via sessionInit hook if callback registration failed
+    setHook("rstudio.sessionInit", function(newSession) {
+      if (!.biome_env$shared_env$deferred_done) {
+        tryCatch(deferred_pkg_init(), error = function(e)
+          sys_log("DeferredFallback", "FAIL", e$message))
+        tryCatch(update_resources(quiet = TRUE), error = function(e) NULL)
+      }
+    }, action = "append")
+  })
 
   # ── PERSISTENT TOOLS ──
+  # H3: Reuse existing tool_env instead of detach/attach race
   tool_env_name <- "tools:biome_calc"
-  if (tool_env_name %in% search()) detach(tool_env_name, character.only = TRUE)
-  tool_env <- attach(NULL, name = tool_env_name)
+  tool_env <- tryCatch({
+    pos <- match(tool_env_name, search())
+    if (!is.na(pos)) as.environment(pos) else attach(NULL, name = tool_env_name)
+  }, error = function(e) attach(NULL, name = tool_env_name))
 
   .fmt_eng <- function(name, enabled, loaded) {
       if (!enabled) return(paste0(.C_GRAY, "[\u2717] ", name, .C_RESET))

@@ -723,7 +723,15 @@ run_audit("8.4", "Rprofile Version", {
   vnum <- as.numeric(gsub("[^0-9.]", "", v))
   if (!is.na(vnum) && vnum < 9.6) warning(sprintf("Version %s is pre-v9.6 — missing memory sentinels", v))
   sprintf("v%s", v)
-}, fix_hint = "Deploy Rprofile v9.6")
+}, fix_hint = "Deploy Rprofile v9.7")
+
+run_audit("8.5", "API Version Contract (v9.7)", {
+  # M2: Machine-readable API version check — warns on mismatch, does not hard-fail
+  api_v <- tryCatch(.biome_env$API_VERSION, error = function(e) 0L)
+  if (api_v == 0L) warning("API_VERSION not found in .biome_env — Rprofile may be pre-v9.7")
+  else if (api_v < 3L) warning(sprintf("API_VERSION=%d, audit v27 expects >= 3 — some tests may fail on missing fields", api_v))
+  sprintf("API_VERSION=%d (expected >= 3)", api_v)
+}, fix_hint = "Deploy Rprofile v9.7")
 
 # ==============================================================================
 # [9.0] FUNCTIONAL TESTS (real-world workflows)
