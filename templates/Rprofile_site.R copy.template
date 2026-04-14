@@ -585,195 +585,11 @@ local({
 
   deferred_pkg_init <- function() {
     if (.biome_env$shared_env$deferred_done) return(invisible(NULL))
+    .biome_env$shared_env$deferred_done <- TRUE
     fc <- .biome_env$shared_env$last_cores
     qr <- .biome_env$shared_env$last_quota
     msg_parts <- c()
 
-    # ══ SAFETY-CRITICAL: Install memory guards FIRST (before any tmpfs/routing) ══
-    # These guards do NOT depend on tmpfs variables. They MUST be installed even
-    # if the tmpfs/routing section below errors out.
-
-    # v9.6: Helper — get available RAM in GB (reused by all heap guards)
-    .biome_get_ram_gb <- function() {
-      tryCatch({
-        mi <- readLines("/proc/meminfo", warn = FALSE)
-        al <- grep("^MemAvailable:", mi, value = TRUE)
-        if (length(al) > 0) as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1])) / 1024 / 1024
-        else Inf
-      }, error = function(e) Inf)
-    }
-
-    # v9.6: solve() memory guard — reduces BLAS threads for large matrices (OOM prevention)
-    # ROOT CAUSE: Multi-threaded OpenBLAS (16 threads) uses ~3× workspace vs serial.
-    # For a 100k×100k matrix: 16 threads → ~224 GB workspace; 2 threads → ~160 GB.
-    # This is WHY BIOME-CALC OOMs on large solve() but vanilla RStudio (1 thread) does not.
-    if (ENABLE_SMART_ROUTING) tryCatch({
-      .biome_env$original_solve <- base::solve
-      safe_solve <- function(a, b, ...) {
-        if (is.matrix(a) && nrow(a) > 5000 && ncol(a) == nrow(a)) {
-          n <- nrow(a)
-          matrix_gb <- (n * n * 8) / 1024^3
-          ram_avail_gb <- .biome_get_ram_gb()
-
-          # Estimate memory need based on current thread count
-          curr_threads <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
-          # Multi-threaded LAPACK workspace: ~(2 + 0.06*threads)× matrix size
-          total_need_gb <- matrix_gb * (2 + 0.06 * curr_threads)
-
-          if (is.finite(ram_avail_gb) && total_need_gb > ram_avail_gb * 0.8) {
-            # CRITICAL: OOM likely — warn and offer to reduce threads
-            warning(sprintf(paste0(
-              "BIOME-CALC: solve() on %d x %d matrix (~%.0f GB) with %d BLAS threads needs ~%.0f GB.\n",
-              "  Available RAM: ~%.0f GB. OOM risk is HIGH.\n",
-              "  Alternatives: Matrix::Cholesky() for SPD, or sparse methods.\n",
-              "  Proceeding with 2 BLAS threads to reduce workspace (use Ctrl+C to cancel)..."),
-              n, n, matrix_gb, curr_threads, total_need_gb, ram_avail_gb),
-              call. = FALSE, immediate. = TRUE)
-            Sys.sleep(2)  # Give user time to Ctrl+C
-          }
-
-          # AUTO-FIX: Reduce BLAS threads for large dense matrices to save workspace RAM
-          # For matrices > 10k×10k, reduce to 2 threads (saves ~60% workspace)
-          # For matrices > 5k×5k, reduce to max(4, curr_threads/2)
-          reduced_threads <- if (n > 10000) 2L
-                             else if (n > 5000) max(4L, as.integer(curr_threads / 2))
-                             else curr_threads
-          if (reduced_threads < curr_threads) {
-            if (interactive() && matrix_gb > 1) {
-              message(sprintf(paste0(.C_YELLOW,
-                "\U0001F4A1 BIOME-CALC: Temporarily reducing BLAS threads %d \u2192 %d for solve(%d\u00d7%d)",
-                " to save ~%.0f GB workspace.", .C_RESET),
-                curr_threads, reduced_threads, n, n,
-                matrix_gb * 0.06 * (curr_threads - reduced_threads)))
-            }
-            # Temporarily set reduced threads
-            Sys.setenv(OPENBLAS_NUM_THREADS = as.character(reduced_threads),
-                       OMP_NUM_THREADS = as.character(reduced_threads))
-            if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
-              RhpcBLASctl::blas_set_num_threads(reduced_threads)
-              RhpcBLASctl::omp_set_num_threads(reduced_threads)
-            }, error = function(e) NULL)
-
-            # Run solve with reduced threads and restore after
-            on.exit({
-              Sys.setenv(OPENBLAS_NUM_THREADS = as.character(curr_threads),
-                         OMP_NUM_THREADS = as.character(curr_threads))
-              if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
-                RhpcBLASctl::blas_set_num_threads(curr_threads)
-                RhpcBLASctl::omp_set_num_threads(curr_threads)
-              }, error = function(e) NULL)
-              if (interactive() && matrix_gb > 1) {
-                message(sprintf(paste0(.C_GREEN,
-                  "\u2705 BLAS threads restored: %d", .C_RESET), curr_threads))
-              }
-            }, add = TRUE)
-          } else if (matrix_gb > 5 && interactive()) {
-            message(sprintf(paste0(.C_YELLOW,
-              "\U0001F4A1 BIOME-CALC: solve() on %d\u00d7%d matrix (~%.1f GB). This may take a while.", .C_RESET),
-              n, n, matrix_gb))
-          }
-        }
-        .biome_env$original_solve(a, b, ...)
-      }
-      be <- baseenv()
-      if (bindingIsLocked("solve", be)) unlockBinding("solve", be)
-      assign("solve", safe_solve, envir = be)
-      lockBinding("solve", be)
-    }, error = function(e) NULL)
-
-    # v9.6: dist() guard — O(n²) output, common in ecology (vegan::vegdist wraps this)
-    if (ENABLE_SMART_ROUTING) tryCatch({
-      .biome_env$original_dist <- stats::dist
-      safe_dist <- function(x, ...) {
-        if (is.matrix(x) || is.data.frame(x)) {
-          n <- nrow(x)
-          result_gb <- (n * (n - 1) / 2 * 8) / 1024^3  # dist stores lower triangle
-          if (result_gb > 5 && interactive()) {
-            ram_gb <- .biome_get_ram_gb()
-            full_matrix_gb <- (n * n * 8) / 1024^3
-            if (is.finite(ram_gb) && full_matrix_gb > ram_gb * 0.5) {
-              warning(sprintf(paste0(
-                "BIOME-CALC: dist() on %d observations will create a %.1f GB dist object.\n",
-                "  as.matrix() on this would need %.1f GB. Available RAM: ~%.0f GB.\n",
-                "  For N > 20,000: consider sparse distance methods or spatial indexing."),
-                n, result_gb, full_matrix_gb, ram_gb),
-                call. = FALSE, immediate. = TRUE)
-            } else {
-              message(sprintf(paste0(.C_YELLOW,
-                "\U0001F4A1 BIOME-CALC: dist() on %d obs (~%.1f GB). Large result.", .C_RESET), n, result_gb))
-            }
-          }
-        }
-        .biome_env$original_dist(x, ...)
-      }
-      se <- asNamespace("stats")
-      if (bindingIsLocked("dist", se)) unlockBinding("dist", se)
-      assign("dist", safe_dist, envir = se)
-      lockBinding("dist", se)
-    }, error = function(e) NULL)
-
-    # v9.6: outer() guard — creates n×m matrix from two vectors
-    if (ENABLE_SMART_ROUTING) tryCatch({
-      .biome_env$original_outer <- base::outer
-      safe_outer <- function(X, Y = X, FUN = "*", ...) {
-        n1 <- length(X); n2 <- length(Y)
-        result_gb <- (n1 * n2 * 8) / 1024^3
-        if (result_gb > 5 && interactive()) {
-          ram_gb <- .biome_get_ram_gb()
-          if (is.finite(ram_gb) && result_gb > ram_gb * 0.5) {
-            warning(sprintf(paste0(
-              "BIOME-CALC: outer() will create a %d x %d matrix (%.1f GB). Available RAM: ~%.0f GB.\n",
-              "  This may OOM. Consider chunked processing or sparse methods."),
-              n1, n2, result_gb, ram_gb), call. = FALSE, immediate. = TRUE)
-          } else {
-            message(sprintf(paste0(.C_YELLOW,
-              "\U0001F4A1 BIOME-CALC: outer() creating %d x %d matrix (~%.1f GB).", .C_RESET),
-              n1, n2, result_gb))
-          }
-        }
-        .biome_env$original_outer(X, Y, FUN, ...)
-      }
-      be <- baseenv()
-      if (bindingIsLocked("outer", be)) unlockBinding("outer", be)
-      assign("outer", safe_outer, envir = be)
-      lockBinding("outer", be)
-    }, error = function(e) NULL)
-
-    # v9.6: expand.grid() guard — exponential growth (product of all vector lengths)
-    if (ENABLE_SMART_ROUTING) tryCatch({
-      .biome_env$original_expand_grid <- base::expand.grid
-      safe_expand_grid <- function(...) {
-        args <- list(...)
-        if (length(args) > 0) {
-          total_rows <- prod(vapply(args, length, 1L))
-          ncols <- length(args)
-          result_gb <- (total_rows * ncols * 8) / 1024^3  # Conservative: assumes numeric
-          if (result_gb > 2 && interactive()) {
-            ram_gb <- .biome_get_ram_gb()
-            msg <- sprintf("expand.grid() will create %.0f rows x %d cols (~%.1f GB)", total_rows, ncols, result_gb)
-            if (is.finite(ram_gb) && result_gb > ram_gb * 0.5) {
-              warning(sprintf(paste0(
-                "BIOME-CALC: %s. Available RAM: ~%.0f GB.\n",
-                "  Consider: data.table::CJ() for cross-joins, or iterators."), msg, ram_gb),
-                call. = FALSE, immediate. = TRUE)
-            } else {
-              message(sprintf(paste0(.C_YELLOW, "\U0001F4A1 BIOME-CALC: %s.", .C_RESET), msg))
-            }
-          }
-        }
-        .biome_env$original_expand_grid(...)
-      }
-      be <- baseenv()
-      if (bindingIsLocked("expand.grid", be)) unlockBinding("expand.grid", be)
-      assign("expand.grid", safe_expand_grid, envir = be)
-      lockBinding("expand.grid", be)
-    }, error = function(e) NULL)
-
-    # v9.6-fix: Set deferred_done AFTER all guards are installed (belt-and-suspenders)
-    .biome_env$shared_env$deferred_done <- TRUE
-
-    # ══ Tmpfs routing + package config (wrapped — failure here cannot lose guards) ══
-    tryCatch({
     # v9.6: Determine tmp routing via multi-signal heuristic
     force_nfs <- Sys.getenv("BIOME_FORCE_NFS_TMP") == "true"
     force_tmpfs <- Sys.getenv("BIOME_FORCE_TMPFS") == "true"
@@ -951,6 +767,182 @@ local({
       msg_parts <- c(msg_parts, "Geosphere [SafeGuard]")
     }, error = function(e) NULL)
 
+    # v9.6: solve() memory guard — reduces BLAS threads for large matrices (OOM prevention)
+    # ROOT CAUSE: Multi-threaded OpenBLAS (16 threads) uses ~3× workspace vs serial.
+    # For a 100k×100k matrix: 16 threads → ~224 GB workspace; 2 threads → ~160 GB.
+    # This is WHY BIOME-CALC OOMs on large solve() but vanilla RStudio (1 thread) does not.
+    if (ENABLE_SMART_ROUTING) tryCatch({
+      .biome_env$original_solve <- base::solve
+      safe_solve <- function(a, b, ...) {
+        if (is.matrix(a) && nrow(a) > 5000 && ncol(a) == nrow(a)) {
+          n <- nrow(a)
+          matrix_gb <- (n * n * 8) / 1024^3
+          ram_avail_gb <- .biome_get_ram_gb()
+
+          # Estimate memory need based on current thread count
+          curr_threads <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+          # Multi-threaded LAPACK workspace: ~(2 + 0.06*threads)× matrix size
+          total_need_gb <- matrix_gb * (2 + 0.06 * curr_threads)
+
+          if (is.finite(ram_avail_gb) && total_need_gb > ram_avail_gb * 0.8) {
+            # CRITICAL: OOM likely — warn and offer to reduce threads
+            warning(sprintf(paste0(
+              "BIOME-CALC: solve() on %d x %d matrix (~%.0f GB) with %d BLAS threads needs ~%.0f GB.\n",
+              "  Available RAM: ~%.0f GB. OOM risk is HIGH.\n",
+              "  Alternatives: Matrix::Cholesky() for SPD, or sparse methods.\n",
+              "  Proceeding with 2 BLAS threads to reduce workspace (use Ctrl+C to cancel)..."),
+              n, n, matrix_gb, curr_threads, total_need_gb, ram_avail_gb),
+              call. = FALSE, immediate. = TRUE)
+            Sys.sleep(2)  # Give user time to Ctrl+C
+          }
+
+          # AUTO-FIX: Reduce BLAS threads for large dense matrices to save workspace RAM
+          # For matrices > 10k×10k, reduce to 2 threads (saves ~60% workspace)
+          # For matrices > 5k×5k, reduce to max(4, curr_threads/2)
+          reduced_threads <- if (n > 10000) 2L
+                             else if (n > 5000) max(4L, as.integer(curr_threads / 2))
+                             else curr_threads
+          if (reduced_threads < curr_threads) {
+            if (interactive() && matrix_gb > 1) {
+              message(sprintf(paste0(.C_YELLOW,
+                "\U0001F4A1 BIOME-CALC: Temporarily reducing BLAS threads %d \u2192 %d for solve(%d\u00d7%d)",
+                " to save ~%.0f GB workspace.", .C_RESET),
+                curr_threads, reduced_threads, n, n,
+                matrix_gb * 0.06 * (curr_threads - reduced_threads)))
+            }
+            # Temporarily set reduced threads
+            Sys.setenv(OPENBLAS_NUM_THREADS = as.character(reduced_threads),
+                       OMP_NUM_THREADS = as.character(reduced_threads))
+            if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
+              RhpcBLASctl::blas_set_num_threads(reduced_threads)
+              RhpcBLASctl::omp_set_num_threads(reduced_threads)
+            }, error = function(e) NULL)
+
+            # Run solve with reduced threads and restore after
+            on.exit({
+              Sys.setenv(OPENBLAS_NUM_THREADS = as.character(curr_threads),
+                         OMP_NUM_THREADS = as.character(curr_threads))
+              if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
+                RhpcBLASctl::blas_set_num_threads(curr_threads)
+                RhpcBLASctl::omp_set_num_threads(curr_threads)
+              }, error = function(e) NULL)
+              if (interactive() && matrix_gb > 1) {
+                message(sprintf(paste0(.C_GREEN,
+                  "\u2705 BLAS threads restored: %d", .C_RESET), curr_threads))
+              }
+            }, add = TRUE)
+          } else if (matrix_gb > 5 && interactive()) {
+            message(sprintf(paste0(.C_YELLOW,
+              "\U0001F4A1 BIOME-CALC: solve() on %d\u00d7%d matrix (~%.1f GB). This may take a while.", .C_RESET),
+              n, n, matrix_gb))
+          }
+        }
+        .biome_env$original_solve(a, b, ...)
+      }
+      be <- baseenv()
+      if (bindingIsLocked("solve", be)) unlockBinding("solve", be)
+      assign("solve", safe_solve, envir = be)
+      lockBinding("solve", be)
+    }, error = function(e) NULL)
+
+    # v9.6: Helper — get available RAM in GB (reused by all heap guards)
+    .biome_get_ram_gb <- function() {
+      tryCatch({
+        mi <- readLines("/proc/meminfo", warn = FALSE)
+        al <- grep("^MemAvailable:", mi, value = TRUE)
+        if (length(al) > 0) as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1])) / 1024 / 1024
+        else Inf
+      }, error = function(e) Inf)
+    }
+
+    # v9.6: dist() guard — O(n²) output, common in ecology (vegan::vegdist wraps this)
+    if (ENABLE_SMART_ROUTING) tryCatch({
+      .biome_env$original_dist <- stats::dist
+      safe_dist <- function(x, ...) {
+        if (is.matrix(x) || is.data.frame(x)) {
+          n <- nrow(x)
+          result_gb <- (n * (n - 1) / 2 * 8) / 1024^3  # dist stores lower triangle
+          if (result_gb > 5 && interactive()) {
+            ram_gb <- .biome_get_ram_gb()
+            full_matrix_gb <- (n * n * 8) / 1024^3
+            if (is.finite(ram_gb) && full_matrix_gb > ram_gb * 0.5) {
+              warning(sprintf(paste0(
+                "BIOME-CALC: dist() on %d observations will create a %.1f GB dist object.\n",
+                "  as.matrix() on this would need %.1f GB. Available RAM: ~%.0f GB.\n",
+                "  For N > 20,000: consider sparse distance methods or spatial indexing."),
+                n, result_gb, full_matrix_gb, ram_gb),
+                call. = FALSE, immediate. = TRUE)
+            } else {
+              message(sprintf(paste0(.C_YELLOW,
+                "\U0001F4A1 BIOME-CALC: dist() on %d obs (~%.1f GB). Large result.", .C_RESET), n, result_gb))
+            }
+          }
+        }
+        .biome_env$original_dist(x, ...)
+      }
+      se <- asNamespace("stats")
+      if (bindingIsLocked("dist", se)) unlockBinding("dist", se)
+      assign("dist", safe_dist, envir = se)
+      lockBinding("dist", se)
+    }, error = function(e) NULL)
+
+    # v9.6: outer() guard — creates n×m matrix from two vectors
+    if (ENABLE_SMART_ROUTING) tryCatch({
+      .biome_env$original_outer <- base::outer
+      safe_outer <- function(X, Y = X, FUN = "*", ...) {
+        n1 <- length(X); n2 <- length(Y)
+        result_gb <- (n1 * n2 * 8) / 1024^3
+        if (result_gb > 5 && interactive()) {
+          ram_gb <- .biome_get_ram_gb()
+          if (is.finite(ram_gb) && result_gb > ram_gb * 0.5) {
+            warning(sprintf(paste0(
+              "BIOME-CALC: outer() will create a %d x %d matrix (%.1f GB). Available RAM: ~%.0f GB.\n",
+              "  This may OOM. Consider chunked processing or sparse methods."),
+              n1, n2, result_gb, ram_gb), call. = FALSE, immediate. = TRUE)
+          } else {
+            message(sprintf(paste0(.C_YELLOW,
+              "\U0001F4A1 BIOME-CALC: outer() creating %d x %d matrix (~%.1f GB).", .C_RESET),
+              n1, n2, result_gb))
+          }
+        }
+        .biome_env$original_outer(X, Y, FUN, ...)
+      }
+      be <- baseenv()
+      if (bindingIsLocked("outer", be)) unlockBinding("outer", be)
+      assign("outer", safe_outer, envir = be)
+      lockBinding("outer", be)
+    }, error = function(e) NULL)
+
+    # v9.6: expand.grid() guard — exponential growth (product of all vector lengths)
+    if (ENABLE_SMART_ROUTING) tryCatch({
+      .biome_env$original_expand_grid <- base::expand.grid
+      safe_expand_grid <- function(...) {
+        args <- list(...)
+        if (length(args) > 0) {
+          total_rows <- prod(vapply(args, length, 1L))
+          ncols <- length(args)
+          result_gb <- (total_rows * ncols * 8) / 1024^3  # Conservative: assumes numeric
+          if (result_gb > 2 && interactive()) {
+            ram_gb <- .biome_get_ram_gb()
+            msg <- sprintf("expand.grid() will create %.0f rows x %d cols (~%.1f GB)", total_rows, ncols, result_gb)
+            if (is.finite(ram_gb) && result_gb > ram_gb * 0.5) {
+              warning(sprintf(paste0(
+                "BIOME-CALC: %s. Available RAM: ~%.0f GB.\n",
+                "  Consider: data.table::CJ() for cross-joins, or iterators."), msg, ram_gb),
+                call. = FALSE, immediate. = TRUE)
+            } else {
+              message(sprintf(paste0(.C_YELLOW, "\U0001F4A1 BIOME-CALC: %s.", .C_RESET), msg))
+            }
+          }
+        }
+        .biome_env$original_expand_grid(...)
+      }
+      be <- baseenv()
+      if (bindingIsLocked("expand.grid", be)) unlockBinding("expand.grid", be)
+      assign("expand.grid", safe_expand_grid, envir = be)
+      lockBinding("expand.grid", be)
+    }, error = function(e) NULL)
+    
     if (ENABLE_FUTURE_OPT && isNamespaceLoaded("future")) tryCatch({
       fw <- max(1L, fc - 1L)
       cl <- .biome_make_cluster_impl(workers = fw, worker_threads = 1L)
@@ -1017,8 +1009,6 @@ local({
       options(chattr.model = AI_MODEL, chattr.provider = "ollama")
       msg_parts <- c(msg_parts, "Chattr")
     }, error = function(e) NULL)
-
-    }, error = function(e) sys_log("DeferredInit", "FAIL", e$message))
 
     if (length(msg_parts) > 0 && interactive()) {
       message(paste0(.C_GREEN, "   \U0001F680 BIOME-CALC: Engines Initialized: ", paste(msg_parts, collapse=", "), .C_RESET))

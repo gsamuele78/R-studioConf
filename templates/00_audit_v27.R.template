@@ -848,7 +848,7 @@ run_audit("10.1", "Spatial Correlation Matrix Inversion (247x247)", {
       inv_r <- (1 / 0.001) * solve(r_spatial)
       dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
 
-      sym_ok <- isSymmetric(inv_r)
+      sym_ok <- isSymmetric(inv_r, tol = 1e-10) # Added tolerance for multi-threaded BLAS
       if (!sym_ok) stop(sprintf("Inverse not symmetric at i=%d", i))
       results <- c(results, sprintf("i=%d:%.2fs", i, dt))
     }
