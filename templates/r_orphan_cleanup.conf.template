@@ -61,4 +61,14 @@ EXCLUDE_PATTERNS=(
     "rstudio-server"
     "rserver"
     "rsession"
+    # v4.6: C++ compiler chain spawned by nimble/TMB/Rcpp compilation
+    # compileNimble() → R CMD SHLIB → make → g++ → cc1plus
+    # These are LEGITIMATE children of rsession, not orphans.
+    # Killing these aborts 16h+ MCMC compilation and causes "R Session Aborted".
+    "cc1plus"
+    "cc1"
+    "g++"
+    "c++"
+    "R CMD SHLIB"
+    "R CMD INSTALL"
 )

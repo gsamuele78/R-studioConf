@@ -424,21 +424,58 @@ OMPEOF
 }
 
 # ==============================================================================
-# STEP 5: RAMDISK
+# STEP 5: LOCAL /Rtmp DISK VALIDATION (v10.0)
 # ==============================================================================
-setup_nodes_ramdisk() {
-  log_step "Step 5: RAMDisk (${RAMDISK_SIZE} on /tmp)"
+setup_nodes_tmp_disk() {
+  log_step "Step 5: Local /Rtmp Disk Validation (${TMP_DISK_GB:-400}GB)"
 
-  local fstab_entry="tmpfs /tmp tmpfs rw,nosuid,nodev,noatime,nodiratime,size=${RAMDISK_SIZE},mode=1777 0 0"
-  if ! grep -q "^tmpfs /tmp" /etc/fstab 2>/dev/null; then
-    echo "${fstab_entry}" >> /etc/fstab
-  else
-    # Update existing entry to ensure noatime,nodiratime (v9.6 hardening)
-    sed -i 's|^tmpfs /tmp tmpfs.*|'"${fstab_entry}"'|' /etc/fstab
+  local RTMP_MOUNT="/Rtmp"
+
+  # ── Create mount point if needed ──
+  if [[ ! -d "${RTMP_MOUNT}" ]]; then
+    mkdir -p "${RTMP_MOUNT}"
+    chmod 1777 "${RTMP_MOUNT}"
+    log_info "Created ${RTMP_MOUNT} mount point"
   fi
-  run_cmd systemctl daemon-reload
-  run_cmd mount -o "remount,size=${RAMDISK_SIZE},noatime,nodiratime" /tmp 2>/dev/null || mount /tmp 2>/dev/null || true
-  log_success "RAMDisk: $(df -h /tmp | tail -1 | awk '{print $2}')"
+
+  # ── Remove legacy tmpfs /tmp entry if present ──
+  if grep -q "^tmpfs /tmp" /etc/fstab 2>/dev/null; then
+    log_warn "Removing legacy tmpfs /tmp entry from /etc/fstab"
+    sed -i '/^tmpfs \/tmp/d' /etc/fstab
+    run_cmd systemctl daemon-reload
+    run_cmd umount /tmp 2>/dev/null || true
+  fi
+
+  # ── Validate /Rtmp is on a real disk (not tmpfs) ──
+  local tmp_fstype
+  tmp_fstype=$(df -T "${RTMP_MOUNT}" 2>/dev/null | awk 'NR==2 {print $2}')
+  if [[ "${tmp_fstype}" == "tmpfs" || "${tmp_fstype}" == "rootfs" ]]; then
+    log_error "${RTMP_MOUNT} is NOT on a dedicated disk (got: ${tmp_fstype})."
+    log_error "Expected: ext4/xfs on a dedicated disk mounted at ${RTMP_MOUNT}."
+    log_error "Attach a dedicated disk, format as ext4, add to /etc/fstab, and mount at ${RTMP_MOUNT}."
+    exit 1
+  fi
+
+  # ── Validate sufficient space ──
+  local tmp_size_gb
+  tmp_size_gb=$(df -BG "${RTMP_MOUNT}" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$2); print $2}')
+  if [[ "${tmp_size_gb}" -lt 100 ]]; then
+    log_warn "${RTMP_MOUNT} disk is only ${tmp_size_gb}GB. Recommended: ${TMP_DISK_GB:-400}GB dedicated disk."
+  fi
+
+  # ── Ensure correct permissions ──
+  chmod 1777 "${RTMP_MOUNT}"
+
+  # ── Deploy systemd-tmpfiles cleanup rule ──
+  # Clean files >7 days old on boot and via systemd-tmpfiles-clean.timer (daily)
+  mkdir -p /etc/tmpfiles.d
+  cat > /etc/tmpfiles.d/biome-rtmp-cleanup.conf <<TMPEOF
+# BIOME-CALC: Clean /Rtmp files older than 7 days
+# Runs on boot via systemd-tmpfiles-clean.timer
+q ${RTMP_MOUNT} 1777 root root 7d
+TMPEOF
+
+  log_success "/Rtmp disk: ${tmp_fstype} filesystem, ${tmp_size_gb}GB ($(df -h "${RTMP_MOUNT}" | tail -1 | awk '{print $4}') free)"
 }
 
 # ==============================================================================
@@ -525,8 +562,10 @@ setup_nodes_swap() {
     log_success "fstab updated: ${fstab_entry}"
   fi
 
-  # ── Tune swappiness — prefer RAM for an analytics server ──
-  local swappiness_target=10
+  # ── Tune swappiness — prefer RAM but tolerate compiler spikes ──
+  # v9.9: Raised 10→30. cc1plus (NIMBLE CppAD) spikes 8-15GB transiently.
+  # At 10, OOM killer fires before 32GB swap is utilized.
+  local swappiness_target=30
   if ! grep -q "^vm.swappiness" /etc/sysctl.conf 2>/dev/null; then
     echo "vm.swappiness=${swappiness_target}" >> /etc/sysctl.conf
     log_info "vm.swappiness=${swappiness_target} written to /etc/sysctl.conf"
@@ -691,11 +730,11 @@ R_LIBS_SITE=/usr/local/lib/R/site-library/:\${R_LIBS_SITE}:/usr/lib/R/library
 # This prevents OpenBLAS illegal opcode crashes by evaluating the CPU
 # directly from bash before libopenblas.so is dynamically loaded.
 
-# Temp dirs (${RAMDISK_SIZE} RAMDisk)
-TMPDIR=/tmp
-TMP=/tmp
-TEMP=/tmp
-R_TEMPDIR=/tmp
+# Temp dirs (local /Rtmp disk — NOT tmpfs, no RAM consumed, NOT OS /tmp)
+TMPDIR=/Rtmp
+TMP=/Rtmp
+TEMP=/Rtmp
+R_TEMPDIR=/Rtmp
 
 # Python (system-wide venv)
 RETICULATE_PYTHON=${PYTHON_ENV}/bin/python
@@ -706,14 +745,14 @@ _R_CHECK_COMPILATION_FLAGS_KNOWN_='-Wformat -Werror=format-security -Wdate-time'
 
 # TensorFlow (CPU-only, no GPU)
 TF_CPP_MIN_LOG_LEVEL=2
-KERAS_HOME=/tmp/keras
+KERAS_HOME=/Rtmp/keras
 CUDA_VISIBLE_DEVICES=-1
 
 # Force BSPM to use sudo instead of pkexec
 BSPM_SUDO=true
 
-# RAMDisk size (read by Rprofile.site)
-BIOME_RAMDISK_GB=${RAMDISK_GB}
+# /tmp disk size (v10.0: local disk, NOT tmpfs — no RAM consumed)
+BIOME_TMP_DISK_GB=${TMP_DISK_GB:-400}
 
 # Font configuration for ragg/systemfonts (v9.6)
 FONTCONFIG_PATH=/etc/fonts
@@ -751,9 +790,7 @@ RENVEOF
     LOG_FILE="${LOG_FILE}" \
     RAMDISK_GB="${RAMDISK_GB}" \
     RSESSION_CONF_PATH="${RSESSION_CONF_PATH}" \
-    TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-60}" \
-    TMP_REDIRECT_THRESHOLD_PCT="${TMP_REDIRECT_THRESHOLD_PCT:-75}" \
-    BIG_DATA_THRESHOLD_GB="${BIG_DATA_THRESHOLD_GB:-5}"
+    TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-80}"
 
   printf "%s" "$generated_profile" > "${tmp_profile}"
   run_cmd cp "${tmp_profile}" "${rprofile}"
@@ -835,18 +872,6 @@ WEOF
       sed -i 's|"/usr/bin/python3"|"'"${PYTHON_ENV}"'/bin/python"|g' "${prefs}"
       log_success "  rstudio-prefs.json migrated for ${username}"
     fi
-
-    # ── Create NFS fallback tmp directory (v9.6) ──
-    local fb_dir="${user_home}/.r_tmp_fallback"
-    if [[ ! -d "${fb_dir}" ]]; then
-      mkdir -p "${fb_dir}"
-      # Set ownership to the user (resolve uid from directory owner)
-      local dir_owner
-      dir_owner=$(stat -c '%U' "${user_home}" 2>/dev/null || echo "${username}")
-      chown "${dir_owner}:${dir_owner}" "${fb_dir}" 2>/dev/null || true
-      chmod 750 "${fb_dir}"
-      log_success "  .r_tmp_fallback created for ${username}"
-    fi
   done
 
   # ── User /etc/skel template for new users ──
@@ -866,11 +891,6 @@ XDG_CONFIG_HOME=\${HOME}/.config
 SKELEOF
   run_cmd chmod 644 /etc/skel/.Renviron
   log_success "New-user /etc/skel/.Renviron template created"
-
-  # NFS fallback tmp directory for tmpfs overflow (v9.6)
-  mkdir -p /etc/skel/.r_tmp_fallback
-  run_cmd chmod 750 /etc/skel/.r_tmp_fallback
-  log_success "New-user /etc/skel/.r_tmp_fallback created (NFS tmpfs overflow dir)"
 }
 
 # ==============================================================================
@@ -1447,7 +1467,7 @@ case "${choice}" in
     setup_nodes_arrow
     setup_nodes_gcloud
     setup_nodes_blas
-    setup_nodes_ramdisk
+    setup_nodes_tmp_disk
     setup_nodes_swap
     setup_nodes_python
     setup_nodes_r_packages

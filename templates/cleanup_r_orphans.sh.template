@@ -30,7 +30,9 @@ source "$CONF_FILE"
 KILL_TIMEOUT=15
 
 # How many levels up to check for a valid 'rsession' parent
-MAX_PARENT_DEPTH=5
+# v4.6: Increased from 5→8 for NIMBLE/TMB compilation chains:
+# rsession → R → system2(sh) → make → sh → g++ → cc1plus (6-7 levels)
+MAX_PARENT_DEPTH=8
 
 mkdir -p "$LOG_DIR" "$NOTIFY_DIR"
 
@@ -130,7 +132,8 @@ check_is_orphan() {
         # VALIDATION: Is this an RStudio Session or Main R Process?
         # Matches: rsession, R (interactive), RStudio Server, rserver
         # ADDED v4.5: tmux, screen, sshd (for terminal-based long jobs)
-        if echo "$CURR_CMD" | grep -qE 'rsession|/R\s|R --interactive|rstudio-server|rserver|tmux|screen|sshd'; then
+        # ADDED v4.6: R CMD, nimble, compileNimble (for NIMBLE/TMB C++ compilation)
+        if echo "$CURR_CMD" | grep -qE 'rsession|/R\s|R --interactive|rstudio-server|rserver|tmux|screen|sshd|R CMD|nimble|compileNimble'; then
             # FOUND OWNER! This process is SAFE.
             return 1 
         fi

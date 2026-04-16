@@ -1,0 +1,545 @@
+Apt update
+usare anche https://copilot.cloud.microsoft/?fromCode=cmcv2&redirectId=EC7D430D949C4B8BA087064762B128FB&auth=2
+e https://support.posit.co/hc/en-us/articles/360024137174-Integrating-Ubuntu-with-Active-Directory-for-Posit-Workbench-RStudio-Server-Pro
+https://docs.posit.co/rsp/configuration/authentication/active-directory/
+come 
+installazione cran packages
+https://www.digitalocean.com/community/tutorials/how-to-install-r-on-ubuntu-22-04
+
+sudo apt install --no-install-recommends r-base
+
+sudo apt-get install libopenblas-dev libomp-dev
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo update-alternatives --config libblas.so.3-x86_64-linux-gnu
+There are 2 choices for the alternative libblas.so.3-x86_64-linux-gnu (providing /usr/lib/x86_64-linux-gnu/libblas.so.3).
+
+  Selection    Path                                                     Priority   Status
+------------------------------------------------------------
+* 0            /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3   100       auto mode
+  1            /usr/lib/x86_64-linux-gnu/blas/libblas.so.3               10        manual mode
+  2            /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3   100       manual mode
+
+Press <enter> to keep the current choice[*], or type selection number: 
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo update-alternatives --config liblapack.so.3-x86_64-linux-gnu
+There are 2 choices for the alternative liblapack.so.3-x86_64-linux-gnu (providing /usr/lib/x86_64-linux-gnu/liblapack.so.3).
+
+  Selection    Path                                                       Priority   Status
+------------------------------------------------------------
+* 0            /usr/lib/x86_64-linux-gnu/openblas-pthread/liblapack.so.3   100       auto mode
+  1            /usr/lib/x86_64-linux-gnu/lapack/liblapack.so.3             10        manual mode
+  2            /usr/lib/x86_64-linux-gnu/openblas-pthread/liblapack.so.3   100       manual mode
+
+Press <enter> to keep the current choice[*], or type selection number: 1
+update-alternatives: using /usr/lib/x86_64-linux-gnu/lapack/liblapack.so.3 to provide /usr/lib/x86_64-linux-gnu/liblapack.so.3 (liblapack.so.3-x86_64-linux-gnu) in manual mode
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ 
+
+
+Number of processors: 72
+Number of threads per core: 2
+Total number of threads: 144
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo cat /etc/environment 
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+OPENBLAS_NUM_THREADS=32
+OMP_NUM_THREADS=32
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ ./check_pkg_config.sh 
+Checking pkg-config variables for OpenBLAS and OpenMP...
+Package openmp was not found in the pkg-config search path.
+Perhaps you should add the directory containing `openmp.pc'
+to the PKG_CONFIG_PATH environment variable
+No package 'openmp' found
+Package openmp was not found in the pkg-config search path.
+Perhaps you should add the directory containing `openmp.pc'
+to the PKG_CONFIG_PATH environment variable
+No package 'openmp' found
+OpenBLAS CFLAGS: -I/usr/include/x86_64-linux-gnu/openblas-pthread/
+OpenBLAS LIBS: -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas
+OpenMP CFLAGS: 
+OpenMP LIBS: 
+All done.
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ 
+
+sudo mkdir -p /usr/local/lib/pkgconfig/
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo view /usr/local/lib/pkgconfig/openmp.pc
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: OpenMP
+Description: OpenMP (Portable Shared Memory Parallel Programming)
+Version: 4.5
+Cflags: -fopenmp
+Libs: -fopenmp
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo reboot
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo reboot
+
+sudo view /etc/profile
+export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
+
+dopo il source 
+pkg-config --cflags --libs openmp
+
+install package bspm
+https://github.com/cran4linux/bspm?tab=readme-ov-file#ubuntu
+
+. /etc/os-release # to get UBUNTU_CODENAME
+URL="https://raw.githubusercontent.com/eddelbuettel/r2u/master/inst/scripts"
+curl -s "${URL}/add_cranapt_${UBUNTU_CODENAME}.sh" | sudo bash -s
+
+
+installed bspm
+
+#to install rstudio needed gdebi and required packages
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo apt install gdebi 
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo apt install gdebi 
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+The following packages were automatically installed and are no longer required:
+  linux-headers-5.15.0-124 linux-headers-5.15.0-124-generic linux-image-5.15.0-124-generic linux-modules-5.15.0-124-generic linux-modules-extra-5.15.0-124-generic
+Use 'sudo apt autoremove' to remove them.
+The following additional packages will be installed:
+  adwaita-icon-theme at-spi2-core build-essential cpp cpp-11 dconf-gsettings-backend dconf-service diffstat dpkg-dev fakeroot g++ g++-11 gcc gcc-11 gcc-11-base
+  gdebi-core gettext gir1.2-atk-1.0 gir1.2-freedesktop gir1.2-gdkpixbuf-2.0 gir1.2-gtk-3.0 gir1.2-harfbuzz-0.0 gir1.2-pango-1.0 gir1.2-vte-2.91 gnome-icon-theme
+  gsettings-desktop-schemas gtk-update-icon-cache humanity-icon-theme intltool-debian libalgorithm-diff-perl libalgorithm-diff-xs-perl libalgorithm-merge-perl
+  libaliased-perl libapt-pkg-perl libarchive-zip-perl libasan6 libatk-bridge2.0-0 libatk1.0-0 libatk1.0-data libatomic1 libatspi2.0-0 libauthen-sasl-perl
+  libb-hooks-endofscope-perl libb-hooks-op-check-perl libc-dev-bin libc-devtools libc6-dev libcairo-gobject2 libcapture-tiny-perl libcc1-0
+  libclass-data-inheritable-perl libclass-method-modifiers-perl libclass-xsaccessor-perl libclone-perl libcolord2 libconfig-tiny-perl libconst-fast-perl
+  libcpanel-json-xs-perl libcrypt-dev libdata-dpath-perl libdata-dump-perl libdata-messagepack-perl libdata-optlist-perl libdata-validate-domain-perl
+  libdata-validate-ip-perl libdata-validate-uri-perl libdconf1 libdevel-callchecker-perl libdevel-size-perl libdevel-stacktrace-perl libdynaloader-functions-perl
+  libemail-address-xs-perl libencode-locale-perl libepoxy0 libexception-class-perl libexporter-tiny-perl libfakeroot libfile-basedir-perl libfile-find-rule-perl
+  libfile-listing-perl libfont-afm-perl libfont-ttf-perl libgcc-11-dev libgd3 libgdk-pixbuf-2.0-0 libgdk-pixbuf2.0-bin libgdk-pixbuf2.0-common libgtk-3-0
+  libgtk-3-bin libgtk-3-common libhtml-form-perl libhtml-format-perl libhtml-html5-entities-perl libhtml-parser-perl libhtml-tagset-perl libhtml-tree-perl
+  libhttp-cookies-perl libhttp-daemon-perl libhttp-date-perl libhttp-message-perl libhttp-negotiate-perl libimport-into-perl libio-html-perl
+  libio-interactive-perl libio-prompt-tiny-perl libio-socket-ssl-perl libio-string-perl libipc-run3-perl libipc-system-simple-perl libisl23 libiterator-perl
+  libiterator-util-perl libitm1 libjson-maybexs-perl liblist-compare-perl liblist-moreutils-perl liblist-moreutils-xs-perl liblist-someutils-perl
+  liblist-someutils-xs-perl liblist-utilsby-perl liblsan0 liblwp-mediatypes-perl liblwp-protocol-https-perl libmailtools-perl libmarkdown2 libmath-base85-perl
+  libmodule-implementation-perl libmodule-runtime-perl libmoo-perl libmoox-aliases-perl libmouse-perl libmpc3 libnamespace-clean-perl libnet-domain-tld-perl
+  libnet-http-perl libnet-ipv6addr-perl libnet-netmask-perl libnet-smtp-ssl-perl libnet-ssleay-perl libnetaddr-ip-perl libnsl-dev libnumber-compare-perl
+  libpackage-stash-perl libpackage-stash-xs-perl libpangoxft-1.0-0 libparams-classify-perl libparams-util-perl libpath-tiny-perl libperlio-gzip-perl
+  libperlio-utf8-strict-perl librole-tiny-perl librsvg2-2 librsvg2-common libsereal-decoder-perl libsereal-encoder-perl libsocket6-perl libsort-versions-perl
+  libstdc++-11-dev libstrictures-perl libsub-exporter-perl libsub-exporter-progressive-perl libsub-identify-perl libsub-install-perl libsub-name-perl
+  libsub-quote-perl libsyntax-keyword-try-perl libtext-glob-perl libtext-levenshteinxs-perl libtext-markdown-discount-perl libtext-xslate-perl
+  libtime-duration-perl libtime-moment-perl libtimedate-perl libtirpc-dev libtry-tiny-perl libtsan0 libubsan1 libunicode-utf8-perl liburi-perl
+  libvariable-magic-perl libvte-2.91-0 libvte-2.91-common libwayland-client0 libwayland-cursor0 libwayland-egl1 libwww-perl libwww-robotrules-perl libxcomposite1
+  libxcursor1 libxdamage1 libxfixes3 libxi6 libxinerama1 libxkbcommon0 libxml-libxml-perl libxml-namespacesupport-perl libxml-parser-perl libxml-sax-base-perl
+  libxml-sax-expat-perl libxml-sax-perl libxpm4 libxrandr2 libxs-parse-keyword-perl libxtst6 libyaml-libyaml-perl lintian linux-libc-dev lto-disabled-list lzip
+  lzop manpages-dev patchutils perl-openssl-defaults rpcsvc-proto session-migration t1utils ubuntu-mono
+Suggested packages:
+  cpp-doc gcc-11-locales debian-keyring g++-multilib g++-11-multilib gcc-11-doc gcc-multilib autoconf automake libtool flex bison gdb gcc-doc gcc-11-multilib
+  gettext-doc autopoint libasprintf-dev libgettextpo-dev libdigest-hmac-perl libgssapi-perl glibc-doc colord libgd-tools gvfs libcrypt-ssleay-perl
+  libscalar-number-perl librsvg2-bin libstdc++-11-doc libbareword-filehandles-perl libindirect-perl libmultidimensional-perl libbusiness-isbn-perl
+  libauthen-ntlm-perl libxml-sax-expatxs-perl binutils-multiarch libtext-template-perl
+Recommended packages:
+  libgtk2-perl
+The following NEW packages will be installed:
+  adwaita-icon-theme at-spi2-core build-essential cpp cpp-11 dconf-gsettings-backend dconf-service diffstat dpkg-dev fakeroot g++ g++-11 gcc gcc-11 gcc-11-base
+  gdebi gdebi-core gettext gir1.2-atk-1.0 gir1.2-freedesktop gir1.2-gdkpixbuf-2.0 gir1.2-gtk-3.0 gir1.2-harfbuzz-0.0 gir1.2-pango-1.0 gir1.2-vte-2.91
+  gnome-icon-theme gsettings-desktop-schemas gtk-update-icon-cache humanity-icon-theme intltool-debian libalgorithm-diff-perl libalgorithm-diff-xs-perl
+  libalgorithm-merge-perl libaliased-perl libapt-pkg-perl libarchive-zip-perl libasan6 libatk-bridge2.0-0 libatk1.0-0 libatk1.0-data libatomic1 libatspi2.0-0
+  libauthen-sasl-perl libb-hooks-endofscope-perl libb-hooks-op-check-perl libc-dev-bin libc-devtools libc6-dev libcairo-gobject2 libcapture-tiny-perl libcc1-0
+  libclass-data-inheritable-perl libclass-method-modifiers-perl libclass-xsaccessor-perl libclone-perl libcolord2 libconfig-tiny-perl libconst-fast-perl
+  libcpanel-json-xs-perl libcrypt-dev libdata-dpath-perl libdata-dump-perl libdata-messagepack-perl libdata-optlist-perl libdata-validate-domain-perl
+  libdata-validate-ip-perl libdata-validate-uri-perl libdconf1 libdevel-callchecker-perl libdevel-size-perl libdevel-stacktrace-perl libdynaloader-functions-perl
+  libemail-address-xs-perl libencode-locale-perl libepoxy0 libexception-class-perl libexporter-tiny-perl libfakeroot libfile-basedir-perl libfile-find-rule-perl
+  libfile-listing-perl libfont-afm-perl libfont-ttf-perl libgcc-11-dev libgd3 libgdk-pixbuf-2.0-0 libgdk-pixbuf2.0-bin libgdk-pixbuf2.0-common libgtk-3-0
+  libgtk-3-bin libgtk-3-common libhtml-form-perl libhtml-format-perl libhtml-html5-entities-perl libhtml-parser-perl libhtml-tagset-perl libhtml-tree-perl
+  libhttp-cookies-perl libhttp-daemon-perl libhttp-date-perl libhttp-message-perl libhttp-negotiate-perl libimport-into-perl libio-html-perl
+  libio-interactive-perl libio-prompt-tiny-perl libio-socket-ssl-perl libio-string-perl libipc-run3-perl libipc-system-simple-perl libisl23 libiterator-perl
+  libiterator-util-perl libitm1 libjson-maybexs-perl liblist-compare-perl liblist-moreutils-perl liblist-moreutils-xs-perl liblist-someutils-perl
+  liblist-someutils-xs-perl liblist-utilsby-perl liblsan0 liblwp-mediatypes-perl liblwp-protocol-https-perl libmailtools-perl libmarkdown2 libmath-base85-perl
+  libmodule-implementation-perl libmodule-runtime-perl libmoo-perl libmoox-aliases-perl libmouse-perl libmpc3 libnamespace-clean-perl libnet-domain-tld-perl
+  libnet-http-perl libnet-ipv6addr-perl libnet-netmask-perl libnet-smtp-ssl-perl libnet-ssleay-perl libnetaddr-ip-perl libnsl-dev libnumber-compare-perl
+  libpackage-stash-perl libpackage-stash-xs-perl libpangoxft-1.0-0 libparams-classify-perl libparams-util-perl libpath-tiny-perl libperlio-gzip-perl
+  libperlio-utf8-strict-perl librole-tiny-perl librsvg2-2 librsvg2-common libsereal-decoder-perl libsereal-encoder-perl libsocket6-perl libsort-versions-perl
+  libstdc++-11-dev libstrictures-perl libsub-exporter-perl libsub-exporter-progressive-perl libsub-identify-perl libsub-install-perl libsub-name-perl
+  libsub-quote-perl libsyntax-keyword-try-perl libtext-glob-perl libtext-levenshteinxs-perl libtext-markdown-discount-perl libtext-xslate-perl
+  libtime-duration-perl libtime-moment-perl libtimedate-perl libtirpc-dev libtry-tiny-perl libtsan0 libubsan1 libunicode-utf8-perl liburi-perl
+  libvariable-magic-perl libvte-2.91-0 libvte-2.91-common libwayland-client0 libwayland-cursor0 libwayland-egl1 libwww-perl libwww-robotrules-perl libxcomposite1
+  libxcursor1 libxdamage1 libxfixes3 libxi6 libxinerama1 libxkbcommon0 libxml-libxml-perl libxml-namespacesupport-perl libxml-parser-perl libxml-sax-base-perl
+  libxml-sax-expat-perl libxml-sax-perl libxpm4 libxrandr2 libxs-parse-keyword-perl libxtst6 libyaml-libyaml-perl lintian linux-libc-dev lto-disabled-list lzip
+  lzop manpages-dev patchutils perl-openssl-defaults rpcsvc-proto session-migration t1utils ubuntu-mono
+0 upgraded, 218 newly installed, 0 to remove and 14 not upgraded.
+Need to get 91.6 MB of archives.
+After this operation, 305 MB of additional disk space will be used.
+Do you want to continue? [Y/n] y
+
+Install.packages R form root
+
+parallel
+doSNOW
+remote
+devtools
+tidyverse 
+furrr
+
+
+
+Install r-studio and testing and configure access
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo gdebi rstudio-server-2024.09.1-394-amd64.deb 
+
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo view /etc/pam.d/common-session
+...
+#
+# /etc/pam.d/common-session - session-related modules common to all services
+#
+# This file is included from other service-specific PAM config files,
+# and should contain a list of modules that define tasks to be performed
+# at the start and end of interactive sessions.
+#
+# As of pam 1.0.1-6, this file is managed by pam-auth-update by default.
+# To take advantage of this, it is recommended that you configure any
+# local modules either before or after the default block, and use
+# pam-auth-update to manage selection of other modules.  See
+# pam-auth-update(8) for details.
+
+# here are the per-package modules (the "Primary" block)
+session [default=1]                     pam_permit.so
+# here's the fallback if no module succeeds
+session requisite                       pam_deny.so
+# prime the stack with a positive return value if there isn't one already;
+# this avoids us returning an error just because nothing sets a success code
+# since the modules above will each just jump around
+session required                        pam_permit.so
+#to autocreate user home directory 
+#https://support.posit.co/hc/en-us/articles/360024137174-Integrating-Ubuntu-with-Active-Directory-for-Posit-Workbench-RStudio-Server-Pro
+session required pam_mkhomedir.so skel=/etc/skel/ umask=0022
+
+# The pam_umask module will set the umask according to the system default in
+# /etc/login.defs and user settings, solving the problem of different
+# umask settings with different shells, display managers, remote sessions etc.
+# See "man pam_umask".
+session optional                        pam_umask.so
+# and here are more per-package modules (the "Additional" block)
+session required        pam_unix.so
+session optional                        pam_sss.so
+session optional        pam_systemd.so
+session optional                        pam_mkhomedir.so
+# end of pam-auth-update config
+~                                 
+....
+
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo cp /etc/pam.d/login /etc/pam.d/rstudio
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo apt install pamtester
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ pamtester --verbose rstudio gianfranco.samuele2@unibo.it authenticate acct_mgmt setcred open_session close_session
+pamtester: invoking pam_start(rstudio, gianfranco.samuele2@unibo.it, ...)
+pamtester: performing operation - authenticate
+Password: 
+pamtester: successfully authenticated
+pamtester: performing operation - acct_mgmt
+pamtester: Permission denied
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ 
+
+https://support.posit.co/hc/en-us/articles/15173704481943-Active-Directory-LDAP-user-not-able-to-login-permission-denied-on-PAM-acct-mgmt
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo cat /etc/sssd/sssd.conf
+
+[sssd]
+domains = personale.dir.unibo.it
+config_file_version = 2
+services = nss, pam
+
+[domain/personale.dir.unibo.it]
+default_shell = /bin/bash
+ad_server = dcrpersonale02.personale.dir.unibo.it
+krb5_store_password_if_offline = True
+cache_credentials = True
+krb5_realm = PERSONALE.DIR.UNIBO.IT
+realmd_tags = manages-system joined-with-adcli 
+id_provider = ad
+fallback_homedir = /home/PERSONALE/%u
+ad_domain = personale.dir.unibo.it
+use_fully_qualified_names = False
+ldap_id_mapping = True
+access_provider = ad
+ldap_use_tokengroups = False
+ignore_group_members = True
+ldap_group_nesting_level = 0
+simple_allow_groups = Id2135244,Mat038683,DottRic0773812,Str00968.QualificaAggregata.Dottorandi,Str00968.QualificaAggregata.Ric.Unibo
+ad_gpo_map_service = +rstudio
+enumerate = true 
+
+restart sssd
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo systemctl restart sssd.service
+
+pamtester: performing operation - open_session
+sh: 1: cannot create /run/motd.dynamic.new: Permission denied
+Welcome to Ubuntu 22.04.5 LTS (GNU/Linux 5.15.0-126-generic x86_64)
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo reboot
+
+
+
+gianfranco.samuele2@sgbga-d142248s:/usr/local/custom/rstudio/Script$ sudo cat /etc/R/Rprofile.site 
+##						Emacs please make this -*- R -*-
+## empty Rprofile.site for R on Debian
+##
+## Copyright (C) 2008 - 2018  Dirk Eddelbuettel and GPL'ed
+##
+## see help(Startup) for documentation on ~/.Rprofile and Rprofile.site
+
+# ## Example of .Rprofile
+# options(width=65, digits=5)
+# options(show.signif.stars=FALSE)
+# setHook(packageEvent("grDevices", "onLoad"),
+#         function(...) grDevices::ps.options(horizontal=FALSE))
+# set.seed(1234)
+# .First <- function() cat("\n   Welcome to R!\n\n")
+# .Last <- function()  cat("\n   Goodbye!\n\n")
+
+# ## Example of Rprofile.site
+# local({
+#  # add MASS to the default packages, set a CRAN mirror
+#  old <- getOption("defaultPackages"); r <- getOption("repos")
+#  r["CRAN"] <- "http://my.local.cran"
+#  options(defaultPackages = c(old, "MASS"), repos = r)
+#})
+
+## We set the cloud mirror, which is 'network-close' to everybody, as default
+local({
+    r <- getOption("repos")
+    r["CRAN"] <- "https://cloud.r-project.org"
+    options(repos = r)
+})
+suppressMessages(bspm::enable())
+options(bspm.version.check=FALSE)
+setHook("rstudio.sessionInit", function(newSession) {
+  if (newSession)
+        print(sessioninfo::session_info())
+        message("******************************************************************")
+        message("*** You are welcome to SGBGA-D142249S - 137.204.142.249        ***")
+        message("*** If you want to install personal local R package            ***")
+        message("*** If doesn't work Execute:                                   ***")
+        message("*** bspm::moveto_sys()				                ***")
+        message("*** If continue to not work Execute:                           ***")
+        message("*** bspm::disable()				                ***")
+        message("*** Install Package R as usual: with install.packages(package) ***")
+        message("******************************************************************")
+        #print(sessioninfo::session_info())
+        message("******************************************************************")
+	#print(sessionInfo())
+	source("/usr/local/custom/rstudio/show_storage.R")
+}, action = "append")
+
+gianfranco.samuele2@sgbga-d142248s:~$ sudo cat /usr/local/custom/rstudio/show_storage.R
+# RStudio session startup script
+
+# Define the path to your bash script
+bash_script <- "/usr/local/custom/rstudio/show_storage.sh"
+
+# Function to check and display quota
+check_storage <- function() {
+  # Capture the output of the bash script
+  storage_output <- system(paste("bash", bash_script), intern = TRUE)
+
+  # Print the output to the RStudio console
+  cat(storage_output, sep = "\n")
+}
+
+# Run the function to check and display quota
+check_storage()
+
+# Ensure the script runs even when restoring a session
+#.Last <- function() {
+#  check_storage()
+#}
+gianfranco.samuele2@sgbga-d142248s:~$ 
+
+
+gianfranco.samuele2@sgbga-d142248s:~$ sudo cat /etc/profile
+# /etc/profile: system-wide .profile file for the Bourne shell (sh(1))
+# and Bourne compatible shells (bash(1), ksh(1), ash(1), ...).
+
+if [ "${PS1-}" ]; then
+  if [ "${BASH-}" ] && [ "$BASH" != "/bin/sh" ]; then
+    # The file bash.bashrc already sets the default PS1.
+    # PS1='\h:\w\$ '
+    if [ -f /etc/bash.bashrc ]; then
+      . /etc/bash.bashrc
+    fi
+  else
+    if [ "$(id -u)" -eq 0 ]; then
+      PS1='# '
+    else
+      PS1='$ '
+    fi
+  fi
+fi
+
+if [ -d /etc/profile.d ]; then
+  for i in /etc/profile.d/*.sh; do
+    if [ -r $i ]; then
+      . $i
+    fi
+  done
+  unset i
+fi
+export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
+
+gianfranco.samuele2@sgbga-d142248s:~$ sudo view /usr/local/custom/rstudio/config_rstudio.sh
+gianfranco.samuele2@sgbga-d142248s:~$ sudo chmod +x /usr/local/custom/rstudio/config_rstudio.sh
+gianfranco.samuele2@sgbga-d142248s:~$ sudo cat /usr/local/custom/rstudio/config_rstudio.sh
+#!/bin/bash -e
+#R script to set user R library in RUSERPATH and apply some config template to User
+#load mkl path and variable
+#. /opt/intel/oneapi/setvars.sh
+
+
+#for R environment
+#create project folder
+# Check if the user is not root
+if [ "$UID" != "0" ]; then
+    #get Group ID user
+    GID=$(id -g)
+    RPATH=$(which R)
+    RSED=$(which sed)
+    RCP=$(which cp)
+    RVERSION=$($RPATH --version | head -n1 | cut -d " " -f3|cut -d "." -f1,2 )
+    RUSRCONFPATH="$HOME/.config/rstudio"
+    RTEMPLATEPATH="/usr/local/custom/rstudio"
+    RUSERPATH="/BIGDATA1/r_projects/$USER"
+
+    # Check if the user's home directory exists in /media/path
+    if [ ! -d "$RUSERPATH" ]; then
+       # Create the user's directory under /media/path
+       mkdir -p "$RUSERPATH/.config"
+       mkdir -p "$RUSERPATH/.local"
+       # Set ownership of the directory to the user
+       chown $USER:$GID -R "$RUSERPATH"
+       chmod 700 "$RUSERPATH/.config"
+       chmod 700 "$RUSERPATH/.local"
+    fi
+    #move R UserLibrary path to /media/r_projects/$USER/R/x86_64-pc-linux-gnu-library/$RVERSION
+    if [ ! -d "$RUSERPATH/R/x86_64-pc-linux-gnu-library/$RVERSION" ]; then
+            mkdir -p "$RUSERPATH/R/x86_64-pc-linux-gnu-library/$RVERSION"
+            # Set ownership of the directory to the user
+            chown $USER:$GID -R "$RUSERPATH/R/x86_64-pc-linux-gnu-library/$RVERSION"
+    fi
+    #configure rstudio user Preference change a template
+    if [ ! -f "$HOME/.Rlconfig" ]; then
+        touch "$HOME/.Rlconfig"
+        $($RCP $RTEMPLATEPATH/rstudio-prefs-template.json $RUSRCONFPATH/rstudio-prefs.json)
+        cd $RUSRCONFPATH
+        $($RSED --in-place --regexp-extended "s#USER#\l${USER}#g" $RUSRCONFPATH/rstudio-prefs.json)
+        chown $USER:$GID "$RUSRCONFPATH/rstudio-prefs.json"
+        #Configure R_LIBS_USER environment in ~./Renviron to be check .libPaths()
+#       if [ ! -f "$HOME/.Renviron" ]; then
+#               R_LIBS_USER="$RUSERPATH/R/x86_64-pc-linux-gnu-library/$RVERSION"
+#               echo "XDG_CONFIG_HOME=$RUSERPATH/.config"> "$HOME/.Renviron"
+#               echo "R_LIBS_USER=$R_LIBS_USER" >> "$HOME/.Renviron"
+#               echo "HOME=$RUSERPATH" >> "$HOME/.Renviron"
+#    	fi
+	R_LIBS_USER="$RUSERPATH/R/x86_64-pc-linux-gnu-library/$RVERSION"
+	echo "XDG_CONFIG_HOME=$RUSERPATH/.config">> "$HOME/.Renviron"
+	#echo "XDG_DATA_HOME=$RUSERPATH/.local">> "$HOME/.Renviron"
+        echo "R_LIBS_USER=$R_LIBS_USER" >> "$HOME/.Renviron"
+        echo "HOME=$RUSERPATH" >> "$HOME/.Renviron"
+        #echo "XDG_CONFIG_HOME=$RUSERPATH">> "$HOME/.Renviron"
+        #RSTUDIO_CONFIG_HOME="/media/r_projects/$USER/.config/rstudio"
+        #echo "RSTUDIO_CONFIG_HOME=$RSTUDIO_CONFIG_HOME" >> "$HOME/.Renviron"
+        chown $USER:$GID "$HOME/.Renviron"
+	if [ ! -f "$HOME/.Rbashlconfig" ]; then
+		touch "$HOME/.Rlbashconfig"
+		#some welcome messages
+		#echo "echo "welcome to $HOST SERVER"" >> $HOME/.bashrc 
+		#echo "echo "If you have any problem please write an e-mail to 'Lifewatch_Biome_server@live.unibo.it'"" >> $HOME/.bashrc
+		#change to new R user path $RUSERPATH
+		#echo "echo "Your R user path is $RUSERPATH"" >> $HOME/.bashrc
+		echo "cd $RUSERPATH" >> $HOME/.bashrc
+		#export R_LIBS_USER="/media/r_projects/$USER/R/x86_64-pc-linux-gnu-library/$RVERSION"
+	fi
+    fi
+fi
+
+root@sgbga-d142248s:~# ln -s /usr/local/custom/rstudio/config_rstudio.sh /etc/profile.d/999-config_rstudio.sh
+root@sgbga-d142248s:~# ls -la /etc/profile.d/999-config_rstudio.sh
+lrwxrwxrwx 1 root root 43 Nov 29 10:45 /etc/profile.d/999-config_rstudio.sh -> /usr/local/custom/rstudio/config_rstudio.sh
+root@sgbga-d142248s:~# 
+
+gianfranco.samuele2@sgbga-d142248s:~$ sudo cat /usr/local/custom/rstudio/rstudio-prefs-template.json 
+{
+    "initial_working_directory": "/BIGDATA1/r_projects/USER",
+    "default_open_project_location": "/BIGDATA1/r_projects/USER",
+    "posix_terminal_shell": "bash",
+    "show_last_dot_value": true,
+    "auto_detect_indentation": true,
+    "highlight_selected_line": true,
+    "highlight_r_function_calls": true,
+    "rainbow_parentheses": true,
+    "check_arguments_to_r_function_calls": true,
+    "che:q!ck_unexpected_assignment_in_function_call": true,
+    "warn_if_no_such_variable_in_scope": true,
+    "warn_variable_defined_but_not_used": true,
+    "show_diagnostics_other": true,
+    "syntax_color_console": true,
+    "intend_guides": "rainbowfills",
+    "rainbow_parentheses": true,
+    "auto_expand_error_tracebacks": true
+}
+gianfranco.samuele2@sgbga-d142248s:~$ 
+
+
+gianfranco.samuele2@sgbga-d142248s:~$ sudo cat /etc/rstudio/rsession.conf 
+# R Session Configuration File
+#
+# sessioni attive per 7 giorni max
+session-timeout-minutes=10080
+websocket-log-level=1
+session-handle-offline-enabled=1
+session-connections-block-suspend=1
+session-external-pointers-block-suspend=1
+#r-libs-user=/media/r_projects/$USER/R/x86_64-pc-linux-gnu-library/%v
+#r-libs-user=/media/r_projects/libs_user/
+#session-default-working-dir=/media/r_projects/$USER/working
+#session-default-new-project-dir=/media/r_projects/$USER/Projec
+copilot-enabled=1
+
+gianfranco.samuele2@sgbga-d142248s:~$ sudo view /etc/rstudio/rserver.conf 
+gianfranco.samuele2@sgbga-d142248s:~$ sudo cat /etc/rstudio/rserver.conf 
+# Server Configuration File
+#
+# Server Configuration File
+www-address=137.204.142.248
+www-thread-pool-size=6
+#auth-required-user-group=analysts,admins,rstudio-users
+gianfranco.samuele2@sgbga-d142248s:~$ 
+
+
+gianfranco.samuele2@sgbga-d142248s:~$ sudo view /etc/rstudio/logging.conf
+gianfranco.samuele2@sgbga-d142248s:~$ sudo cat /etc/rstudio/logging.conf
+[*]
+log-level=info
+#logger-type=syslog
+logger-type=file
+max-size-mb=20
+rotate=yes
+
+[@rserver]
+log-level=debug
+log-dir=/var/log/rstudio/rstudio-server/server
+logger-type=file
+max-size-mb=10
+rotate=yes
+
+[file-locking]
+log-dir=/var/log/rstudio/rstudio-server/file-locking
+log-file-mode=600
+gianfranco.samuele2@sgbga-d142248s:~$ 
+
+gianfranco.samuele2@sgbga-d142248s:~$ sudo view /etc/rstudio/env-vars
+gianfranco.samuele2@sgbga-d142248s:~$ sudo cat /etc/rstudio/env-vars
+OPENBLAS_NUM_THREADS=4
+MP_NUM_THREADS=5 
+gianfranco.samuele2@sgbga-d142248s:~$ 
+
+
+
+
+

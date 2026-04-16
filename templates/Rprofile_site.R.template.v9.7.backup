@@ -12,27 +12,40 @@
 #   - Per-session detection: this profile (handles live migration without reboot)
 #   - Thread cap: %%MAX_BLAS_THREADS%% max to prevent QEMU livelock
 #
-# ARCHITECTURE (v10.0):
-#   /Rtmp = dedicated 400GB local disk per VM (NOT tmpfs, NOT NFS, NOT OS /tmp)
-#   NFS   = user homes (/nfs/home/<user>) — shared persistent data
-#   Each VM has its own /Rtmp disk → no cross-server tmp interference
-#   Full VM RAM available for R (no tmpfs reservation)
+# v9.5 CHANGES (from v9.3):
+#   - [Section -2] OPENBLAS_CORETYPE auto-detection at the VERY TOP of file.
+#   - [Section -1] PSOCK Worker Fast Path (from v9.4).
+#   - get_active_users(): pure-R /proc scan (no fork/system2).
+#   - deferred_pkg_init() + biome_make_cluster() user-facing tool.
 #
-# v10.0 CHANGES (from v9.8) — Local /Rtmp Disk Architecture:
-#   - [T1]  Replaced 100GB RAM tmpfs with dedicated 400GB local disk at /Rtmp
-#   - [T2]  Removed tmpfs→NFS split-brain routing (biome_tmpfs_safe, get_tmp_use_pct)
-#   - [T3]  Removed NFS fallback (~/.r_tmp_fallback) — no longer needed
-#   - [T4]  All per-package temp dirs use local /Rtmp/biome_<user>/<pkg>
-#   - [T5]  RAMDISK_GB=0 (no RAM consumed by /Rtmp)
-#   - [T6]  NIMBLE compilation still routes to NFS ($HOME) for reboot safety
-#   - [T7]  API_VERSION bumped 4→5 (tmp architecture change)
-#   - Full RAM available: +100GB headroom for NIMBLE/big-data workloads
+# v9.6 CHANGES (from v9.5):
+#   - Multi-signal tmpfs heuristic, dual-threshold, per-user tmp consolidation
+#   - Automatic NFS fallback (permanent within session, never reverts)
+#   - ragg rendering backend, hardened save/load, biome_plot_budget()
+#   - Memory sentinels: solve/dist/outer/expand.grid guards
+#
+# v9.7 CHANGES (from v9.6) — Pessimistic Engineering Hardening:
+#   - [L2]  Template integrity self-check (unsubstituted placeholder detection)
+#   - [C1]  Callback fallback: if addTaskCallback fails, sessionInit hook fires guards
+#   - [C2]  Idempotent guard installation (safe on re-source, attr-tagged wrappers)
+#   - [H1]  Re-source protection: .biome_env in .GlobalEnv preserved on re-load
+#   - [H2]  NFS split-brain marker file per session PID
+#   - [H3]  tool_env reuse instead of detach/attach race
+#   - [H4]  diag_logs bounded at 500 entries (prevents memory leak on long sessions)
+#   - [M1]  Unified RAM helper: .biome_get_ram_gb stored in .biome_env
+#   - [M2]  API_VERSION contract for audit interoperability
+#   - [M3]  geosphere::distm guard uses centralized .get_ram_gb
+#   - [M4]  Sys.sleep(2) in solve guard gated on interactive()
 #
 # v9.8 CHANGES (from v9.7) — OpenBLAS Serial Safety:
 #   - [B1]  SECTION -1.5: BLAS serial/pthread safety check at profile load
+#           Detects pthread variant → warns + forces OPENBLAS_NUM_THREADS=1
 #   - [B2]  .biome_env$blas_is_serial: pessimistic flag (FALSE unless proven serial)
 #   - [B3]  solve() guard: serial-aware, skips thread manipulation when serial confirmed
-#   - [B4]  Belt-and-suspenders: OPENBLAS_NUM_THREADS=1 in Renviron.site
+#   - [B4]  API_VERSION bumped 3→4 (blas_is_serial field added)
+#   - Infrastructure: openblas-serial replaces openblas-pthread in all scripts
+#           (50_setup_nodes.sh, r_env_manager.sh, setup_nodes.vars.conf)
+#   - Belt-and-suspenders: OPENBLAS_NUM_THREADS=1 in Renviron.site
 # ==============================================================================
 
 # ── L2: Template Integrity Self-Check ──
@@ -228,18 +241,19 @@ local({
   ENABLE_TF_MGMT       <- TRUE
   ENABLE_NUMA_AWARE    <- FALSE
   ENABLE_GGPLOT_OPT    <- TRUE     # v9.6: ragg backend + viridis defaults
+  ENABLE_NFS_BIG_DATA  <- TRUE     # v9.6: force NFS for ops > threshold
 
-  # /Rtmp usage advisory threshold (% of local disk — warning only, no redirect)
+  # Tmpfs routing thresholds (v9.6 — configurable via vars.conf)
   TMP_WARN_PCT     <- %%TMP_WARN_THRESHOLD_PCT%%L    # Advisory warn at this %
+  TMP_REDIRECT_PCT <- %%TMP_REDIRECT_THRESHOLD_PCT%%L  # Hard redirect at this %
+  BIG_DATA_THRESHOLD_GB <- %%BIG_DATA_THRESHOLD_GB%%L  # Ops > this always NFS
 
   # ── Infrastructure ──
   R_HOST       <- "%%BIOME_HOST%%"
   LOG_PATH     <- "%%LOG_FILE%%"
   VM_VCORES    <- %%VM_VCORES%%L
   VM_RAM_GB    <- %%VM_RAM_GB%%L
-  RAMDISK_GB   <- 0L   # v10.0: /Rtmp is local disk, NOT tmpfs — no RAM consumed
-  TMP_DISK_GB  <- tryCatch(as.integer(Sys.getenv("BIOME_TMP_DISK_GB", "400")), error=function(e) 400L)
-  RTMP_PATH    <- "/Rtmp"  # v10.0: dedicated R temp disk mount point
+  RAMDISK_GB   <- tryCatch(as.integer(Sys.getenv("BIOME_RAMDISK_GB", "%%RAMDISK_GB%%")), error=function(e) %%RAMDISK_GB%%L)
   MAX_THREADS  <- %%MAX_BLAS_THREADS%%L
   
   OLLAMA_API   <- "http://127.0.0.1:11434/api/generate"
@@ -295,11 +309,12 @@ local({
   .biome_env$VERSION <- VERSION
   # v9.7: Machine-readable API version for audit interop (M2)
   # Bump this when .biome_env structure changes (fields added/renamed/removed)
-  # v10.0: bumped 4→5 for local /Rtmp disk architecture
-  .biome_env$API_VERSION <- 5L
-  # v10.0: Store /Rtmp disk threshold in .biome_env for audit/diagnostic access
+  # v9.8: bumped 3→4 for blas_is_serial field
+  .biome_env$API_VERSION <- 4L
+  # v9.6: Store thresholds in .biome_env for audit/diagnostic access
   .biome_env$TMP_WARN_PCT <- TMP_WARN_PCT
-  .biome_env$TMP_DISK_GB <- TMP_DISK_GB
+  .biome_env$TMP_REDIRECT_PCT <- TMP_REDIRECT_PCT
+  .biome_env$BIG_DATA_THRESHOLD_GB <- BIG_DATA_THRESHOLD_GB
   # v9.8: BLAS variant detection — pessimistic: assume pthread unless proven serial
   # This flag lets memory guards skip thread manipulation when serial BLAS is active
   # (serial OpenBLAS ignores OPENBLAS_NUM_THREADS entirely)
@@ -359,9 +374,9 @@ local({
   }, error = function(e) NULL)
 
   if (ENABLE_TMP_CLEANUP && MY_UID >= 0) {
-    # v10.0: Clean stale per-user temp dirs in /Rtmp
+    # v9.6: Clean both /tmp (old-style + new biome_<user>) and NFS fallback
     tryCatch({
-      all_tmp <- list.files(RTMP_PATH,
+      all_tmp <- list.files("/tmp",
         pattern=paste0("^Rtmp|^terra_|^sf_|^arrow_|^rgee_|^gdalwarp_|^biome_", curr_user),
         full.names=TRUE)
       if (length(all_tmp) > 0) {
@@ -375,7 +390,26 @@ local({
         to_del <- to_del[basename(to_del) != current_td]
         if (length(to_del) > 0) {
            unlink(to_del, recursive=TRUE, force=FALSE)
-           sys_log("Cleanup", "OK", sprintf("Removed %d /Rtmp items older than %dh", length(to_del), limit_h))
+           sys_log("Cleanup", "OK", sprintf("Removed %d /tmp items older than %dh", length(to_del), limit_h))
+        }
+      }
+    }, error = function(e) NULL)
+    # v9.6: Also clean NFS fallback dir
+    tryCatch({
+      nfs_fallback <- file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
+      if (dir.exists(nfs_fallback)) {
+        all_nfs_tmp <- list.files(nfs_fallback, full.names = TRUE, recursive = FALSE)
+        if (length(all_nfs_tmp) > 0) {
+          info <- file.info(all_nfs_tmp)
+          age_h <- as.numeric(difftime(Sys.time(), info$mtime, units="hours"))
+          limit_h <- .biome_env$shared_env$timeout_hours
+          to_del <- all_nfs_tmp[!is.na(info$uid) & info$uid == MY_UID & age_h > limit_h]
+          if (length(to_del) > 0) {
+            bytes_freed <- sum(info$size[match(to_del, rownames(info))], na.rm = TRUE)
+            unlink(to_del, recursive = TRUE, force = FALSE)
+            sys_log("NfsTmpCleanup", "OK", sprintf("Removed %d NFS fallback items (%.1f GB)",
+                    length(to_del), bytes_freed / 1024^3))
+          }
         }
       }
     }, error = function(e) NULL)
@@ -429,8 +463,7 @@ local({
 
   get_system_ram_gb <- function() {
     tryCatch({
-      # v10.0: RAMDISK_GB is 0 (/Rtmp is local disk, not RAM). Full RAM available.
-      ra <- floor(.biome_raw_ram_gb())
+      ra <- floor(.biome_raw_ram_gb()) - RAMDISK_GB
       if (is.finite(.biome_env$shared_env$cgroup_ram_gb)) ra <- min(ra, floor(.biome_env$shared_env$cgroup_ram_gb))
       max(2L, as.integer(ra))
     }, error=function(e) 16L)
@@ -520,19 +553,57 @@ local({
         }, error = function(e) NULL)
       }
 
-      # v10.0: Advisory /Rtmp disk usage check (no redirect — local disk is safe)
+      # v9.6: Dual-threshold tmpfs monitoring
       if (ENABLE_SMART_ROUTING) tryCatch({
-        tmp_pct <- get_tmp_disk_use_pct()
-        if (tmp_pct >= TMP_WARN_PCT && !isTRUE(getOption("biome_tmp_warn_shown"))) {
-          options(biome_tmp_warn_shown = TRUE)
-          if (interactive()) {
-            warning(sprintf(paste0(
-              "BIOME-CALC: /Rtmp local disk is at %d%% capacity.\n",
-              "  Clean up stale temp files or contact admin if persistent."),
-              as.integer(tmp_pct)), call. = FALSE, immediate. = TRUE)
+        already_on_nfs <- (Sys.getenv("BIOME_FORCE_NFS_TMP") == "true")
+        force_tmpfs <- (Sys.getenv("BIOME_FORCE_TMPFS") == "true")
+        if (!already_on_nfs && !force_tmpfs) {
+          safety <- biome_tmpfs_safe()
+          if (!safety$safe) {
+            fallback <- file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
+            if (!dir.exists(fallback)) dir.create(fallback, recursive = TRUE, showWarnings = FALSE)
+            user_fb <- file.path(fallback, paste0("biome_", curr_user))
+            if (!dir.exists(user_fb)) dir.create(user_fb, recursive = TRUE, showWarnings = FALSE)
+            # v9.9: Pin original tempdir before redirecting — prevents split-brain
+            # for active C++ compilation (NIMBLE/TMB/Rcpp). compileNimble() writes
+            # .cpp to tempdir() but g++ inherits $TMPDIR. Without this pin,
+            # the compiler looks for source files in NFS that are still on RAMDisk.
+            Sys.setenv(BIOME_ORIGINAL_TMPDIR = tempdir())
+            Sys.setenv(BIOME_FORCE_NFS_TMP = "true", TMP = user_fb, TEMP = user_fb, TMPDIR = user_fb)
+            # H2: Write NFS session marker (split-brain detection for biome_load_session)
+            tryCatch(writeLines(as.character(Sys.getpid()),
+              file.path(user_fb, sprintf(".biome_nfs_session_%d", Sys.getpid()))), error = function(e) NULL)
+            sys_log("TmpOverflow", "WARN", sprintf("Mid-session redirect: %s", safety$reason))
+            if (interactive()) message(sprintf(paste0(.C_YELLOW,
+              "\n\u26a0\ufe0f  BIOME-CALC: /tmp at %d%% \u2014 auto-redirected to NFS (%s).",
+              "\n   This session will NOT revert to tmpfs (pessimistic).", .C_RESET),
+              as.integer(safety$pct), user_fb))
+          } else if (safety$warn) {
+            if (!isTRUE(getOption("biome_tmp_warn_shown"))) {
+              options(biome_tmp_warn_shown = TRUE)
+              if (interactive()) message(sprintf(paste0(.C_YELLOW,
+                "\n\U0001F4A1 BIOME-CALC: /tmp at %d%% capacity.",
+                "\n   For large computations: Sys.setenv(BIOME_FORCE_NFS_TMP = 'true')", .C_RESET),
+                as.integer(safety$pct)))
+            }
           }
-          sys_log("TmpDisk", "WARN", sprintf("/Rtmp at %d%%", as.integer(tmp_pct)))
         }
+        # Per-user quota monitor
+        if (!already_on_nfs) tryCatch({
+          user_root <- file.path("/tmp", paste0("biome_", curr_user))
+          if (dir.exists(user_root)) {
+            files <- list.files(user_root, full.names = TRUE, recursive = TRUE, all.files = TRUE)
+            if (length(files) > 0) {
+              user_gb <- sum(file.info(files, extra_cols = FALSE)$size, na.rm = TRUE) / 1024^3
+              if (user_gb > 10 && interactive() && !isTRUE(getOption("biome_user_quota_warned"))) {
+                options(biome_user_quota_warned = TRUE)
+                warning(sprintf(
+                  "BIOME-CALC: Your temp files in /tmp are using %.1f GB. Consider Sys.setenv(BIOME_FORCE_NFS_TMP='true').",
+                  user_gb), call. = FALSE, immediate. = TRUE)
+              }
+            }
+          }
+        }, error = function(e) NULL)
       }, error = function(e) NULL)
 
     }, error=function(e) sys_log("ResMgmt", "FAIL", e$message))
@@ -558,20 +629,21 @@ local({
         OMP_NUM_THREADS      = as.character(worker_threads),
         OPENBLAS_NUM_THREADS = as.character(worker_threads),
         MKL_NUM_THREADS      = as.character(worker_threads),
-        TMP                  = RTMP_PATH,
-        TEMP                 = RTMP_PATH,
-        TMPDIR               = RTMP_PATH,
+        TMP                  = Sys.getenv("TMP", "/tmp"),
+        TEMP                 = Sys.getenv("TEMP", "/tmp"),
+        TMPDIR               = Sys.getenv("TMPDIR", "/tmp"),
+        BIOME_FORCE_NFS_TMP  = Sys.getenv("BIOME_FORCE_NFS_TMP", ""),
         if (nchar(coretype) > 0) c(OPENBLAS_CORETYPE = coretype) else NULL
       )
     )
   }
 
-  # ── Deferred Loading (v10.0: all temp on local /Rtmp disk) ──
+  # ── Deferred Loading (v9.6: multi-signal heuristic + per-user tmp) ──
 
-  # v10.0: Simple /Rtmp disk usage check (advisory only, no redirect)
-  get_tmp_disk_use_pct <- function() {
+  # v9.6: df-primary tmpfs usage (correct, 1ms fork cost is irrelevant at 30s callback)
+  get_tmp_use_pct <- function() {
     tryCatch({
-      df_out <- system2("df", args = c("-P", RTMP_PATH), stdout = TRUE, stderr = FALSE)
+      df_out <- system2("df", args = c("-P", "-BG", "/tmp"), stdout = TRUE, stderr = FALSE)
       if (length(df_out) >= 2) {
         parts <- strsplit(trimws(df_out[2]), "[[:space:]]+")[[1]]
         pct_str <- gsub("[^0-9]", "", parts[5])
@@ -579,6 +651,56 @@ local({
       }
       0
     }, error = function(e) 0)
+  }
+
+  # v9.6/v9.7: Multi-signal tmpfs safety heuristic (pessimistic)
+  # v9.7: Reads thresholds from .biome_env instead of closed-over lexical vars,
+  # so the exported copy in tools:biome_calc resolves correctly.
+  biome_tmpfs_safe <- function() {
+    tryCatch({
+      # Read thresholds from .biome_env (robust — works from any calling environment)
+      .be <- tryCatch(get(".biome_env", envir = .GlobalEnv), error = function(e) NULL)
+      .warn_pct <- tryCatch(.be$TMP_WARN_PCT, error = function(e) 60L)
+      .redir_pct <- tryCatch(.be$TMP_REDIRECT_PCT, error = function(e) 75L)
+      .ramdisk_gb <- tryCatch(.be$BIG_DATA_THRESHOLD_GB, error = function(e) 5L)
+      # Use Sys.info() for user — safe from any context
+      .user <- Sys.info()[["user"]]
+      # Resolve ramdisk size from .biome_env or environment variable
+      .ramdisk_total_gb <- tryCatch(
+        as.integer(Sys.getenv("BIOME_RAMDISK_GB", "100")),
+        error = function(e) 100L)
+
+      s1_pct <- get_tmp_use_pct()
+      s2_mem_avail_gb <- tryCatch({
+        mi <- readLines("/proc/meminfo", warn = FALSE)
+        al <- grep("^MemAvailable:", mi, value = TRUE)
+        if (length(al) > 0) as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1])) / 1024 / 1024
+        else Inf
+      }, error = function(e) Inf)
+      s3_cgroup_headroom_gb <- tryCatch({
+        cg_ram <- .be$shared_env$cgroup_ram_gb
+        if (is.finite(cg_ram)) cg_ram - (.ramdisk_total_gb + 4) else Inf
+      }, error = function(e) Inf)
+      s4_user_pct <- tryCatch({
+        user_root <- file.path("/tmp", paste0("biome_", .user))
+        if (!dir.exists(user_root)) return(0)
+        user_bytes <- sum(file.info(
+          list.files(user_root, all.files = TRUE, full.names = TRUE, recursive = TRUE)
+        )$size, na.rm = TRUE)
+        as.numeric(user_bytes / (.ramdisk_total_gb * 1024^3) * 100)
+      }, error = function(e) 0)
+      reasons <- c()
+      if (s1_pct >= .redir_pct) reasons <- c(reasons, sprintf("tmpfs at %d%%", as.integer(s1_pct)))
+      if (s2_mem_avail_gb < (.ramdisk_total_gb * 2)) reasons <- c(reasons, sprintf("MemAvail=%.0fGB", s2_mem_avail_gb))
+      if (s3_cgroup_headroom_gb < 0) reasons <- c(reasons, "cgroup limit near")
+      if (s4_user_pct > 30) reasons <- c(reasons, sprintf("user at %d%% of tmpfs", as.integer(s4_user_pct)))
+      warn_reasons <- c()
+      if (s1_pct >= .warn_pct && s1_pct < .redir_pct) {
+        warn_reasons <- c(warn_reasons, sprintf("tmpfs at %d%%", as.integer(s1_pct)))
+      }
+      list(safe = length(reasons) == 0, warn = length(warn_reasons) > 0,
+           reason = paste(c(reasons, warn_reasons), collapse = "; "), pct = s1_pct)
+    }, error = function(e) list(safe = TRUE, warn = FALSE, reason = "", pct = 0))
   }
 
   deferred_pkg_init <- function() {
@@ -798,11 +920,45 @@ local({
     # v9.6-fix: Set deferred_done AFTER all guards are installed (belt-and-suspenders)
     .biome_env$shared_env$deferred_done <- TRUE
 
-    # ══ Per-user /Rtmp setup (v10.0: always local disk, no routing decisions) ══
+    # ══ Tmpfs routing base setup (one-time, wrapped — failure cannot lose guards) ══
     tryCatch({
-      user_tmp_root <- file.path(RTMP_PATH, paste0("biome_", curr_user))
+      # v9.6: Determine tmp routing via multi-signal heuristic
+      force_nfs <- Sys.getenv("BIOME_FORCE_NFS_TMP") == "true"
+      force_tmpfs <- Sys.getenv("BIOME_FORCE_TMPFS") == "true"
+      safety <- biome_tmpfs_safe()
+      smart_tmp_base <- if (!ENABLE_SMART_ROUTING) "/tmp"
+                        else if (force_tmpfs) "/tmp"
+                        else if (force_nfs || !safety$safe) file.path(Sys.getenv("HOME"), ".r_tmp_fallback")
+                        else "/tmp"
+      if (!dir.exists(smart_tmp_base)) dir.create(smart_tmp_base, recursive=TRUE, showWarnings=FALSE)
+
+      # v9.6: Per-user consolidated tmp root
+      user_tmp_root <- file.path(smart_tmp_base, paste0("biome_", curr_user))
       if (!dir.exists(user_tmp_root)) dir.create(user_tmp_root, recursive = TRUE, showWarnings = FALSE)
+
+      # NFS redirect warning
+      if (!safety$safe && !force_tmpfs && interactive()) {
+        sys_log("TmpOverflow", "WARN", sprintf("Redirected to NFS: %s", safety$reason))
+        warning(sprintf(
+          paste0("BIOME-CALC: tmpfs unsafe (%s). Temp files redirected to NFS (%s).\n",
+                 "  This is slower but prevents OOM. Override: Sys.setenv(BIOME_FORCE_TMPFS = \"true\")"),
+          safety$reason, smart_tmp_base
+        ), call. = FALSE, immediate. = TRUE)
+      } else if (safety$warn && !force_tmpfs && interactive()) {
+        if (!isTRUE(getOption("biome_tmp_warn_shown"))) {
+          options(biome_tmp_warn_shown = TRUE)
+          message(sprintf(paste0(.C_YELLOW,
+            "\n\U0001F4A1 BIOME-CALC: /tmp at %d%% capacity.",
+            "\n   For large computations (>%d GB temp), consider:",
+            "\n   Sys.setenv(BIOME_FORCE_NFS_TMP = 'true') before starting.",
+            .C_RESET), as.integer(safety$pct), BIG_DATA_THRESHOLD_GB))
+        }
+      }
+
+      # v9.7: Store routing base in .biome_env so deferred_pkg_hooks can access it
+      .biome_env$shared_env$smart_tmp_base <- smart_tmp_base
       .biome_env$shared_env$user_tmp_root <- user_tmp_root
+
     }, error = function(e) sys_log("DeferredInit", "FAIL", e$message))
   }
 
@@ -815,23 +971,50 @@ local({
     qr <- .biome_env$shared_env$last_quota
     msg_parts <- c()
 
-    # v10.0: All packages use local /Rtmp/biome_<user>/ (no routing decisions)
+    # Resolve tmpfs routing from deferred_init (set once, used by all hooks)
     user_tmp_root <- .biome_env$shared_env$user_tmp_root
     if (is.null(user_tmp_root)) {
-      user_tmp_root <- file.path(RTMP_PATH, paste0("biome_", curr_user))
+      smart_tmp_base <- "/tmp"
+      user_tmp_root <- file.path(smart_tmp_base, paste0("biome_", curr_user))
       if (!dir.exists(user_tmp_root)) dir.create(user_tmp_root, recursive = TRUE, showWarnings = FALSE)
     }
+    smart_tmp_base <- .biome_env$shared_env$smart_tmp_base
+    if (is.null(smart_tmp_base)) smart_tmp_base <- "/tmp"
 
-    # v10.0: Terra — all temp on local /Rtmp disk
+    # v9.6: Terra with size-aware routing
     if (ENABLE_TERRA_OPT && isNamespaceLoaded("terra") &&
         .biome_env$shared_env$terra_threads == 0L) tryCatch({
       tt <- min(fc, 8L); gc_mb <- as.integer(floor(qr * 0.2 * 1024))
       Sys.setenv(GDAL_NUM_THREADS = as.character(tt), GDAL_CACHEMAX = as.character(gc_mb))
-      td <- file.path(user_tmp_root, "terra")
+
+      if (isTRUE(ENABLE_NFS_BIG_DATA) && smart_tmp_base == "/tmp") {
+        terra_use_gb <- tryCatch({
+          td_chk <- file.path(user_tmp_root, "terra")
+          if (!dir.exists(td_chk)) 0
+          else {
+            files <- list.files(td_chk, full.names = TRUE, recursive = TRUE, all.files = TRUE)
+            if (length(files) == 0) 0
+            else sum(file.info(files, extra_cols = FALSE)$size, na.rm = TRUE) / 1024^3
+          }
+        }, error = function(e) 0)
+        if (terra_use_gb >= BIG_DATA_THRESHOLD_GB || biome_tmpfs_safe()$pct >= TMP_WARN_PCT) {
+          terra_fallback <- file.path(Sys.getenv("HOME"), ".r_tmp_fallback",
+                                      paste0("biome_", curr_user), "terra")
+          if (!dir.exists(terra_fallback)) dir.create(terra_fallback, recursive = TRUE, showWarnings = FALSE)
+          td <- terra_fallback
+          routing_label <- "NFS-Safe"
+        } else {
+          td <- file.path(user_tmp_root, "terra")
+          routing_label <- "RAMDisk"
+        }
+      } else {
+        td <- file.path(user_tmp_root, "terra")
+        routing_label <- if (smart_tmp_base == "/tmp") "RAMDisk" else "NFS-Fallback"
+      }
       if (!dir.exists(td)) dir.create(td, recursive = TRUE, showWarnings = FALSE)
       terra::terraOptions(memfrac = 0.6, tempdir = td, verbose = FALSE)
       .biome_env$shared_env$terra_threads <- tt
-      msg_parts <- c(msg_parts, "Terra [LocalDisk]")
+      msg_parts <- c(msg_parts, sprintf("Terra [%s]", routing_label))
     }, error = function(e) NULL)
 
     if (ENABLE_SMART_ROUTING && isNamespaceLoaded("raster") &&
@@ -840,7 +1023,7 @@ local({
       if (!dir.exists(rt)) dir.create(rt, recursive=TRUE, showWarnings=FALSE)
       raster::rasterOptions(tmpdir = rt)
       .biome_env$shared_env$.raster_hook_done <- TRUE
-      msg_parts <- c(msg_parts, "Raster [LocalDisk]")
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Raster [RAMDisk]" else "Raster [NFS-Fallback]")
     }, error = function(e) NULL)
 
     if (ENABLE_SMART_ROUTING && isNamespaceLoaded("stars") &&
@@ -849,7 +1032,7 @@ local({
       if (!dir.exists(st)) dir.create(st, recursive=TRUE, showWarnings=FALSE)
       Sys.setenv(GDAL_PAM_PROXY_DIR = st)
       .biome_env$shared_env$.stars_hook_done <- TRUE
-      msg_parts <- c(msg_parts, "Stars [LocalDisk]")
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Stars [RAMDisk]" else "Stars [NFS-Fallback]")
     }, error = function(e) NULL)
 
     if (ENABLE_SMART_ROUTING && isNamespaceLoaded("ncdf4") &&
@@ -857,7 +1040,7 @@ local({
       nc_tmp <- file.path(user_tmp_root, "ncdf4")
       if (!dir.exists(nc_tmp)) dir.create(nc_tmp, recursive=TRUE, showWarnings=FALSE)
       .biome_env$shared_env$.ncdf4_hook_done <- TRUE
-      msg_parts <- c(msg_parts, "NetCDF [LocalDisk]")
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "NetCDF [RAMDisk]" else "NetCDF [NFS-Fallback]")
     }, error = function(e) NULL)
 
     if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("gstat") || isNamespaceLoaded("fields") ||
@@ -869,7 +1052,8 @@ local({
                   if (isNamespaceLoaded("fields")) "Fields",
                   if (isNamespaceLoaded("spatstat")) "Spatstat")
       .biome_env$shared_env$.spatial_stats_hook_done <- TRUE
-      msg_parts <- c(msg_parts, sprintf("%s [LocalDisk]", paste(loaded, collapse="+")))
+      msg_parts <- c(msg_parts, sprintf("%s [%s]", paste(loaded, collapse="+"),
+                     if (smart_tmp_base == "/tmp") "RAMDisk" else "NFS-Fallback"))
     }, error = function(e) NULL)
 
     if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("keras") || isNamespaceLoaded("tensorflow")) &&
@@ -879,7 +1063,7 @@ local({
       Sys.setenv(KERAS_CACHE_DIR = kt)
       Sys.setenv(TF_XLA_FLAGS = paste0("--tf_xla_enable_xla_devices --tf_xla_cpu_global_jit --tf_xla_auto_jit=2 --tf_xla_fallback_tmpdir=", kt))
       .biome_env$shared_env$.keras_hook_done <- TRUE
-      msg_parts <- c(msg_parts, "Keras [LocalDisk]")
+      msg_parts <- c(msg_parts, if (smart_tmp_base == "/tmp") "Keras [RAMDisk]" else "Keras [NFS-Fallback]")
     }, error = function(e) NULL)
 
     if (ENABLE_GGPLOT_OPT && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly") ||
@@ -897,11 +1081,12 @@ local({
         tryCatch(systemfonts::system_fonts(), error = function(e) NULL)
       }
       backend_label <- if (has_ragg) "ragg" else "cairo"
+      tmp_label <- if (smart_tmp_base == "/tmp") "RAMDisk" else "NFS-Fallback"
       vis_pkgs <- c("Ggplot", if (isNamespaceLoaded("tmap")) "Tmap",
                     if (isNamespaceLoaded("mapview")) "Mapview")
       .biome_env$shared_env$.ggplot_hook_done <- TRUE
-      msg_parts <- c(msg_parts, sprintf("%s [%s/LocalDisk]", paste(vis_pkgs, collapse="+"),
-                                         backend_label))
+      msg_parts <- c(msg_parts, sprintf("%s [%s/%s]", paste(vis_pkgs, collapse="+"),
+                                         backend_label, tmp_label))
     }, error = function(e) NULL)
     
     if (ENABLE_ARROW_OPT && isNamespaceLoaded("arrow") &&
@@ -990,14 +1175,14 @@ local({
       msg_parts <- c(msg_parts, sprintf("%s [%d threads]", tmb_label, tmb_threads))
     }, error = function(e) NULL)
 
-    # v10.0: NIMBLE/nimbleHMC — NFS-safe compilation + thread cap for multi-chain MCMC
+    # v9.9: NIMBLE/nimbleHMC — NFS-safe compilation + thread cap for multi-chain MCMC
     # NIMBLE's compileNimble() spawns: system2("R CMD SHLIB") → make → g++ → cc1plus
     # This chain can run 16+ hours and consume 8-15GB RAM per chain.
-    # Pessimistic design: compile artifacts to NFS ($HOME) for reboot-safety.
-    # Compiler scratch (cc1plus temp .o files) uses local /Rtmp automatically.
+    # Pessimistic design: always compile to NFS ($HOME), never RAMDisk.
+    # RAMDisk is reserved for medium workloads (ggplot, terra rasters < threshold).
     if ((isNamespaceLoaded("nimble") || isNamespaceLoaded("nimbleHMC")) &&
         !isTRUE(.biome_env$shared_env$.nimble_hook_done)) tryCatch({
-      # Route NIMBLE compilation outputs to NFS (survives reboots for 16h+ runs)
+      # Route NIMBLE compilation to NFS (crash-proof for 16h+ runs)
       nimble_dir <- file.path(Sys.getenv("HOME"), ".nimble_compile",
                               paste0("session_", Sys.getpid()))
       if (!dir.exists(nimble_dir)) dir.create(nimble_dir, recursive = TRUE,
@@ -1007,6 +1192,14 @@ local({
       # Cap threads for multi-chain safety (4 chains × 4 threads = 16 = VM max)
       bt <- .biome_env$shared_env$last_threads
       nimble_threads <- max(2L, min(4L, as.integer(bt)))
+
+      # If mid-session NFS redirect happened, restore original tempdir for compiler
+      orig_td <- Sys.getenv("BIOME_ORIGINAL_TMPDIR", "")
+      if (nzchar(orig_td) && dir.exists(orig_td)) {
+        # Compiler uses $TMPDIR for intermediate files — point it back to RAMDisk
+        # so cc1plus doesn't write multi-GB scratch to NFS
+        Sys.setenv(TMPDIR = orig_td)
+      }
 
       .biome_env$shared_env$.nimble_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("NIMBLE [NFS-Safe/%d threads]", nimble_threads))
@@ -1127,14 +1320,15 @@ local({
     cat(sprintf("  vCPU Cores:   %d (Allocated)\n", .biome_env$shared_env$last_cores))
     cat(sprintf("  Active Users: %d\n", get_active_users()))
     tmp_str <- tryCatch({
-      df <- system2("df", args = c("-P", "-BG", RTMP_PATH), stdout = TRUE, stderr = FALSE)
+      df <- system2("df", args = c("-P", "-BG", "/tmp"), stdout = TRUE, stderr = FALSE)
       if (length(df) >= 2) {
          p <- strsplit(df[2], "\\s+")[[1]]
-         sprintf("%s free of %s (%s used | Local Disk | Warn @%d%%)",
-                 p[4], p[2], p[5], TMP_WARN_PCT)
+         route <- if (Sys.getenv("BIOME_FORCE_NFS_TMP") == "true") "NFS-Active" else "RAMDisk"
+         sprintf("%s free of %s (Warn @%d%% / Redirect @%d%% | Route: %s | Current: %s)",
+                 p[4], p[2], TMP_WARN_PCT, TMP_REDIRECT_PCT, route, p[5])
       } else "Unknown"
     }, error = function(e) "Unknown")
-    cat(sprintf("  /Rtmp Disk:   %s\n", tmp_str))
+    cat(sprintf("  RAMDisk Tmp:  %s\n", tmp_str))
     cat(sprintf("  Tmp Cleanup:  Files >%d hours\n", .biome_env$shared_env$timeout_hours))
     ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto")
     cat(sprintf("  BLAS Type:    %s\n", ct))
@@ -1199,7 +1393,7 @@ local({
   }, envir = tool_env)
 
   assign("biome_tutorial", function() {
-    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC v", VERSION, ": User Guide ===", .C_RESET, "\n"))
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC: User Guide ===", .C_RESET, "\n"))
     cat("This system automatically optimizes resources. Services are 'Lazy' [\u25CB] by default\n")
     cat("and become 'Active' [\u2713] the moment you use them.\n\n")
     cat(paste0(.C_BOLD, "1. Resource Management (Auto)", .C_RESET, "\n"))
@@ -1210,17 +1404,17 @@ local({
     cat(paste0(.C_BOLD, "3. AI Assistant", .C_RESET, "\n"))
     cat(sprintf("   - ask_ai(\"How do I run a PERMANOVA?\")  [Model: %s]\n\n", AI_MODEL))
     cat(paste0(.C_BOLD, "4. Geospatial (Terra/RGEE)", .C_RESET, "\n"))
-    cat("   - library(terra); library(rgee) \u2014 auto-threads & cache.\n")
-    cat("   - All temp data uses local /Rtmp disk (fast, no RAM cost).\n\n")
+    cat("   - library(terra); library(rgee) \u2014 auto-threads & /tmp cache.\n")
+    cat(sprintf("   - Terra ops >%d GB auto-route to NFS for safety.\n\n", BIG_DATA_THRESHOLD_GB))
     cat(paste0(.C_BOLD, "5. Parallel Computing", .C_RESET, "\n"))
     cat("   - library(future.apply); future_lapply(1:100, sqrt)\n")
     cat("   - For manual clusters: cl <- biome_make_cluster(workers=4)\n\n")
-    cat(paste0(.C_BOLD, "6. /Rtmp Local Disk (v10.0)", .C_RESET, "\n"))
-    cat(sprintf("   - /Rtmp is a dedicated %dGB local disk (NOT RAM, NOT OS /tmp, NOT NFS).\n", TMP_DISK_GB))
-    cat(sprintf("   - Advisory warning at %d%% usage. No auto-redirect needed.\n", TMP_WARN_PCT))
-    cat("   - NIMBLE compilation routes to NFS ($HOME) for reboot safety.\n")
-    cat("   - Diagnostic: biome_plot_budget()\n\n")
-    cat(paste0(.C_BOLD, "7. Ggplot Optimization", .C_RESET, "\n"))
+    cat(paste0(.C_BOLD, "6. Tmpfs Auto-Protection (v9.6)", .C_RESET, "\n"))
+    cat(sprintf("   - Warning at %d%% tmpfs usage, auto-redirect to NFS at %d%%.\n", TMP_WARN_PCT, TMP_REDIRECT_PCT))
+    cat("   - Once redirected, session stays on NFS (pessimistic).\n")
+    cat("   - Override: Sys.setenv(BIOME_FORCE_TMPFS = \"true\")\n")
+    cat("   - Check status: biome_plot_budget()\n\n")
+    cat(paste0(.C_BOLD, "7. Ggplot Optimization (v9.6)", .C_RESET, "\n"))
     cat("   - ragg backend auto-enabled (2-4x faster than cairo).\n")
     cat("   - Viridis colorblind-safe palette as default.\n\n")
     cat(paste0(.C_BOLD, "8. Safely Saving & Loading Work", .C_RESET, "\n"))
@@ -1228,7 +1422,6 @@ local({
     cat("   - Load saved variables: biome_load_session()\n")
     cat("   - Warns if workspace is large or disk space is low.\n")
     cat("   - Note: RStudio will NOT auto-save your data on logout!\n\n")
-    cat(paste0(.C_GRAY, "   Tip: sessioninfo::session_info() for full R/BLAS/LAPACK details.", .C_RESET, "\n"))
     cat(sprintf("  Support: %s\n", "%%BIOME_CONTACT%%"))
   }, envir = tool_env)
 
@@ -1330,34 +1523,38 @@ local({
     })
   }, envir = tool_env)
 
-  # v10.0: Plot budget diagnostic tool (local /Rtmp disk)
+  # v9.6: Plot budget diagnostic tool
   assign("biome_plot_budget", function() {
     cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Plot Budget ===", .C_RESET, "\n"))
     tmp_info <- tryCatch(
-      system2("df", args = c("-P", "-BG", RTMP_PATH), stdout = TRUE, stderr = FALSE),
+      system2("df", args = c("-P", "-BG", "/tmp"), stdout = TRUE, stderr = FALSE),
       error = function(e) NULL
     )
     if (!is.null(tmp_info) && length(tmp_info) >= 2) {
       p <- strsplit(trimws(tmp_info[2]), "\\s+")[[1]]
-      cat(sprintf("  /Rtmp Disk:   Total: %s | Used: %s | Free: %s (%s)\n", p[2], p[3], p[4], p[5]))
+      cat(sprintf("  tmpfs Total: %s | Used: %s | Free: %s (%s)\n", p[2], p[3], p[4], p[5]))
     }
     backend <- if (requireNamespace("ragg", quietly = TRUE)) "ragg (fast)" else "cairo (default)"
     cat(sprintf("  Render backend: %s\n", backend))
-    cat(sprintf("  Tmp storage:    Local Disk /Rtmp (no RAM cost)\n"))
+    routing <- if (Sys.getenv("BIOME_FORCE_NFS_TMP") == "true") "NFS (safe for big data)" else "RAMDisk (fast)"
+    cat(sprintf("  Tmp routing:    %s\n", routing))
     cat(sprintf("  R tempdir:      %s\n", tempdir()))
-    user_root <- file.path(RTMP_PATH, paste0("biome_", Sys.info()[["user"]]))
+    user_root <- file.path("/tmp", paste0("biome_", Sys.info()[["user"]]))
     if (dir.exists(user_root)) {
       sz <- sum(file.info(list.files(user_root, full.names = TRUE, recursive = TRUE, all.files = TRUE))$size, na.rm = TRUE)
       cat(sprintf("  Your tmp usage: ~%.1f MB\n", sz / 1024^2))
     }
-    tmp_pct <- get_tmp_disk_use_pct()
-    if (tmp_pct < TMP_WARN_PCT) {
-      cat(paste0("  Status:         ", .C_GREEN, "OK \u2014 plenty of disk space for heavy renders", .C_RESET, "\n"))
+    safety <- tryCatch(biome_tmpfs_safe(), error = function(e) list(safe = TRUE, warn = FALSE, reason = ""))
+    if (safety$safe && !safety$warn) {
+      cat(paste0("  Safety:         ", .C_GREEN, "OK \u2014 tmpfs is safe for heavy renders", .C_RESET, "\n"))
+    } else if (safety$warn) {
+      cat(paste0("  Safety:         ", .C_YELLOW, "ADVISORY \u2014 ", safety$reason, .C_RESET, "\n"))
     } else {
-      cat(paste0("  Status:         ", .C_YELLOW, sprintf("ADVISORY \u2014 /Rtmp at %d%% capacity", as.integer(tmp_pct)), .C_RESET, "\n"))
+      cat(paste0("  Safety:         ", .C_RED, "REDIRECT ACTIVE \u2014 ", safety$reason, .C_RESET, "\n"))
     }
     cat(paste0("  ", .C_GRAY,
-      "Tip: ggsave(width=20, height=15, dpi=300) \u2248 80 MB. At dpi=600 \u2248 320 MB.", .C_RESET, "\n\n"))
+      "Tip: ggsave(width=20, height=15, dpi=300) \u2248 80 MB. At dpi=600 \u2248 320 MB.",
+      "\n       Override: Sys.setenv(BIOME_FORCE_TMPFS = \"true\")", .C_RESET, "\n\n"))
     invisible(NULL)
   }, envir = tool_env)
 
@@ -1368,7 +1565,7 @@ local({
     cat(paste0("  ", .C_BOLD, "biome_tutorial()", .C_RESET, "      - Code examples.\n"))
     cat(paste0("  ", .C_BOLD, "biome_save_session()", .C_RESET, "  - Save your data safely before logout.\n"))
     cat(paste0("  ", .C_BOLD, "biome_load_session()", .C_RESET, "  - Restore your saved data.\n"))
-    cat(paste0("  ", .C_BOLD, "biome_plot_budget()", .C_RESET, "   - Check /Rtmp disk health & ggplot budget.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_plot_budget()", .C_RESET, "   - Check tmpfs health & ggplot budget.\n"))
     cat(paste0("  ", .C_BOLD, "ask_ai(txt)", .C_RESET, "           - Ask AI.\n"))
     cat(paste0("  ", .C_BOLD, "biome_make_cluster()", .C_RESET, "  - Create safe PSOCK cluster.\n"))
     cat(paste0("  ", .C_BOLD, "biome_help()", .C_RESET, "          - This message.\n"))
@@ -1376,7 +1573,8 @@ local({
   }, envir = tool_env)
 
   # v9.6: Export diagnostic functions to tools:biome_calc for audit access
-  assign("get_tmp_disk_use_pct", get_tmp_disk_use_pct, envir = tool_env)
+  assign("biome_tmpfs_safe", biome_tmpfs_safe, envir = tool_env)
+  assign("get_tmp_use_pct", get_tmp_use_pct, envir = tool_env)
 
   assign("biome_restore", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
   assign("show_quota", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
@@ -1394,13 +1592,13 @@ local({
 
       bn <- "**********************************************************"
       message(paste0("\n", .C_CYAN, bn))
-      message(sprintf("*** BIOME-CALC v%s (%s)%s***", VERSION, R_HOST, paste(rep(" ", max(1, 37 - nchar(VERSION) - nchar(R_HOST))), collapse="")))
+      message(sprintf("*** You are welcome to BIOME-CALC (%s)        ***", R_HOST))
       message("*** If you have any problem please write an e-mail to: ***")
       message(sprintf("*** %-52s ***", "%%BIOME_CONTACT%%"))
       message("*** Don't share your password with anyone...           ***")
       message(paste0(bn, .C_RESET))
 
-      message(sprintf("\n   RAM Quota:  %-3d GB  (VM ~%dGB, full RAM available)", .biome_env$shared_env$last_quota, VM_RAM_GB))
+      message(sprintf("\n   RAM Quota:  %-3d GB  (VM ~%dGB - %dGB tmpfs)", .biome_env$shared_env$last_quota, VM_RAM_GB, RAMDISK_GB))
       message(sprintf("   vCPU:       %-3d / %d  (Adapts to active users)", .biome_env$shared_env$last_cores, total_vcores))
       
       ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto")
@@ -1409,27 +1607,9 @@ local({
         vl <- grep("^vendor_id", ci, value = TRUE)[1]
         if (!is.na(vl)) trimws(sub(".*:\\s*", "", vl)) else "unknown"
       }, error = function(e) "unknown")
-      message(sprintf("   BLAS:       CORETYPE=%s (vendor=%s)", ct, cpuv))
-
-      # v10.0: Show BLAS/LAPACK library details (compact, single line)
-      tryCatch({
-        ei <- extSoftVersion()
-        blas_lib <- basename(La_library())
-        lapack_ver <- ei[["LAPACK"]]
-        if (is.null(lapack_ver) || !nzchar(lapack_ver)) lapack_ver <- "system"
-        message(sprintf("   LAPACK:     %s (%s)", blas_lib, lapack_ver))
-      }, error = function(e) NULL)
-
-      # v10.0: Show /Rtmp disk info
-      tryCatch({
-        df_out <- system2("df", args = c("-h", RTMP_PATH), stdout = TRUE, stderr = FALSE)
-        if (length(df_out) >= 2) {
-          p <- strsplit(trimws(df_out[2]), "\\s+")[[1]]
-          message(sprintf("   /Rtmp:      %s free of %s (%s)", p[4], p[2], p[5]))
-        }
-      }, error = function(e) NULL)
+      message(sprintf("   BLAS:       CORETYPE=%s (vendor=%s, dynamic)", ct, cpuv))
       
-      message(paste0("\n   ", .C_BOLD, "\U0001F680 Engines:", .C_RESET))
+      message(paste0("\n   ", .C_BOLD, "\U0001F680 Engines Initialized / Started:", .C_RESET))
       r_sio <- .fmt_eng("SmartIO", ENABLE_SMART_IO, TRUE)
       r_ai  <- .fmt_eng("AI", ENABLE_AI_ASSISTANT, .biome_env$shared_env$ai_active)
       r_ter <- .fmt_eng("Terra", ENABLE_TERRA_OPT, isNamespaceLoaded("terra"))
@@ -1441,7 +1621,6 @@ local({
       message(paste0("   \U0001F4A1 Type ", .C_BOLD, "biome_help()", .C_RESET, " for commands."))
       message(paste0("   \U0001F4DA Type ", .C_BOLD, "biome_tutorial()", .C_RESET, " for examples."))
       message(paste0("   \U0001F4CA Type ", .C_BOLD, "status()", .C_RESET, " to see resource quotas & active engines."))
-      message(paste0("   \U0001F50D Type ", .C_BOLD, "sessioninfo::session_info()", .C_RESET, " for full R/BLAS/LAPACK details."))
       if (.biome_env$shared_env$ai_active) message(paste0("   \U0001F916 Try  ", .C_BOLD, 'ask_ai("Help me with R")', .C_RESET, "."))
       message(sprintf("   Startup: %.2fs", as.numeric(difftime(Sys.time(), .start_time, units="secs"))))
       message(paste0(.C_CYAN, bn, .C_RESET, "\n"))
