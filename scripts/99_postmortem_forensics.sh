@@ -447,6 +447,47 @@ collect_user_forensics() {
         fi
     fi
 
+    subsection "User RStudio State & Crash Loops"
+    local rstudio_active="${user_home}/.local/share/rstudio/sessions/active"
+    if [[ -d "$rstudio_active" ]]; then
+        local active_sessions
+        active_sessions=$(safe_cmd "ls -1 '$rstudio_active' 2>/dev/null" 5)
+        if [[ -n "$active_sessions" ]]; then
+            report "  Active/Suspended sessions found:"
+            while IFS= read -r sess; do
+                local sess_dir="${rstudio_active}/${sess}"
+                local sess_size
+                sess_size=$(safe_cmd "du -sh '$sess_dir' 2>/dev/null" 5)
+                report "    $sess_size"
+                # Check for large suspension payloads
+                local large_files
+                large_files=$(safe_cmd "find '$sess_dir' -type f -size +50M -exec ls -lh {} + 2>/dev/null" 5)
+                if [[ -n "$large_files" ]]; then
+                    report "    $(severity HIGH): Large workspace/session payloads detected!"
+                    report "    $large_files"
+                    report "    These cause crash loops (RStudio OOMs while trying to restore)."
+                    report "    FIX: run 'mv ${user_home}/.local/share/rstudio ${user_home}/.local/share/rstudio-backup'"
+                fi
+            done <<< "$active_sessions"
+        else
+            report "  No active/suspended sessions found."
+        fi
+    else
+        report "  $(severity OK): No RStudio state directory found for user."
+    fi
+
+    # Also check user rstudio logs
+    local rstudio_logs="${user_home}/.local/share/rstudio/log"
+    if [[ -d "$rstudio_logs" ]]; then
+        local recent_log
+        recent_log=$(safe_cmd "find '$rstudio_logs' -type f -mtime -1 -exec tail -n 5 {} + 2>/dev/null" 5)
+        if [[ -n "$recent_log" ]]; then
+            report ""
+            report "  Recent user RStudio logs (last 24h):"
+            report "$recent_log"
+        fi
+    fi
+
     subsection "User /Rtmp Usage"
     local user_tmp="${RTMP_PATH}/biome_${target_user}"
     if [[ -d "$user_tmp" ]]; then
@@ -531,6 +572,7 @@ collect_guard_status() {
     guard_check=$(safe_cmd "timeout 15 Rscript --vanilla -e \"
         tryCatch({
             source('$RPROFILE_PATH')
+            if (exists('.biome_env') && !is.null(.biome_env\\\$deferred_pkg_init)) try(.biome_env\\\$deferred_pkg_init(), silent=TRUE)
             cat('solve_guard:', isTRUE(attr(base::solve, 'biome_guard')), '\n')
             cat('dist_guard:', isTRUE(attr(stats::dist, 'biome_guard')), '\n')
             cat('outer_guard:', isTRUE(attr(base::outer, 'biome_guard')), '\n')
@@ -579,11 +621,11 @@ collect_guard_status() {
 
     subsection "Template Placeholders"
     local placeholders
-    placeholders=$(safe_cmd "grep -c '%%' '$RPROFILE_PATH' 2>/dev/null" 3)
+    placeholders=$(safe_cmd "grep -cE '%%[A-Z0-9_]+%%' '$RPROFILE_PATH' 2>/dev/null" 3 | awk 'NR==1 {print $1+0}')
     if [[ -n "$placeholders" && "$placeholders" -gt 0 ]]; then
         report "  $(severity CRITICAL): Found ${placeholders} unsubstituted %%PLACEHOLDERS%% in Rprofile.site!"
         report "  Template was not processed correctly. Redeploy with 50_setup_nodes.sh → option 3."
-        safe_cmd "grep '%%' '$RPROFILE_PATH' 2>/dev/null | head -5" 3 | while IFS= read -r line; do
+        safe_cmd "grep -oE '%%[A-Z0-9_]+%%' '$RPROFILE_PATH' 2>/dev/null | head -5" 3 | while IFS= read -r line; do
             report "    $line"
         done
     else
@@ -648,7 +690,7 @@ collect_orphan_status() {
             report "  Total orphan RAM: ~${total_rss_mb} MB"
             if [[ $total_rss_mb -gt 4096 ]]; then
                 report "  $(severity HIGH): Orphans consuming >4GB RAM — run cleanup!"
-                report "  FIX: sudo bash /etc/biome-calc/conf/cleanup_r_orphans.sh"
+                report "  FIX: sudo bash /etc/biome-calc/script/cleanup_r_orphans.sh"
             fi
         fi
     else
@@ -656,9 +698,25 @@ collect_orphan_status() {
     fi
 
     subsection "Cleanup Cron Status"
-    if [[ -f /etc/cron.d/biome_orphan_cleanup ]]; then
+    if [[ -f /etc/cron.d/r_orphan_cleanup ]]; then
         report "  $(severity OK): Orphan cleanup cron installed"
-        report "  $(safe_read /etc/cron.d/biome_orphan_cleanup 3)"
+        safe_read /etc/cron.d/r_orphan_cleanup 3 | while IFS= read -r line; do
+            report "    $line"
+        done
+        
+        # Check required scripts
+        local script_missing=false
+        for s in cleanup_r_orphans.sh notify_r_orphans.sh r_orphan_report.sh; do
+            if [[ ! -x "/etc/biome-calc/script/$s" ]]; then
+                report "  $(severity CRITICAL): Required script missing or not executable: /etc/biome-calc/script/$s"
+                script_missing=true
+            fi
+        done
+        if [[ "$script_missing" == false ]]; then
+            report "  $(severity OK): All cleanup daemon scripts are installed and executable"
+        else
+            report "  FIX: Redeploy orphan cleanup scripts: sudo bash scripts/50_setup_nodes.sh → option 8"
+        fi
     else
         report "  $(severity MEDIUM): Orphan cleanup cron NOT found!"
         report "  FIX: sudo bash scripts/50_setup_nodes.sh → option 8"
@@ -1031,11 +1089,11 @@ generate_diagnosis() {
 
     # Read back collected data flags
     local has_oom has_sigsegv has_sigill has_orphans has_pthread
-    has_oom=$(safe_cmd "dmesg -T 2>/dev/null | grep -ci 'oom\|killed process'" 5)
-    has_sigsegv=$(safe_cmd "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -ci 'SIGSEGV\|segv\|signal 11'" 10)
-    has_sigill=$(safe_cmd "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -ci 'SIGILL\|signal 4'" 10)
-    has_orphans=$(safe_cmd "ps -eo ppid,args 2>/dev/null | awk '\$1 == 1' | grep -cE 'Rscript|R --slave'" 5)
-    has_pthread=$(safe_cmd "update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -ci pthread" 5)
+    has_oom=$(safe_cmd "dmesg -T 2>/dev/null | grep -ci 'oom\|killed process'" 5 | awk 'NR==1 {print $1+0}')
+    has_sigsegv=$(safe_cmd "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -ci 'SIGSEGV\|segv\|signal 11'" 10 | awk 'NR==1 {print $1+0}')
+    has_sigill=$(safe_cmd "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -ci 'SIGILL\|signal 4'" 10 | awk 'NR==1 {print $1+0}')
+    has_orphans=$(safe_cmd "ps -eo ppid,args 2>/dev/null | awk '\$1 == 1' | grep -cE 'Rscript|R --slave'" 5 | awk 'NR==1 {print $1+0}')
+    has_pthread=$(safe_cmd "update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -ci pthread" 5 | awk 'NR==1 {print $1+0}')
 
     # Diagnosis 1: BLAS crash
     if [[ "${has_pthread:-0}" -gt 0 ]]; then
@@ -1077,7 +1135,7 @@ generate_diagnosis() {
         report "  $(severity HIGH) DIAGNOSIS: ${has_orphans} orphaned R processes"
         report "    CAUSE: User sessions crashed/disconnected without cleanup"
         report "    IMPACT: Memory leak — orphans consume RAM indefinitely"
-        report "    FIX: sudo bash /etc/biome-calc/conf/cleanup_r_orphans.sh"
+        report "    FIX: sudo bash /etc/biome-calc/script/cleanup_r_orphans.sh"
         report ""
     fi
 
@@ -1102,16 +1160,32 @@ generate_diagnosis() {
             report "    FIX: Remove OMP_NUM_THREADS/OPENBLAS_NUM_THREADS from user .Renviron"
             report ""
         fi
+
+        local large_payloads=0
+        if [[ -d "${user_home}/.local/share/rstudio/sessions/active" ]]; then
+            large_payloads=$(safe_cmd "find '${user_home}/.local/share/rstudio/sessions/active' -type f -size +50M 2>/dev/null | wc -l" 5 | awk 'NR==1 {print $1+0}')
+        fi
+        
+        if [[ "$large_payloads" -gt 0 ]]; then
+            report "  $(severity CRITICAL) DIAGNOSIS: Massive Session Payload (Aw, Snap! Error Code 4)"
+            report "    CAUSE: The R session suspend file (.env/.RData) is >50MB."
+            report "    SYMPTOM: When resuming session, NGINX may drop connection, or browser tab crashes with 'Aw, Snap!' or 'Error Code: 4'"
+            report "             (Browser OOM parsing the massive JSON workspace state)."
+            report "    FIX: Reset user's session state by clearing the rstudio active session folder:"
+            report "         sudo mv ${user_home}/.local/share/rstudio/sessions/active ${user_home}/.local/share/rstudio/sessions/active_backup_\$(date +%s)"
+            report ""
+        fi
     fi
 
     # If nothing found
-    if [[ "${has_oom:-0}" -eq 0 && "${has_sigsegv:-0}" -eq 0 && "${has_sigill:-0}" -eq 0 && "${has_pthread:-0}" -eq 0 ]]; then
+    if [[ "${has_oom:-0}" -eq 0 && "${has_sigsegv:-0}" -eq 0 && "${has_sigill:-0}" -eq 0 && "${has_pthread:-0}" -eq 0 && "${large_payloads:-0}" -eq 0 ]]; then
         report "  $(severity OK): No critical crash indicators found in the last ${hours}h."
         report ""
         report "  POSSIBLE NON-CRASH CAUSES:"
         report "    - Browser/VPN disconnection (session is still alive, user thinks it crashed)"
         report "    - NGINX proxy_read_timeout exceeded during long computation"
         report "    - User confusion about warning messages (guard fired, they think it's an error)"
+        report "    - Browser Tab Crash 'Error code: 4' (run this script for specific user to check for massive state payloads)"
         report "    CHECK: ps aux | grep 'rsession.*<username>' — session may still be running"
     fi
 }

@@ -135,60 +135,32 @@ test_start <- proc.time()
 # OPTIMIZATION: Force garbage collection before the heavy run to free up system RAM
 gc(verbose = FALSE)
 
-# ── OOM PROOF CHUNKING STRATEGY ──
+# post_samples_1ch <- runMCMC(
+#  Cmcmc_1ch,
+#  niter = 200,
+#  nburnin = 50,
+#  inits = init_1ch,
+#  thin = 1,
+#  nchains = 1,
+#  summary = TRUE,
+#  WAIC = FALSE
+# )
 
-# Create a secure temporary directory on the local /Rtmp disk
-chunk_dir <- file.path("/Rtmp", Sys.getenv("USER", "biome_user"), "mcmc_chunks")
-dir.create(chunk_dir, showWarnings = FALSE, recursive = TRUE)
-
-cat("\n[1/3] Starting 2000 iteration burn-in phase...\n")
-# 1. INITIAL BURN-IN (discarded from memory immediately)
-invisible(runMCMC(
+# Cmodel_1ch$codeMCMC_1ch
+post_samples_1ch <- runMCMC(
   Cmcmc_1ch,
-  niter = 2000,
+  niter = 5000,
   nburnin = 2000,
   inits = init_1ch,
+  thin = 1,
   nchains = 1,
-  summary = FALSE,
-  WAIC = FALSE
-))
+  summary = TRUE,
+  WAIC = F,
+  progressBar = TRUE
+)
 
-cat("\n[2/3] Starting chunked inference phase (10 chunks of 300 iters)...\n")
-# 2. CHUNKED INFERENCE (3000 total iterations)
-n_chunks <- 10
-chunk_files <- character(n_chunks)
-
-for (i in seq_len(n_chunks)) {
-  gc(verbose = FALSE) # Clear RAM before every single chunk
-  
-  # reset = FALSE means NIMBLE picks up EXACTLY where it left off mathematically
-  chunk_samples <- runMCMC(
-    Cmcmc_1ch,
-    niter = 300,
-    nburnin = 0,
-    thin = 10,
-    nchains = 1,
-    summary = FALSE,
-    WAIC = FALSE,
-    reset = FALSE
-  )
-  
-  # Save to disk and flush RAM immediately
-  chunk_files[i] <- file.path(chunk_dir, paste0("chunk_", i, ".rds"))
-  saveRDS(chunk_samples, chunk_files[i])
-  rm(chunk_samples)
-}
-
-cat("\n[3/3] Merging chunks from disk...\n")
-# 3. MERGE RESULTS (so the output acts identically to the original script)
-merged_list <- lapply(chunk_files, readRDS)
-post_samples_1ch <- do.call(rbind, merged_list)
-
-# Safely clean up the disk
-unlink(chunk_files)
 
 test_end <- proc.time() - test_start
 
 print(test_end)
-# Print matrix dimensions to verify we got all 300 expected rows (3000 iters / 10 thin)
-print(dim(post_samples_1ch))
+print(names(post_samples_1ch))
