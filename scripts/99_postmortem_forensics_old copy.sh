@@ -1,22 +1,5 @@
 #!/bin/bash
 # =============================================================================
-
-# --- ROBUST COUNT HELPERS (v2 patch) ---
-count_lines() {
-    local cmd="$1"
-    local out
-    out=$(safe_cmd "$cmd" 5 2>/dev/null || true)
-    printf "%s
-" "$out" | wc -l | tr -d " \n\r"
-}
-
-safe_number() {
-    local val="$1"
-    [[ "$val" =~ ^[0-9]+$ ]] && echo "$val" || echo 0
-}
-
-# --- END ROBUST HELPERS ---
-
 # 99_postmortem_forensics.sh — BIOME-CALC Post-Mortem Crash Forensics
 # =============================================================================
 # Automated data collection and crash analysis for R session failures.
@@ -226,11 +209,7 @@ collect_system_state() {
     subsection "Kernel Swappiness"
     local swappiness
     swappiness=$(safe_cmd "cat /proc/sys/vm/swappiness" 3)
-    sysctl_target=$(sysctl -n vm.swappiness 2>/dev/null || echo 30)
-    report "  Runtime swappiness target: ${sysctl_target}"
-    report "  vm.swappiness = ${swappiness:-unknown} (dynamic target)"
-    sysctl_target=$(sysctl -n vm.swappiness 2>/dev/null || echo 30)
-    report "  Runtime swappiness target: ${sysctl_target}"
+    report "  vm.swappiness = ${swappiness:-unknown} (expected: 10)"
     if [[ -n "$swappiness" && "$swappiness" -gt 30 ]]; then
         report "  $(severity MEDIUM): Swappiness too high — should be 10 for RStudio workloads"
     fi
@@ -1110,16 +1089,11 @@ generate_diagnosis() {
 
     # Read back collected data flags
     local has_oom has_sigsegv has_sigill has_orphans has_pthread
-    # --- ROBUST COUNTERS (v2 patch) ---
-    has_oom=$(safe_number "$(count_lines "dmesg -T 2>/dev/null | grep -iE 'oom|killed process'")")
-    has_sigsegv=$(safe_number "$(count_lines "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -iE 'SIGSEGV|segv|signal 11'")")
-    has_sigill=$(safe_number "$(count_lines "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -iE 'SIGILL|signal 4'")")
-    has_orphans=$(safe_number "$(count_lines "ps -eo ppid,args 2>/dev/null | awk '\$1 == 1' | grep -E 'Rscript|R --slave'")")
-    has_pthread=$(safe_number "$(count_lines "update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -i pthread")")
-    # --- END ROBUST COUNTERS ---
+    has_oom=$(safe_cmd "dmesg -T 2>/dev/null | grep -ci 'oom\|killed process'" 5 | awk 'NR==1 {print $1+0}')
     has_sigsegv=$(safe_cmd "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -ci 'SIGSEGV\|segv\|signal 11'" 10 | awk 'NR==1 {print $1+0}')
     has_sigill=$(safe_cmd "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -ci 'SIGILL\|signal 4'" 10 | awk 'NR==1 {print $1+0}')
     has_orphans=$(safe_cmd "ps -eo ppid,args 2>/dev/null | awk '\$1 == 1' | grep -cE 'Rscript|R --slave'" 5 | awk 'NR==1 {print $1+0}')
+    has_pthread=$(safe_cmd "update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -ci pthread" 5 | awk 'NR==1 {print $1+0}')
 
     # Diagnosis 1: BLAS crash
     if [[ "${has_pthread:-0}" -gt 0 ]]; then
