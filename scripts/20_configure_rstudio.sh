@@ -451,6 +451,7 @@ configure_rstudio_session_env_settings() {
         ["session-connections-block-suspend"]="1"
         ["session-external-pointers-block-suspend"]="1"
         ["copilot-enabled"]="${RSESSION_COPLOT_ENABLED:-0}" # Default to 0 if var not set
+        ["session-save-action-default"]="${RSESSION_SAVE_ACTION_DEFAULT:-no}"
     )
     for key in "${!rsession_settings[@]}"; do
         local line="${key}=${rsession_settings[$key]}"

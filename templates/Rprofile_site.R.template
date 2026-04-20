@@ -1247,9 +1247,10 @@ local({
       }
     }
     ws_gb <- ws_size / 1024^3
-    if (ws_gb > 20) {
+    if (ws_gb > 1.5) {
       message(sprintf(paste0(.C_YELLOW,
-        "\n\u26a0\ufe0f  WARNING: Non-spatial workspace is ~%.1f GB.",
+        "\n\u26a0\ufe0f  CRITICAL WARNING: Workspace is %.1f GB. Loading this in the future may crash the RStudio Web Interface!",
+        "\n   Please use saveRDS() for large dataframes instead of biome_save_session().",
         "\n   %d spatial objects excluded from estimate (they are file-backed).",
         "\n   Consider: save(obj1, obj2, file='my_data.RData') to save selectively.",
         .C_RESET), ws_gb, excluded_count))
