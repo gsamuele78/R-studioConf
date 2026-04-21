@@ -1,4 +1,22 @@
 #!/bin/bash
+# =============================================================================
+
+# --- ROBUST COUNT HELPERS (v2 patch) ---
+count_lines() {
+    local cmd="$1"
+    local out
+    out=$(safe_cmd "$cmd" 5 2>/dev/null || true)
+    printf "%s
+" "$out" | wc -l | tr -d " \n\r"
+}
+
+safe_number() {
+    local val="$1"
+    [[ "$val" =~ ^[0-9]+$ ]] && echo "$val" || echo 0
+}
+
+# --- END ROBUST HELPERS ---
+
 # 99_postmortem_forensics.sh — BIOME-CALC Post-Mortem Crash Forensics
 # =============================================================================
 # Automated data collection and crash analysis for R session failures.
@@ -16,26 +34,7 @@
 #   sudo bash 99_postmortem_forensics.sh --all-recent
 #
 # Design: Pessimistic PRD (every read can fail, every path can be missing)
-#
-# Version: 2.1.0
-#   - v2.1.0 fixes:
-#     * BUG: duplicate section [10] (SSL collided with DIAGNOSIS) → renumbered
-#       SSL=10, Nginx=11, Telemetry=12, RStudio=13, Auth=14, Diagnosis=15
-#     * BUG: duplicate swappiness report lines in collect_system_state
-#     * BUG: generate_diagnosis() redefined patched counters via legacy code
-#       → removed legacy has_sigsegv/has_sigill/has_orphans overwrites
-#     * BUG: version string mismatch (header said 1.0.0, banner said 2.0.0)
-#     * RESTORED: GUARDED_FUNCTIONS + UNGUARDED_PATTERNS arrays (were in the
-#       original v1.0.0, dropped in the first v2.1.0 rewrite, now re-added
-#       with v11.0-aware content and wired into generate_diagnosis via new
-#       print_unguarded_patterns_table() helper so the "unguarded patterns
-#       table" reference in the diagnosis text is no longer orphan.
-#   - v2.1.0 alignment with Rprofile v11.0 + audit v28:
-#     * User forensics: check /Rtmp/biome_<user>/ v11.0 subdirs and cluster_logs
-#     * Guard status: check biome_future_plan + biome_worker_diagnostics in tools:biome_calc
-#     * NIMBLE routing: v11.0 expects /Rtmp, NOT NFS $HOME (invert old check)
-#     * NEW section [15]: top-level return() bug detection (v10.0 regression)
-#     * BIOME_USER_TMP env + .biome_env$USER_TMP_ROOT checks
+# Version: 1.0.0
 # =============================================================================
 
 set -euo pipefail
@@ -43,56 +42,38 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
 
-# =============================================================================
-# ROBUST COUNT HELPERS
-# =============================================================================
-count_lines() {
-    local cmd="$1"
-    local out
-    out=$(safe_cmd "$cmd" 5 2>/dev/null || true)
-    if [[ -z "$out" ]]; then
-        echo 0
-    else
-        printf '%s\n' "$out" | wc -l | tr -d " \n\r"
-    fi
-}
-
-safe_number() {
-    local val="$1"
-    [[ "$val" =~ ^[0-9]+$ ]] && echo "$val" || echo 0
-}
-
-# =============================================================================
-# EARLY HELP (before sourcing common_utils, which requires root)
-# =============================================================================
+# ── Early help detection (before sourcing common_utils, which requires root) ──
 for arg in "$@"; do
     if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
-        cat <<'HELPEND'
-Usage: 99_postmortem_forensics.sh [OPTIONS]
-
-Automated post-mortem crash forensics for BIOME-CALC R sessions.
-Collects all evidence, classifies crash type, checks guard coverage,
-and produces actionable diagnosis for sysadmin DevOps workflow.
-
-Options:
-  --user <username>   Target user to investigate (required unless --all-recent)
-  --hours <N>         Look back N hours for crash events (default: 4)
-  --output <file>     Write report to file (also prints to stdout)
-  --all-recent        Scan all recent crashes (no specific user)
-  --quick             Skip BLAS smoke test and guard verification (faster)
-  --incident          Auto-write incident log entry
-  -h, --help          Display this help
-
-Examples:
-  sudo $0 --user mario.rossi --incident
-  sudo $0 --user anna.verdi --hours 8 --output /tmp/crash_report.txt --quick
-  sudo $0 --all-recent --hours 2
-HELPEND
+        echo "Usage: $0 [OPTIONS]"
+        echo ""
+        echo "Automated post-mortem crash forensics for BIOME-CALC R sessions."
+        echo "Collects all evidence, classifies crash type, checks guard coverage,"
+        echo "and produces actionable diagnosis for sysadmin DevOps workflow."
+        echo ""
+        echo "Options:"
+        echo "  --user <username>   Target user to investigate (required unless --all-recent)"
+        echo "  --hours <N>         Look back N hours for crash events (default: 4)"
+        echo "  --output <file>     Write report to file (also prints to stdout)"
+        echo "  --all-recent        Scan all recent crashes (no specific user)"
+        echo "  --quick             Skip BLAS smoke test and guard verification (faster)"
+        echo "  --incident          Auto-write incident log entry"
+        echo "  -h, --help          Display this help"
+        echo ""
+        echo "Examples:"
+        echo "  # Full forensics for a specific user"
+        echo "  sudo $0 --user mario.rossi --incident"
+        echo ""
+        echo "  # Quick scan, last 8 hours, save to file"
+        echo "  sudo $0 --user anna.verdi --hours 8 --output /tmp/crash_report.txt --quick"
+        echo ""
+        echo "  # Scan all recent crashes (no specific user)"
+        echo "  sudo $0 --all-recent --hours 2"
         exit 0
     fi
 done
 
-# Source common utilities
+# Source common utilities (requires root for log directory creation)
 if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
     echo "ERROR: common_utils.sh not found at $UTILS_SCRIPT_PATH" >&2
     exit 2
@@ -117,7 +98,7 @@ cleanup() {
 trap cleanup EXIT ERR INT TERM
 
 # =============================================================================
-# CONSTANTS
+# CONSTANTS (Pessimistic: all paths verified before use)
 # =============================================================================
 
 BIOME_LOG="/var/log/biome-log/r_biome_system.log"
@@ -128,58 +109,29 @@ RTMP_PATH="/Rtmp"
 NFS_HOME="/nfs/home"
 INCIDENT_LOG="/var/log/biome-log/incident_log.txt"
 
-# v11.0 expected per-user subdirs under /Rtmp/biome_<user>/
-V11_USER_SUBDIRS=(nimble_compile tmb_compile stan_compile rcpp_cache cluster_logs keras_cache plot_cache)
+# Known guarded functions (must match Rprofile_site.R.template)
+GUARDED_FUNCTIONS=("solve" "dist" "outer" "expand.grid" "distm" "registerDoParallel")
 
-# Known guarded functions (must match Rprofile_site.R.template v11.0)
-# — Used by generate_diagnosis to tell the sysadmin which primitives are
-#   actively wrapped. If a user OOMs on one of these, the guard fired and
-#   they ignored it; if they OOM on something NOT in this list, it's an
-#   unguarded pattern and the guard needs to be extended.
-GUARDED_FUNCTIONS=(
-    # Base memory sentinels (v9.6+)
-    "solve" "dist" "outer" "expand.grid" "read.csv"
-    # Geosphere (v9.6)
-    "distm"
-    # Parallel safeguards (v11.0 [N4][N5])
-    "parallel::makeCluster" "doSNOW::registerDoSNOW" "doParallel::registerDoParallel"
-    # Compile routing hooks (v11.0 [N1][N2][N7])
-    "nimble::compileNimble" "TMB::compile" "rstan" "cmdstanr"
-)
-
-# Known dangerous unguarded patterns (common in botanical R scripts —
-# these are NOT intercepted by any wrapper; they require script rewrite
-# or a new guard if they show up in repeated OOMs).
+# Known dangerous unguarded patterns (common in botanical R scripts)
 UNGUARDED_PATTERNS=(
-    "as.matrix(dist(...))          # doubles RAM footprint"
-    "readRDS(huge_file)            # no size check before load"
-    "do.call(rbind, list_of_dfs)   # O(n^2) mem for many dfs"
-    "Rcpp::sourceCpp               # compile + JIT allocations"
-    "raster::stack(many_files)     # loads all rasters to RAM"
-    "dplyr::collect()              # pulls full DB table in-memory"
-    "geom_point(aes(...))          # >10k points = huge SVG/PNG"
-    "vegan::vegdist -> hclust      # N^2 dist + full dendrogram"
-    "compileNimble(...)            # C++ compile scratch (routed to /Rtmp in v11.0)"
-    "merge(x, y, by=...)           # inner join can blow up via cartesian"
-    "combn(n, k)                   # factorial growth for k>4, n>20"
+    "as.matrix.*dist"
+    "readRDS"
+    "do.call.*rbind"
+    "Rcpp::sourceCpp"
+    "raster::stack"
+    "collect()"
+    "geom_point.*aes"
+    "vegdist.*hclust"
+    "compileNimble"
+    "merge.*by"
+    "combn("
 )
-
-# Helper to print the patterns table (called from diagnosis when relevant)
-print_unguarded_patterns_table() {
-    report "  UNGUARDED PATTERNS TABLE (check if user's script contains any):"
-    local pat
-    for pat in "${UNGUARDED_PATTERNS[@]}"; do
-        report "    • $pat"
-    done
-    report ""
-    report "  GUARDED (wrapped by Rprofile v11.0 — these DO warn/block):"
-    report "    ${GUARDED_FUNCTIONS[*]}"
-}
 
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
+# Safe file reader — returns content or empty string, never crashes
 safe_read() {
     local filepath="$1"
     local max_lines="${2:-50}"
@@ -190,12 +142,14 @@ safe_read() {
     fi
 }
 
+# Safe command runner — returns output or empty string
 safe_cmd() {
     local cmd="$1"
     local timeout_sec="${2:-10}"
     timeout "$timeout_sec" bash -c "$cmd" 2>/dev/null || echo ""
 }
 
+# Format section header
 section() {
     local title="$1"
     printf "\n%s\n" "═══════════════════════════════════════════════════════════════"
@@ -203,10 +157,12 @@ section() {
     printf "%s\n\n" "═══════════════════════════════════════════════════════════════"
 }
 
+# Format sub-section
 subsection() {
     printf "\n  ── %s ──\n" "$1"
 }
 
+# Severity badge
 severity() {
     local level="$1"
     case "$level" in
@@ -219,6 +175,7 @@ severity() {
     esac
 }
 
+# Write to report file (tee-style: stdout + file)
 report() {
     if [[ -n "${REPORT_FILE:-}" ]]; then
         printf "%s\n" "$*" | tee -a "$REPORT_FILE"
@@ -266,15 +223,16 @@ collect_system_state() {
         fi
     fi
 
-    # BUG FIX v2.1.0: previously printed swappiness lines twice.
     subsection "Kernel Swappiness"
-    local swappiness sysctl_target
+    local swappiness
     swappiness=$(safe_cmd "cat /proc/sys/vm/swappiness" 3)
     sysctl_target=$(sysctl -n vm.swappiness 2>/dev/null || echo 30)
-    report "  vm.swappiness (runtime): ${swappiness:-unknown}"
-    report "  vm.swappiness (sysctl target): ${sysctl_target}"
+    report "  Runtime swappiness target: ${sysctl_target}"
+    report "  vm.swappiness = ${swappiness:-unknown} (dynamic target)"
+    sysctl_target=$(sysctl -n vm.swappiness 2>/dev/null || echo 30)
+    report "  Runtime swappiness target: ${sysctl_target}"
     if [[ -n "$swappiness" && "$swappiness" -gt 30 ]]; then
-        report "  $(severity MEDIUM): Swappiness too high — should be ≤10 for RStudio workloads"
+        report "  $(severity MEDIUM): Swappiness too high — should be 10 for RStudio workloads"
     fi
 
     subsection "/Rtmp Local Disk"
@@ -289,15 +247,10 @@ collect_system_state() {
         else
             report "  $(severity OK): /Rtmp disk healthy"
         fi
-        # v2.1.0: verify it's NOT tmpfs (v11.0 requirement)
-        local is_tmpfs
-        is_tmpfs=$(safe_cmd "df -T $RTMP_PATH | awk 'NR==2 {print \$2}'" 3)
-        if [[ "$is_tmpfs" == "tmpfs" ]]; then
-            report "  $(severity CRITICAL): /Rtmp is tmpfs — v11.0 requires ext4/xfs local disk!"
-        fi
     else
         report "  $(severity HIGH): /Rtmp is NOT mounted as a separate filesystem!"
         report "  Check: Is the local virtio disk attached? Is /Rtmp in fstab?"
+        # Check if it's accidentally tmpfs
         local is_tmpfs
         is_tmpfs=$(safe_cmd "mount | grep 'on /Rtmp' | grep tmpfs" 3)
         if [[ -n "$is_tmpfs" ]]; then
@@ -337,6 +290,7 @@ collect_oom_events() {
 
     section "2. KERNEL OOM EVENTS (last ${hours}h)"
 
+    # dmesg OOM events
     local oom_events
     oom_events=$(safe_cmd "dmesg -T 2>/dev/null | grep -iE 'oom|killed process|out of memory' | tail -20" 10)
 
@@ -345,12 +299,14 @@ collect_oom_events() {
         report ""
         report "$oom_events"
         report ""
+        # Extract killed process names and PIDs
         local killed_procs
         killed_procs=$(echo "$oom_events" | grep -oP 'Killed process \d+ \([^)]+\)' || true)
         if [[ -n "$killed_procs" ]]; then
             report "  Killed processes:"
             report "$killed_procs"
         fi
+        # Extract RSS of killed processes
         local rss_info
         rss_info=$(echo "$oom_events" | grep -oP 'rss:\d+' || true)
         if [[ -n "$rss_info" ]]; then
@@ -383,6 +339,7 @@ collect_crash_signals() {
         report ""
         report "$journal_crashes"
         report ""
+        # Classify signal types
         if echo "$journal_crashes" | grep -qi "SIGSEGV\|signal 11\|segv"; then
             report "  DIAGNOSIS: SIGSEGV (Segmentation Fault)"
             report "  LIKELY CAUSE: OpenBLAS-pthread thread collision during solve()/crossprod()"
@@ -406,6 +363,7 @@ collect_user_forensics() {
 
     section "4. USER-SPECIFIC FORENSICS: ${target_user}"
 
+    # User existence check
     local user_info
     user_info=$(safe_cmd "getent passwd '$target_user'" 5)
     if [[ -z "$user_info" ]]; then
@@ -427,6 +385,7 @@ collect_user_forensics() {
         user_logs=$(safe_cmd "grep '$target_user' '$BIOME_LOG' | tail -30" 10)
         if [[ -n "$user_logs" ]]; then
             report "$user_logs"
+            # Check for Profile load
             if echo "$user_logs" | grep -q "Profile.*OK"; then
                 report ""
                 report "  $(severity OK): Rprofile loaded successfully for this user"
@@ -435,6 +394,7 @@ collect_user_forensics() {
                 report "  $(severity HIGH): No successful Rprofile load found for this user!"
                 report "  Guards may NOT be active. Check .Rprofile for interference."
             fi
+            # Check for guard warnings
             local guard_warns
             guard_warns=$(echo "$user_logs" | grep -iE "solve|dist|outer|expand|distm|WARN" || true)
             if [[ -n "$guard_warns" ]]; then
@@ -475,6 +435,7 @@ collect_user_forensics() {
     if [[ -f "$user_rprofile" ]]; then
         report "  User has a custom .Rprofile:"
         report "  $(safe_read "$user_rprofile" 20)"
+        # Check for known interference patterns
         local interference=false
         if grep -qE 'options\(error.*=.*recover\)' "$user_rprofile" 2>/dev/null; then
             report "  $(severity MEDIUM): User has options(error=recover) — may hang sessions"
@@ -494,13 +455,14 @@ collect_user_forensics() {
     subsection "User .Renviron Check"
     local user_renviron="${user_home}/.Renviron"
     if [[ -f "$user_renviron" ]]; then
+        # Check for hardcoded thread settings (should have been migrated)
         local thread_overrides
         thread_overrides=$(grep -E '^(OMP_NUM_THREADS|OPENBLAS_NUM_THREADS|MKL_NUM_THREADS|MC_CORES)=' "$user_renviron" 2>/dev/null || true)
         if [[ -n "$thread_overrides" ]]; then
             report "  $(severity HIGH): User has hardcoded thread settings in .Renviron!"
             report "  These OVERRIDE dynamic allocation and can cause instability:"
             report "  $thread_overrides"
-            report "  FIX: Remove these lines"
+            report "  FIX: Remove these lines (50_setup_nodes.sh --migrate should have done this)"
         else
             report "  $(severity OK): No hardcoded thread settings in .Renviron"
         fi
@@ -518,6 +480,7 @@ collect_user_forensics() {
                 local sess_size
                 sess_size=$(safe_cmd "du -sh '$sess_dir' 2>/dev/null" 5)
                 report "    $sess_size"
+                # Check for large suspension payloads
                 local large_files
                 large_files=$(safe_cmd "find '$sess_dir' -type f -size +50M -exec ls -lh {} + 2>/dev/null" 5)
                 if [[ -n "$large_files" ]]; then
@@ -534,6 +497,7 @@ collect_user_forensics() {
         report "  $(severity OK): No RStudio state directory found for user."
     fi
 
+    # Also check user rstudio logs
     local rstudio_logs="${user_home}/.local/share/rstudio/log"
     if [[ -d "$rstudio_logs" ]]; then
         local recent_log
@@ -545,36 +509,17 @@ collect_user_forensics() {
         fi
     fi
 
-    # v2.1.0: v11.0-aware /Rtmp layout inspection
-    subsection "User /Rtmp Usage (v11.0 layout)"
+    subsection "User /Rtmp Usage"
     local user_tmp="${RTMP_PATH}/biome_${target_user}"
     if [[ -d "$user_tmp" ]]; then
         local tmp_size
         tmp_size=$(safe_cmd "du -sh '$user_tmp'" 5)
         report "  $tmp_size"
+        # Count files
         local tmp_files
         tmp_files=$(safe_cmd "find '$user_tmp' -type f | wc -l" 5)
         report "  Files: ${tmp_files:-unknown}"
-        # Check v11.0 subdirs
-        local missing=()
-        for sub in "${V11_USER_SUBDIRS[@]}"; do
-            [[ -d "$user_tmp/$sub" ]] || missing+=("$sub")
-        done
-        if [[ ${#missing[@]} -gt 0 ]]; then
-            report "  $(severity MEDIUM): v11.0 subdirs missing: ${missing[*]}"
-            report "  → User may have a stale pre-v11.0 layout. Clean up:"
-            report "    sudo rm -rf '$user_tmp' ; triggers fresh init on next rsession"
-        else
-            report "  $(severity OK): All 7 v11.0 subdirs present"
-        fi
-        # Legacy NFS NIMBLE path (v10 fallback): should NOT be populated in v11.0
-        local legacy_nimble="${user_home}/.nimble_compile"
-        if [[ -d "$legacy_nimble" ]]; then
-            local legacy_size
-            legacy_size=$(safe_cmd "du -sh '$legacy_nimble' 2>/dev/null | awk '{print \$1}'" 5)
-            report "  $(severity MEDIUM): Legacy v10 NIMBLE dir on NFS: $legacy_nimble ($legacy_size)"
-            report "  → v11.0 routes to /Rtmp; this dir is orphan. Safe to remove."
-        fi
+        # Largest files
         local largest
         largest=$(safe_cmd "find '$user_tmp' -type f -exec ls -lhS {} + 2>/dev/null | head -5" 5)
         if [[ -n "$largest" ]]; then
@@ -582,33 +527,7 @@ collect_user_forensics() {
             report "$largest"
         fi
     else
-        report "  No /Rtmp data for this user (no temp directory exists — never triggered Rprofile?)"
-    fi
-
-    # v2.1.0: cluster_logs — the core of Martina-class diagnostics
-    subsection "User cluster_logs/ (PSOCK worker post-mortem)"
-    local cl_dir="${user_tmp}/cluster_logs"
-    if [[ -d "$cl_dir" ]]; then
-        local log_count
-        log_count=$(safe_cmd "find '$cl_dir' -name 'psock_*.log' | wc -l" 5)
-        log_count="${log_count//[^0-9]/}"
-        report "  Total worker logs: ${log_count:-0}"
-        # Recent logs with errors
-        local error_logs
-        error_logs=$(safe_cmd "find '$cl_dir' -name 'psock_*.log' -mmin -$((hours * 60)) -exec grep -l -iE 'error|SIGSEGV|SIGKILL|unserialize|fatal' {} + 2>/dev/null" 10)
-        if [[ -n "$error_logs" ]]; then
-            report "  $(severity HIGH): Recent worker logs with errors (last ${hours}h):"
-            while IFS= read -r log; do
-                report "    $(basename "$log"):"
-                safe_cmd "grep -iE 'error|SIGSEGV|unserialize|fatal' '$log' | head -3" 5 | while IFS= read -r l; do
-                    [[ -n "$l" ]] && report "      $l"
-                done
-            done <<< "$error_logs"
-        else
-            report "  $(severity OK): No recent worker errors"
-        fi
-    else
-        report "  $(severity LOW): No cluster_logs/ dir (never used PSOCK workers, or pre-v11.0 layout)"
+        report "  No /Rtmp data for this user (no temp directory exists)"
     fi
 }
 
@@ -644,6 +563,7 @@ collect_blas_status() {
     report "  Detected CORETYPE: ${coretype:-not detected}"
     report "  CPU Model: ${cpu_model:-unknown}"
 
+    # BLAS smoke test
     subsection "BLAS Smoke Test"
     local smoke_result
     smoke_result=$(safe_cmd "timeout 10 Rscript --vanilla -e \"
@@ -666,20 +586,20 @@ collect_blas_status() {
 }
 
 collect_guard_status() {
-    section "6. MEMORY GUARD COVERAGE + v11.0 TOOLS"
+    section "6. MEMORY GUARD COVERAGE"
 
     subsection "Guard Installation Check"
     local guard_check
-    guard_check=$(safe_cmd "timeout 20 Rscript --vanilla -e \"
+    guard_check=$(safe_cmd "timeout 15 Rscript --vanilla -e \"
         tryCatch({
             source('$RPROFILE_PATH')
-            if (exists('.biome_env') && is.function(.biome_env\\\$deferred_pkg_init)) try(.biome_env\\\$deferred_pkg_init(), silent=TRUE)
+            if (exists('.biome_env') && !is.null(.biome_env\\\$deferred_pkg_init)) try(.biome_env\\\$deferred_pkg_init(), silent=TRUE)
             cat('solve_guard:', isTRUE(attr(base::solve, 'biome_guard')), '\n')
             cat('dist_guard:', isTRUE(attr(stats::dist, 'biome_guard')), '\n')
             cat('outer_guard:', isTRUE(attr(base::outer, 'biome_guard')), '\n')
             cat('expand_grid_guard:', isTRUE(attr(base::expand.grid, 'biome_guard')), '\n')
         }, error = function(e) cat('GUARD_CHECK_FAILED:', e\\\$message, '\n'))
-    \" 2>&1" 30)
+    \" 2>&1" 20)
 
     if [[ -n "$guard_check" ]]; then
         local all_ok=true
@@ -699,7 +619,7 @@ collect_guard_status() {
             report "  All base guards are installed and functional."
         else
             report ""
-            report "  FIX: Redeploy Rprofile v11.0: sudo bash scripts/50_setup_nodes.sh → option 3"
+            report "  FIX: Redeploy Rprofile: sudo bash scripts/50_setup_nodes.sh → option 3"
         fi
     else
         report "  $(severity HIGH): Could not verify guard status (Rscript timed out or failed)"
@@ -721,73 +641,16 @@ collect_guard_status() {
     fi
 
     subsection "Template Placeholders"
-    local placeholder_count
-    placeholder_count=$(safe_cmd "grep -cE '%%[A-Z0-9_]+%%' '$RPROFILE_PATH' 2>/dev/null" 3 | awk 'NR==1 {print $1+0}')
-    if [[ -n "$placeholder_count" && "$placeholder_count" -gt 0 ]]; then
-        report "  $(severity CRITICAL): Found ${placeholder_count} unsubstituted %%PLACEHOLDERS%% in Rprofile.site!"
+    local placeholders
+    placeholders=$(safe_cmd "grep -cE '%%[A-Z0-9_]+%%' '$RPROFILE_PATH' 2>/dev/null" 3 | awk 'NR==1 {print $1+0}')
+    if [[ -n "$placeholders" && "$placeholders" -gt 0 ]]; then
+        report "  $(severity CRITICAL): Found ${placeholders} unsubstituted %%PLACEHOLDERS%% in Rprofile.site!"
         report "  Template was not processed correctly. Redeploy with 50_setup_nodes.sh → option 3."
         safe_cmd "grep -oE '%%[A-Z0-9_]+%%' '$RPROFILE_PATH' 2>/dev/null | head -5" 3 | while IFS= read -r line; do
             report "    $line"
         done
     else
         report "  $(severity OK): No unsubstituted template placeholders"
-    fi
-
-    # v2.1.0: v11.0 tools (biome_future_plan, biome_worker_diagnostics)
-    subsection "v11.0 Tools in tools:biome_calc"
-    local tools_check
-    tools_check=$(safe_cmd "timeout 30 Rscript --vanilla -e \"
-        suppressMessages(try(source('$RPROFILE_PATH'), silent = TRUE))
-        if (exists('.biome_env')) {
-          cat(sprintf('VERSION: %s\n', .biome_env\\\$VERSION %||% 'unknown'))
-          cat(sprintf('API_VERSION: %s\n', .biome_env\\\$API_VERSION %||% 0))
-        }
-        if ('tools:biome_calc' %in% search()) {
-          tools <- ls(as.environment('tools:biome_calc'))
-          cat(sprintf('TOOLS_TOTAL: %d\n', length(tools)))
-          for (t in c('biome_make_cluster','biome_future_plan','biome_worker_diagnostics','biome_plot_budget','status')) {
-            cat(sprintf('TOOL_%s: %s\n', t, t %in% tools))
-          }
-        } else cat('tools:biome_calc: NOT_ATTACHED\n')
-    \" 2>&1" 35)
-
-    if [[ -n "$tools_check" ]]; then
-        report "$tools_check" | sed 's/^/  /'
-        if echo "$tools_check" | grep -qE "TOOL_biome_future_plan: TRUE" && \
-           echo "$tools_check" | grep -qE "TOOL_biome_worker_diagnostics: TRUE"; then
-            report "  $(severity OK): v11.0 tools attached"
-        else
-            report "  $(severity MEDIUM): v11.0 tools missing (biome_future_plan / biome_worker_diagnostics)"
-            report "  → Rprofile likely pre-v11.0"
-        fi
-    fi
-
-    # v2.1.0: NIMBLE routing — v11.0 expects /Rtmp, not NFS
-    subsection "NIMBLE Routing (v11.0 expects /Rtmp, NOT NFS)"
-    local nimble_route
-    nimble_route=$(safe_cmd "timeout 15 Rscript --vanilla -e \"
-        suppressMessages(try(source('$RPROFILE_PATH'), silent = TRUE))
-        if ('nimble' %in% rownames(installed.packages())) {
-          suppressMessages(try(library(nimble), silent = TRUE))
-          if (exists('.biome_env') && is.function(.biome_env\\\$deferred_pkg_hooks)) try(.biome_env\\\$deferred_pkg_hooks(), silent = TRUE)
-          nd <- getOption('nimble.dirName', '')
-          bnd <- Sys.getenv('BIOME_NIMBLE_DIR', '')
-          cat('nimble.dirName:', nd, '\n')
-          cat('BIOME_NIMBLE_DIR:', bnd, '\n')
-          cat('routed_to_rtmp:', (startsWith(nd, '/Rtmp/') || startsWith(bnd, '/Rtmp/')), '\n')
-        } else cat('nimble: NOT_INSTALLED\n')
-    \" 2>&1" 20)
-
-    if [[ -n "$nimble_route" ]]; then
-        report "$nimble_route" | sed 's/^/  /'
-        if echo "$nimble_route" | grep -q "routed_to_rtmp: TRUE"; then
-            report "  $(severity OK): NIMBLE routed to /Rtmp (v11.0 local-disk)"
-        elif echo "$nimble_route" | grep -q "nimble: NOT_INSTALLED"; then
-            report "  $(severity LOW): nimble not installed — skipped"
-        else
-            report "  $(severity HIGH): NIMBLE routing not on /Rtmp — v10.0 NFS-race pattern"
-            report "  → Concurrent compileNimble() in parLapply workers can produce unserialize() crashes"
-        fi
     fi
 }
 
@@ -804,6 +667,7 @@ collect_nfs_status() {
     fi
 
     subsection "NFS Accessibility"
+    # Use timeout to prevent hanging on stale NFS
     local nfs_test
     nfs_test=$(safe_cmd "timeout 5 ls $NFS_HOME/ 2>&1 | head -5" 8)
     if [[ -n "$nfs_test" ]]; then
@@ -831,15 +695,15 @@ collect_orphan_status() {
 
     local orphan_count
     orphan_count=$(safe_cmd "ps -eo pid,ppid,user,rss,args 2>/dev/null | awk '\$2 == 1' | grep -cE 'Rscript|R --slave|R --no-save|R --no-echo'" 5)
-    orphan_count=$(safe_number "${orphan_count//[^0-9]/}")
 
-    if [[ "$orphan_count" -gt 0 ]]; then
+    if [[ -n "$orphan_count" && "$orphan_count" -gt 0 ]]; then
         report "  $(severity HIGH): Found ${orphan_count} orphaned R processes (PPID=1)"
         report ""
         safe_cmd "ps -eo pid,ppid,user,rss:10,etime,args 2>/dev/null | awk '\$2 == 1' | grep -E 'Rscript|R --slave|R --no-save|R --no-echo' | sort -k4 -rn | head -10" 5 | while IFS= read -r line; do
             report "  $line"
         done
         report ""
+        # Calculate total RSS of orphans
         local total_rss_kb
         total_rss_kb=$(safe_cmd "ps -eo ppid,rss 2>/dev/null | awk '\$1 == 1' | awk '{sum += \$2} END {print sum}'" 5)
         if [[ -n "$total_rss_kb" && "$total_rss_kb" -gt 0 ]]; then
@@ -860,6 +724,8 @@ collect_orphan_status() {
         safe_read /etc/cron.d/r_orphan_cleanup 3 | while IFS= read -r line; do
             report "    $line"
         done
+        
+        # Check required scripts
         local script_missing=false
         for s in cleanup_r_orphans.sh notify_r_orphans.sh r_orphan_report.sh; do
             if [[ ! -x "/etc/biome-calc/script/$s" ]]; then
@@ -883,12 +749,14 @@ collect_service_status() {
 
     local -a services=("rstudio-server" "nginx")
 
+    # Detect auth backend
     if systemctl list-unit-files 2>/dev/null | grep -q "sssd.service"; then
         services+=("sssd")
     fi
     if systemctl list-unit-files 2>/dev/null | grep -q "winbind.service"; then
         services+=("winbind")
     fi
+    # Telemetry stack
     if systemctl list-unit-files 2>/dev/null | grep -q "botanical-telemetry.service"; then
         services+=("botanical-telemetry")
     fi
@@ -911,29 +779,21 @@ collect_service_status() {
             fi
         fi
     done
-
-    # v2.1.0: biome-cleanup-orphans.timer
-    if systemctl list-unit-files 2>/dev/null | grep -q "biome-cleanup-orphans.timer"; then
-        if systemctl is-active --quiet biome-cleanup-orphans.timer 2>/dev/null; then
-            report "  $(severity OK): biome-cleanup-orphans.timer is ACTIVE"
-        else
-            report "  $(severity MEDIUM): biome-cleanup-orphans.timer is INACTIVE"
-        fi
-    fi
 }
 
 # =============================================================================
-# BUG FIX v2.1.0: renumbered sections — SSL=10, Nginx=11, Telemetry=12,
-# RStudio=13, Auth=14, Diagnosis=15, v11.0 Integrity=16
+# NEW MODULES: SSL / NGINX / TELEMETRY / RSTUDIO CONFIG / AUTH
 # =============================================================================
 
 collect_ssl_status() {
     section "10. SSL CERTIFICATE STATUS"
 
+    # Find active SSL cert path from NGINX config
     local cert_path
     cert_path=$(safe_cmd "grep -rh 'ssl_certificate[^_]' /etc/nginx/snippets/ /etc/nginx/sites-enabled/ 2>/dev/null | grep -v '#' | head -1 | awk '{print \$2}' | tr -d ';'" 5)
 
     if [[ -z "$cert_path" ]]; then
+        # Fallback: check common paths
         for p in /etc/letsencrypt/live/*/fullchain.pem /etc/ssl/certs/nginx-selfsigned.crt; do
             if [[ -f "$p" ]]; then
                 cert_path="$p"
@@ -956,6 +816,7 @@ collect_ssl_status() {
         report "  Valid From: ${cert_notbefore:-unknown}"
         report "  Expires:    ${cert_notafter:-unknown}"
 
+        # Check expiry
         if [[ -n "$cert_notafter" ]]; then
             local expiry_epoch now_epoch days_left
             expiry_epoch=$(safe_cmd "date -d '$cert_notafter' +%s 2>/dev/null" 3)
@@ -978,6 +839,7 @@ collect_ssl_status() {
             fi
         fi
 
+        # Self-signed detection
         if echo "${cert_issuer:-}" | grep -qi "self.signed\|nginx-selfsigned"; then
             report "  $(severity MEDIUM): Self-signed certificate detected"
             report "  Browsers may show security warnings on first visit"
@@ -987,6 +849,7 @@ collect_ssl_status() {
         report "  NGINX may be serving plain HTTP or is misconfigured."
     fi
 
+    # Let's Encrypt auto-renewal cron
     subsection "Auto-Renewal Cron"
     if [[ -f /etc/cron.d/certbot-renew ]] || crontab -l 2>/dev/null | grep -q certbot; then
         report "  $(severity OK): Certbot auto-renewal is configured"
@@ -1105,6 +968,7 @@ collect_rstudio_config() {
 
     subsection "rserver.conf"
     if [[ -f "$rserver_conf" ]]; then
+        # Binding address
         local bind_addr
         bind_addr=$(safe_cmd "grep '^www-address=' '$rserver_conf' | cut -d= -f2" 3)
         report "  www-address = ${bind_addr:-not set}"
@@ -1115,10 +979,12 @@ collect_rstudio_config() {
             report "  $(severity OK): Bound to localhost (behind NGINX proxy)"
         fi
 
+        # Port
         local bind_port
         bind_port=$(safe_cmd "grep '^www-port=' '$rserver_conf' | cut -d= -f2" 3)
         report "  www-port = ${bind_port:-8787}"
 
+        # Frame origin (needed for portal iframe)
         local frame_origin
         frame_origin=$(safe_cmd "grep '^www-frame-origin=' '$rserver_conf' | cut -d= -f2" 3)
         if [[ "${frame_origin:-}" == "same" ]]; then
@@ -1127,6 +993,7 @@ collect_rstudio_config() {
             report "  $(severity MEDIUM): www-frame-origin=${frame_origin:-not set} — portal iframe may break"
         fi
 
+        # Encrypt password (should be 0 behind NGINX SSL)
         local encrypt_pw
         encrypt_pw=$(safe_cmd "grep '^auth-encrypt-password=' '$rserver_conf' | cut -d= -f2" 3)
         if [[ "${encrypt_pw:-}" == "0" ]]; then
@@ -1229,77 +1096,6 @@ collect_auth_status() {
 }
 
 # =============================================================================
-# v2.1.0 NEW SECTION: v11.0 integrity + return() bug detection
-# =============================================================================
-collect_v11_integrity() {
-    section "15. BIOME v11.0 INTEGRITY CHECK"
-
-    subsection "OpenMP Infrastructure"
-    if dpkg -l libgomp1 2>/dev/null | grep -q '^ii'; then
-        report "  $(severity OK): libgomp1 installed"
-    else
-        report "  $(severity HIGH): libgomp1 NOT installed — OpenMP unavailable"
-    fi
-    if [[ -f /usr/local/lib/pkgconfig/openmp.pc ]]; then
-        report "  $(severity OK): /usr/local/lib/pkgconfig/openmp.pc present"
-    else
-        report "  $(severity MEDIUM): openmp.pc missing (R packages won't compile with -fopenmp)"
-    fi
-    if command -v pkg-config &>/dev/null; then
-        local omp_cflags
-        omp_cflags=$(pkg-config --cflags openmp 2>/dev/null || true)
-        if echo "$omp_cflags" | grep -q -- '-fopenmp'; then
-            report "  $(severity OK): pkg-config --cflags openmp → $omp_cflags"
-        else
-            report "  $(severity MEDIUM): pkg-config --cflags openmp → '${omp_cflags:-<empty>}'"
-        fi
-    fi
-
-    subsection "v11.0 Top-Level return() Bug Detection"
-    # Spawn Rscript with BIOME_WORKER_MODE=1 and verify -e body runs.
-    # If Rscript aborts (v10.0 bug present), worker PSOCK nodes die at handshake.
-    if command -v Rscript &>/dev/null && [[ -f "$RPROFILE_PATH" ]]; then
-        local marker
-        marker=$(mktemp -t biome_v11_check.XXXXXX)
-        BIOME_WORKER_MODE=1 BIOME_WORKER_THREADS=1 \
-            R_PROFILE="$RPROFILE_PATH" \
-            timeout 20 Rscript --no-init-file --no-save --no-restore --no-echo \
-                -e "cat('ALIVE=', Sys.getpid(), sep='', file='$marker')" >/dev/null 2>&1 || true
-
-        if [[ -s "$marker" ]]; then
-            report "  $(severity OK): Worker Rscript body executed ($(cat "$marker"))"
-            report "    → return() bug fix is in place (v11.0+)"
-        else
-            report "  $(severity CRITICAL): Worker Rscript ABORTED during Rprofile load"
-            report "    → v10.0 top-level return() BUG PRESENT"
-            report "    → SYMPTOM: PSOCK workers die at handshake (unserialize(node\$con))"
-            report "    → FIX: Deploy Rprofile v11.0"
-        fi
-        rm -f "$marker"
-    else
-        report "  $(severity MEDIUM): Cannot run Rscript detection (missing Rscript or Rprofile)"
-    fi
-
-    subsection "BIOME_USER_TMP Env Var (v11.0)"
-    # The current user (root, likely) may not have BIOME_USER_TMP set. This is
-    # expected — we're checking whether the Rprofile SETS it during load.
-    local but
-    but=$(safe_cmd "timeout 10 Rscript --vanilla -e \"
-        suppressMessages(try(source('$RPROFILE_PATH'), silent = TRUE))
-        cat(Sys.getenv('BIOME_USER_TMP'))
-    \" 2>/dev/null" 15)
-    if [[ -n "$but" ]]; then
-        if [[ "$but" == /Rtmp/biome_* ]]; then
-            report "  $(severity OK): BIOME_USER_TMP=$but (v11.0 layout)"
-        else
-            report "  $(severity MEDIUM): BIOME_USER_TMP=$but (expected /Rtmp/biome_<user>)"
-        fi
-    else
-        report "  $(severity MEDIUM): Rprofile does not set BIOME_USER_TMP (pre-v11.0)"
-    fi
-}
-
-# =============================================================================
 # ANALYSIS ENGINE — SYNTHESIZE ALL DATA INTO DIAGNOSIS
 # =============================================================================
 
@@ -1307,33 +1103,25 @@ generate_diagnosis() {
     local target_user="${1:-}"
     local hours="${2:-4}"
 
-    section "16. AUTOMATED DIAGNOSIS"
+    section "10. AUTOMATED DIAGNOSIS"
 
-    # BUG FIX v2.1.0: previously, robust patched counters were overwritten
-    # by legacy safe_cmd + awk code. That has been REMOVED. The patched
-    # helpers are authoritative.
+    local diagnoses=()
+    local fixes=()
+
+    # Read back collected data flags
     local has_oom has_sigsegv has_sigill has_orphans has_pthread
+    # --- ROBUST COUNTERS (v2 patch) ---
     has_oom=$(safe_number "$(count_lines "dmesg -T 2>/dev/null | grep -iE 'oom|killed process'")")
     has_sigsegv=$(safe_number "$(count_lines "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -iE 'SIGSEGV|segv|signal 11'")")
     has_sigill=$(safe_number "$(count_lines "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -iE 'SIGILL|signal 4'")")
     has_orphans=$(safe_number "$(count_lines "ps -eo ppid,args 2>/dev/null | awk '\$1 == 1' | grep -E 'Rscript|R --slave'")")
     has_pthread=$(safe_number "$(count_lines "update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -i pthread")")
+    # --- END ROBUST COUNTERS ---
+    has_sigsegv=$(safe_cmd "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -ci 'SIGSEGV\|segv\|signal 11'" 10 | awk 'NR==1 {print $1+0}')
+    has_sigill=$(safe_cmd "journalctl -u rstudio-server --since '${hours} hours ago' --no-pager 2>/dev/null | grep -ci 'SIGILL\|signal 4'" 10 | awk 'NR==1 {print $1+0}')
+    has_orphans=$(safe_cmd "ps -eo ppid,args 2>/dev/null | awk '\$1 == 1' | grep -cE 'Rscript|R --slave'" 5 | awk 'NR==1 {print $1+0}')
 
-    # v2.1.0: detect top-level return() bug
-    local has_return_bug=0
-    if command -v Rscript &>/dev/null && [[ -f "$RPROFILE_PATH" ]]; then
-        local bug_marker
-        bug_marker=$(mktemp -t biome_diag.XXXXXX)
-        BIOME_WORKER_MODE=1 BIOME_WORKER_THREADS=1 \
-            R_PROFILE="$RPROFILE_PATH" \
-            timeout 20 Rscript --no-init-file --no-save --no-restore --no-echo \
-                -e "cat('ALIVE', file='$bug_marker')" >/dev/null 2>&1 || true
-        if [[ ! -s "$bug_marker" ]]; then
-            has_return_bug=1
-        fi
-        rm -f "$bug_marker"
-    fi
-
+    # Diagnosis 1: BLAS crash
     if [[ "${has_pthread:-0}" -gt 0 ]]; then
         report "  $(severity CRITICAL) DIAGNOSIS: OpenBLAS-pthread is active"
         report "    CAUSE: pthread BLAS thread pool races with rsession pthreads"
@@ -1362,9 +1150,6 @@ generate_diagnosis() {
         report "    CHECK: Did the guard fire? (look for BIOME-CALC warnings in section 4)"
         report "    IF GUARD FIRED: User ignored warning. Consider making guard BLOCKING (stop() vs warning())"
         report "    IF GUARD DID NOT FIRE: Unguarded operation — check the unguarded patterns table"
-        report ""
-        print_unguarded_patterns_table
-        report ""
         report "    FIX OPTIONS:"
         report "      1. Rewrite user's script to use sparse/chunked methods"
         report "      2. Add a new guard for the unguarded pattern"
@@ -1380,19 +1165,7 @@ generate_diagnosis() {
         report ""
     fi
 
-    # v2.1.0: top-level return() bug diagnosis
-    if [[ "${has_return_bug:-0}" -gt 0 ]]; then
-        report "  $(severity CRITICAL) DIAGNOSIS: v10.0 top-level return() bug present"
-        report "    CAUSE: Rprofile.site has a top-level return() that aborts Rscript"
-        report "    SYMPTOM: parLapply/makeClusterPSOCK workers die at handshake →"
-        report "             'Error in unserialize(node\$con) : error reading from connection'"
-        report "    DETECTION: Spawned Rscript with BIOME_WORKER_MODE=1 and -e body failed to execute"
-        report "    FIX: Deploy Rprofile v11.0"
-        report ""
-    fi
-
-    # User-specific issues
-    local large_payloads=0
+    # Check for user-specific issues
     if [[ -n "$target_user" ]]; then
         local user_home
         user_home=$(safe_cmd "getent passwd '$target_user' | cut -d: -f6" 3)
@@ -1406,8 +1179,7 @@ generate_diagnosis() {
 
         local thread_overrides
         thread_overrides=$(grep -cE '^(OMP_NUM_THREADS|OPENBLAS_NUM_THREADS)=' "${user_home}/.Renviron" 2>/dev/null || echo "0")
-        thread_overrides="${thread_overrides//[^0-9]/}"
-        if [[ "${thread_overrides:-0}" -gt 0 ]]; then
+        if [[ "$thread_overrides" -gt 0 ]]; then
             report "  $(severity HIGH) DIAGNOSIS: User has hardcoded thread settings"
             report "    File: ${user_home}/.Renviron"
             report "    IMPACT: Overrides dynamic allocation — can cause thread fan-out"
@@ -1415,41 +1187,24 @@ generate_diagnosis() {
             report ""
         fi
 
+        local large_payloads=0
         if [[ -d "${user_home}/.local/share/rstudio/sessions/active" ]]; then
             large_payloads=$(safe_cmd "find '${user_home}/.local/share/rstudio/sessions/active' -type f -size +50M 2>/dev/null | wc -l" 5 | awk 'NR==1 {print $1+0}')
         fi
-
-        if [[ "${large_payloads:-0}" -gt 0 ]]; then
+        
+        if [[ "$large_payloads" -gt 0 ]]; then
             report "  $(severity CRITICAL) DIAGNOSIS: Massive Session Payload (Aw, Snap! Error Code 4)"
             report "    CAUSE: The R session suspend file (.env/.RData) is >50MB."
-            report "    SYMPTOM: When resuming session, NGINX may drop connection, or browser tab crashes"
-            report "             with 'Aw, Snap!' or 'Error Code: 4' (Browser OOM parsing workspace state)."
+            report "    SYMPTOM: When resuming session, NGINX may drop connection, or browser tab crashes with 'Aw, Snap!' or 'Error Code: 4'"
+            report "             (Browser OOM parsing the massive JSON workspace state)."
             report "    FIX: Reset user's session state by clearing the rstudio active session folder:"
-            report "         sudo mv ${user_home}/.local/share/rstudio/sessions/active \\"
-            report "                 ${user_home}/.local/share/rstudio/sessions/active_backup_\$(date +%s)"
+            report "         sudo mv ${user_home}/.local/share/rstudio/sessions/active ${user_home}/.local/share/rstudio/sessions/active_backup_\$(date +%s)"
             report ""
-        fi
-
-        # v2.1.0: user-specific worker error aggregation
-        local user_tmp="${RTMP_PATH}/biome_${target_user}"
-        if [[ -d "${user_tmp}/cluster_logs" ]]; then
-            local worker_errors
-            worker_errors=$(safe_cmd "find '${user_tmp}/cluster_logs' -name 'psock_*.log' -mmin -$((hours * 60)) -exec grep -c -iE 'unserialize|SIGSEGV|fatal' {} + 2>/dev/null | awk -F: '{sum+=\$2} END {print sum+0}'" 10)
-            worker_errors=$(safe_number "${worker_errors//[^0-9]/}")
-            if [[ "${worker_errors:-0}" -gt 0 ]]; then
-                report "  $(severity HIGH) DIAGNOSIS: ${worker_errors} PSOCK worker error(s) in last ${hours}h"
-                report "    FILE: ${user_tmp}/cluster_logs/"
-                report "    CAUSE: Typically unserialize(node\$con) from NFS race OR top-level return() bug"
-                report "    FIX: Verify Rprofile v11.0 deployed; use biome_worker_diagnostics() to inspect"
-                report ""
-            fi
         fi
     fi
 
     # If nothing found
-    if [[ "${has_oom:-0}" -eq 0 && "${has_sigsegv:-0}" -eq 0 && "${has_sigill:-0}" -eq 0 \
-          && "${has_pthread:-0}" -eq 0 && "${large_payloads:-0}" -eq 0 \
-          && "${has_return_bug:-0}" -eq 0 ]]; then
+    if [[ "${has_oom:-0}" -eq 0 && "${has_sigsegv:-0}" -eq 0 && "${has_sigill:-0}" -eq 0 && "${has_pthread:-0}" -eq 0 && "${large_payloads:-0}" -eq 0 ]]; then
         report "  $(severity OK): No critical crash indicators found in the last ${hours}h."
         report ""
         report "  POSSIBLE NON-CRASH CAUSES:"
@@ -1475,7 +1230,7 @@ write_incident_log() {
 === INCIDENT: $(date -Iseconds) ===
 User:       ${target_user}
 Collected:  $(date '+%Y-%m-%d %H:%M:%S')
-Script:     99_postmortem_forensics.sh v2.1.0
+Script:     99_postmortem_forensics.sh
 Report:     ${REPORT_FILE:-stdout}
 Summary:    ${diagnosis_summary}
 =======================================
@@ -1489,27 +1244,30 @@ EOF
 # =============================================================================
 
 usage() {
-    cat <<'USAGEEND'
-Usage: 99_postmortem_forensics.sh [OPTIONS]
-
-Automated post-mortem crash forensics for BIOME-CALC R sessions.
-Collects all evidence, classifies crash type, checks guard coverage,
-and produces actionable diagnosis for sysadmin DevOps workflow.
-
-Options:
-  --user <username>   Target user to investigate (required unless --all-recent)
-  --hours <N>         Look back N hours for crash events (default: 4)
-  --output <file>     Write report to file (also prints to stdout)
-  --all-recent        Scan all recent crashes (no specific user)
-  --quick             Skip BLAS smoke test and guard verification (faster)
-  --incident          Auto-write incident log entry
-  -h, --help          Display this help
-
-Examples:
-  sudo $0 --user mario.rossi --incident
-  sudo $0 --user anna.verdi --hours 8 --output /tmp/crash_report.txt --quick
-  sudo $0 --all-recent --hours 2
-USAGEEND
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Automated post-mortem crash forensics for BIOME-CALC R sessions."
+    echo "Collects all evidence, classifies crash type, checks guard coverage,"
+    echo "and produces actionable diagnosis for sysadmin DevOps workflow."
+    echo ""
+    echo "Options:"
+    echo "  --user <username>   Target user to investigate (required unless --all-recent)"
+    echo "  --hours <N>         Look back N hours for crash events (default: 4)"
+    echo "  --output <file>     Write report to file (also prints to stdout)"
+    echo "  --all-recent        Scan all recent crashes (no specific user)"
+    echo "  --quick             Skip BLAS smoke test and guard verification (faster)"
+    echo "  --incident          Auto-write incident log entry"
+    echo "  -h, --help          Display this help"
+    echo ""
+    echo "Examples:"
+    echo "  # Full forensics for a specific user"
+    echo "  sudo $0 --user mario.rossi --incident"
+    echo ""
+    echo "  # Quick scan, last 8 hours, save to file"
+    echo "  sudo $0 --user anna.verdi --hours 8 --output /tmp/crash_report.txt --quick"
+    echo ""
+    echo "  # Scan all recent crashes (no specific user)"
+    echo "  sudo $0 --all-recent --hours 2"
 }
 
 # =============================================================================
@@ -1522,11 +1280,13 @@ main() {
         exit 1
     fi
 
+    # Pessimistic: require root
     if [[ "$EUID" -ne 0 ]]; then
         log "ERROR" "This script must be run as root (sudo). Forensic data collection requires root access."
         exit 1
     fi
 
+    # Parse arguments
     local TARGET_USER=""
     local HOURS=4
     local QUICK=false
@@ -1574,19 +1334,22 @@ main() {
         esac
     done
 
+    # Validate
     if [[ -z "$TARGET_USER" && "$ALL_RECENT" == false ]]; then
         echo "ERROR: Either --user <username> or --all-recent is required." >&2
         usage
         exit 1
     fi
 
+    # Initialize report file
     if [[ -n "$REPORT_FILE" ]]; then
         mkdir -p "$(dirname "$REPORT_FILE")"
-        : > "$REPORT_FILE"
+        : > "$REPORT_FILE"  # Truncate/create
     fi
 
+    # Banner
     report "╔═══════════════════════════════════════════════════════════════╗"
-    report "║     BIOME-CALC POST-MORTEM FORENSICS v2.1.0                 ║"
+    report "║     BIOME-CALC POST-MORTEM FORENSICS v2.0.0                 ║"
     report "║     $(date '+%Y-%m-%d %H:%M:%S')                                    ║"
     if [[ -n "$TARGET_USER" ]]; then
         report "$(printf '║     User: %-50s ║' "$TARGET_USER")"
@@ -1594,18 +1357,17 @@ main() {
     report "$(printf '║     Lookback: %-47s ║' "${HOURS} hours")"
     report "╚═══════════════════════════════════════════════════════════════╝"
 
-    # Sections 1-3
+    # Execute collection modules
     collect_system_state
     collect_oom_events "$HOURS"
     collect_crash_signals "$HOURS"
 
-    # Section 4
     if [[ -n "$TARGET_USER" ]]; then
         collect_user_forensics "$TARGET_USER" "$HOURS"
     fi
 
-    # Section 5-6
     collect_blas_status
+
     if [[ "$QUICK" == false ]]; then
         collect_guard_status
     else
@@ -1613,7 +1375,6 @@ main() {
         report "  ⏩ Guard verification skipped (--quick mode)"
     fi
 
-    # Sections 7-14
     collect_nfs_status
     collect_orphan_status
     collect_service_status
@@ -1623,39 +1384,36 @@ main() {
     collect_rstudio_config
     collect_auth_status
 
-    # Section 15 (v2.1.0 new)
-    collect_v11_integrity
-
-    # Section 16 — Diagnosis
+    # Synthesize diagnosis
     generate_diagnosis "$TARGET_USER" "$HOURS"
 
+    # Incident log
     if [[ "$DO_INCIDENT" == true ]]; then
         write_incident_log "$TARGET_USER" "Automated forensic scan"
     fi
 
+    # Final summary
     section "REPORT COMPLETE"
     report "  Timestamp: $(date -Iseconds)"
     if [[ -n "$REPORT_FILE" ]]; then
         report "  Full report saved to: $REPORT_FILE"
     fi
-    report "  Sections collected: 16"
+    report "  Sections collected: 14"
     report "    1-3: System state, OOM, crash signals"
-    report "    4: User-specific forensics (incl. v11.0 layout + cluster_logs)"
-    report "    5-6: BLAS safety, memory guard coverage + v11.0 tools + NIMBLE routing"
+    report "    4: User-specific forensics"
+    report "    5-6: BLAS safety, memory guard coverage"
     report "    7-8: NFS storage, orphan processes"
-    report "    9: Service status (rstudio, nginx, sssd, telemetry, biome-cleanup-orphans)"
+    report "    9: Service status (rstudio, nginx, sssd, telemetry)"
     report "    10: SSL certificate validity"
     report "    11: NGINX config, proxy timeouts, websocket"
     report "    12: Telemetry API health"
     report "    13: RStudio server configuration"
     report "    14: Authentication & Kerberos"
-    report "    15: v11.0 integrity (OpenMP, return() bug, BIOME_USER_TMP)"
-    report "    16: Automated diagnosis"
     report ""
     report "  Next steps:"
-    report "    1. Review the AUTOMATED DIAGNOSIS section (16) for actionable fixes"
-    report "    2. If return() bug detected: priority deploy Rprofile v11.0"
-    report "    3. If user has worker errors: inspect cluster_logs/ via biome_worker_diagnostics()"
+    report "    1. Review the AUTOMATED DIAGNOSIS section for actionable fixes"
+    report "    2. If edge case found: add guard to Rprofile_site.R.template"
+    report "    3. If script issue: send user the fix from troubleshooting guide"
     report "    4. If infra issue: apply DevOps fix chain from troubleshooting guide"
     report ""
 }
