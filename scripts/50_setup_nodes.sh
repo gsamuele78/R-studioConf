@@ -44,7 +44,7 @@ source "${VARS_CONF}"
 
 # ── Template paths ──
 RPROFILE_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site.R.template"
-AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v27.R.template"
+AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v28.R.template"
 
 # ── Args ──
 SKIP_OLLAMA="${SKIP_OLLAMA:-false}"
