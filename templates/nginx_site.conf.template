@@ -15,8 +15,16 @@ map $remote_user $short_remote_user {
 # MAP: Upgrade header mapping for WebSockets
 map $http_upgrade $connection_upgrade {
     default upgrade;
-    ''      close;
+    ''      "";
 }
+
+
+
+## MAP: Upgrade header mapping for WebSockets
+#map $http_upgrade $connection_upgrade {
+#    default upgrade;
+#    ''      close;
+#}
 
 # ── ADD 1: WebSocket-aware Connection header map (FIX-3) ─────────────────────
 #
