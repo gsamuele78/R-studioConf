@@ -171,7 +171,7 @@ setup_nodes_dependencies() {
     libudunits2-dev cmake build-essential \
     libopenblas-serial-dev libomp-dev gfortran \
     libfreetype-dev libharfbuzz-dev libfribidi-dev libtiff-dev libpng-dev \
-    libnetcdf-dev libhdf5-dev \
+    libnetcdf-dev libhdf5-dev libeigen3-dev \
     default-jdk \
     libnlopt-dev \
     libgoogle-perftools-dev sendemail dnsutils \

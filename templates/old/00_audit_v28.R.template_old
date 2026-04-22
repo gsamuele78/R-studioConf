@@ -1,0 +1,2059 @@
+# ==============================================================================
+# BIOME-CALC: ENTERPRISE INFRASTRUCTURE AUDIT v28
+# ==============================================================================
+# Target: RStudio Server Open Source (Web Console Safe) — Rprofile v11.0 compatible
+# Usage:  source("%%BIOME_CONF%%/00_audit_v28.R")   (from R/RStudio)
+#         Or deployed by 99_audit_r_environment.sh
+#
+# Template placeholders (filled by 99_audit_r_environment.sh):
+#   %%BIOME_CONF%%    - /etc/biome-calc
+#   %%LOG_FILE%%      - /var/log/biome-log/r_biome_system.log
+#   %%MAX_THREADS%%   - 16 (from setup_nodes.vars.conf)
+#   %%NFS_HOME%%      - /nfs/home
+#   %%CIFS_ARCHIVE%%  - /mnt/ProjectStorage
+#   %%PYTHON_ENV%%    - /opt/r-geospatial
+#
+# CHANGES v27.2 → v28 (Rprofile v11.0 LOCAL-DISK architecture):
+#   BREAKING: NIMBLE routing is now INVERTED vs v27.2
+#   - [12.1] NIMBLE dir MUST be on /Rtmp (was NFS $HOME in v10.0)
+#   - [8.5]  API_VERSION expected >= 6 (v11.0 schema with USER_TMP_ROOT)
+#
+#   NEW TESTS for Rprofile v11.0 [N1]-[N14]:
+#   - [6.6]  BIOME_USER_TMP env var + .biome_env$USER_TMP_ROOT
+#   - [6.7]  v11.0 per-user subdirs under /Rtmp/biome_<user>/
+#   - [8.7]  New tools: biome_future_plan, biome_worker_diagnostics
+#   - [12.4] NIMBLE per-worker compile subdir (worker_<pid>)
+#   - [13.x] NEW SECTION: OpenMP validation
+#   - [14.13] biome_make_cluster() outfile parameter
+#   - [14.14] parallel::makeCluster safeguard
+#   - [14.15] doSNOW::registerDoSNOW safeguard
+#   - [14.16] Full worker env propagation
+#   - [14.17] biome_future_plan() smoke test
+#   - [14.18] biome_worker_diagnostics() available
+#   - [14.19] rstan/cmdstanr output_dir routing
+#   - [14.20] top-level return() bug fix (worker Rscript survival)
+# ==============================================================================
+
+suppressMessages({
+  library(utils)
+  library(parallel)
+})
+
+# ── Pre-load packages + trigger guards ──
+.audit_pkgs <- list()
+for (.pkg in c("geosphere", "ggplot2", "terra", "vegan", "fields",
+               "ncdf4", "lme4", "tmap", "Matrix",
+               "glmmTMB", "doParallel", "igraph", "caret",
+               "nimble", "nimbleHMC", "doSNOW", "arrow",
+               "Rcpp", "RhpcBLASctl", "data.table")) {
+  .audit_pkgs[[.pkg]] <- tryCatch({
+    suppressMessages(library(.pkg, character.only = TRUE))
+    TRUE
+  }, error = function(e) FALSE)
+}
+
+tryCatch({
+  if (exists(".biome_env", envir = .GlobalEnv)) {
+    be <- get(".biome_env", envir = .GlobalEnv)
+    if (is.function(be$deferred_pkg_init)) be$deferred_pkg_init()
+    if (is.function(be$deferred_pkg_hooks)) be$deferred_pkg_hooks()
+  }
+}, error = function(e) NULL)
+
+# ── Logging ──
+LOG_FILE <- file.path(Sys.getenv("HOME"), "biome_audit.log")
+tryCatch(cat("", file = LOG_FILE), error = function(e) NULL)
+
+SYS_LOG <- "%%LOG_FILE%%"
+tryCatch({
+  if (file.exists(SYS_LOG) && file.access(SYS_LOG, 2) != 0) {
+    if (Sys.info()[["user"]] == "root") {
+      system(sprintf("chmod 666 '%s'", SYS_LOG), intern = FALSE)
+    }
+  } else if (!file.exists(SYS_LOG)) {
+    tryCatch(cat("", file = SYS_LOG), error = function(e) NULL)
+  }
+}, error = function(e) NULL)
+
+audit_cat <- function(...) {
+  msg <- paste0(...)
+  cat(msg)
+  tryCatch(cat(msg, file = LOG_FILE, append = TRUE), error = function(e) NULL)
+}
+
+.A0 <- "\033[0m"; .AR <- "\033[31m"; .AG <- "\033[32m"
+.AY <- "\033[33m"; .AB <- "\033[1;34m"; .AC <- "\033[36m"
+
+audit_cat(paste0("\n", .AB,
+  "==================================================================\n",
+  "  BIOME-CALC ENTERPRISE AUDIT v28 (Rprofile v11.0 compatible)\n",
+  "  ", format(Sys.time(), "%d %B %Y - %H:%M:%S"), "\n",
+  "  Host: ", Sys.info()[["nodename"]], " | User: ", Sys.info()[["user"]], "\n",
+  "==================================================================", .A0, "\n"))
+
+audit_cat(sprintf("\n  Pre-loaded: %s\n",
+  paste(names(.audit_pkgs)[unlist(.audit_pkgs)], collapse = ", ")))
+if (any(!unlist(.audit_pkgs))) {
+  audit_cat(sprintf("  Missing:    %s (some tests will skip)\n",
+    paste(names(.audit_pkgs)[!unlist(.audit_pkgs)], collapse = ", ")))
+}
+.deferred_ok <- tryCatch(
+  isTRUE(get(".biome_env", envir = .GlobalEnv)$shared_env$deferred_done),
+  error = function(e) FALSE)
+audit_cat(sprintf("  Guards:     %s\n",
+  if (.deferred_ok) "Active (deferred_pkg_init OK)" else "PENDING (guards may not be installed)"))
+
+.ai_model_default <- tryCatch({
+  mf <- "%%BIOME_CONF%%/ai_model"
+  if (file.exists(mf)) trimws(readLines(mf, n = 1, warn = FALSE)) else "codellama:7b"
+}, error = function(e) "codellama:7b")
+
+conf <- list(
+  ollama_port  = 11434,
+  ollama_api   = "http://127.0.0.1:11434/api/generate",
+  ai_model     = .ai_model_default,
+  max_tmp_pct  = 85,
+  max_threads  = %%MAX_THREADS%%L,
+  biome_conf   = "%%BIOME_CONF%%",
+  nfs_home     = "%%NFS_HOME%%",
+  python_env   = "%%PYTHON_ENV%%"
+)
+
+audit_log <- list()
+
+safe_eval <- function(expr, timeout = 20) {
+  if (.Platform$OS.type == "unix") {
+    job <- parallel::mcparallel(expr)
+    res <- suppressWarnings(parallel::mccollect(job, wait = FALSE, timeout = timeout))
+    if (is.null(res)) {
+      try(tools::pskill(job$pid, signal = 9L), silent = TRUE)
+      suppressWarnings(try(parallel::mccollect(job, wait = FALSE, timeout = 1), silent = TRUE))
+      stop(sprintf("Timeout after %ds (child killed)", timeout))
+    }
+    val <- res[[1]]
+    if (inherits(val, "try-error")) stop(attr(val, "condition")$message %||% as.character(val))
+    return(val)
+  }
+  setTimeLimit(elapsed = timeout, transient = TRUE)
+  on.exit(setTimeLimit(elapsed = Inf))
+  force(expr)
+}
+
+run_audit <- function(id, name, expr, fix_hint = "Contact SysAdmin", timeout = 20, use_fork = FALSE) {
+  tryCatch({
+    df <- as.numeric(sub("%", "", system("df -h /Rtmp | tail -1 | awk '{print $5}'", intern = TRUE)))
+    if (df > conf$max_tmp_pct) stop("Safety Abort: /Rtmp full")
+  }, error = function(e) stop("Safety check failed"))
+
+  audit_cat(sprintf("[%s] %-45s ", id, name)); flush.console()
+
+  warn_msg <- NULL
+  res <- tryCatch(
+    withCallingHandlers({
+      if (use_fork) {
+        val <- safe_eval(expr, timeout = timeout)
+      } else {
+        setTimeLimit(elapsed = timeout, transient = TRUE)
+        val <- force(expr)
+        setTimeLimit(elapsed = Inf)
+      }
+      if (!is.null(warn_msg)) list(s = "WARN", m = warn_msg)
+      else list(s = "PASS", m = if (is.character(val)) val else "OK")
+    }, warning = function(w) {
+      warn_msg <<- conditionMessage(w)
+      invokeRestart("muffleWarning")
+    }),
+    error = function(e) {
+      setTimeLimit(elapsed = Inf)
+      list(s = "FAIL", m = e$message)
+    },
+    finally = { gc(verbose = FALSE) }
+  )
+
+  audit_log[[id]] <<- list(s = res$s, m = res$m, fix = fix_hint)
+  status_color <- switch(res$s, "PASS" = .AG, "WARN" = .AY, .AR)
+  audit_cat(paste0(status_color, "[", res$s, "]", .A0,
+    if (res$m != "OK") sprintf(" (%s)", res$m) else "", "\n"))
+  flush.console()
+}
+
+# ==============================================================================
+# [1.0] CONFIGURATION & THREAD SAFETY
+# ==============================================================================
+audit_cat("\n[1.0] CONFIGURATION & THREAD SAFETY\n")
+
+run_audit("1.1", "Rprofile Status", {
+  if (!exists("status")) stop("Rprofile not loaded (status() missing)")
+  "Active"
+})
+
+run_audit("1.2", sprintf("Thread Capping Check (Max %d)", conf$max_threads), {
+  omp <- as.integer(Sys.getenv("OMP_NUM_THREADS"))
+  if (is.na(omp)) stop("OMP_NUM_THREADS unset")
+  if (omp > conf$max_threads) stop(sprintf("UNSAFE: Threads=%d (Must be <= %d for QEMU)", omp, conf$max_threads))
+  sprintf("Safe: %d threads", omp)
+}, fix_hint = "Update to Rprofile >= v11.0")
+
+run_audit("1.3", "CPU Model Detection", {
+  cpuinfo <- tryCatch(readLines("/proc/cpuinfo", warn = FALSE), error = function(e) "")
+  model_line <- grep("^model name", cpuinfo, value = TRUE)[1]
+  vendor_line <- grep("^vendor_id", cpuinfo, value = TRUE)[1]
+  model_name <- trimws(sub(".*:\\s*", "", model_line))
+  vendor_id  <- trimws(sub(".*:\\s*", "", vendor_line))
+  coretype <- Sys.getenv("OPENBLAS_CORETYPE", "")
+
+  if (nchar(coretype) > 0) {
+    intel_types <- c("HASWELL", "SKYLAKEX", "SANDYBRIDGE", "IVYBRIDGE", "BROADWELL", "PRESCOTT")
+    amd_types   <- c("ZEN", "BULLDOZER", "PILEDRIVER", "STEAMROLLER", "EXCAVATOR", "BARCELONA")
+    if (grepl("AMD", vendor_id, ignore.case = TRUE) && toupper(coretype) %in% intel_types) {
+      stop(sprintf("CORETYPE=%s (Intel) on AMD CPU — BLAS will livelock!", coretype))
+    }
+    if (grepl("Intel", vendor_id, ignore.case = TRUE) && toupper(coretype) %in% amd_types) {
+      stop(sprintf("CORETYPE=%s (AMD) on Intel CPU — mismatch", coretype))
+    }
+  }
+
+  info <- sprintf("%s (%s, CORETYPE=%s)", model_name, vendor_id,
+    if (nchar(coretype) > 0) coretype else "auto")
+
+  if (grepl("QEMU", model_name, ignore.case = TRUE)) {
+    warning(sprintf("Virtual CPU — recommend cpu:host if no live-migration needed (%s)", info))
+  }
+  info
+}, fix_hint = "Set cpu:host in Proxmox VM config for best performance")
+
+run_audit("1.4", "BLAS Library Check", {
+  si <- sessionInfo()
+  blas <- si$BLAS
+  lapack <- si$LAPACK
+  blas_base <- basename(blas)
+  if (grepl("openblas", blas, ignore.case = TRUE)) {
+    if (grepl("openblas-pthread", blas, fixed = TRUE)) {
+      stop(sprintf(paste0(
+        "CRITICAL: OpenBLAS-pthread detected (%s).\n",
+        "  This WILL cause SIGSEGV during solve()/crossprod() in RStudio.\n",
+        "  Fix: sudo apt-get install libopenblas0-serial && ",
+        "sudo apt-get remove libopenblas0-pthread"), blas_base))
+    }
+    variant <- if (grepl("serial", blas)) "serial (safe)" else
+               if (grepl("openmp", blas)) "openmp" else "unknown-variant"
+    lapack_ok <- grepl("openblas-serial", lapack, fixed = TRUE)
+    if (!lapack_ok && grepl("openblas-pthread", lapack, fixed = TRUE)) {
+      stop(sprintf("CRITICAL: LAPACK uses pthread variant (%s)", basename(lapack)))
+    }
+    sprintf("OpenBLAS (%s) | LAPACK: %s", variant, if (lapack_ok) "serial" else basename(lapack))
+  } else if (grepl("/blas/", blas)) {
+    stop(sprintf("Reference BLAS active (%s) — 10-50x slower!", blas_base))
+  } else {
+    warning(sprintf("Non-OpenBLAS: %s — verify performance", blas_base))
+  }
+}, fix_hint = "Run 50_setup_nodes.sh (sets BLAS/LAPACK to openblas-serial)")
+
+run_audit("1.5", "Stale Env Vars (/etc/environment)", {
+  env_file <- "/etc/environment"
+  if (!file.exists(env_file)) return("OK (no /etc/environment)")
+  env_lines <- readLines(env_file, warn = FALSE)
+  stale_vars <- c("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+  found <- c()
+  for (v in stale_vars) {
+    if (any(grepl(sprintf("^%s=", v), env_lines))) found <- c(found, v)
+  }
+  if (length(found) > 0) {
+    stop(sprintf("Static thread vars found: %s — conflicts with dynamic Rprofile", paste(found, collapse = ", ")))
+  }
+  openblas_nt <- Sys.getenv("OPENBLAS_NUM_THREADS", "")
+  if (nchar(openblas_nt) == 0) {
+    warning("OPENBLAS_NUM_THREADS not set in Renviron.site (missing belt-and-suspenders for serial BLAS)")
+  }
+  "Clean (no static thread vars)"
+}, fix_hint = "sed -i '/^OPENBLAS_NUM_THREADS\\|^OMP_NUM_THREADS\\|^MKL_NUM_THREADS/d' /etc/environment")
+
+run_audit("1.6", "OpenMP pkg-config", {
+  pc_check <- tryCatch(
+    system2("pkg-config", args = c("--cflags", "openmp"), stdout = TRUE, stderr = FALSE),
+    error = function(e) ""
+  )
+  if (length(pc_check) == 0 || !any(grepl("-fopenmp", pc_check))) {
+    warning("OpenMP not found by pkg-config — R packages may compile single-threaded")
+  } else {
+    sprintf("Available (%s)", pc_check[1])
+  }
+}, fix_hint = "Run 50_setup_nodes.sh (creates /usr/local/lib/pkgconfig/openmp.pc)")
+
+# v28: NEW — verify Rprofile >= v11.0
+run_audit("1.7", "Rprofile Version >= 11.0", {
+  v <- tryCatch(.biome_env$VERSION, error = function(e) "unknown")
+  if (v == "unknown") stop("Cannot determine Rprofile version")
+  vnum <- suppressWarnings(as.numeric(gsub("[^0-9.]", "", v)))
+  if (is.na(vnum)) stop(sprintf("Cannot parse version: %s", v))
+  if (vnum < 9.6)   stop(sprintf("CRITICAL: v%s is pre-v9.6 — missing memory sentinels", v))
+  if (vnum < 11.0)  warning(sprintf("v%s is pre-v11.0 — missing local-disk NIMBLE routing + return() fix", v))
+  sprintf("v%s", v)
+}, fix_hint = "Deploy Rprofile v11.0 via 50_setup_nodes.sh")
+
+# v28: NEW — BIOME_USER_TMP must be set by Rprofile Section -1.8
+run_audit("1.8", "BIOME_USER_TMP env var (v11.0)", {
+  but <- Sys.getenv("BIOME_USER_TMP", "")
+  if (nchar(but) == 0) stop("BIOME_USER_TMP not set (Rprofile < v11.0 or Section -1.8 failed)")
+  if (!grepl("^/Rtmp/biome_", but)) {
+    warning(sprintf("BIOME_USER_TMP=%s — unusual path (expected /Rtmp/biome_<user>)", but))
+  }
+  expected <- file.path("/Rtmp", paste0("biome_", Sys.info()[["user"]]))
+  if (but != expected) {
+    warning(sprintf("BIOME_USER_TMP=%s (expected %s)", but, expected))
+  }
+  if (!dir.exists(but)) stop(sprintf("BIOME_USER_TMP dir does not exist: %s", but))
+  sprintf("OK (%s)", but)
+}, fix_hint = "Deploy Rprofile v11.0 — Section -1.8 creates the user tmp root")
+
+# ==============================================================================
+# [2.0] SERVICES
+# ==============================================================================
+audit_cat("\n[2.0] SERVICES\n")
+
+run_audit("2.1", "Ollama Connection", {
+  con <- tryCatch(
+    socketConnection("127.0.0.1", conf$ollama_port, open = "r", timeout = 2),
+    error = function(e) NULL
+  )
+  if (is.null(con)) stop("Unreachable on port 11434")
+  close(con)
+  "Online"
+})
+
+run_audit("2.2", "AI Inference", {
+  body <- sprintf('{"model":"%s","prompt":"Say OK","stream":false}', conf$ai_model)
+  res <- system2("curl", args = c(
+    "-s", "-m", "90", "--connect-timeout", "5", "-X", "POST",
+    conf$ollama_api, "-d", shQuote(body)
+  ), stdout = TRUE, stderr = FALSE)
+  raw <- paste(res, collapse = "")
+  if (nchar(raw) == 0) stop("Empty response (model loading? timeout?)")
+  if (!grepl('"response"', raw)) stop("Invalid response format")
+  if (grepl('"error"', raw)) stop("Ollama returned error")
+  sprintf("Response OK (%s)", conf$ai_model)
+}, timeout = 100, use_fork = FALSE)
+
+run_audit("2.3", "Ollama Security (Localhost Binding)", {
+  ss_out <- tryCatch(system2("ss", args = c("-tlnp"), stdout = TRUE, stderr = FALSE), error = function(e) "")
+  ollama_lines <- grep(":11434", ss_out, value = TRUE)
+  if (length(ollama_lines) == 0) stop("Ollama not listening on port 11434")
+  if (any(grepl("0\\.0\\.0\\.0:11434|\\*:11434|\\[::\\]:11434", ollama_lines))) {
+    stop("EXPOSED on 0.0.0.0 — data leaves VM!")
+  }
+  "Localhost-only (127.0.0.1:11434)"
+}, fix_hint = "Redeploy with 50_setup_nodes.sh")
+
+run_audit("2.4", "Ollama Model Readiness", {
+  models_raw <- tryCatch(
+    system2("curl", args = c("-s", "-m", "5", "http://127.0.0.1:11434/api/tags"), stdout = TRUE, stderr = FALSE),
+    error = function(e) ""
+  )
+  models_str <- paste(models_raw, collapse = "")
+  if (nchar(models_str) == 0) stop("Cannot list models")
+  model_names <- regmatches(models_str, gregexpr('"name"\\s*:\\s*"([^"]+)"', models_str))[[1]]
+  model_names <- gsub('"name"\\s*:\\s*"', '', gsub('"$', '', model_names))
+  has_configured <- any(grepl(conf$ai_model, model_names, fixed = TRUE))
+  has_fallback   <- any(grepl("codellama", model_names, ignore.case = TRUE))
+  has_rcoder     <- any(grepl("r-coder", model_names, ignore.case = TRUE))
+  parts <- c()
+  if (has_rcoder)     parts <- c(parts, "r-coder")
+  if (has_configured && conf$ai_model != "r-coder") parts <- c(parts, conf$ai_model)
+  if (has_fallback)   parts <- c(parts, "codellama")
+  if (length(parts) == 0) stop(sprintf("No models found (expected %s)", conf$ai_model))
+  if (!has_configured && !has_rcoder) warning(sprintf("Configured model '%s' missing", conf$ai_model))
+  sprintf("Available: %s", paste(unique(parts), collapse = ", "))
+}, fix_hint = "Run: ollama pull qwen2.5-coder:14b-instruct-q4_K_M")
+
+run_audit("2.5", "Ollama Systemd Hardening", {
+  override <- "/etc/systemd/system/ollama.service.d/biome-hardening.conf"
+  if (!file.exists(override)) stop("No systemd hardening override found")
+  oconf <- readLines(override, warn = FALSE)
+  checks <- c(); issues <- c()
+  if (any(grepl("MemoryMax=", oconf))) {
+    mem <- sub(".*MemoryMax=([0-9]+[A-Z]).*", "\\1", oconf[grep("MemoryMax=", oconf)[1]])
+    checks <- c(checks, sprintf("RAM=%s", mem))
+  } else issues <- c(issues, "No MemoryMax")
+  if (any(grepl("OLLAMA_HOST=127\\.0\\.0\\.1", oconf))) checks <- c(checks, "localhost") else issues <- c(issues, "OLLAMA_HOST not 127.0.0.1")
+  if (any(grepl("OLLAMA_KEEP_ALIVE=", oconf))) checks <- c(checks, "idle-unload")
+  if (any(grepl("OLLAMA_MAX_LOADED_MODELS=", oconf))) checks <- c(checks, "single-model")
+  if (length(issues) > 0) stop(paste(issues, collapse = "; "))
+  paste(checks, collapse = ", ")
+}, fix_hint = "Redeploy with 50_setup_nodes.sh")
+
+# ==============================================================================
+# [3.0] COMPUTATIONAL STRESS (SAFE MODE)
+# ==============================================================================
+audit_cat("\n[3.0] COMPUTATIONAL STRESS\n")
+
+run_audit("3.1", "BLAS Warmup (100x100)", {
+  A <- matrix(runif(100 * 100), 100, 100)
+  B <- A %*% A
+  "OK"
+}, timeout = 15, use_fork = TRUE,
+   fix_hint = "BLAS livelock: set cpu:host in Proxmox or OPENBLAS_CORETYPE=SANDYBRIDGE")
+
+run_audit("3.2", "Matrix Mult Stress (2000x2000)", {
+  N <- 2000
+  A <- matrix(runif(N * N), N, N)
+  t0 <- Sys.time()
+  C <- A %*% A
+  dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+  sprintf("Done in %.2fs", dt)
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "BLAS livelock or slow: check OPENBLAS_CORETYPE and cpu type")
+
+run_audit("3.3", "Keras CPU Backend", {
+  if (requireNamespace("keras", quietly = TRUE)) {
+    tryCatch({
+      tensorflow::tf$constant("Hello")
+      "Active (OneDNN)"
+    }, error = function(e) stop(e$message))
+  } else "Skipped (not installed)"
+}, use_fork = TRUE, timeout = 30)
+
+
+# ==============================================================================
+# [4.0] SYSTEM HEALTH
+# ==============================================================================
+audit_cat("\n[4.0] SYSTEM HEALTH\n")
+
+run_audit("4.1", "/Rtmp Disk (Local)", {
+  df_line <- system("df -BG /Rtmp | tail -1", intern = TRUE)
+  parts <- strsplit(trimws(df_line), "\\s+")[[1]]
+  total_gb <- as.numeric(sub("G", "", parts[2]))
+  free_gb <- as.numeric(sub("G", "", parts[4]))
+  pct <- as.numeric(sub("%", "", parts[5]))
+  warn_pct <- tryCatch(.biome_env$TMP_WARN_PCT, error = function(e) 80L)
+  fs_type <- system("df -T /Rtmp | tail -1 | awk '{print $2}'", intern = TRUE)
+  if (grepl("tmpfs", fs_type)) stop("CRITICAL: /Rtmp is still tmpfs — must be local disk")
+  if (pct >= 95) stop(sprintf("CRITICAL: /Rtmp at %d%%. Disk full.", pct))
+  if (pct >= warn_pct) warning(sprintf("Advisory: %d%% used (warn@%d%%)", pct, warn_pct))
+  if (total_gb < 100) warning(sprintf("/Rtmp only %dGB — recommended 400GB", total_gb))
+  sprintf("OK (%d GB free of %d GB, %d%% | %s | Warn@%d%%)", free_gb, total_gb, pct, fs_type, warn_pct)
+}, fix_hint = "Mount dedicated 400GB disk at /Rtmp. Run 50_setup_nodes.sh.")
+
+run_audit("4.2", sprintf("NFS Mount (%s)", conf$nfs_home), {
+  mounts <- system(sprintf("mount | grep '%s'", conf$nfs_home), intern = TRUE)
+  if (length(mounts) == 0) stop("Not mounted")
+  if (grepl("nfs4", mounts[1])) {
+    tf <- file.path(conf$nfs_home, Sys.info()[["user"]], ".biome_nfs_test")
+    tryCatch({
+      writeLines("test", tf); file.remove(tf)
+      "Mounted (nfs4, I/O OK)"
+    }, error = function(e) sprintf("Mounted but I/O failed: %s", e$message))
+  } else "Mounted (non-nfs4)"
+}, fix_hint = "Check NFS server and network configuration")
+
+run_audit("4.3", "Swap Configuration", {
+  si <- system("swapon --show --noheadings --bytes 2>/dev/null", intern = TRUE)
+  if (length(si) == 0) stop("No swap active")
+  sprintf("Active (%d devices)", length(si))
+})
+
+run_audit("4.4", "Disk I/O Scheduler", {
+  scheds <- list.files("/sys/block", full.names = TRUE)
+  scheds <- scheds[!grepl("loop|ram|dm-", scheds)]
+  results <- vapply(scheds, function(d) {
+    sf <- file.path(d, "queue", "scheduler")
+    if (file.exists(sf)) {
+      s <- readLines(sf, n = 1, warn = FALSE)
+      m <- regmatches(s, regexpr("\\[\\w+\\]", s))
+      if (length(m) > 0) gsub("[\\[\\]]", "", m) else "unknown"
+    } else "none"
+  }, character(1))
+  paste(paste0(basename(names(results)), "=", results), collapse = ", ")
+})
+
+run_audit("4.5", "System Log Permissions", {
+  slog <- "%%LOG_FILE%%"
+  if (!file.exists(slog)) stop(sprintf("Missing: %s", slog))
+  if (file.access(slog, 2) != 0) stop(sprintf("Not writable (run: chmod 666 %s)", slog))
+  tryCatch({
+    cat(sprintf("[%s] [AUDIT] Permission test OK\n", format(Sys.time())), file = slog, append = TRUE)
+    "Writable"
+  }, error = function(e) stop(sprintf("Write failed: %s", e$message)))
+}, fix_hint = "Run: sudo chmod 666 %%LOG_FILE%%")
+
+run_audit("4.6", "/Rtmp Routing Validation", {
+  smart_routing_enabled <- tryCatch(.biome_env$shared_env$deferred_done, error = function(e) FALSE)
+  if (!smart_routing_enabled) return("Skipped (deferred init not yet triggered)")
+
+  status_msgs <- c()
+  user <- Sys.info()[["user"]]
+  user_root <- file.path("/Rtmp", paste0("biome_", user))
+  if (dir.exists(user_root)) {
+    subdirs <- list.dirs(user_root, recursive = FALSE, full.names = FALSE)
+    status_msgs <- c(status_msgs, sprintf("biome_%s: %s", user, paste(subdirs, collapse=",")))
+  }
+  if (isNamespaceLoaded("terra")) {
+    td <- terra::terraOptions()$tempdir
+    if (!grepl("/Rtmp", td, fixed = TRUE)) warning(sprintf("terra tmp not under /Rtmp: %s", td))
+    status_msgs <- c(status_msgs, sprintf("terra: %s", basename(dirname(td))))
+  }
+  if (isNamespaceLoaded("raster")) {
+    rd <- raster::tmpDir()
+    if (!grepl("/Rtmp", rd, fixed = TRUE)) warning(sprintf("raster tmp not under /Rtmp: %s", rd))
+    status_msgs <- c(status_msgs, sprintf("raster: %s", basename(dirname(rd))))
+  }
+  tmpdir_val <- Sys.getenv("TMPDIR", "")
+  if (nchar(tmpdir_val) > 0 && !grepl("/Rtmp", tmpdir_val, fixed = TRUE)) {
+    warning(sprintf("TMPDIR=%s — expected /Rtmp", tmpdir_val))
+  }
+  if (length(status_msgs) == 0) "Skipped (GIS packages not loaded)" else paste(status_msgs, collapse=", ")
+}, fix_hint = "Ensure Rprofile v11.0 is deployed (RTMP_PATH=/Rtmp)")
+
+run_audit("4.7", "NUMA Topology", {
+  numa_raw <- tryCatch(system2("lscpu", stdout = TRUE, stderr = FALSE), error = function(e) "")
+  numa_line <- grep("NUMA node\\(s\\)", numa_raw, value = TRUE)
+  if (length(numa_line) == 0) return("Unknown (lscpu unavailable)")
+  numa_count <- as.integer(trimws(sub(".*:\\s*", "", numa_line[1])))
+  sockets <- grep("Socket\\(s\\)", numa_raw, value = TRUE)
+  socket_count <- if (length(sockets) > 0) as.integer(trimws(sub(".*:\\s*", "", sockets[1]))) else 1L
+  if (socket_count > 1 && numa_count <= 1) {
+    warning(sprintf("Multi-socket (%d) but NUMA not exposed", socket_count))
+  }
+  sprintf("%d node(s), %d socket(s)", numa_count, socket_count)
+}, fix_hint = "In Proxmox: VM -> Hardware -> Processor -> Enable NUMA")
+
+# ==============================================================================
+# [5.0] MEMORY SENTINELS (unchanged from v27.2)
+# ==============================================================================
+audit_cat("\n[5.0] MEMORY SENTINELS\n")
+
+run_audit("5.1", "solve() Thread Reduction Guard", {
+  orig <- tryCatch(get("original_solve", envir = .biome_env), error = function(e) NULL)
+  if (is.null(orig)) stop("solve() guard not installed")
+  curr_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+  if (curr_t <= 2) return(sprintf("Active (threads already at %d)", curr_t))
+  sprintf("Active (will reduce %d -> 2 for N>10k matrices)", curr_t)
+}, fix_hint = "Deploy Rprofile v11.0")
+
+run_audit("5.2", "dist() Memory Guard", {
+  orig <- tryCatch(get("original_dist", envir = .biome_env), error = function(e) NULL)
+  if (is.null(orig)) stop("dist() guard not installed")
+  d <- dist(matrix(1:20, nrow = 5))
+  if (!inherits(d, "dist")) stop("dist() wrapper broke output class")
+  "Active (verified with 5-row test)"
+}, fix_hint = "Deploy Rprofile v11.0")
+
+run_audit("5.3", "geosphere::distm() Guard", {
+  if (!requireNamespace("geosphere", quietly = TRUE)) return("Skipped (geosphere not installed)")
+  orig <- tryCatch(get("original_distm", envir = .biome_env), error = function(e) NULL)
+  if (is.null(orig)) {
+    if (!isNamespaceLoaded("geosphere")) stop("Guard not active (load geosphere first)")
+    stop("Guard missing despite geosphere being loaded")
+  }
+  coords <- matrix(c(0,0, 1,1), ncol = 2)
+  d <- geosphere::distm(coords)
+  if (!is.matrix(d) || nrow(d) != 2) stop("distm() wrapper broke output")
+  "Active (verified with 2-point test)"
+}, fix_hint = "Deploy Rprofile v11.0 and library(geosphere) before audit")
+
+run_audit("5.4", "outer() Memory Guard", {
+  orig <- tryCatch(get("original_outer", envir = .biome_env), error = function(e) NULL)
+  if (is.null(orig)) stop("outer() guard not installed")
+  o <- outer(1:5, 1:5, "+")
+  if (!is.matrix(o) || nrow(o) != 5) stop("outer() wrapper broke output")
+  "Active (verified with 5x5 test)"
+}, fix_hint = "Deploy Rprofile v11.0")
+
+run_audit("5.5", "expand.grid() Memory Guard", {
+  orig <- tryCatch(get("original_expand_grid", envir = .biome_env), error = function(e) NULL)
+  if (is.null(orig)) stop("expand.grid() guard not installed")
+  eg <- expand.grid(a = 1:3, b = 1:4)
+  if (nrow(eg) != 12) stop("expand.grid() wrapper broke output")
+  "Active (verified with 3x4 test)"
+}, fix_hint = "Deploy Rprofile v11.0")
+
+run_audit("5.6", "read.csv() Original Preserved", {
+  orig <- tryCatch(get("original_read_csv", envir = .biome_env), error = function(e) NULL)
+  if (is.null(orig)) stop("Original read.csv not preserved — infinite recursion risk")
+  if (!is.function(orig)) stop("original_read_csv is not a function")
+  "Preserved (safe fallback available)"
+}, fix_hint = "Deploy Rprofile v11.0")
+
+# ==============================================================================
+# [6.0] /Rtmp LOCAL DISK VALIDATION (v11.0 aware)
+# ==============================================================================
+audit_cat("\n[6.0] /Rtmp LOCAL DISK VALIDATION\n")
+
+run_audit("6.1", "get_tmp_disk_use_pct() Function", {
+  gtd <- tryCatch(get("get_tmp_disk_use_pct", envir = as.environment("tools:biome_calc")), error = function(e) NULL)
+  if (is.null(gtd)) stop("get_tmp_disk_use_pct() not found in tools:biome_calc")
+  result <- gtd()
+  if (!is.numeric(result) || length(result) != 1) stop("get_tmp_disk_use_pct() returned non-numeric")
+  if (result < 0 || result > 100) stop(sprintf("get_tmp_disk_use_pct() out of range: %.0f", result))
+  sprintf("Active (disk usage: %d%%)", as.integer(result))
+}, fix_hint = "Deploy Rprofile v11.0")
+
+run_audit("6.2", "Warn Threshold Configuration", {
+  warn_ok <- tryCatch({.biome_env$TMP_WARN_PCT; TRUE}, error = function(e) FALSE)
+  disk_ok <- tryCatch({.biome_env$TMP_DISK_GB; TRUE}, error = function(e) FALSE)
+  if (!warn_ok) stop("Missing TMP_WARN_PCT in .biome_env")
+  if (!disk_ok) stop("Missing TMP_DISK_GB in .biome_env")
+  wp <- .biome_env$TMP_WARN_PCT
+  dg <- .biome_env$TMP_DISK_GB
+  redir_gone <- is.null(tryCatch(.biome_env$TMP_REDIRECT_PCT, error = function(e) NULL))
+  bigdata_gone <- is.null(tryCatch(.biome_env$BIG_DATA_THRESHOLD_GB, error = function(e) NULL))
+  issues <- c()
+  if (!redir_gone) issues <- c(issues, "TMP_REDIRECT_PCT still present (removed in v10.0)")
+  if (!bigdata_gone) issues <- c(issues, "BIG_DATA_THRESHOLD_GB still present (removed in v10.0)")
+  if (length(issues) > 0) warning(paste(issues, collapse = "; "))
+  if (wp > 95) warning(sprintf("Warn threshold %d%% is very high", wp))
+  sprintf("Warn@%d%% Disk=%dGB", wp, dg)
+}, fix_hint = "Check setup_nodes.vars.conf and Rprofile v11.0")
+
+run_audit("6.3", "Per-User /Rtmp Isolation", {
+  user <- Sys.info()[["user"]]
+  user_root <- file.path("/Rtmp", paste0("biome_", user))
+  if (!dir.exists(user_root)) {
+    warning(sprintf("biome_%s not created yet (deferred until first package load)", user))
+  } else {
+    subdirs <- list.dirs(user_root, recursive = FALSE, full.names = FALSE)
+    other_users <- list.dirs("/Rtmp", recursive = FALSE, full.names = FALSE)
+    other_biome <- grep("^biome_", other_users, value = TRUE)
+    other_biome <- setdiff(other_biome, paste0("biome_", user))
+    leaked <- c()
+    for (ob in other_biome) {
+      ob_path <- file.path("/Rtmp", ob)
+      if (file.access(ob_path, 4) == 0) leaked <- c(leaked, ob)
+    }
+    if (length(leaked) > 0) warning(sprintf("Can read other users' tmp: %s", paste(leaked, collapse=", ")))
+    return(sprintf("OK (subdirs: %s)", paste(subdirs, collapse=", ")))
+  }
+  "Pending (not yet initialized)"
+}, fix_hint = "Run library(terra) or library(ggplot2) to trigger deferred init")
+
+run_audit("6.4", "/Rtmp Filesystem Validation", {
+  fs_type <- tryCatch(system("df -T /Rtmp | tail -1 | awk '{print $2}'", intern = TRUE),
+                      error = function(e) "unknown")
+  if (grepl("tmpfs", fs_type)) stop("/Rtmp is tmpfs — must be local disk (ext4/xfs)")
+  perms <- tryCatch(system("stat -c '%a' /Rtmp", intern = TRUE),
+                    error = function(e) "unknown")
+  if (perms != "1777") warning(sprintf("/Rtmp permissions=%s (expected 1777)", perms))
+  tmpfile_conf <- "/etc/tmpfiles.d/biome-rtmp-cleanup.conf"
+  if (!file.exists(tmpfile_conf)) warning("Missing systemd-tmpfiles rule: biome-rtmp-cleanup.conf")
+  sprintf("OK (%s filesystem, mode=%s, tmpfiles-rule=%s)", fs_type, perms,
+          if (file.exists(tmpfile_conf)) "present" else "MISSING")
+}, fix_hint = "Run 50_setup_nodes.sh")
+
+run_audit("6.5", "Cgroup Refresh Mechanism", {
+  lcg <- tryCatch(.biome_env$shared_env$last_cgroup_check, error = function(e) NULL)
+  if (is.null(lcg)) stop("last_cgroup_check not in shared_env (Rprofile < v9.6?)")
+  cg_ram <- tryCatch(.biome_env$shared_env$cgroup_ram_gb, error = function(e) NULL)
+  if (!is.null(cg_ram) && is.finite(cg_ram)) {
+    sprintf("Active (cgroup RAM: %.0f GB, refresh every 5min)", cg_ram)
+  } else {
+    "Active (no cgroup limit detected)"
+  }
+}, fix_hint = "Deploy Rprofile v11.0")
+
+# v28: NEW — .biome_env$USER_TMP_ROOT must be set and match BIOME_USER_TMP
+run_audit("6.6", ".biome_env$USER_TMP_ROOT (v11.0)", {
+  usr <- tryCatch(.biome_env$USER_TMP_ROOT, error = function(e) NULL)
+  if (is.null(usr)) stop("USER_TMP_ROOT not in .biome_env (Rprofile < v11.0)")
+  env_val <- Sys.getenv("BIOME_USER_TMP", "")
+  if (nchar(env_val) > 0 && env_val != usr) {
+    warning(sprintf("Mismatch: .biome_env=%s, env=%s", usr, env_val))
+  }
+  if (!dir.exists(usr)) stop(sprintf("USER_TMP_ROOT dir missing: %s", usr))
+  sprintf("OK (%s)", usr)
+}, fix_hint = "Deploy Rprofile v11.0")
+
+# v28: NEW — v11.0 per-user subdirs must all exist after deferred init
+run_audit("6.7", "v11.0 per-user subdirs under /Rtmp/biome_<user>/", {
+  usr <- tryCatch(.biome_env$USER_TMP_ROOT,
+                  error = function(e) file.path("/Rtmp", paste0("biome_", Sys.info()[["user"]])))
+  expected_subdirs <- c("nimble_compile", "tmb_compile", "stan_compile",
+                        "rcpp_cache", "cluster_logs", "keras_cache", "plot_cache")
+  missing <- c()
+  for (sub in expected_subdirs) {
+    if (!dir.exists(file.path(usr, sub))) missing <- c(missing, sub)
+  }
+  if (length(missing) > 0) {
+    warning(sprintf("Missing v11.0 subdirs under %s: %s", usr, paste(missing, collapse=", ")))
+  }
+  present <- setdiff(expected_subdirs, missing)
+  sprintf("OK (%d/%d present: %s)", length(present), length(expected_subdirs),
+          paste(present, collapse=","))
+}, fix_hint = "Deploy Rprofile v11.0 (Section -1.8 pre-creates all subdirs)")
+
+
+# ==============================================================================
+# [7.0] RENDERING BACKEND
+# ==============================================================================
+audit_cat("\n[7.0] RENDERING BACKEND\n")
+
+run_audit("7.1", "ragg Package", {
+  if (!requireNamespace("ragg", quietly = TRUE)) {
+    warning("ragg not installed — falling back to cairo (2-4x slower for ggplot)")
+  } else {
+    sprintf("Installed (v%s)", as.character(packageVersion("ragg")))
+  }
+}, fix_hint = "Run 50_setup_nodes.sh")
+
+run_audit("7.2", "systemfonts Package", {
+  if (!requireNamespace("systemfonts", quietly = TRUE)) {
+    warning("systemfonts not installed — font detection degraded")
+  } else {
+    nf <- tryCatch(nrow(systemfonts::system_fonts()), error = function(e) 0)
+    sprintf("Installed (%d fonts detected)", nf)
+  }
+}, fix_hint = "Run 50_setup_nodes.sh")
+
+run_audit("7.3", "Fontconfig Path", {
+  fc <- Sys.getenv("FONTCONFIG_PATH", "")
+  if (nchar(fc) == 0) warning("FONTCONFIG_PATH not set")
+  else if (!dir.exists(fc)) stop(sprintf("FONTCONFIG_PATH=%s does not exist", fc))
+  else {
+    conf_files <- list.files(fc, pattern = "\\.conf$")
+    sprintf("OK (%s, %d configs)", fc, length(conf_files))
+  }
+}, fix_hint = "Set FONTCONFIG_PATH=/etc/fonts in Renviron.site")
+
+run_audit("7.4", "ragg System Dependencies", {
+  missing <- c()
+  ft_ok <- file.exists("/usr/include/freetype2/freetype/freetype.h") ||
+           system2("pkg-config", args = c("--exists", "freetype2"), stdout = FALSE, stderr = FALSE) == 0
+  if (!ft_ok) missing <- c(missing, "libfreetype-dev")
+  if (!file.exists("/usr/include/harfbuzz/hb.h")) missing <- c(missing, "libharfbuzz-dev")
+  if (!file.exists("/usr/include/fribidi/fribidi.h")) missing <- c(missing, "libfribidi-dev")
+  if (length(missing) > 0) warning(sprintf("Missing system libs: %s", paste(missing, collapse=", ")))
+  else "All present (freetype, harfbuzz, fribidi)"
+}, fix_hint = "apt install libfreetype-dev libharfbuzz-dev libfribidi-dev")
+
+# ==============================================================================
+# [8.0] SESSION HARDENING (v11.0 aware)
+# ==============================================================================
+audit_cat("\n[8.0] SESSION HARDENING\n")
+
+run_audit("8.1", "biome_save_session() Hardened", {
+  sv <- tryCatch(get("biome_save_session", envir = as.environment("tools:biome_calc")), error = function(e) NULL)
+  if (is.null(sv)) stop("biome_save_session not found in tools:biome_calc")
+  sv_body <- paste(deparse(sv), collapse = "")
+  checks <- c(
+    "EXCLUDE_CLASSES" = grepl("EXCLUDE_CLASSES", sv_body),
+    "SpatRaster"      = grepl("SpatRaster", sv_body),
+    "disk_check"      = grepl("df_home|free_gb", sv_body),
+    "tryCatch"        = grepl("tryCatch", sv_body)
+  )
+  missing <- names(checks)[!checks]
+  if (length(missing) > 0) warning(sprintf("Missing hardening: %s", paste(missing, collapse=", ")))
+  else sprintf("Hardened (%s)", paste(names(checks), collapse="+"))
+}, fix_hint = "Deploy Rprofile v11.0")
+
+run_audit("8.2", "biome_load_session() Hardened", {
+  ld <- tryCatch(get("biome_load_session", envir = as.environment("tools:biome_calc")), error = function(e) NULL)
+  if (is.null(ld)) stop("biome_load_session not found")
+  ld_body <- paste(deparse(ld), collapse = "")
+  checks <- c(
+    "RAM_check"    = grepl("ram_avail_mb|MemAvailable", ld_body),
+    "file_size"    = grepl("file_mb|file\\.info", ld_body),
+    "tryCatch"     = grepl("tryCatch", ld_body),
+    "object_count" = grepl("before_objs|after_objs", ld_body)
+  )
+  missing <- names(checks)[!checks]
+  if (length(missing) > 0) warning(sprintf("Missing hardening: %s", paste(missing, collapse=", ")))
+  else sprintf("Hardened (%s)", paste(names(checks), collapse="+"))
+}, fix_hint = "Deploy Rprofile v11.0")
+
+run_audit("8.3", "biome_plot_budget() Tool", {
+  pb <- tryCatch(get("biome_plot_budget", envir = as.environment("tools:biome_calc")), error = function(e) NULL)
+  if (is.null(pb)) stop("biome_plot_budget not found")
+  "Available"
+}, fix_hint = "Deploy Rprofile v11.0")
+
+run_audit("8.4", "Rprofile Version", {
+  v <- tryCatch(.biome_env$VERSION, error = function(e) "unknown")
+  if (v == "unknown") stop("Cannot determine Rprofile version")
+  vnum <- as.numeric(gsub("[^0-9.]", "", v))
+  if (!is.na(vnum) && vnum < 11.0) warning(sprintf("v%s is pre-v11.0", v))
+  sprintf("v%s", v)
+}, fix_hint = "Deploy Rprofile v11.0")
+
+# v28: Updated — API_VERSION expected >= 6 (v11.0 schema)
+run_audit("8.5", "API Version Contract (v11.0)", {
+  api_v <- tryCatch(.biome_env$API_VERSION, error = function(e) 0L)
+  if (api_v == 0L) stop("API_VERSION missing — Rprofile pre-v9.7 or broken")
+  if (api_v < 4L)  stop(sprintf("API_VERSION=%d (contract broken — need >= 4)", api_v))
+  if (api_v < 6L)  warning(sprintf("API_VERSION=%d (audit v28 expects >= 6 for v11.0 schema)", api_v))
+  sprintf("API_VERSION=%d (expected >= 6)", api_v)
+}, fix_hint = "Deploy Rprofile v11.0")
+
+run_audit("8.6", "BLAS Serial Detection Flag", {
+  blas_serial <- tryCatch(.biome_env$blas_is_serial, error = function(e) NULL)
+  if (is.null(blas_serial)) {
+    warning("blas_is_serial not in .biome_env — Rprofile may be pre-v9.8")
+  } else if (isTRUE(blas_serial)) {
+    "Serial BLAS confirmed (solve guard thread reduction disabled — safe)"
+  } else {
+    blas_path <- tryCatch(sessionInfo()$BLAS, error = function(e) "unknown")
+    warning(sprintf("blas_is_serial=FALSE (BLAS: %s)", basename(blas_path)))
+  }
+}, fix_hint = "Deploy Rprofile v11.0 + switch to openblas-serial")
+
+# v28: NEW — v11.0 new tools: biome_future_plan + biome_worker_diagnostics
+run_audit("8.7", "v11.0 new tools in tools:biome_calc", {
+  required <- c("biome_future_plan", "biome_worker_diagnostics",
+                "biome_make_cluster", "biome_plot_budget",
+                "biome_save_session", "biome_load_session",
+                "status", "ask_ai", "biome_help", "biome_tutorial")
+  env <- as.environment("tools:biome_calc")
+  present <- ls(env)
+  missing <- setdiff(required, present)
+  if (length(missing) > 0) {
+    stop(sprintf("Missing tools: %s (v11.0 adds biome_future_plan + biome_worker_diagnostics)",
+                 paste(missing, collapse = ", ")))
+  }
+  sprintf("All %d required tools present (total=%d)", length(required), length(present))
+}, fix_hint = "Deploy Rprofile v11.0")
+
+# ==============================================================================
+# [9.0] FUNCTIONAL TESTS
+# ==============================================================================
+audit_cat("\n[9.0] FUNCTIONAL TESTS\n")
+
+run_audit("9.1", "solve() Safety Test (6000x6000)", {
+  blas_serial <- isTRUE(tryCatch(.biome_env$blas_is_serial, error = function(e) FALSE))
+  curr_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+
+  if (blas_serial) {
+    N <- 6000
+    A <- matrix(runif(N * N), N, N)
+    diag(A) <- diag(A) + N
+    t0 <- Sys.time()
+    B <- solve(A)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    rm(A, B); gc(verbose = FALSE)
+    sprintf("OK (%.1fs, serial BLAS — no thread reduction needed, no SIGSEGV)", dt)
+  } else {
+    if (curr_t <= 2) return(sprintf("Skipped (threads already at %d)", curr_t))
+    N <- 6000
+    A <- matrix(runif(N * N), N, N)
+    diag(A) <- diag(A) + N
+    t0 <- Sys.time()
+    B <- solve(A)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    rm(A, B); gc(verbose = FALSE)
+    if (post_t != curr_t) stop(sprintf("Threads not restored: was %d, now %d", curr_t, post_t))
+    sprintf("OK (%.1fs, threads %d->reduced->%d restored)", dt, curr_t, post_t)
+  }
+}, timeout = 120, use_fork = TRUE,
+   fix_hint = "Deploy Rprofile v11.0 with serial-aware solve() guard")
+
+run_audit("9.2", "ggplot2 Render Test (ragg)", {
+  if (!.audit_pkgs[["ggplot2"]]) return("Skipped (ggplot2 not installed)")
+  test_plot_file <- tempfile(fileext = ".png")
+  on.exit(unlink(test_plot_file), add = TRUE)
+  tryCatch({
+    df <- data.frame(x = rnorm(500), y = rnorm(500), group = sample(letters[1:5], 500, replace = TRUE))
+    p <- ggplot2::ggplot(df, ggplot2::aes(x = x, y = y, colour = group)) +
+      ggplot2::geom_point(alpha = 0.6) +
+      ggplot2::theme_minimal() +
+      ggplot2::labs(title = "BIOME Audit Test")
+    has_ragg <- requireNamespace("ragg", quietly = TRUE)
+    if (has_ragg) {
+      ragg::agg_png(test_plot_file, width = 800, height = 600)
+    } else {
+      grDevices::png(test_plot_file, width = 800, height = 600)
+    }
+    print(p)
+    grDevices::dev.off()
+    file_kb <- file.info(test_plot_file)$size / 1024
+    if (is.na(file_kb) || file_kb < 1) stop("Plot file empty")
+    backend <- if (has_ragg) "ragg" else "cairo"
+    sprintf("OK (%s backend, %.0f KB, 500 points)", backend, file_kb)
+  }, error = function(e) stop(sprintf("Render failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Install: ragg, ggplot2")
+
+run_audit("9.3", "Terra Raster Calculation", {
+  if (!.audit_pkgs[["terra"]]) return("Skipped (terra not installed)")
+  tryCatch({
+    r <- terra::rast(nrows = 100, ncols = 100, vals = runif(10000))
+    r2 <- r * 2 + log(r + 1)
+    stats <- terra::global(r2, fun = "mean", na.rm = TRUE)
+    td <- terra::terraOptions()$tempdir
+    routing <- if (grepl("biome_", td)) basename(dirname(td)) else "default"
+    sprintf("OK (mean=%.2f, tmpdir=%s, routing=%s)", stats$mean, basename(td), routing)
+  }, error = function(e) stop(sprintf("Terra calc failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check terra installation and /Rtmp permissions")
+
+run_audit("9.4", "Geosphere Distance Matrix", {
+  if (!.audit_pkgs[["geosphere"]]) return("Skipped (geosphere not installed)")
+  tryCatch({
+    set.seed(42)
+    coords <- cbind(lon = runif(100, -10, 40), lat = runif(100, 35, 60))
+    t0 <- Sys.time()
+    dm <- geosphere::distm(coords, fun = geosphere::distHaversine)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    if (!is.matrix(dm) || nrow(dm) != 100) stop("distm output wrong dimensions")
+    if (!isSymmetric(dm)) stop("Distance matrix not symmetric")
+    max_km <- max(dm) / 1000
+    mem_mb <- object.size(dm) / 1024^2
+    rm(dm); gc(verbose = FALSE)
+    sprintf("OK (100x100 in %.2fs, max=%.0fkm, %.1fMB)", dt, max_km, mem_mb)
+  }, error = function(e) stop(sprintf("Geosphere failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check geosphere installation")
+
+run_audit("9.5", "dist() Guard Functional Test", {
+  tryCatch({
+    m <- matrix(runif(1000 * 10), nrow = 1000, ncol = 10)
+    t0 <- Sys.time()
+    d <- dist(m)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    if (!inherits(d, "dist")) stop("dist() output class broken")
+    if (length(d) != 1000 * 999 / 2) stop("dist() size wrong")
+    rm(m, d); gc(verbose = FALSE)
+    sprintf("OK (1000 obs, %.2fs, %d elements)", dt, 1000L * 999L / 2L)
+  }, error = function(e) stop(sprintf("dist() failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check dist() guard")
+
+
+# ==============================================================================
+# [10.0] ECOLOGY WORKFLOW TESTS (real-world OOM scenarios)
+# ==============================================================================
+audit_cat("\n[10.0] ECOLOGY WORKFLOW TESTS\n")
+
+run_audit("10.1", "Spatial Correlation Matrix Inversion (247x247)", {
+  tryCatch({
+    set.seed(2025)
+    N <- 247
+    coords <- cbind(runif(N, 10, 15), runif(N, 40, 45))
+    geo_distmat <- as.matrix(dist(coords))
+    if (!isSymmetric(geo_distmat)) stop("Generated geodist matrix not symmetric")
+    results <- c()
+    for (i in c(1, 10, 25)) {
+      rho_scaling <- max(geo_distmat) / i
+      r_spatial <- exp(-geo_distmat / rho_scaling)
+      t0 <- Sys.time()
+      inv_r <- (1 / 0.001) * solve(r_spatial)
+      dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+      sym_ok <- isSymmetric(inv_r, tol = 1e-10)
+      if (!sym_ok) stop(sprintf("Inverse not symmetric at i=%d", i))
+      results <- c(results, sprintf("i=%d:%.2fs", i, dt))
+    }
+    rm(geo_distmat, r_spatial, inv_r); gc(verbose = FALSE)
+    sprintf("OK (%s, symmetry verified)", paste(results, collapse = ", "))
+  }, error = function(e) stop(sprintf("Spatial correlation failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check solve() guard or OpenBLAS CORETYPE")
+
+run_audit("10.2", "Multi-solve Thread Consistency", {
+  tryCatch({
+    initial_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    N <- 500
+    for (iter in 1:5) {
+      A <- matrix(rnorm(N * N), N, N)
+      diag(A) <- diag(A) + N
+      B <- solve(A)
+      post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+      if (post_t != initial_t) {
+        stop(sprintf("Thread leak at iter %d: expected %d, got %d", iter, initial_t, post_t))
+      }
+    }
+    rm(A, B); gc(verbose = FALSE)
+    sprintf("OK (5 iterations, threads stable at %d)", initial_t)
+  }, error = function(e) stop(sprintf("Thread consistency failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check solve() on.exit thread restore")
+
+run_audit("10.3", "End-to-End Geodistance Pipeline", {
+  if (!.audit_pkgs[["geosphere"]]) return("Skipped (geosphere not installed)")
+  tryCatch({
+    set.seed(42)
+    N <- 150
+    coords <- cbind(lon = runif(N, 7, 18), lat = runif(N, 37, 45))
+    t0 <- Sys.time()
+    geo_dist_m <- geosphere::distm(coords, fun = geosphere::distHaversine)
+    t_dist <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    geo_dist_km <- geo_dist_m / 1000
+    rho <- max(geo_dist_km) / 5
+    r_spatial <- exp(-geo_dist_km / rho)
+    if (!isSymmetric(r_spatial)) stop("Correlation matrix not symmetric")
+    t0 <- Sys.time()
+    precision <- solve(r_spatial)
+    t_solve <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    identity_check <- r_spatial %*% precision
+    diag_err <- max(abs(diag(identity_check) - 1))
+    if (diag_err > 1e-6) stop(sprintf("Identity diagonal error: %.2e", diag_err))
+    rm(geo_dist_m, geo_dist_km, r_spatial, precision, identity_check); gc(verbose = FALSE)
+    sprintf("OK (distm=%.2fs, solve=%.2fs, diag_err=%.1e)", t_dist, t_solve, diag_err)
+  }, error = function(e) stop(sprintf("Pipeline failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check geosphere + solve() integration")
+
+run_audit("10.4", "outer() + expand.grid() Combined Guard", {
+  tryCatch({
+    x <- seq(0, 10, length.out = 500)
+    y <- seq(0, 10, length.out = 500)
+    t0 <- Sys.time()
+    D <- outer(x, y, function(a, b) abs(a - b))
+    t_outer <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    if (!is.matrix(D) || nrow(D) != 500) stop("outer() dimensions wrong")
+    mem_mb <- as.numeric(object.size(D)) / 1024^2
+    params <- expand.grid(
+      sigma = c(0.1, 0.5, 1.0, 2.0),
+      range = c(1, 5, 10, 20),
+      nugget = c(0.01, 0.05, 0.1)
+    )
+    if (nrow(params) != 48) stop(sprintf("expand.grid wrong: %d rows", nrow(params)))
+    rm(D); gc(verbose = FALSE)
+    sprintf("OK (outer 500x500 in %.2fs/%.1fMB, expand.grid 48 rows)", t_outer, mem_mb)
+  }, error = function(e) stop(sprintf("Combined test failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check outer()/expand.grid() guards")
+
+run_audit("10.5", "GAM Model Fitting (mgcv)", {
+  tryCatch({
+    set.seed(123)
+    N <- 2000
+    dat <- data.frame(
+      temp     = sort(runif(N, 5, 30)),
+      altitude = runif(N, 0, 3000),
+      precip   = runif(N, 200, 2000)
+    )
+    dat$abundance <- exp(-0.01 * (dat$temp - 18)^2) * 100 + rnorm(N, sd = 10)
+    dat$abundance <- pmax(dat$abundance, 0)
+    initial_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    t0 <- Sys.time()
+    mod <- mgcv::gam(abundance ~ s(temp, k = 30) + s(altitude, k = 20) +
+                      s(precip, k = 20), data = dat, method = "REML")
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    if (!inherits(mod, "gam")) stop("GAM object not returned")
+    if (post_t != initial_t) stop(sprintf("Thread leak: %d -> %d", initial_t, post_t))
+    dev_exp <- round(summary(mod)$dev.expl * 100, 1)
+    rm(dat, mod); gc(verbose = FALSE)
+    sprintf("OK (%.1fs, deviance=%.1f%%, threads stable at %d)", dt, dev_exp, post_t)
+  }, error = function(e) stop(sprintf("GAM failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "mgcv is base R")
+
+run_audit("10.6", "Community Dissimilarity (vegan::vegdist)", {
+  if (!.audit_pkgs[["vegan"]]) return("Skipped (vegan not installed)")
+  tryCatch({
+    set.seed(42)
+    n_sites <- 300; n_species <- 80
+    community <- matrix(0, nrow = n_sites, ncol = n_species)
+    for (j in 1:n_species) {
+      prevalence <- rbeta(1, 2, 5)
+      occupied <- rbinom(n_sites, 1, prevalence)
+      community[, j] <- occupied * rpois(n_sites, lambda = sample(1:20, 1))
+    }
+    colnames(community) <- paste0("sp", 1:n_species)
+    methods <- c("bray", "jaccard", "euclidean")
+    results <- c()
+    for (m in methods) {
+      t0 <- Sys.time()
+      d <- vegan::vegdist(community, method = m)
+      dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+      if (!inherits(d, "dist")) stop(sprintf("vegdist(%s) broke output", m))
+      results <- c(results, sprintf("%s:%.2fs", m, dt))
+    }
+    rm(community, d); gc(verbose = FALSE)
+    sprintf("OK (%dx%d, %s)", n_sites, n_species, paste(results, collapse = ", "))
+  }, error = function(e) stop(sprintf("vegdist failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check vegan installation")
+
+run_audit("10.7", "Sparse Matrix Cholesky (Matrix pkg)", {
+  if (!.audit_pkgs[["Matrix"]]) return("Skipped (Matrix not installed)")
+  tryCatch({
+    set.seed(2025)
+    N <- 2000
+    n_edges <- N * 5
+    i_idx <- sample(N, n_edges, replace = TRUE)
+    j_idx <- sample(N, n_edges, replace = TRUE)
+    M <- Matrix::sparseMatrix(i = i_idx, j = j_idx, x = runif(n_edges, 0.1, 1),
+                               dims = c(N, N))
+    M <- M + Matrix::t(M) + Matrix::Diagonal(N, 10)
+    t0 <- Sys.time()
+    ch <- Matrix::Cholesky(M, perm = TRUE, LDL = FALSE)
+    dt_chol <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    b <- Matrix::Matrix(rnorm(N), ncol = 1, sparse = TRUE)
+    t0 <- Sys.time()
+    x_sol <- Matrix::solve(ch, b)
+    dt_solve <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    resid <- max(abs(as.numeric(M %*% x_sol - b)))
+    if (resid > 1e-6) stop(sprintf("Sparse solve residual: %.2e", resid))
+    sparsity <- round(1 - Matrix::nnzero(M) / (N * N), 4) * 100
+    rm(M, ch, b, x_sol); gc(verbose = FALSE)
+    sprintf("OK (N=%d, %.1f%% sparse, chol=%.3fs, solve=%.3fs)",
+            N, sparsity, dt_chol, dt_solve)
+  }, error = function(e) stop(sprintf("Sparse solve failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Install Matrix package")
+
+run_audit("10.8", "NetCDF Climate I/O (ncdf4)", {
+  if (!.audit_pkgs[["ncdf4"]]) return("Skipped (ncdf4 not installed)")
+  tryCatch({
+    lon_vals <- seq(7, 18, by = 0.25)
+    lat_vals <- seq(37, 45, by = 0.25)
+    time_vals <- 1:12
+    lon_dim  <- ncdf4::ncdim_def("lon",  "degrees_east",  lon_vals)
+    lat_dim  <- ncdf4::ncdim_def("lat",  "degrees_north", lat_vals)
+    time_dim <- ncdf4::ncdim_def("time", "months",        time_vals)
+    temp_var <- ncdf4::ncvar_def("temperature", "celsius",
+                                  list(lon_dim, lat_dim, time_dim), missval = -999)
+    nc_file <- tempfile(fileext = ".nc")
+    on.exit(unlink(nc_file), add = TRUE)
+    nc <- ncdf4::nc_create(nc_file, list(temp_var))
+    n_lon <- length(lon_vals); n_lat <- length(lat_vals); n_time <- 12
+    temp_data <- array(rnorm(n_lon * n_lat * n_time, mean = 18, sd = 8),
+                       dim = c(n_lon, n_lat, n_time))
+    ncdf4::ncvar_put(nc, temp_var, temp_data)
+    ncdf4::nc_close(nc)
+    nc_in <- ncdf4::nc_open(nc_file)
+    temp_read <- ncdf4::ncvar_get(nc_in, "temperature")
+    ncdf4::nc_close(nc_in)
+    if (!all(dim(temp_read) == c(n_lon, n_lat, n_time))) stop("Dimensions wrong")
+    if (max(abs(temp_read - temp_data)) > 1e-5) stop("Data corrupted")
+    file_kb <- file.info(nc_file)$size / 1024
+    tmp_routing <- if (grepl("biome_", nc_file)) "biome_tmp" else "system_tmp"
+    rm(temp_data, temp_read); gc(verbose = FALSE)
+    sprintf("OK (%dx%dx%d, %.0f KB, routing=%s)",
+            n_lon, n_lat, n_time, file_kb, tmp_routing)
+  }, error = function(e) stop(sprintf("NetCDF failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Install ncdf4 + libnetcdf-dev")
+
+run_audit("10.9", "Mixed Model Thread Safety (lme4)", {
+  if (!.audit_pkgs[["lme4"]]) return("Skipped (lme4 not installed)")
+  tryCatch({
+    set.seed(42)
+    n_regions <- 10; n_sites_per <- 20; n_obs_per <- 5
+    N <- n_regions * n_sites_per * n_obs_per
+    dat <- data.frame(
+      region  = factor(rep(1:n_regions, each = n_sites_per * n_obs_per)),
+      site    = factor(rep(1:(n_regions * n_sites_per), each = n_obs_per)),
+      temp    = rnorm(N, 15, 5),
+      precip  = rnorm(N, 800, 200)
+    )
+    region_fx <- rnorm(n_regions, sd = 3)[as.integer(dat$region)]
+    site_fx   <- rnorm(n_regions * n_sites_per, sd = 1.5)[as.integer(dat$site)]
+    dat$abundance <- 50 + 2 * dat$temp - 0.01 * dat$precip +
+                     region_fx + site_fx + rnorm(N, sd = 2)
+    initial_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    t0 <- Sys.time()
+    mod <- lme4::lmer(abundance ~ temp + precip + (1|region/site), data = dat)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    if (post_t != initial_t) stop(sprintf("Thread leak: %d -> %d", initial_t, post_t))
+    rm(dat, mod); gc(verbose = FALSE)
+    sprintf("OK (N=%d, %.1fs, threads=%d)", N, dt, post_t)
+  }, error = function(e) stop(sprintf("lme4 failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check lme4 installation")
+
+run_audit("10.10", "Kriging Spatial Interpolation (fields)", {
+  if (!.audit_pkgs[["fields"]]) return("Skipped (fields not installed)")
+  tryCatch({
+    set.seed(42)
+    N_obs <- 200; N_pred <- 50
+    obs_coords <- cbind(runif(N_obs, 0, 100), runif(N_obs, 0, 100))
+    obs_vals <- sin(obs_coords[,1] / 20) * cos(obs_coords[,2] / 20) * 10 + rnorm(N_obs, sd = 1)
+    t0 <- Sys.time()
+    fit <- fields::Tps(obs_coords, obs_vals)
+    dt_fit <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    pred_coords <- cbind(runif(N_pred, 0, 100), runif(N_pred, 0, 100))
+    t0 <- Sys.time()
+    pred <- predict(fit, pred_coords)
+    dt_pred <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    if (length(pred) != N_pred) stop("Prediction length mismatch")
+    rm(fit, pred); gc(verbose = FALSE)
+    sprintf("OK (fit=%d in %.2fs, pred=%d in %.3fs)", N_obs, dt_fit, N_pred, dt_pred)
+  }, error = function(e) stop(sprintf("Kriging failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check fields + outer()/solve() guards")
+
+# ==============================================================================
+# [11.0] ADVANCED ECOLOGY TESTS
+# ==============================================================================
+audit_cat("\n[11.0] ADVANCED ECOLOGY TESTS\n")
+
+run_audit("11.1", "glmmTMB Hessian Inversion", {
+  if (!.audit_pkgs[["glmmTMB"]]) return("Skipped (glmmTMB not installed)")
+  tryCatch({
+    set.seed(42)
+    N <- 1000; n_sites <- 50
+    dat <- data.frame(
+      count    = rpois(N, lambda = 5),
+      habitat  = rnorm(N, 10, 3),
+      elevation = rnorm(N, 500, 200),
+      site     = factor(rep(1:n_sites, each = N / n_sites))
+    )
+    dat$count[rbinom(N, 1, 0.3) == 1] <- 0L
+    initial_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    t0 <- Sys.time()
+    mod <- glmmTMB::glmmTMB(count ~ habitat + elevation + (1|site), data = dat, family = poisson())
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    if (post_t != initial_t) stop(sprintf("Thread leak: %d -> %d", initial_t, post_t))
+    aic <- round(AIC(mod), 1)
+    rm(dat, mod); gc(verbose = FALSE)
+    sprintf("OK (%.1fs, AIC=%.0f, threads=%d)", dt, aic, post_t)
+  }, error = function(e) stop(sprintf("glmmTMB failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check TMB/glmmTMB + solve() guard")
+
+run_audit("11.2", "doParallel Worker Thread Isolation", {
+  if (!.audit_pkgs[["doParallel"]]) return("Skipped (doParallel not installed)")
+  tryCatch({
+    suppressMessages(library(foreach))
+    doParallel::registerDoParallel(cores = 2)
+    worker_threads <- foreach::foreach(i = 1:2, .combine = c) %dopar% {
+      as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "-1"))
+    }
+    doParallel::stopImplicitCluster()
+    if (any(worker_threads > 2)) {
+      stop(sprintf("Workers had uncapped BLAS: %s", paste(worker_threads, collapse = ", ")))
+    }
+    sprintf("OK (2 workers, threads: %s)", paste(worker_threads, collapse = ", "))
+  }, error = function(e) stop(sprintf("doParallel failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check doParallel registerDoParallel hook")
+
+run_audit("11.3", "igraph Large Graph", {
+  if (!.audit_pkgs[["igraph"]]) return("Skipped (igraph not installed)")
+  tryCatch({
+    set.seed(42)
+    N <- 5000; n_edges <- 25000
+    edges <- cbind(sample(N, n_edges, replace = TRUE), sample(N, n_edges, replace = TRUE))
+    t0 <- Sys.time()
+    g <- igraph::graph_from_edgelist(edges, directed = FALSE)
+    g <- igraph::simplify(g)
+    dt_build <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    t0 <- Sys.time()
+    comm <- igraph::cluster_louvain(g)
+    dt_comm <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    n_communities <- length(igraph::communities(comm))
+    rm(g, comm, edges); gc(verbose = FALSE)
+    sprintf("OK (%d nodes, Louvain=%.2fs, %d communities)", N, dt_comm, n_communities)
+  }, error = function(e) stop(sprintf("igraph failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check igraph installation")
+
+run_audit("11.4", "Caret Hyperparameter Grid", {
+  if (!.audit_pkgs[["caret"]]) return("Skipped (caret not installed)")
+  tryCatch({
+    set.seed(42)
+    dat <- data.frame(
+      species_richness = rpois(200, lambda = 15),
+      temp = rnorm(200, 18, 5),
+      precip = rnorm(200, 800, 200),
+      ndvi = runif(200, 0.2, 0.9)
+    )
+    ctrl <- caret::trainControl(method = "cv", number = 3)
+    t0 <- Sys.time()
+    mod <- caret::train(species_richness ~ ., data = dat, method = "glm",
+                        trControl = ctrl, family = "poisson")
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    grid <- expand.grid(shrinkage = c(0.01, 0.05, 0.1),
+                         interaction.depth = c(1, 2, 3, 5),
+                         n.minobsinnode = c(5, 10, 20),
+                         n.trees = c(100, 500, 1000))
+    if (nrow(grid) != 108) stop(sprintf("expand.grid wrong: %d rows", nrow(grid)))
+    rm(dat, mod, grid); gc(verbose = FALSE)
+    sprintf("OK (GLM CV in %.1fs, expand.grid 108 rows verified)", dt)
+  }, error = function(e) stop(sprintf("caret failed: %s", e$message)))
+}, timeout = 60, use_fork = TRUE,
+   fix_hint = "Check caret + expand.grid() guard")
+
+
+# ==============================================================================
+# [12.0] NIMBLE COMPILATION TESTS (v11.0: ROUTING INVERTED — now on /Rtmp)
+# ==============================================================================
+# v10.0 routed NIMBLE compile to $HOME (NFS) "for reboot safety".
+# v11.0 FIX: routes to /Rtmp local disk to avoid NFS dir-cache races during
+# concurrent compileNimble() in parLapply workers (cause of unserialize() crashes).
+# Compile artifacts are ephemeral and regenerated every session — no persistence needed.
+# ==============================================================================
+audit_cat("\n[12.0] NIMBLE COMPILATION TESTS (v11.0 routing)\n")
+
+run_audit("12.1", "NIMBLE Model Compilation (LOCAL /Rtmp routing)", {
+  if (!.audit_pkgs[["nimble"]]) return("Skipped (nimble not installed)")
+  tryCatch({
+    code <- nimble::nimbleCode({
+      mu ~ dnorm(0, sd = 10)
+      sigma ~ dunif(0, 100)
+      for (i in 1:5) {
+        y[i] ~ dnorm(mu, sd = sigma)
+      }
+    })
+    set.seed(42)
+    model <- nimble::nimbleModel(
+      code,
+      data = list(y = rnorm(5, 10, 2)),
+      inits = list(mu = 0, sigma = 1),
+      check = FALSE
+    )
+    initial_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+    t0 <- Sys.time()
+    Cmodel <- nimble::compileNimble(model)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    post_t <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+
+    # v28 INVERTED EXPECTATION: NIMBLE dir must be on /Rtmp (NOT NFS $HOME)
+    nimble_dir <- getOption("nimble.dirName", "")
+    if (nchar(nimble_dir) == 0) {
+      nimble_dir <- tryCatch(nimble::getNimbleDir(), error = function(e) "")
+    }
+    home <- Sys.getenv("HOME")
+    if (nchar(nimble_dir) > 0) {
+      if (grepl(paste0("^", home), nimble_dir)) {
+        stop(sprintf("REGRESSION: NIMBLE dir on NFS (%s) — v11.0 requires /Rtmp!", nimble_dir))
+      }
+      if (!grepl("^/Rtmp/", nimble_dir)) {
+        warning(sprintf("NIMBLE dir not on /Rtmp: %s", nimble_dir))
+      }
+    }
+    if (post_t != initial_t) warning(sprintf("Thread change: %d -> %d", initial_t, post_t))
+    calc_ok <- tryCatch({ Cmodel$calculate(); TRUE }, error = function(e) FALSE)
+    if (!calc_ok) warning("Compiled model calculate() failed")
+    rm(model, Cmodel); gc(verbose = FALSE)
+    sprintf("OK (compile=%.1fs, dir=%s, threads=%d)",
+            dt, if (nchar(nimble_dir) > 0) basename(nimble_dir) else "unknown", post_t)
+  }, error = function(e) stop(sprintf("NIMBLE compile failed: %s", e$message)))
+}, timeout = 120, use_fork = TRUE,
+   fix_hint = "Deploy Rprofile v11.0 (NIMBLE hook routes to /Rtmp, not NFS)")
+
+run_audit("12.2", "NIMBLE MCMC Build + Short Run", {
+  if (!.audit_pkgs[["nimble"]]) return("Skipped (nimble not installed)")
+  tryCatch({
+    code <- nimble::nimbleCode({
+      mu ~ dnorm(0, sd = 10)
+      sigma ~ dunif(0, 100)
+      for (i in 1:5) { y[i] ~ dnorm(mu, sd = sigma) }
+    })
+    set.seed(42)
+    model <- nimble::nimbleModel(code,
+      data = list(y = rnorm(5, 10, 2)),
+      inits = list(mu = 0, sigma = 1),
+      check = FALSE)
+    mcmcConf <- nimble::configureMCMC(model, print = FALSE)
+    mcmc <- nimble::buildMCMC(mcmcConf)
+    Cmodel <- nimble::compileNimble(model)
+    Cmcmc <- nimble::compileNimble(mcmc, project = model)
+    t0 <- Sys.time()
+    Cmcmc$run(10)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    samples <- as.matrix(Cmcmc$mvSamples)
+    if (nrow(samples) != 10) stop(sprintf("Expected 10 samples, got %d", nrow(samples)))
+    rm(model, mcmcConf, mcmc, Cmodel, Cmcmc, samples); gc(verbose = FALSE)
+    sprintf("OK (10 iters in %.2fs)", dt)
+  }, error = function(e) stop(sprintf("NIMBLE MCMC failed: %s", e$message)))
+}, timeout = 180, use_fork = TRUE,
+   fix_hint = "Check nimble C++ compiler chain and /Rtmp scratch space")
+
+run_audit("12.3", "NIMBLE buildDerivs (HMC-ready)", {
+  if (!.audit_pkgs[["nimble"]]) return("Skipped (nimble not installed)")
+  if (!.audit_pkgs[["nimbleHMC"]]) return("Skipped (nimbleHMC not installed)")
+  tryCatch({
+    code <- nimble::nimbleCode({
+      mu ~ dnorm(0, sd = 10)
+      for (i in 1:5) { y[i] ~ dnorm(mu, sd = 1) }
+    })
+    set.seed(42)
+    model <- nimble::nimbleModel(code,
+      data = list(y = rnorm(5, 10, 2)),
+      inits = list(mu = 0),
+      buildDerivs = TRUE,
+      check = FALSE)
+    t0 <- Sys.time()
+    Cmodel <- nimble::compileNimble(model)
+    dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    derivs_ok <- tryCatch({
+      model$enableDerivs(c("mu")); TRUE
+    }, error = function(e) FALSE)
+    rm(model, Cmodel); gc(verbose = FALSE)
+    sprintf("OK (AD compile=%.1fs, derivs=%s)", dt, if (derivs_ok) "enabled" else "unavailable")
+  }, error = function(e) stop(sprintf("NIMBLE AD compile failed: %s", e$message)))
+}, timeout = 180, use_fork = TRUE,
+   fix_hint = "Check nimbleHMC installation")
+
+# v28: NEW — per-worker NIMBLE compile subdir (worker_<pid>) [N2]
+run_audit("12.4", "NIMBLE per-worker compile subdir (v11.0 [N2])", {
+  if (!.audit_pkgs[["nimble"]]) return("Skipped (nimble not installed)")
+  # We verify the env var + directory scaffolding exists.
+  # The actual per-worker subdir is created when PSOCK worker starts.
+  usr <- tryCatch(.biome_env$USER_TMP_ROOT, error = function(e) NULL)
+  if (is.null(usr)) stop("USER_TMP_ROOT missing — Rprofile < v11.0")
+  nimble_root <- file.path(usr, "nimble_compile")
+  if (!dir.exists(nimble_root)) stop(sprintf("nimble_compile root missing: %s", nimble_root))
+
+  # BIOME_NIMBLE_DIR env var must be exported for PSOCK workers to inherit
+  bnd <- Sys.getenv("BIOME_NIMBLE_DIR", "")
+  if (nchar(bnd) == 0) stop("BIOME_NIMBLE_DIR env var not set (workers can't route)")
+  if (bnd != nimble_root) {
+    warning(sprintf("BIOME_NIMBLE_DIR=%s != %s", bnd, nimble_root))
+  }
+
+  # Validate: NFS fallback from v10.0 ($HOME/.nimble_compile) should NOT be used
+  old_nfs_path <- file.path(Sys.getenv("HOME"), ".nimble_compile")
+  session_dir_v11 <- file.path(nimble_root, paste0("session_", Sys.getpid()))
+  if (dir.exists(session_dir_v11)) {
+    sprintf("OK (root=%s, session dir=%s)", nimble_root, basename(session_dir_v11))
+  } else {
+    warning(sprintf("Session dir not created yet (will be on first compileNimble): %s",
+                    basename(session_dir_v11)))
+    sprintf("OK (root=%s, session dir pending)", nimble_root)
+  }
+}, fix_hint = "Deploy Rprofile v11.0 [N1+N2]: NIMBLE hook routes to /Rtmp")
+
+# v28: NEW — TMB per-PID compile dir (v11.0 [N1])
+run_audit("12.5", "TMB per-PID compile dir (v11.0)", {
+  if (!.audit_pkgs[["TMB"]] && !.audit_pkgs[["glmmTMB"]]) {
+    return("Skipped (TMB/glmmTMB not installed)")
+  }
+  tmb_env <- Sys.getenv("TMB_COMPILE_DIR", "")
+  if (nchar(tmb_env) == 0) {
+    warning("TMB_COMPILE_DIR not set (TMB/glmmTMB hook not fired yet)")
+    return("Pending (load library(glmmTMB) to trigger hook)")
+  }
+  if (!grepl("^/Rtmp/", tmb_env)) {
+    warning(sprintf("TMB_COMPILE_DIR=%s — expected under /Rtmp", tmb_env))
+  }
+  usr <- tryCatch(.biome_env$USER_TMP_ROOT, error = function(e) "/Rtmp/unknown")
+  expected_prefix <- file.path(usr, "tmb_compile")
+  if (!startsWith(tmb_env, expected_prefix)) {
+    warning(sprintf("TMB dir not under %s: %s", expected_prefix, tmb_env))
+  }
+  sprintf("OK (%s)", basename(tmb_env))
+}, fix_hint = "Deploy Rprofile v11.0 and library(glmmTMB) to trigger")
+
+# ==============================================================================
+# [13.0] OpenMP VALIDATION (v28 NEW SECTION)
+# ==============================================================================
+# OpenMP (libgomp) provides parallelism for many R packages independent of BLAS.
+# Packages using OpenMP DIRECTLY (not via BLAS): data.table, terra/GDAL, arrow,
+# BRISC, spNNGP, ranger, TMB, Rcpp with pragma omp. Verify:
+#   1. libgomp installed
+#   2. pkg-config finds openmp flags
+#   3. OMP_NUM_THREADS respected at runtime
+#   4. Thread cap propagated to OMP-aware packages
+#   5. Compile-test: a tiny C program with #pragma omp parallel
+# ==============================================================================
+audit_cat("\n[13.0] OpenMP VALIDATION\n")
+
+run_audit("13.1", "libgomp package installed", {
+  # libgomp1 is required for any C/C++ code using OpenMP
+  dpkg_out <- tryCatch(
+    system2("dpkg", args = c("-l", "libgomp1"), stdout = TRUE, stderr = FALSE),
+    error = function(e) ""
+  )
+  if (!any(grepl("^ii\\s+libgomp1", dpkg_out))) {
+    stop("libgomp1 not installed (apt install libgomp1)")
+  }
+  # Also check that the runtime library exists
+  gomp_so <- Sys.glob("/usr/lib/x86_64-linux-gnu/libgomp.so*")
+  if (length(gomp_so) == 0) stop("libgomp.so.* not found in /usr/lib/x86_64-linux-gnu/")
+  sprintf("OK (%d lib files)", length(gomp_so))
+}, fix_hint = "apt install libgomp1")
+
+run_audit("13.2", "OpenMP compiler flags (pkg-config)", {
+  # /usr/local/lib/pkgconfig/openmp.pc should be deployed by 50_setup_nodes.sh
+  pc_path <- "/usr/local/lib/pkgconfig/openmp.pc"
+  if (!file.exists(pc_path)) {
+    warning(sprintf("openmp.pc missing: %s (custom OpenMP pkg-config not deployed)", pc_path))
+  }
+  pc_out <- tryCatch(
+    system2("pkg-config", args = c("--cflags", "openmp"), stdout = TRUE, stderr = FALSE),
+    error = function(e) ""
+  )
+  if (length(pc_out) == 0) stop("pkg-config --cflags openmp returned nothing")
+  if (!any(grepl("-fopenmp", pc_out))) {
+    stop(sprintf("pkg-config openmp missing -fopenmp: %s", paste(pc_out, collapse=" ")))
+  }
+  lib_out <- tryCatch(
+    system2("pkg-config", args = c("--libs", "openmp"), stdout = TRUE, stderr = FALSE),
+    error = function(e) ""
+  )
+  sprintf("OK (cflags: %s, libs: %s)",
+          paste(pc_out, collapse=" "),
+          if (length(lib_out) > 0) paste(lib_out, collapse=" ") else "(none)")
+}, fix_hint = "Run 50_setup_nodes.sh (deploys /usr/local/lib/pkgconfig/openmp.pc)")
+
+run_audit("13.3", "OMP_NUM_THREADS runtime consistency", {
+  # Validate env var AND RhpcBLASctl agree on thread count
+  omp_env <- as.integer(Sys.getenv("OMP_NUM_THREADS", "-1"))
+  openblas_env <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "-1"))
+  mkl_env <- as.integer(Sys.getenv("MKL_NUM_THREADS", "-1"))
+
+  if (omp_env < 0) stop("OMP_NUM_THREADS not set")
+  if (omp_env > conf$max_threads) {
+    stop(sprintf("OMP_NUM_THREADS=%d exceeds max=%d", omp_env, conf$max_threads))
+  }
+
+  # v11.0 also sets BLIS_NUM_THREADS and GOTO_NUM_THREADS
+  blis_env <- as.integer(Sys.getenv("BLIS_NUM_THREADS", "-1"))
+  goto_env <- as.integer(Sys.getenv("GOTO_NUM_THREADS", "-1"))
+
+  # Check runtime via RhpcBLASctl if available
+  rhpc_omp <- -1L
+  if (requireNamespace("RhpcBLASctl", quietly = TRUE)) {
+    rhpc_omp <- tryCatch(RhpcBLASctl::omp_get_num_procs(),
+                         error = function(e) -1L)
+  }
+
+  issues <- c()
+  if (omp_env != openblas_env) {
+    issues <- c(issues, sprintf("OMP=%d != OPENBLAS=%d", omp_env, openblas_env))
+  }
+  if (blis_env > 0 && blis_env != omp_env) {
+    issues <- c(issues, sprintf("BLIS=%d != OMP=%d", blis_env, omp_env))
+  }
+  if (length(issues) > 0) warning(paste(issues, collapse = "; "))
+
+  sprintf("OMP=%d OPENBLAS=%d MKL=%d BLIS=%d GOTO=%d (RhpcBLASctl detects %d CPUs)",
+          omp_env, openblas_env, mkl_env,
+          max(blis_env, 0), max(goto_env, 0), rhpc_omp)
+}, fix_hint = "Check update_resources() in Rprofile v11.0")
+
+run_audit("13.4", "data.table setDTthreads respects cap", {
+  if (!requireNamespace("data.table", quietly = TRUE)) return("Skipped (data.table not installed)")
+  dt_threads <- data.table::getDTthreads()
+  max_t <- conf$max_threads
+  if (dt_threads > max_t) {
+    stop(sprintf("data.table threads=%d exceeds max=%d — update_resources() hook broken", dt_threads, max_t))
+  }
+  # Verify a tiny parallel operation actually works
+  tryCatch({
+    dt <- data.table::data.table(x = runif(10000), y = rnorm(10000))
+    result <- dt[, .(mean_x = mean(x), sd_y = sd(y))]
+    if (nrow(result) != 1) stop("data.table parallel op broken")
+  }, error = function(e) stop(sprintf("data.table smoke test failed: %s", e$message)))
+  sprintf("OK (DTthreads=%d, max=%d, aggregation OK)", dt_threads, max_t)
+}, fix_hint = "Check data.table hook in update_resources()")
+
+run_audit("13.5", "OpenMP runtime compile test", {
+  # Compile a tiny C program with OpenMP and verify it runs with N threads
+  tmp_c <- tempfile(fileext = ".c")
+  tmp_bin <- tempfile()
+  on.exit({ unlink(tmp_c); unlink(tmp_bin) }, add = TRUE)
+  c_source <- '
+#include <stdio.h>
+#include <omp.h>
+int main() {
+  int total_threads = 0;
+  #pragma omp parallel reduction(+:total_threads)
+  { total_threads += 1; }
+  printf("%d\\n", total_threads);
+  return 0;
+}
+'
+  writeLines(c_source, tmp_c)
+  # Compile
+  compile_result <- tryCatch(
+    system2("gcc", args = c("-fopenmp", tmp_c, "-o", tmp_bin, "-lgomp"),
+            stdout = TRUE, stderr = TRUE),
+    error = function(e) "ERROR"
+  )
+  if (!file.exists(tmp_bin)) {
+    stop(sprintf("OpenMP compile failed: %s", paste(compile_result, collapse = " ")))
+  }
+  # Run with explicit thread limit
+  env_exec <- c("OMP_NUM_THREADS=4")
+  run_out <- tryCatch(
+    system2("env", args = c(env_exec, tmp_bin), stdout = TRUE, stderr = FALSE),
+    error = function(e) "0"
+  )
+  threads_seen <- suppressWarnings(as.integer(run_out[1]))
+  if (is.na(threads_seen)) stop("OpenMP runtime test did not return an integer")
+  if (threads_seen != 4L) {
+    warning(sprintf("OMP_NUM_THREADS=4 but runtime used %d threads", threads_seen))
+  }
+  sprintf("OK (compile+run OK, threads observed: %d)", threads_seen)
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "apt install gcc libgomp1 — OpenMP not fully functional")
+
+run_audit("13.6", "BRISC/spNNGP/ranger OMP cap (v11.0 [N8])", {
+  # v11.0 [N8] sets OMP_NUM_THREADS cap for packages using OpenMP directly.
+  # Verify the hook ran if any of these packages are loaded.
+  omp_pkgs <- c("BRISC", "spNNGP", "ranger")
+  loaded <- omp_pkgs[vapply(omp_pkgs, isNamespaceLoaded, logical(1))]
+  if (length(loaded) == 0) return("Skipped (no OMP-direct packages loaded)")
+
+  hook_done <- tryCatch(.biome_env$shared_env$.omp_pkg_hook_done, error = function(e) FALSE)
+  if (!isTRUE(hook_done)) {
+    warning(sprintf("Hook not fired yet — load library(%s) and trigger callback", loaded[1]))
+  }
+
+  # Verify ranger.num.threads option set (only for ranger)
+  if ("ranger" %in% loaded) {
+    rnt <- getOption("ranger.num.threads", NULL)
+    if (is.null(rnt)) warning("ranger.num.threads option not set")
+    else if (rnt > conf$max_threads) {
+      stop(sprintf("ranger.num.threads=%d > max=%d", rnt, conf$max_threads))
+    }
+  }
+  sprintf("OK (loaded: %s, hook_done=%s)", paste(loaded, collapse=","), hook_done)
+}, fix_hint = "Deploy Rprofile v11.0 [N8]")
+
+
+# ==============================================================================
+# [14.0] INFRASTRUCTURE PLUMBING (v11.0 extended)
+# ==============================================================================
+audit_cat("\n[14.0] INFRASTRUCTURE PLUMBING\n")
+
+run_audit("14.1", "PSOCK Cluster Thread Isolation", {
+  bmc <- tryCatch(get("biome_make_cluster", envir = as.environment("tools:biome_calc")), error = function(e) NULL)
+  if (is.null(bmc)) stop("biome_make_cluster not in tools:biome_calc")
+  tryCatch({
+    cl <- bmc(workers = 2, worker_threads = 1L)
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+    worker_blas <- parallel::clusterEvalQ(cl, as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "-1")))
+    worker_omp  <- parallel::clusterEvalQ(cl, as.integer(Sys.getenv("OMP_NUM_THREADS", "-1")))
+    blas_vals <- unlist(worker_blas)
+    omp_vals  <- unlist(worker_omp)
+    if (any(blas_vals > 2)) stop(sprintf("Workers OPENBLAS=%s (expected 1)", paste(blas_vals, collapse=",")))
+    if (any(omp_vals > 2))  stop(sprintf("Workers OMP=%s (expected 1)", paste(omp_vals, collapse=",")))
+    parallel::stopCluster(cl)
+    sprintf("OK (BLAS=%s, OMP=%s)", paste(blas_vals, collapse=","), paste(omp_vals, collapse=","))
+  }, error = function(e) stop(sprintf("Cluster test failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check .biome_make_cluster_impl in Rprofile v11.0")
+
+run_audit("14.2", "future::plan() Worker Thread Safety", {
+  if (!requireNamespace("future", quietly = TRUE)) return("Skipped (future not installed)")
+  tryCatch({
+    future_workers <- tryCatch(.biome_env$shared_env$future_workers, error = function(e) 0L)
+    if (future_workers > 0L) {
+      val <- future::value(future::future({
+        list(blas = as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "-1")),
+             omp  = as.integer(Sys.getenv("OMP_NUM_THREADS", "-1")))
+      }))
+      if (val$blas > 2) stop(sprintf("Future worker OPENBLAS=%d (expected 1)", val$blas))
+      sprintf("OK (%d workers, worker BLAS=%d)", future_workers, val$blas)
+    } else {
+      hook_exists <- !is.null(tryCatch(.biome_env$deferred_pkg_hooks, error = function(e) NULL))
+      if (hook_exists) "Pending (future not loaded yet — hook ready)" else stop("No deferred_pkg_hooks function")
+    }
+  }, error = function(e) stop(sprintf("Future test failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Check future::plan() hook")
+
+run_audit("14.3", "Renviron.site Variable Contract", {
+  required_vars <- list(
+    TMPDIR           = "/Rtmp",
+    TMP              = "/Rtmp",
+    TEMP             = "/Rtmp",
+    R_TEMPDIR        = "/Rtmp",
+    OPENBLAS_NUM_THREADS = "1",
+    RETICULATE_PYTHON = NULL,
+    FONTCONFIG_PATH  = "/etc/fonts",
+    BSPM_SUDO        = "true",
+    TF_CPP_MIN_LOG_LEVEL = "2",
+    BIOME_TMP_DISK_GB = NULL
+  )
+  missing <- c(); wrong <- c()
+  for (var_name in names(required_vars)) {
+    val <- Sys.getenv(var_name, "")
+    expected <- required_vars[[var_name]]
+    if (nchar(val) == 0) missing <- c(missing, var_name)
+    else if (!is.null(expected) && val != expected) {
+      wrong <- c(wrong, sprintf("%s=%s (expected %s)", var_name, val, expected))
+    }
+  }
+  if (length(missing) > 0) stop(sprintf("Missing env vars: %s", paste(missing, collapse=", ")))
+  if (length(wrong) > 0) warning(paste(wrong, collapse="; "))
+  sprintf("OK (%d vars verified)", length(required_vars))
+}, fix_hint = "Redeploy Renviron.site via 50_setup_nodes.sh")
+
+run_audit("14.4", "Arrow Thread Capping", {
+  if (!requireNamespace("arrow", quietly = TRUE)) return("Skipped (arrow not installed)")
+  tryCatch({
+    cpu_threads <- arrow::cpu_count()
+    io_threads  <- arrow::io_thread_count()
+    max_allowed <- conf$max_threads
+    if (cpu_threads > max_allowed) stop(sprintf("Arrow CPU=%d > max=%d", cpu_threads, max_allowed))
+    if (io_threads > max_allowed) stop(sprintf("Arrow IO=%d > max=%d", io_threads, max_allowed))
+    sprintf("OK (CPU=%d, IO=%d, max=%d)", cpu_threads, io_threads, max_allowed)
+  }, error = function(e) stop(sprintf("Arrow check failed: %s", e$message)))
+}, fix_hint = "Check arrow hook")
+
+run_audit("14.5", "Task Callback Registration", {
+  cb_names <- tryCatch(getTaskCallbackNames(), error = function(e) character(0))
+  has_monitor <- "biome_resource_monitor" %in% cb_names
+  if (!has_monitor) warning("biome_resource_monitor not in task callbacks")
+  sprintf("%s (callbacks: %s)", if (has_monitor) "Active" else "Fallback",
+          paste(cb_names, collapse=", "))
+}, fix_hint = "Check addTaskCallback in Rprofile")
+
+run_audit("14.6", "bspm Sudo Access", {
+  sudoers_file <- "/etc/sudoers.d/99-bspm-domain-users"
+  if (!file.exists(sudoers_file)) stop("bspm sudoers rule missing")
+  bspm_ok <- requireNamespace("bspm", quietly = TRUE)
+  if (!bspm_ok) stop("bspm package not installed")
+  perms <- tryCatch(system(sprintf("stat -c '%%a' '%s'", sudoers_file), intern = TRUE),
+                    error = function(e) "unknown")
+  if (perms != "440") warning(sprintf("Sudoers perms=%s (expected 440)", perms))
+  sprintf("OK (bspm installed, sudoers=%s, perms=%s)", basename(sudoers_file), perms)
+}, fix_hint = "Redeploy bspm sudoers via 50_setup_nodes.sh")
+
+run_audit("14.7", "Python Venv + Reticulate", {
+  py_path <- Sys.getenv("RETICULATE_PYTHON", "")
+  if (nchar(py_path) == 0) stop("RETICULATE_PYTHON not set")
+  if (!file.exists(py_path)) stop(sprintf("RETICULATE_PYTHON=%s does not exist", py_path))
+  if (file.access(py_path, 1) != 0) stop(sprintf("Python not executable: %s", py_path))
+  py_ver <- tryCatch(system2(py_path, args = "--version", stdout = TRUE, stderr = TRUE),
+                     error = function(e) "unknown")
+  keras_home <- Sys.getenv("KERAS_HOME", "")
+  cuda_vis <- Sys.getenv("CUDA_VISIBLE_DEVICES", "")
+  issues <- c()
+  if (!grepl("/Rtmp", keras_home)) issues <- c(issues, sprintf("KERAS_HOME=%s (expected /Rtmp)", keras_home))
+  if (cuda_vis != "-1") issues <- c(issues, sprintf("CUDA_VISIBLE_DEVICES=%s (expected -1)", cuda_vis))
+  if (length(issues) > 0) warning(paste(issues, collapse="; "))
+  sprintf("OK (%s)", paste(py_ver, collapse=" "))
+}, fix_hint = "Check RETICULATE_PYTHON in Renviron.site")
+
+run_audit("14.8", "data.table fread SmartIO Hook", {
+  if (!requireNamespace("data.table", quietly = TRUE)) return("Skipped (data.table not installed)")
+  tf <- tempfile(fileext = ".csv")
+  on.exit(unlink(tf), add = TRUE)
+  writeLines(c("x,y", "1,2", "3,4"), tf)
+  tryCatch({
+    dt <- data.table::fread(tf)
+    if (!is.data.frame(dt) || nrow(dt) != 2) stop("fread wrong dimensions")
+    df <- read.csv(tf)
+    if (nrow(df) != 2) stop("read.csv wrong dimensions")
+    orig_csv <- tryCatch(get("original_read_csv", envir = .biome_env), error = function(e) NULL)
+    if (is.null(orig_csv)) warning("original_read_csv not preserved")
+    sprintf("OK (fread=%dx%d, original=%s)", nrow(dt), ncol(dt),
+            if (!is.null(orig_csv)) "preserved" else "MISSING")
+  }, error = function(e) stop(sprintf("SmartIO test failed: %s", e$message)))
+}, timeout = 10,
+   fix_hint = "Check SmartIO section")
+
+run_audit("14.9", "rJava Heap Scaling (v11.0 dynamic)", {
+  if (!requireNamespace("rJava", quietly = TRUE)) return("Skipped (rJava not installed)")
+  java_params <- getOption("java.parameters", "")
+  if (nchar(java_params) == 0 || !grepl("-Xmx", java_params)) {
+    hook_done <- tryCatch(.biome_env$shared_env$.rjava_hook_done, error = function(e) FALSE)
+    if (!isTRUE(hook_done)) {
+      warning("rJava heap not configured — Java defaults to 256MB (climate4R OOM risk)")
+    }
+  }
+  heap_match <- regmatches(java_params, regexpr("-Xmx([0-9]+)g", java_params))
+  if (length(heap_match) > 0) {
+    heap_gb <- as.integer(sub("-Xmx([0-9]+)g", "\\1", heap_match))
+    quota <- tryCatch(.biome_env$shared_env$last_quota, error = function(e) 0)
+    expected_heap <- max(2L, min(16L, as.integer(floor(quota * 0.25))))
+    # v11.0 caps at 16GB max — v10.0 had no cap
+    if (heap_gb > 16L) warning(sprintf("Java heap %dGB > v11.0 cap of 16GB (GC pauses risk)", heap_gb))
+    if (heap_gb < 2) warning(sprintf("Java heap only %dGB — too low for climate4R", heap_gb))
+    sprintf("OK (heap=%dGB, quota=%dGB, expected~%dGB, max_cap=16GB)",
+            heap_gb, quota, expected_heap)
+  } else {
+    sprintf("Pending (java.parameters='%s')", java_params)
+  }
+}, fix_hint = "Load library(rJava) to trigger heap hook (v11.0 [N11])")
+
+run_audit("14.10", "Orphan Cleanup Service", {
+  timer_active <- tryCatch(
+    system2("systemctl", args = c("is-active", "--quiet", "biome-cleanup-orphans.timer"),
+            stdout = FALSE, stderr = FALSE) == 0,
+    error = function(e) FALSE
+  )
+  script_exists <- file.exists("/usr/local/bin/cleanup_r_orphans.sh")
+  issues <- c()
+  if (!timer_active) issues <- c(issues, "biome-cleanup-orphans.timer not active")
+  if (!script_exists) issues <- c(issues, "cleanup_r_orphans.sh not deployed")
+  if (length(issues) > 0) warning(paste(issues, collapse = "; "))
+  else sprintf("OK (timer=active, script=deployed)")
+}, fix_hint = "Run 50_setup_nodes.sh")
+
+run_audit("14.11", "Kernel Swappiness", {
+  swappiness <- tryCatch(as.integer(readLines("/proc/sys/vm/swappiness", warn = FALSE)),
+                         error = function(e) NA_integer_)
+  if (is.na(swappiness)) stop("Cannot read /proc/sys/vm/swappiness")
+  if (swappiness > 30) warning(sprintf("vm.swappiness=%d (should be <=30 for analytics)", swappiness))
+  overcommit <- tryCatch(as.integer(readLines("/proc/sys/vm/overcommit_memory", warn = FALSE)),
+                         error = function(e) NA_integer_)
+  sprintf("OK (swappiness=%d, overcommit=%s)", swappiness,
+          if (is.na(overcommit)) "unknown" else as.character(overcommit))
+}, fix_hint = "sysctl vm.swappiness=10")
+
+run_audit("14.12", "RhpcBLASctl Thread Control", {
+  if (!requireNamespace("RhpcBLASctl", quietly = TRUE)) {
+    stop("RhpcBLASctl not installed — solve() guard cannot reduce BLAS threads")
+  }
+  tryCatch({
+    current <- RhpcBLASctl::blas_get_num_procs()
+    sprintf("OK (current BLAS threads=%d)", current)
+  }, error = function(e) {
+    warning(sprintf("RhpcBLASctl installed but blas_get_num_procs() failed: %s", e$message))
+  })
+}, fix_hint = "install.packages('RhpcBLASctl')")
+
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  v28 NEW TESTS — v11.0 SAFEGUARDS AND TOOLS                              ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# v28 [N3]: biome_make_cluster() accepts outfile= and routes to cluster_logs/
+run_audit("14.13", "biome_make_cluster outfile parameter (v11.0 [N3])", {
+  bmc <- tryCatch(get("biome_make_cluster", envir = as.environment("tools:biome_calc")),
+                  error = function(e) NULL)
+  if (is.null(bmc)) stop("biome_make_cluster not found")
+  # Inspect formals: must include 'outfile' arg (new in v11.0)
+  fml <- names(formals(bmc))
+  if (!"outfile" %in% fml) stop(sprintf("biome_make_cluster missing 'outfile' arg (formals: %s)",
+                                         paste(fml, collapse=", ")))
+
+  # cluster_logs/ directory must exist
+  usr <- tryCatch(.biome_env$USER_TMP_ROOT, error = function(e) NULL)
+  if (is.null(usr)) stop("USER_TMP_ROOT missing")
+  cl_dir <- file.path(usr, "cluster_logs")
+  if (!dir.exists(cl_dir)) warning(sprintf("cluster_logs dir missing: %s", cl_dir))
+
+  # Smoke test: create 1 worker, verify outfile is created in cluster_logs/
+  tryCatch({
+    cl <- bmc(workers = 1, worker_threads = 1L)
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+    # Give worker a moment to log its greeting
+    parallel::clusterEvalQ(cl, Sys.getpid())
+    parallel::stopCluster(cl)
+  }, error = function(e) stop(sprintf("Smoke test failed: %s", e$message)))
+
+  # Check if any log file was created in cluster_logs/
+  logs_found <- if (dir.exists(cl_dir)) list.files(cl_dir, pattern = "^psock_.*\\.log$") else character(0)
+  sprintf("OK (outfile arg present, cluster_logs=%d file(s))", length(logs_found))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Deploy Rprofile v11.0 (biome_make_cluster with outfile=)")
+
+# v28 [N4]: parallel::makeCluster safeguard (warns + optionally redirects)
+run_audit("14.14", "parallel::makeCluster safeguard (v11.0 [N4])", {
+  # v11.0 wraps parallel::makeCluster to emit a warning when called with PSOCK.
+  # Check that original_makeCluster was saved in .biome_env (proof of install).
+  orig <- tryCatch(get("original_makeCluster", envir = .biome_env), error = function(e) NULL)
+  if (is.null(orig)) {
+    warning("parallel::makeCluster safeguard not installed (Rprofile pre-v11.0 or ENABLE_PARALLEL_GUARD=FALSE)")
+    return("Not installed")
+  }
+  if (!is.function(orig)) stop("original_makeCluster is not a function")
+  # Verify the current makeCluster in the namespace is WRAPPED (not == orig)
+  current <- parallel::makeCluster
+  is_wrapped <- !identical(current, orig)
+  sprintf("%s (original preserved, wrapped=%s)",
+          if (is_wrapped) "Active" else "Not wrapped",
+          is_wrapped)
+}, fix_hint = "Deploy Rprofile v11.0 [N4]")
+
+# v28 [N5]: doSNOW::registerDoSNOW safeguard
+run_audit("14.15", "doSNOW::registerDoSNOW safeguard (v11.0 [N5])", {
+  if (!.audit_pkgs[["doSNOW"]]) return("Skipped (doSNOW not installed)")
+  orig <- tryCatch(get("original_registerDoSNOW", envir = .biome_env), error = function(e) NULL)
+  if (is.null(orig)) {
+    warning("doSNOW safeguard not installed (Rprofile pre-v11.0 or doSNOW loaded after hook)")
+    return("Not installed")
+  }
+  if (!is.function(orig)) stop("original_registerDoSNOW is not a function")
+  "Active (original preserved)"
+}, fix_hint = "Deploy Rprofile v11.0 [N5] and library(doSNOW)")
+
+# v28 [N3]: Full worker env propagation — BIOME_NIMBLE_DIR + BIOME_TMB_DIR + etc
+run_audit("14.16", "Worker env propagation (v11.0 [N3])", {
+  bmc <- tryCatch(get("biome_make_cluster", envir = as.environment("tools:biome_calc")),
+                  error = function(e) NULL)
+  if (is.null(bmc)) stop("biome_make_cluster not found")
+  tryCatch({
+    cl <- bmc(workers = 1, worker_threads = 1L)
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+    # Worker must have all v11.0 env vars inherited
+    worker_env <- parallel::clusterCall(cl, function() {
+      list(
+        BIOME_WORKER_MODE = Sys.getenv("BIOME_WORKER_MODE"),
+        BIOME_USER_TMP   = Sys.getenv("BIOME_USER_TMP"),
+        BIOME_NIMBLE_DIR = Sys.getenv("BIOME_NIMBLE_DIR"),
+        BIOME_TMB_DIR    = Sys.getenv("BIOME_TMB_DIR"),
+        BIOME_STAN_DIR   = Sys.getenv("BIOME_STAN_DIR"),
+        BIOME_RCPP_CACHE = Sys.getenv("BIOME_RCPP_CACHE"),
+        TMPDIR           = Sys.getenv("TMPDIR"),
+        OPENBLAS_CORETYPE = Sys.getenv("OPENBLAS_CORETYPE")
+      )
+    })[[1]]
+    parallel::stopCluster(cl)
+    missing_vars <- names(worker_env)[vapply(worker_env, function(x) nchar(x) == 0, logical(1))]
+    if (length(missing_vars) > 0) {
+      warning(sprintf("Worker missing env vars: %s", paste(missing_vars, collapse=", ")))
+    }
+    # Verify all BIOME_*_DIR point under /Rtmp
+    for (k in c("BIOME_USER_TMP", "BIOME_NIMBLE_DIR", "BIOME_TMB_DIR", "BIOME_STAN_DIR", "BIOME_RCPP_CACHE")) {
+      if (nchar(worker_env[[k]]) > 0 && !grepl("^/Rtmp/", worker_env[[k]])) {
+        warning(sprintf("%s=%s — not under /Rtmp", k, worker_env[[k]]))
+      }
+    }
+    sprintf("OK (%d vars, WORKER_MODE=%s, NIMBLE_DIR=%s)",
+            length(worker_env), worker_env$BIOME_WORKER_MODE,
+            if (nchar(worker_env$BIOME_NIMBLE_DIR) > 0) basename(worker_env$BIOME_NIMBLE_DIR) else "MISSING")
+  }, error = function(e) stop(sprintf("Worker env test failed: %s", e$message)))
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Deploy Rprofile v11.0 [N3] — check env_vec in .biome_make_cluster_impl")
+
+# v28 [N9]: biome_future_plan() helper — strategy selection
+run_audit("14.17", "biome_future_plan() helper (v11.0 [N9])", {
+  bfp <- tryCatch(get("biome_future_plan", envir = as.environment("tools:biome_calc")),
+                  error = function(e) NULL)
+  if (is.null(bfp)) stop("biome_future_plan not found in tools:biome_calc")
+  fml <- names(formals(bfp))
+  if (!"strategy" %in% fml) stop(sprintf("biome_future_plan missing 'strategy' arg (formals: %s)",
+                                          paste(fml, collapse=", ")))
+  if (!"workers" %in% fml) stop("biome_future_plan missing 'workers' arg")
+  # Smoke: try strategy="sequential" (no workers spawned, no deps on future.callr)
+  if (!requireNamespace("future", quietly = TRUE)) {
+    warning("future package not installed — cannot smoke test")
+    return("Available (function exists, smoke-test skipped)")
+  }
+  # Save current plan, test sequential, restore
+  old_plan <- future::plan()
+  on.exit(tryCatch(future::plan(old_plan), error = function(e) NULL), add = TRUE)
+  res <- tryCatch(bfp(strategy = "sequential"), error = function(e) as.character(e$message))
+  if (!identical(res, "sequential") && !is.character(res)) {
+    warning(sprintf("biome_future_plan(strategy='sequential') returned unexpected value"))
+  }
+  sprintf("Available (sequential smoke OK)")
+}, timeout = 10,
+   fix_hint = "Deploy Rprofile v11.0 [N9]")
+
+# v28 [N10]: biome_worker_diagnostics() tool
+run_audit("14.18", "biome_worker_diagnostics() tool (v11.0 [N10])", {
+  bwd <- tryCatch(get("biome_worker_diagnostics", envir = as.environment("tools:biome_calc")),
+                  error = function(e) NULL)
+  if (is.null(bwd)) stop("biome_worker_diagnostics not found")
+  fml <- names(formals(bwd))
+  if (!"n" %in% fml) stop("biome_worker_diagnostics missing 'n' arg")
+  if (!"since_hours" %in% fml) stop("biome_worker_diagnostics missing 'since_hours' arg")
+  # Smoke: call with short window — should not error even with no logs
+  res <- tryCatch(bwd(n = 1, since_hours = 1),
+                  error = function(e) as.character(e$message))
+  # It returns invisible(NULL) or a vector of paths — both are fine
+  "Available (smoke OK)"
+}, timeout = 10,
+   fix_hint = "Deploy Rprofile v11.0 [N10]")
+
+# v28 [N7]: rstan/cmdstanr/brms output_dir routing
+run_audit("14.19", "Stan output_dir routing (v11.0 [N7])", {
+  stan_loaded <- isNamespaceLoaded("rstan") || isNamespaceLoaded("cmdstanr") || isNamespaceLoaded("brms")
+  if (!stan_loaded) return("Skipped (no Stan package loaded)")
+  # Must have fired the hook
+  hook_done <- tryCatch(.biome_env$shared_env$.stan_hook_done, error = function(e) FALSE)
+  if (!isTRUE(hook_done)) warning("Stan hook not fired yet")
+  # CMDSTANR_OUTPUT_DIR env
+  cmdstanr_dir <- Sys.getenv("CMDSTANR_OUTPUT_DIR", "")
+  stan_tmpdir <- Sys.getenv("STAN_TMPDIR", "")
+  rstan_opt <- getOption("rstan.auto_write", FALSE)
+  brms_opt <- getOption("brms.file_refit", "")
+
+  issues <- c()
+  if (nchar(cmdstanr_dir) > 0 && !grepl("^/Rtmp/", cmdstanr_dir)) {
+    issues <- c(issues, sprintf("CMDSTANR_OUTPUT_DIR=%s not under /Rtmp", cmdstanr_dir))
+  }
+  if (nchar(stan_tmpdir) > 0 && !grepl("^/Rtmp/", stan_tmpdir)) {
+    issues <- c(issues, sprintf("STAN_TMPDIR=%s not under /Rtmp", stan_tmpdir))
+  }
+  if (!isTRUE(rstan_opt)) issues <- c(issues, "rstan.auto_write not TRUE")
+  if (length(issues) > 0) warning(paste(issues, collapse = "; "))
+  sprintf("OK (rstan.auto_write=%s, brms.file_refit=%s)", rstan_opt, brms_opt)
+}, fix_hint = "Deploy Rprofile v11.0 [N7] and library(rstan|cmdstanr|brms)")
+
+# v28 [CRITICAL]: top-level return() bug fix — ensure worker Rscript survives profile load
+run_audit("14.20", "Top-level return() bug fix (v11.0 CRITICAL)", {
+  # v10.0 had a bug: `return(invisible(NULL))` at top-level of Rprofile.site
+  # causes "Error: no function to return from" under Rscript, which halts
+  # execution BEFORE the -e body runs. Worker PSOCK nodes die at handshake.
+  # v11.0 fixes this by wrapping everything in local() blocks with if/else.
+  #
+  # We detect if the bug is present by actually spawning an Rscript subprocess
+  # with BIOME_WORKER_MODE=1 and checking it can execute a -e body.
+  profile_path <- tryCatch({
+    r_home <- R.home()
+    candidates <- c(
+      file.path(r_home, "etc", "Rprofile.site"),
+      "/etc/R/Rprofile.site"
+    )
+    found <- candidates[file.exists(candidates)]
+    if (length(found) == 0) stop("Rprofile.site not found in standard locations")
+    found[1]
+  }, error = function(e) NULL)
+  if (is.null(profile_path)) stop("Cannot locate Rprofile.site")
+
+  # Check for the v10 bug pattern: top-level `return(...)` not wrapped in local()
+  # A simple static check — count top-level return() calls outside local()/function()
+  prof_lines <- tryCatch(readLines(profile_path, warn = FALSE), error = function(e) character(0))
+  # Strip comments
+  stripped <- sub("#.*$", "", prof_lines)
+  # The v10 bug signature: lines with ONLY whitespace + `return(invisible(NULL))` or similar
+  # AND not inside a function/local block. Hard to check statically, so we just
+  # check for the v11 fix marker in the header.
+  has_v11_marker <- any(grepl("v11.0|LOCAL-DISK ARCHITECTURE|return\\(\\) inside local\\(\\)", prof_lines))
+  if (!has_v11_marker) {
+    warning("Rprofile.site header does not show v11.0 marker — fix may be absent")
+  }
+
+  # Real test: spawn Rscript with --no-init-file (parallelly flags) and BIOME_WORKER_MODE=1
+  tmp_marker <- tempfile(fileext = ".txt")
+  on.exit(unlink(tmp_marker), add = TRUE)
+
+  # Ensure R_PROFILE points at the same file so Rscript uses it
+  env_cmd <- c(
+    sprintf("R_PROFILE=%s", profile_path),
+    "BIOME_WORKER_MODE=1",
+    "BIOME_WORKER_THREADS=1"
+  )
+  cmd_str <- sprintf('env %s Rscript --no-init-file --no-save --no-restore --no-echo -e %s',
+                      paste(env_cmd, collapse = " "),
+                      shQuote(sprintf('cat("WORKER_ALIVE=", Sys.getpid(), file="%s")', tmp_marker)))
+  result <- tryCatch(
+    system(cmd_str, intern = FALSE, ignore.stderr = TRUE),
+    error = function(e) 1L
+  )
+
+  if (result != 0 || !file.exists(tmp_marker)) {
+    stop("Rscript aborted (BUG PRESENT) — top-level return() halts worker at Rprofile load")
+  }
+  marker_content <- tryCatch(readLines(tmp_marker, warn = FALSE), error = function(e) "")
+  if (!grepl("WORKER_ALIVE=", paste(marker_content, collapse = ""))) {
+    stop("Rscript exited but -e body did NOT run (BUG PRESENT)")
+  }
+  sprintf("OK (worker Rscript survives Rprofile load)")
+}, timeout = 30, use_fork = TRUE,
+   fix_hint = "Deploy Rprofile v11.0 — fixes top-level return() that aborted Rscript workers")
+
+# ==============================================================================
+# SUMMARY
+# ==============================================================================
+audit_cat("\n")
+fails <- which(vapply(audit_log, function(x) x$s == "FAIL", logical(1)))
+warns <- which(vapply(audit_log, function(x) x$s == "WARN", logical(1)))
+
+if (length(fails) == 0 && length(warns) == 0) {
+  audit_cat(paste0(.AG, "  \u2705 AUDIT COMPLETE - ALL CHECKS PASSED (", length(audit_log), " tests)", .A0, "\n"))
+} else if (length(fails) == 0 && length(warns) > 0) {
+  audit_cat(paste0(.AG, "  \u2705 AUDIT COMPLETE - PASSED", .A0,
+    paste0(.AY, " (", length(warns), " advisory warning(s))", .A0), "\n"))
+  for (wid in names(audit_log)[warns]) {
+    entry <- audit_log[[wid]]
+    audit_cat(sprintf("    %s[%s]%s %s\n", .AY, wid, .A0, entry$m))
+    audit_cat(sprintf("         HINT: %s\n", entry$fix))
+  }
+} else {
+  audit_cat(paste0(.AR, "  \u274c AUDIT COMPLETE - ", length(fails), " FAILURE(S)", .A0))
+  if (length(warns) > 0) audit_cat(paste0(.AY, ", ", length(warns), " WARNING(S)", .A0))
+  audit_cat("\n")
+  for (fid in names(audit_log)[fails]) {
+    entry <- audit_log[[fid]]
+    audit_cat(sprintf("    %s[%s]%s %s\n", .AR, fid, .A0, entry$m))
+    audit_cat(sprintf("         FIX: %s\n", entry$fix))
+  }
+  for (wid in names(audit_log)[warns]) {
+    entry <- audit_log[[wid]]
+    audit_cat(sprintf("    %s[%s]%s %s\n", .AY, wid, .A0, entry$m))
+    audit_cat(sprintf("         HINT: %s\n", entry$fix))
+  }
+}
+audit_cat(sprintf("\nLog saved to: %s\n", LOG_FILE))

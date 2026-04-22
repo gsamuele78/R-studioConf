@@ -38,65 +38,7 @@
 #     - biome_save_session() RData backups
 #     - User scripts, datasets, results
 #
-# v11.2 CHANGES (from v11.1) — "The honest cleanup" — REMOVE PHANTOM APIs:
-#   Discovery: v11.0/v11.1 targeted routing APIs that DO NOT EXIST.
-#   Verified empirically (2026-04-22) by grepping the upstream source repos:
-#     * options("nimble.dirName")       — NIMBLE never reads this option.
-#                                          Only NIMBLE getOption call is for
-#                                          "nimble.Makevars.file". Compile dir
-#                                          is controlled via `dirName` ARGUMENT
-#                                          to compileNimble() or, when NULL,
-#                                          defaults to file.path(tempdir(),
-#                                          "nimble_generatedCode").
-#     * Sys.setenv("TMB_COMPILE_DIR")   — TMB never reads this env var.
-#     * options("rstan.auto_write")     — rstan uses its OWN option storage via
-#                                          rstan_options("auto_write"), NOT
-#                                          base::options().
-#     * Sys.setenv("STAN_TMPDIR")       — Stan never reads this env var.
-#
-#   Verified as REAL and kept in v11.2:
-#     * options("cmdstanr_output_dir")  — cmdstanr/R/options.R:27
-#     * options("brms.file_refit")      — brms/R/brm.R:469
-#
-#   PSOCK NIMBLE ISOLATION — NATURAL, not engineered:
-#     Each PSOCK worker is a separate R process with its own tempdir()
-#     (R creates /Rtmp/RtmpXXXXXX on startup, driven by TMPDIR=/Rtmp from
-#     Renviron.site). NIMBLE's default compile dir is tempdir()/nimble_generatedCode.
-#     So each worker already compiles to a unique path on local disk with
-#     ZERO configuration required. Confirmed via clusterEvalQ showing 4
-#     unique tempdirs on /Rtmp/ for 4 workers.
-#
-#   MARTINA-GATE — Original "NIMBLE race on NFS" crash was a misdiagnosis:
-#     The error `unserialize(node$con) : error reading from connection` in
-#     Martina's script was caused by `setwd("BECAUSE")` (an unsubstituted
-#     TODO placeholder) failing → cascading errors → `data_mod` never created
-#     in master → parLapply's serialize() throws on undefined symbol → socket
-#     closed → next recv fails with unserialize error. NIMBLE was not involved.
-#
-#   CHANGES:
-#   - [H1]  REMOVED: options(nimble.dirName = ...) in worker fast-path (phantom)
-#   - [H2]  REMOVED: setHook(packageEvent("nimble", "onLoad"), ...) (phantom target)
-#   - [H3]  REMOVED: setHook(packageEvent("nimbleHMC", "onLoad"), ...) (phantom)
-#   - [H4]  REMOVED: Sys.setenv(TMB_COMPILE_DIR = ...) in worker fast-path (phantom)
-#   - [H5]  REMOVED: setHook for TMB/glmmTMB (phantom target)
-#   - [H6]  REMOVED: options(rstan.auto_write = ...) (phantom)
-#   - [H7]  REMOVED: Sys.setenv(STAN_TMPDIR = ...) (phantom)
-#   - [H8]  REMOVED: Per-worker subdir creation in BIOME_NIMBLE_DIR / BIOME_TMB_DIR
-#                    (cargo cult — NIMBLE uses tempdir() per worker, not these dirs)
-#   - [H9]  KEPT:    options(cmdstanr_output_dir = worker_sd) for Stan output
-#                    routing — but only if BIOME_STAN_DIR is set (real API)
-#   - [H10] KEPT:    options(brms.file_refit = "on_change") — real API
-#   - [H11] KEPT:    BLAS thread capping via Sys.setenv (OMP_NUM_THREADS etc.) — real
-#   - [H12] KEPT:    BIOME env var propagation via biome_make_cluster() — real
-#   - [H13] KEPT:    cluster_logs outfile routing — real and useful
-#   - [H14] ADDED:   Optional worker diagnostic log (BIOME_WORKER_DEBUG=1) writes
-#                    /tmp/biome_worker_<pid>.log to trace fast-path execution.
-#                    For use if a future mystery arises; no-op by default.
-#   - [H15] API_VERSION bumped 7→8 to signal contract change (phantom APIs removed).
-#
-# v11.1 CHANGES (from v11.0) — SUPERSEDED BY v11.2: attempted setHook fix for
-#   phantom API options(nimble.dirName). Since the option itself doesn't exist,
-#   the setHook approach was academic. Kept here for historical record:
+# v11.1 CHANGES (from v11.0) — PSOCK worker options() propagation fix:
 #   - [F1]  Root cause observed in production (biome-calc04, R 4.5.3, 2026-04-22):
 #           Worker fast-path at Rprofile load creates worker_<pid>/ dirs correctly
 #           and BLAS env vars propagate, BUT options(nimble.dirName = worker_nd)
@@ -320,56 +262,81 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
       }, error = function(e) NULL)
     }
 
-    # ── v11.2 [H1-H8]: NIMBLE / TMB compile routing ─────────────────────────
-    # NOT NEEDED. Each PSOCK worker is a separate R process with its OWN
-    # tempdir() — R creates /Rtmp/RtmpXXXXXX on startup, driven by TMPDIR=/Rtmp
-    # from Renviron.site. NIMBLE's default compile dir is:
-    #     file.path(tempdir(), 'nimble_generatedCode')
-    # So each worker automatically compiles to a unique /Rtmp path with ZERO
-    # configuration. Confirmed empirically: 4 workers → 4 unique tempdirs.
-    # Previous v11.0/v11.1 versions wrote options(nimble.dirName) and
-    # Sys.setenv(TMB_COMPILE_DIR) — both are phantom APIs that NIMBLE and
-    # TMB do not read. They were silently ignored. Removed in v11.2.
-    # ─────────────────────────────────────────────────────────────────────────
-
-    # ── v11.2 [H9-H10]: Stan / brms / cmdstanr routing (REAL options) ───────
-    # Verified upstream:
-    #   * options("cmdstanr_output_dir") — cmdstanr/R/options.R:27
-    #   * options("brms.file_refit")     — brms/R/brm.R:469
-    # Each worker's tempdir() already gives a unique path, but cmdstanr's
-    # default is NOT tempdir() — it defaults to the current working directory.
-    # So we DO need to route cmdstanr_output_dir explicitly to /Rtmp to avoid
-    # writing Stan intermediate CSVs into the user's NFS home when the worker
-    # inherits a NFS cwd. brms.file_refit="on_change" is just a sane default
-    # for re-fitting behavior.
-    sd <- Sys.getenv("BIOME_STAN_DIR", "")
-    if (nzchar(sd)) {
-      # Use the worker's own tempdir() as the Stan output dir — already unique
-      # per worker, always on /Rtmp. No need to create extra worker_<pid>/ dirs.
-      stan_out <- file.path(tempdir(), "cmdstan_output")
-      tryCatch(dir.create(stan_out, recursive = TRUE, showWarnings = FALSE,
-                          mode = "0700"),
+    # v11.0 [N2] + v11.1 FIX: Per-worker NIMBLE compile directory on /Rtmp.
+    # CRITICAL CHANGE from v11.0:
+    # Previous version did: options(nimble.dirName = worker_nd) at profile load.
+    # Problem observed in production: options() is either reset or never applied
+    # for package-named options (e.g. 'nimble.dirName') when set inside the
+    # worker Rprofile. Verified empirically: the worker_<pid> dir IS created on
+    # disk, but getOption('nimble.dirName') returns NULL in clusterEvalQ.
+    # Root cause is not fully understood (suspected: PSOCK bootstrap sequence
+    # resets package-namespaced options, or setOption is lost when the worker
+    # transitions from profile-load to slave-serve loop).
+    #
+    # RELIABLE FIX: register a packageEvent("nimble", "onLoad") hook. The hook
+    # fires EXACTLY when require(nimble) is called inside the worker function,
+    # which is the moment when options(nimble.dirName = ...) actually matters.
+    # The dir is pre-created here so it's ready when the hook fires.
+    nd <- Sys.getenv("BIOME_NIMBLE_DIR", "")
+    if (nzchar(nd)) {
+      worker_nd <- file.path(nd, paste0("worker_", Sys.getpid()))
+      tryCatch(dir.create(worker_nd, recursive = TRUE, showWarnings = FALSE, mode = "0700"),
                error = function(e) NULL)
-      if (dir.exists(stan_out)) {
-        options(
-          cmdstanr_output_dir = stan_out,
-          brms.file_refit     = "on_change"
-        )
-      }
+      # Belt-and-suspenders: also try setting the option now (harmless if reset)
+      if (dir.exists(worker_nd)) options(nimble.dirName = worker_nd)
+      # Primary defense: hook fires on require(nimble) / library(nimble)
+      setHook(packageEvent("nimble", "onLoad"), function(...) {
+        options(nimble.dirName = worker_nd)
+      }, action = "append")
+      # Also for nimbleHMC in case it's loaded without nimble first (unlikely)
+      setHook(packageEvent("nimbleHMC", "onLoad"), function(...) {
+        options(nimble.dirName = worker_nd)
+      }, action = "append")
     }
 
-    # ── v11.2 [H14]: optional diagnostic log for troubleshooting ────────────
-    # Enable by setting BIOME_WORKER_DEBUG=1 in the parent session before
-    # biome_make_cluster(). Writes one log line per worker to
-    # /tmp/biome_worker_<pid>.log so we can confirm the fast-path ran.
-    if (nzchar(Sys.getenv("BIOME_WORKER_DEBUG", ""))) {
-      tryCatch({
-        log_path <- file.path("/tmp", paste0("biome_worker_", Sys.getpid(), ".log"))
-        cat(sprintf("[%s] BIOME worker fast-path v11.2 loaded | pid=%d | tempdir=%s | blas_threads=%s\n",
-                    format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-                    Sys.getpid(), tempdir(), wt),
-            file = log_path, append = TRUE)
-      }, error = function(e) NULL)
+    # v11.0 [N2] + v11.1 FIX: Per-worker TMB compile directory on /Rtmp.
+    # Same hook-based approach. TMB uses env var (TMB_COMPILE_DIR), not option,
+    # so Sys.setenv is the reliable path here — but we also re-assert on load.
+    td <- Sys.getenv("BIOME_TMB_DIR", "")
+    if (nzchar(td)) {
+      worker_td <- file.path(td, paste0("worker_", Sys.getpid()))
+      tryCatch(dir.create(worker_td, recursive = TRUE, showWarnings = FALSE, mode = "0700"),
+               error = function(e) NULL)
+      if (dir.exists(worker_td)) Sys.setenv(TMB_COMPILE_DIR = worker_td)
+      setHook(packageEvent("TMB", "onLoad"), function(...) {
+        Sys.setenv(TMB_COMPILE_DIR = worker_td)
+      }, action = "append")
+      setHook(packageEvent("glmmTMB", "onLoad"), function(...) {
+        Sys.setenv(TMB_COMPILE_DIR = worker_td)
+      }, action = "append")
+    }
+
+    # v11.0 [N7] + v11.1 FIX: Per-worker Stan compile directory on /Rtmp.
+    sd <- Sys.getenv("BIOME_STAN_DIR", "")
+    if (nzchar(sd)) {
+      worker_sd <- file.path(sd, paste0("worker_", Sys.getpid()))
+      tryCatch(dir.create(worker_sd, recursive = TRUE, showWarnings = FALSE, mode = "0700"),
+               error = function(e) NULL)
+      if (dir.exists(worker_sd)) {
+        options(
+          rstan.auto_write = TRUE,
+          brms.file_refit  = "on_change",
+          cmdstanr_output_dir = worker_sd
+        )
+        Sys.setenv(STAN_TMPDIR = worker_sd)
+      }
+      # Re-assert on package load
+      for (pkg in c("rstan", "cmdstanr", "brms")) {
+        setHook(packageEvent(pkg, "onLoad"), local({
+          sd_captured <- worker_sd
+          function(...) {
+            options(rstan.auto_write = TRUE,
+                    brms.file_refit  = "on_change",
+                    cmdstanr_output_dir = sd_captured)
+            Sys.setenv(STAN_TMPDIR = sd_captured)
+          }
+        }), action = "append")
+      }
     }
 
     options(biome.profile.loaded = TRUE)
@@ -500,15 +467,16 @@ local({
     reticulate.python.usage.suggestion = FALSE,
     repos                              = c(CRAN = "https://cloud.r-project.org"),
     save.defaults                      = list(ascii = FALSE, version = NULL, compress = TRUE),
-    # v11.2 [H9]: brms.file_refit is a REAL option (brms/R/brm.R:469)
+    # v11.0 [N6]: Rcpp sourceCpp builds to tempdir() which is /Rtmp via Renviron
+    # v11.0 [N7]: rstan auto_write for compile caching (landed in /Rtmp via TMPDIR)
+    rstan.auto_write                   = TRUE,
     brms.file_refit                    = "on_change"
   )
   Sys.setenv(
     CUDA_VISIBLE_DEVICES = "-1",
-    TF_CPP_MIN_LOG_LEVEL = "2"
-    # v11.2 [H7]: CMDSTANR_OUTPUT_DIR env var is phantom — cmdstanr reads
-    # options("cmdstanr_output_dir"), not this env var. Option is set below
-    # inside the ENABLE_STAN_OPT block where USER_TMP_ROOT is validated.
+    TF_CPP_MIN_LOG_LEVEL = "2",
+    # v11.0 [N7]: route Stan output to /Rtmp by default
+    CMDSTANR_OUTPUT_DIR  = file.path(USER_TMP_ROOT, "stan_compile")
   )
 
   # ── Secure Environment ──
@@ -527,7 +495,7 @@ local({
   se$last_cgroup_check <- 0
   se$user_tmp_root <- USER_TMP_ROOT   # v11.0: stored early
   .biome_env$VERSION <- VERSION
-  .biome_env$API_VERSION <- 8L        # v11.2: bumped 7→8 (phantom APIs removed)
+  .biome_env$API_VERSION <- 7L        # v11.1: bumped 6→7 (setHook-based package routing)
   .biome_env$TMP_WARN_PCT <- TMP_WARN_PCT
   .biome_env$TMP_DISK_GB <- TMP_DISK_GB
   .biome_env$USER_TMP_ROOT <- USER_TMP_ROOT
@@ -1302,17 +1270,15 @@ local({
     # Each process has ITS OWN subdir → zero parent-dir contention.
     # Compile artifacts are ephemeral (regenerated every session) — local-only OK.
     # ══════════════════════════════════════════════════════════════════════
-    # ══════════════════════════════════════════════════════════════════════
-    # v11.2 [H1-H2]: NIMBLE — OMP thread cap only (no compile-dir routing)
-    # ══════════════════════════════════════════════════════════════════════
-    # NIMBLE compile directory is handled automatically via tempdir(), which
-    # is /Rtmp/RtmpXXXXXX per R session (driven by TMPDIR=/Rtmp in Renviron).
-    # Previous v11.0/v11.1 set options(nimble.dirName) which NIMBLE never
-    # reads — confirmed by grep on nimble-dev/nimble source. Removed in v11.2.
-    # We still cap OMP threads here for multi-chain safety.
-    # ══════════════════════════════════════════════════════════════════════
     if ((isNamespaceLoaded("nimble") || isNamespaceLoaded("nimbleHMC")) &&
         !isTRUE(.biome_env$shared_env$.nimble_hook_done)) tryCatch({
+      # v11.0: LOCAL /Rtmp (was NFS $HOME in v10.0 — THE FIX)
+      nimble_dir <- file.path(user_tmp_root, "nimble_compile",
+                              paste0("session_", Sys.getpid()))
+      if (!dir.exists(nimble_dir)) dir.create(nimble_dir, recursive = TRUE,
+                                               showWarnings = FALSE, mode = "0700")
+      options(nimble.dirName = nimble_dir)
+
       # Cap threads for multi-chain safety (4 chains x 4 threads = 16 = VM cap)
       bt <- .biome_env$shared_env$last_threads
       nimble_threads <- max(2L, min(4L, as.integer(bt)))
@@ -1322,45 +1288,35 @@ local({
       Sys.setenv(OMP_NUM_THREADS = as.character(nimble_threads))
 
       .biome_env$shared_env$.nimble_hook_done <- TRUE
-      msg_parts <- c(msg_parts, sprintf("NIMBLE [tempdir/%d threads]", nimble_threads))
+      msg_parts <- c(msg_parts, sprintf("NIMBLE [LocalDisk/%d threads]", nimble_threads))
       if (interactive()) {
         message(sprintf(paste0(.C_GREEN,
-          "\U0001F9EA BIOME-CALC: NIMBLE compile dir -> %s (per-process tempdir).\n",
-          "   Thread cap: %d. Use biome_make_cluster() for multi-chain MCMC.",
-          .C_RESET), file.path(tempdir(), "nimble_generatedCode"), nimble_threads))
+          "\U0001F9EA BIOME-CALC: NIMBLE compilation -> LOCAL /Rtmp (%s).\n",
+          "   Thread cap: %d per chain. Use biome_make_cluster() for multi-chain MCMC.",
+          .C_RESET), nimble_dir, nimble_threads))
       }
     }, error = function(e) NULL)
 
     # ══════════════════════════════════════════════════════════════════════
-    # v11.2 [H4-H5]: TMB/glmmTMB — OMP thread cap only
-    # ══════════════════════════════════════════════════════════════════════
-    # Sys.setenv(TMB_COMPILE_DIR) was phantom (TMB never reads it) — removed.
-    # TMB::compile() compiles in the current working directory by default;
-    # users should setwd() to a scratch dir if needed, or pass `dir=` to
-    # TMB::compile(). options(TMB.threads) IS real — kept.
+    # v11.0 [N1+N8]: TMB/glmmTMB — LOCAL-DISK compile + OMP cap
     # ══════════════════════════════════════════════════════════════════════
     if ((isNamespaceLoaded("TMB") || isNamespaceLoaded("glmmTMB")) &&
         !isTRUE(.biome_env$shared_env$.tmb_hook_done)) tryCatch({
       bt <- .biome_env$shared_env$last_threads
       tmb_threads <- max(1L, min(4L, as.integer(bt)))
       options(TMB.threads = tmb_threads)
+      tmb_tmp <- file.path(user_tmp_root, "tmb_compile",
+                           paste0("session_", Sys.getpid()))
+      if (!dir.exists(tmb_tmp)) dir.create(tmb_tmp, recursive = TRUE,
+                                            showWarnings = FALSE, mode = "0700")
+      Sys.setenv(TMB_COMPILE_DIR = tmb_tmp)
       tmb_label <- if (isNamespaceLoaded("glmmTMB")) "TMB+glmmTMB" else "TMB"
       .biome_env$shared_env$.tmb_hook_done <- TRUE
-      msg_parts <- c(msg_parts, sprintf("%s [%d threads]", tmb_label, tmb_threads))
+      msg_parts <- c(msg_parts, sprintf("%s [LocalDisk/%d threads]", tmb_label, tmb_threads))
     }, error = function(e) NULL)
 
     # ══════════════════════════════════════════════════════════════════════
-    # v11.2 [H9-H10]: rstan / cmdstanr / brms — REAL options only
-    # ══════════════════════════════════════════════════════════════════════
-    # Kept:   options(cmdstanr_output_dir)  — REAL (cmdstanr/R/options.R:27)
-    #         options(brms.file_refit)      — REAL (brms/R/brm.R:469)
-    #         options(mc.cores)             — REAL (base R)
-    # Removed: options(rstan.auto_write)    — PHANTOM; rstan uses its own
-    #         rstan_options() storage, not base::options(). Users who want
-    #         auto_write should call rstan::rstan_options(auto_write = TRUE)
-    #         after loading rstan — we can't do it here because the option
-    #         doesn't exist until rstan is attached (not just namespaced).
-    # Removed: Sys.setenv(STAN_TMPDIR)      — PHANTOM; Stan doesn't read this.
+    # v11.0 [N7]: rstan / cmdstanr / brms — LOCAL-DISK output + cores cap
     # ══════════════════════════════════════════════════════════════════════
     if (ENABLE_STAN_OPT &&
         (isNamespaceLoaded("rstan") || isNamespaceLoaded("cmdstanr") ||
@@ -1370,8 +1326,10 @@ local({
                             paste0("session_", Sys.getpid()))
       if (!dir.exists(stan_tmp)) dir.create(stan_tmp, recursive = TRUE,
                                              showWarnings = FALSE, mode = "0700")
+      # rstan: auto_write caches compiled models to tempdir() (=/Rtmp)
+      options(rstan.auto_write = TRUE)
 
-      # cmdstanr: explicit output_dir (REAL option)
+      # cmdstanr: explicit output_dir
       if (isNamespaceLoaded("cmdstanr")) {
         options(cmdstanr_output_dir = stan_tmp)
       }
@@ -1381,21 +1339,12 @@ local({
         options(brms.file_refit = "on_change")
       }
 
-      # rstan auto_write: can only be set via rstan_options() which requires
-      # rstan to be ATTACHED (library/require), not just namespaced. We set a
-      # deferred hook that fires on first require(rstan).
-      if (!isTRUE(.biome_env$shared_env$.rstan_auto_write_hook)) {
-        setHook(packageEvent("rstan", "attach"), function(...) {
-          tryCatch(rstan::rstan_options(auto_write = TRUE),
-                   error = function(e) NULL)
-        }, action = "append")
-        .biome_env$shared_env$.rstan_auto_write_hook <- TRUE
-      }
-
       # Cap MCMC chains at MAX_THREADS/2 so each chain has ≥2 cores available
       bt <- .biome_env$shared_env$last_threads
       stan_cores <- max(1L, min(4L, as.integer(bt / 2)))
       options(mc.cores = stan_cores)   # rstan picks this up automatically
+
+      Sys.setenv(STAN_TMPDIR = stan_tmp)
 
       stan_pkgs <- c(if (isNamespaceLoaded("rstan")) "rstan",
                      if (isNamespaceLoaded("cmdstanr")) "cmdstanr",
