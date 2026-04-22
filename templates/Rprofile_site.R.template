@@ -38,7 +38,30 @@
 #     - biome_save_session() RData backups
 #     - User scripts, datasets, results
 #
-# v11.0 CHANGES (from v10.0) — Concurrency + NFS-avoidance for all R compilers:
+# v11.1 CHANGES (from v11.0) — PSOCK worker options() propagation fix:
+#   - [F1]  Root cause observed in production (biome-calc04, R 4.5.3, 2026-04-22):
+#           Worker fast-path at Rprofile load creates worker_<pid>/ dirs correctly
+#           and BLAS env vars propagate, BUT options(nimble.dirName = worker_nd)
+#           does NOT persist — getOption("nimble.dirName") returns NULL in
+#           clusterEvalQ. Package-namespaced options set during Rprofile.site
+#           sourcing appear to be lost when the worker transitions to the
+#           parallel:::.slaveRSOCK() serve loop. Plain options (e.g.
+#           "biome.profile.loaded") survive; only package-dotted names are lost.
+#           Not fully understood; possibly related to the way Rscript handles
+#           the site profile vs the slave bootstrap expression.
+#   - [F2]  FIX: register setHook(packageEvent("nimble", "onLoad"), ...) in the
+#           worker fast-path. Hook fires at require(nimble) / library(nimble)
+#           time — exactly when options(nimble.dirName) actually matters for
+#           compileNimble() routing. Hook closure captures worker_nd; safe
+#           across worker lifetime. Applied symmetrically to nimbleHMC.
+#   - [F3]  Same setHook pattern applied to TMB/glmmTMB (env var TMB_COMPILE_DIR)
+#           and rstan/cmdstanr/brms (mixed options + STAN_TMPDIR). Belt-and-
+#           suspenders: also keep the original options()/Sys.setenv() calls in
+#           case either persists — harmless if redundant, saves you if one path
+#           gets broken by future R or package changes.
+#   - [F4]  API_VERSION bumped 6→7 to signal the contract change.
+#
+
 #   - [N1]  NIMBLE compilation moved NFS→/Rtmp local disk (per-PID worker subdirs)
 #           Reason: acregmin=60,acdirmin=60 on NFS causes directory-cache races
 #           during concurrent compileNimble() in multi-chain MCMC via parLapply.
@@ -239,25 +262,56 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
       }, error = function(e) NULL)
     }
 
-    # v11.0 [N2]: Per-worker NIMBLE compile directory on /Rtmp (NOT NFS).
+    # v11.0 [N2] + v11.1 FIX: Per-worker NIMBLE compile directory on /Rtmp.
+    # CRITICAL CHANGE from v11.0:
+    # Previous version did: options(nimble.dirName = worker_nd) at profile load.
+    # Problem observed in production: options() is either reset or never applied
+    # for package-named options (e.g. 'nimble.dirName') when set inside the
+    # worker Rprofile. Verified empirically: the worker_<pid> dir IS created on
+    # disk, but getOption('nimble.dirName') returns NULL in clusterEvalQ.
+    # Root cause is not fully understood (suspected: PSOCK bootstrap sequence
+    # resets package-namespaced options, or setOption is lost when the worker
+    # transitions from profile-load to slave-serve loop).
+    #
+    # RELIABLE FIX: register a packageEvent("nimble", "onLoad") hook. The hook
+    # fires EXACTLY when require(nimble) is called inside the worker function,
+    # which is the moment when options(nimble.dirName = ...) actually matters.
+    # The dir is pre-created here so it's ready when the hook fires.
     nd <- Sys.getenv("BIOME_NIMBLE_DIR", "")
     if (nzchar(nd)) {
       worker_nd <- file.path(nd, paste0("worker_", Sys.getpid()))
       tryCatch(dir.create(worker_nd, recursive = TRUE, showWarnings = FALSE, mode = "0700"),
                error = function(e) NULL)
+      # Belt-and-suspenders: also try setting the option now (harmless if reset)
       if (dir.exists(worker_nd)) options(nimble.dirName = worker_nd)
+      # Primary defense: hook fires on require(nimble) / library(nimble)
+      setHook(packageEvent("nimble", "onLoad"), function(...) {
+        options(nimble.dirName = worker_nd)
+      }, action = "append")
+      # Also for nimbleHMC in case it's loaded without nimble first (unlikely)
+      setHook(packageEvent("nimbleHMC", "onLoad"), function(...) {
+        options(nimble.dirName = worker_nd)
+      }, action = "append")
     }
 
-    # v11.0 [N2]: Per-worker TMB compile directory on /Rtmp.
+    # v11.0 [N2] + v11.1 FIX: Per-worker TMB compile directory on /Rtmp.
+    # Same hook-based approach. TMB uses env var (TMB_COMPILE_DIR), not option,
+    # so Sys.setenv is the reliable path here — but we also re-assert on load.
     td <- Sys.getenv("BIOME_TMB_DIR", "")
     if (nzchar(td)) {
       worker_td <- file.path(td, paste0("worker_", Sys.getpid()))
       tryCatch(dir.create(worker_td, recursive = TRUE, showWarnings = FALSE, mode = "0700"),
                error = function(e) NULL)
       if (dir.exists(worker_td)) Sys.setenv(TMB_COMPILE_DIR = worker_td)
+      setHook(packageEvent("TMB", "onLoad"), function(...) {
+        Sys.setenv(TMB_COMPILE_DIR = worker_td)
+      }, action = "append")
+      setHook(packageEvent("glmmTMB", "onLoad"), function(...) {
+        Sys.setenv(TMB_COMPILE_DIR = worker_td)
+      }, action = "append")
     }
 
-    # v11.0 [N7]: Per-worker Stan compile directory on /Rtmp.
+    # v11.0 [N7] + v11.1 FIX: Per-worker Stan compile directory on /Rtmp.
     sd <- Sys.getenv("BIOME_STAN_DIR", "")
     if (nzchar(sd)) {
       worker_sd <- file.path(sd, paste0("worker_", Sys.getpid()))
@@ -270,6 +324,18 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
           cmdstanr_output_dir = worker_sd
         )
         Sys.setenv(STAN_TMPDIR = worker_sd)
+      }
+      # Re-assert on package load
+      for (pkg in c("rstan", "cmdstanr", "brms")) {
+        setHook(packageEvent(pkg, "onLoad"), local({
+          sd_captured <- worker_sd
+          function(...) {
+            options(rstan.auto_write = TRUE,
+                    brms.file_refit  = "on_change",
+                    cmdstanr_output_dir = sd_captured)
+            Sys.setenv(STAN_TMPDIR = sd_captured)
+          }
+        }), action = "append")
       }
     }
 
@@ -429,7 +495,7 @@ local({
   se$last_cgroup_check <- 0
   se$user_tmp_root <- USER_TMP_ROOT   # v11.0: stored early
   .biome_env$VERSION <- VERSION
-  .biome_env$API_VERSION <- 6L        # v11.0: bumped 5→6 (new env schema)
+  .biome_env$API_VERSION <- 7L        # v11.1: bumped 6→7 (setHook-based package routing)
   .biome_env$TMP_WARN_PCT <- TMP_WARN_PCT
   .biome_env$TMP_DISK_GB <- TMP_DISK_GB
   .biome_env$USER_TMP_ROOT <- USER_TMP_ROOT
