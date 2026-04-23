@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # --- RStudio Service (SSSD Backend) ---
   rstudio-sssd:

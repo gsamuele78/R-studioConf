@@ -1,62 +1,60 @@
 # Claude Agent Instructions — R-studioConf
 
-> **Purpose:** Optimized context file for Anthropic Claude (Claude 3.5 Sonnet / Opus) when working on this codebase.
-> **Usage:** Include this file in Claude's system prompt or upload as Project Knowledge.
+> **For:** Anthropic Claude (any version) working on this codebase.
+> **Load alongside:** `.ai/agents.md` — do not repeat what is in that file.
 
 ---
 
-## 1. Project Summary
+## Behavioral Directives
 
-**What:** Secure RStudio Server data science workspace, serving R over HTTP integrated with Active Directory.
+**Operator profile:** Single LPIC-3 sysadmin. Expert-level. Do NOT explain what `set -euo pipefail` does or what a bind mount is.
 
-**Stack:**
-- `rstudio-sssd` / `rstudio-samba` → RStudio Server data science nodes.
-- `nginx-portal` → Frontend UI and reverse proxy.
-- `oauth2-proxy` → OIDC Sidecar.
-- `ollama-ai` → Local LLM inference engine.
-- `telemetry-api` → Host metrics API.
-
-**Engineering paradigm:** Pessimistic System Engineering — assume failure, bound all resources, verify all trust chains, fail fast on misconfiguration.
+**Tendencies to suppress:**
+1. **Over-explaining** — Output code first. Rationale: 1–2 bullet points max, only for non-obvious constraint choices.
+2. **Apologizing** — Skip apology text. Provide the corrected artifact immediately.
+3. **Optimistic assumptions** — Assume the failure case. If a path might not exist, check. If a service might be down, handle it. Never assume the happy path.
+4. **Partial output** — NEVER produce "add this function to your script." Always output the complete file.
+5. **Suggesting alternatives** — The tech stack is final. Do NOT suggest Traefik, Jupyter, pthread BLAS, tmpfs for R temp, or Kubernetes unless explicitly asked.
 
 ---
 
-## Claude-Specific Behavioral Directives
+## Output Format Rules
 
-### Strengths & Weaknesses
-
-Claude excels at large-scale refactoring and understanding complex dependency chains, but has two distinct tendencies to watch out for:
-
-1. **Over-explaining:** Claude naturally wants to be pedagogical. In this project, the operator is an expert LPIC-3 sysadmin. Output code first. Keep explanations to 1-2 bullet points explaining *why* a constraint was applied.
-2. **Apologizing:** If Claude makes a mistake, it tends to output heavily apologetic text. Skip the apology; just provide the fixed code block.
-
-### Output Formatting
-
-When generating code for this project, Claude MUST follow these formats:
-
--   **Shell Scripts:** Never provide snippets like "replace this function." Always output the entire script file. This ensures `set -euo pipefail`, color variables, and imports remain intact.
--   **Docker Compose:** Output the complete service block. Include all mandatory fields (`deploy.resources.limits`, `healthcheck`, `logging`, `depends_on`). Never omit things with `# ... rest of config`.
--   **File Headers:** The first line of any code block MUST be a comment with the file path (e.g., `# docker-deploy/docker-compose.yml`).
+- **Shell scripts:** Complete file. Line 1: `#!/usr/bin/env bash`. Line 2: `set -euo pipefail`. Color vars present. No snippets.
+- **Docker Compose:** Complete service block. All mandatory fields: `deploy.resources.limits`, `healthcheck`, `logging`, `depends_on`. Never omit with `# ... rest of config`.
+- **File header:** First line of every code block MUST be a comment with the file path (e.g., `# docker-deploy/docker-compose.yml`).
+- **R config templates:** Reference `/Rtmp` for large temp storage, NOT `/tmp`.
 
 ---
 
-## Critical Constraints Checklist
+## Skills — Check Before Implementing
 
-Claude MUST verify these constraints before responding:
+This project has lazy-loaded skills in `.agents/skills/`. Check before implementing:
+- `compose-constraint-audit` → use when touching any `docker-compose.yml`
+- `script-safety-review` → use when creating or modifying any `.sh` file
+- `sandbox-test` → **SKIP — sandbox is currently BROKEN**
+
+---
+
+## Pre-Response Constraints Checklist
+
+Verify before every response touching infrastructure:
 
 ```
 □ Every container has deploy.resources.limits (memory + cpus)
 □ No named Docker volumes — bind mounts only
-□ Scripts begin with set -euo pipefail
-□ Passwords written to files, never passed as CLI arguments
-□ No runtime package installation (apk add, apt-get) in entrypoints
-□ All upstream images pinned to exact versions
+□ Scripts: #!/usr/bin/env bash + set -euo pipefail on line 2
+□ Passwords written to files, never as CLI arguments
+□ No runtime pkg install (apk add, apt-get) in entrypoints
+□ External images pinned to exact semver (botanical/* exempt — locally built)
 □ .env files not committed to git
 □ docker.sock never mounted directly — use docker-socket-proxy
 □ Deploy scripts exit 1 if chown/permission setup fails
 □ No external CDN calls in UI themes
-□ Use jq for JSON manipulation — never sed/awk on JSON
+□ Use jq for JSON — never sed/awk on JSON
+□ R temp storage → /Rtmp not /tmp
+□ BLAS → libopenblas0-serial not pthread
+□ Sandbox BROKEN → do not reference as validation path
+□ src/biome_core_rust DORMANT → do not activate
+□ Infra-Iam-PKI.backup → do not touch
 ```
-
----
-
-*End of Claude-specific instructions.*

@@ -5,57 +5,73 @@ description: Reviews shell scripts for safety and compliance with R-studioConf p
 
 # Script Safety Review Skill
 
-You are reviewing a shell script for the R-studioConf project.
+Reviewing a shell script for R-studioConf. Paradigm: **Pessimistic System Engineering** — assume failure, fail fast.
 
 ## Mandatory Checks
 
 ### 1. Error Handling (HC-03)
-- Second line MUST be `set -euo pipefail`
-- Shebang MUST be `#!/bin/bash`
+- Line 1 MUST be `#!/usr/bin/env bash`
+- Line 2 MUST be `set -euo pipefail`
 
 ### 2. Secret Safety (HC-04)
-- Passwords MUST be written to files via `printf "%s" "$VAR" > file`
+- Passwords MUST be written to temp files: `printf "%s" "$VAR" > file`
 - NEVER pass passwords as CLI arguments (`--password "$VAR"`)
-- NEVER `echo "$PASSWORD"` (leaks in process table)
+- NEVER `echo "$PASSWORD"` — leaks in process table
 - Use `--password-file` flags where available
 
 ### 3. Interactive Input Rules
-Check which category this script belongs to:
 
-**Container-internal (NEVER use read -p):**
-Any script executed as an entrypoint or internal daemon via Dockerfile `CMD`, `ENTRYPOINT`, or triggered by a container lifecycle hook.
-
-If the script is in this category and contains `read -p`, `read -rp`, or `read -s`, it WILL hang when run inside a Docker container. This is a **critical failure**.
+**Container-internal scripts (NEVER use `read -p`):**
+Any script run as a container entrypoint/CMD/ENTRYPOINT or triggered by a container lifecycle hook. If `read -p`, `read -rp`, or `read -s` appears — **CRITICAL FAILURE**: will hang without TTY.
 
 **Operator scripts (interactive allowed):**
-All other scripts in `scripts/` that are run by the sysadmin.
+All scripts in `scripts/` run by the sysadmin on the host. Examples: `10_join_domain_sssd.sh`, `50_setup_nodes.sh`, `test_rstudio_login.sh`.
 
 ### 4. Config Reading
 - CORRECT: `grep "^VAR=" .env | cut -d= -f2- | tr -d '"'`
-- WRONG: `source .env` (unsafe with special characters in passwords)
+- WRONG: `source .env` — unsafe with special characters in passwords
 
 ### 5. Path Resolution
 - MUST use: `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`
-- NEVER use `pwd` or hardcoded absolute paths
+- NEVER use bare `pwd` or hardcoded absolute paths
 
-### 6. Script Coupling
-Before modifying what a script READS or PRODUCES, check the dependency chain:
+### 6. Script Coupling — Dependency Chain
+
+Before modifying what a script READS or PRODUCES, trace the full chain:
 
 ```
+50_setup_nodes.sh
+  ├── lib/common_utils.sh
+  ├── config/setup_nodes.vars.conf
+  ├── templates/Rprofile_site.R.template → /etc/R/Rprofile.site
+  └── r_env_manager.sh configure_java_for_r()
+        └── /etc/biome-calc/profile.d/   (modular R config loader)
+              └── RStudio container session startup
+
 configure_rstudio.sh → .env → docker-deploy/docker-compose.yml → RStudio Container
+update_nginx_templates.sh → config/nginx/ → nginx-portal container
 ```
 
-Cross-check `.ai/agents.md` and `docs/reference/SCRIPT_CATALOG.md` before changing script inputs/outputs.
+Cross-check `.ai/agents.md §5` before changing script inputs/outputs.
 
 ### 7. Destructive Operations (HC-10)
 - Reset/destroy scripts MUST require explicit confirmation (`type 'yes'`)
 - Deploy scripts MUST `exit 1` if `chown` fails
-- Use colored output: GREEN (success), RED (error), YELLOW (warning), BLUE (info)
+- Color output: GREEN (success), RED (error), YELLOW (warning), BLUE (info)
 
 ### 8. JSON Manipulation (HC-12)
 - Use `jq` for ALL JSON operations
 - NEVER use `sed`, `awk`, or `grep` to modify JSON files
 - URL-encode credentials: `jq -nr --arg v "$VAR" '$v|@uri'`
+
+### 9. Storage References
+- For large R temp files: use `/Rtmp` (400GB ext4 disk), NOT `/tmp`
+- Do NOT reference `/tmp` for NIMBLE compilation or matrix scratch space
+
+### 10. BLAS References
+- Package to install: `libopenblas0-serial`
+- Package to remove: `libopenblas0-pthread` (causes SIGSEGV)
+- Detection script: `/etc/profile.d/biome-coretype.sh`
 
 ## Output Format
 

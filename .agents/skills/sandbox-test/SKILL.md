@@ -5,6 +5,11 @@ description: Guides testing changes in the Vagrant/libvirt sandbox environment. 
 
 # Sandbox Testing Skill
 
+> [!WARNING]
+> **SANDBOX IS NON-OPERATIONAL.** The Vagrant/libvirt environment is currently BROKEN.
+> Do NOT follow these steps. Use user/researcher testing against the production host instead.
+> See `.ai/agents.md §8` for the active testing protocol.
+
 You are helping test a change in the R-studioConf Vagrant sandbox.
 
 ## Topology

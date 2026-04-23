@@ -1,82 +1,67 @@
 # Gemini Agent Instructions — R-studioConf
 
-> **Purpose:** Optimized context file for Google Gemini when working on this codebase.
-> **Usage:** Include this file in Gemini's system instructions or as grounding context.
+> **For:** Google Gemini working on this codebase.
+> **Load alongside:** `.ai/agents.md` — project summary is there, not repeated here.
 
 ---
 
-## Gemini-Specific Behavioral Directives
+## Gemini-Specific Behavioral Corrections
 
 ### Grounding & Accuracy
+1. **Never hallucinate image names or versions.** Check `.ai/extracted_versions.env` for pinned external images. Local `botanical-*` images use `:latest` by convention — they are locally built, never pulled from a registry.
+2. **Never assume Docker Swarm mode.** Standalone Docker Compose v2 only.
+3. **Never suggest alternative tools** unless explicitly asked. RStudio, SSSD, Samba, Nginx, Ollama are final technology choices.
+4. **Never reference files that don't exist.** Ground all file references to the actual directory tree.
+5. **Never assume optimistic conditions.** If a path might not exist, check. If a service might be unavailable, handle it. Pessimistic System Engineering — assume failure.
 
-1. **Never hallucinate image names or versions.** The exact versions are extracted into `.github/copilot-instructions.md` by `generate.sh`. 
-2. **Never assume Docker Swarm mode.** This project uses standalone Docker Compose v2. 
-3. **Never suggest alternative tools** unless explicitly asked. The technology choices (RStudio, SSSD, Samba, Nginx, Ollama, Telemetry) are final.
-4. **Ground all file references** to the directory structure. If you reference a file, it must exist in that tree.
-
-### Response Format Preferences
-
-- **Code blocks:** Always include the full file path as a comment on line 1.
-- **Docker Compose changes:** Output the complete service block, not fragments. Gemini tends to omit `deploy:` and `healthcheck:` sections — these are MANDATORY here.
-- **Shell scripts:** Output the complete file. Never produce "add this to your script" snippets.
-
----
-
-## 1. Project Summary (Compact)
-
-**What:** Secure RStudio Server data science workspace.
-
-**Stack:**
-- `rstudio-sssd` / `rstudio-samba` → RStudio Server integrated with Active Directory.
-- `nginx-portal` → Frontend UI and reverse proxy.
-- `oauth2-proxy` → OIDC Sidecar.
-- `ollama-ai` → Local LLM inference engine.
-- `telemetry-api` → Host metrics API.
-
-**Engineering Philosophy:** Pessimistic System Engineering — assume failure; bound all resources; limit API exposures; fail fast on misconfigurations.
+### Output Format
+- **Code blocks:** Full file path as a comment on line 1.
+- **Docker Compose:** Complete service block. Gemini tends to omit `deploy:` and `healthcheck:` — these are MANDATORY.
+- **Shell scripts:** Complete file. Never produce "add this to your script" snippets.
+- **R config:** Reference `/Rtmp` for large temp storage, NOT `/tmp`.
 
 ---
 
-## 2. Critical Constraints Checklist
+## Common Gemini Mistakes on This Project
+
+| Mistake | Fix |
+|---|---|
+| Adding `version: "3.8"` to Compose | Omit `version:` key entirely (Compose v2) |
+| Using named volumes | `volumes: - ./data:/app/data` — bind mounts ONLY |
+| Omitting resource limits | ALWAYS: `deploy.resources.limits.memory` + `cpus` |
+| `docker-compose up` (hyphenated) | `docker compose up` (space) |
+| `/tmp` for R large temp files | Use `/Rtmp` (400GB ext4 disk) |
+| `libopenblas0-pthread` | Use `libopenblas0-serial` (pthread causes SIGSEGV) |
+| Referencing sandbox for validation | Sandbox BROKEN — use user/researcher testing |
+| Activating `src/biome_core_rust` | DORMANT — not deployed |
+
+---
+
+## Pre-Response Constraints Checklist
 
 ```
 □ Every container has deploy.resources.limits (memory + cpus)
 □ No named Docker volumes — bind mounts only
 □ Scripts begin with set -euo pipefail
-□ Passwords written to files, never passed as CLI arguments
+□ Passwords written to files, never as CLI arguments
 □ No runtime package installation in entrypoints
-□ All upstream images pinned to exact versions
+□ External images pinned to exact semver (botanical/* exempt)
 □ .env files not committed to git
 □ docker.sock never mounted directly — use docker-socket-proxy
 □ Deploy scripts exit 1 if chown/permission setup fails
 □ No external CDN calls in UI themes
-□ Use jq for JSON manipulation — never sed/awk on JSON
+□ Use jq for JSON — never sed/awk on JSON
+□ R temp → /Rtmp | BLAS → libopenblas0-serial
 ```
 
 ---
 
-## 3. Boot Sequence Constraints
+## Boot Sequence Constraints
 
-1. **docker-socket-proxy** MUST boot BEFORE telemetry API.
-2. **RStudio** startup must map tempfs directories and bind mounts correctly to Active Directory pipes.
-3. Init scripts (`01_optimize_system.sh`, `10_join_domain_*.sh`, etc.) run on the HOST out-of-band, not inside containers.
-
----
-
-## 4. Common Gemini Mistakes on This Project
-
-### Mistake 1: Generating compose files with `version: "3.8"`
-**Fix:** Omit the `version:` key entirely in Docker Compose V2.
-
-### Mistake 2: Using named volumes
-**Fix:** BIND MOUNTS ONLY. `volumes: - ./data:/app/data`
-
-### Mistake 3: Omitting resource limits
-**Fix:** ALWAYS define `deploy.resources.limits.memory` and `cpus`.
-
-### Mistake 4: Suggesting `docker-compose up` (hyphenated)
-**Fix:** ALWAYS use space-separated `docker compose up`.
+1. `docker-socket-proxy` MUST boot BEFORE `telemetry-api`.
+2. RStudio startup must map tmpfs dirs and bind mounts correctly to AD/SSSD pipes.
+3. Init scripts (`01_optimize_system.sh`, `10_join_domain_*.sh`, `50_setup_nodes.sh`) run on the HOST out-of-band, not inside containers.
 
 ---
 
-*End of Gemini-specific instructions. Cross-reference with agents.md.*
+*Cross-reference `.ai/agents.md` for full project architecture and constraint rationale.*

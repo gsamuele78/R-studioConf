@@ -20,10 +20,11 @@
 
 project:
   name: "R-studioConf"
-  version: "1.0.0"
+  version: "3.0.0"
   owner: "JFS — IT Officer (Funzionario Tecnico Informatico), BiGeA, Università di Bologna"
   paradigm: "Pessimistic System Engineering"
   paradigm_definition: "Assume failure. Bound all resources. Verify all trust chains. Fail fast on misconfiguration."
+  # Never assume happy path. Handle every failure mode explicitly.
 
   # Research context
   department: "BiGeA — Biological, Geological and Environmental Sciences"
@@ -141,6 +142,7 @@ script_categories:
       - "scripts/32_setup_letsencrypt.sh"
       - "scripts/40_install_telemetry.sh"
       - "scripts/50_setup_nodes.sh"
+      - "scripts/21_helper_rstudio_version.sh"
 
   client_portable:
     description: "Copied to remote hosts. Self-contained."
@@ -150,7 +152,17 @@ script_categories:
 # KNOWN BUGS / TECH DEBT
 # Do NOT fix without explicit instruction.
 # ──────────────────────────────────────────────────────────────
-known_issues: []
+known_issues:
+  - id: "KI-01"
+    component: "sandbox"
+    severity: "high"
+    description: "Vagrant/libvirt sandbox is BROKEN. Do not use for validation."
+    workaround: "User testing + researcher testing against production host."
+  - id: "KI-02"
+    component: "src/biome_core_rust"
+    severity: "info"
+    description: "Rust core library evaluated but DORMANT. Does not measurably speed up R code loading."
+    workaround: "Do not activate. Use existing shell/R toolchain."
 
 # ──────────────────────────────────────────────────────────────
 # BRANDING
@@ -168,15 +180,51 @@ branding:
   cdn_policy: "FORBIDDEN — all assets must be local/bundled"
 
 # ──────────────────────────────────────────────────────────────
+# R RUNTIME
+# Non-extractable architectural decisions for R environment.
+# These CANNOT be inferred from compose/Dockerfiles — maintain here.
+# ──────────────────────────────────────────────────────────────
+r_runtime:
+  blas:
+    package: "libopenblas0-serial"
+    banned: "libopenblas0-pthread"  # causes SIGSEGV with rsession pthread collision
+    detection_script: "/etc/profile.d/biome-coretype.sh"
+    rationale: "Serial BLAS has no internal thread pool. Eliminates thread contention with RStudio rsession."
+  tmp_storage:
+    path: "/Rtmp"
+    size_gb: 400
+    fstype: "ext4"
+    replaces: "tmpfs at /tmp (16G RAM-based — OOM on NIMBLE workloads)"
+    validated_by: "50_setup_nodes.sh Step 5"
+  config:
+    modular_dir: "/etc/biome-calc/profile.d/"
+    loader: "/etc/R/Rprofile.site"  # thin loader that sources profile.d/*.R
+    template: "templates/Rprofile_site.R.template"
+    deployed_by: "50_setup_nodes.sh"
+    audit_template: "templates/00_audit_v27.R.template"
+  workloads:
+    - "NIMBLE MCMC (Bayesian hierarchical models)"
+    - "Geospatial analysis (sf, terra, raster)"
+    - "Large-scale matrix statistics (OpenBLAS)"
+  session_resilience:
+    nginx_proxy_read_timeout: "extended for long-running R sessions"
+    nginx_client_max_body_size: "extended for large workspace payloads (100MB+)"
+    crash_pattern: "Error code 4 — browser OOM from massive session state"
+    forensics_script: "scripts/99_postmortem_forensics.sh"
+
+# ──────────────────────────────────────────────────────────────
 # SANDBOX TOPOLOGY
+# STATUS: BROKEN — do not use for validation
 # ──────────────────────────────────────────────────────────────
 sandbox:
+  status: "BROKEN"
   provider: "Vagrant + libvirt/KVM"
   network: "192.168.56.0/24"
+  testing_protocol: "user testing + researcher testing against production host"
   hosts:
     - name: "rstudio-host"
       ip: "192.168.56.40"
       ram: 4096
       cpus: 4
       compose: "docker-deploy/docker-compose.yml"
-      note: "Uses docker-deploy setup with .env.sandbox overrides"
+      note: "Uses docker-deploy setup with .env.sandbox overrides — currently non-operational"
