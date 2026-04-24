@@ -1836,22 +1836,22 @@ local({
         sys_log("Callback", "OK", "Non-RStudio immediate fallback executed")
       }, error = function(e2) sys_log("ImmediateFallback", "FAIL", e2$message))
     }
+  })
+
+  # 2. GUARANTEED FALLBACK for Terminal and Rscript
+  # This runs immediately if we are NOT in RStudio, OR if we are running 
+  # a non-interactive batch script (like Rscript Mod7.R).
+  is_rstudio <- nzchar(Sys.getenv("RSTUDIO", "")) || 
+                nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", ""))
+  
+  if (!is_rstudio || !interactive()) {
+    tryCatch({
+      deferred_pkg_init()
+      deferred_pkg_hooks()
+      update_resources(quiet = TRUE)
+      sys_log("Callback", "OK", "Terminal/Rscript immediate initialization executed")
+    }, error = function(e) sys_log("ImmediateFallback", "FAIL", e$message))
   }
-    # 2. GUARANTEED FALLBACK for Terminal and Rscript
-    # This runs immediately if we are NOT in RStudio, OR if we are running 
-    # a non-interactive batch script (like Rscript Mod7.R).
-    is_rstudio <- nzchar(Sys.getenv("RSTUDIO", "")) || 
-                  nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", ""))
-    
-    if (!is_rstudio || !interactive()) {
-      tryCatch({
-        deferred_pkg_init()
-        deferred_pkg_hooks()
-        update_resources(quiet = TRUE)
-        sys_log("Callback", "OK", "Terminal/Rscript immediate initialization executed")
-      }, error = function(e) sys_log("ImmediateFallback", "FAIL", e$message))
-    }
-  )
 
 
 
