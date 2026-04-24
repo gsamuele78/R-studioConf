@@ -1263,7 +1263,8 @@ local({
     # ══════════════════════════════════════════════════════════════════════
     if (ENABLE_PARALLEL_GUARD && !exists("original_makeCluster", envir = .biome_env)) tryCatch({
       safe_makeCluster <- function(spec,
-                                    type = parallel:::getClusterOption("type"),
+                                    type = tryCatch(parallel:::getClusterOption("type"),
+                                                    error = function(e) "PSOCK"),
                                     ...) {
         # Only warn for PSOCK (default) — FORK/MPI have their own issues
         if ((missing(type) || type == "PSOCK") && interactive()) {
@@ -2009,6 +2010,73 @@ local({
         .C_RESET), workers))
       return(invisible("cluster"))
     }
+  }, envir = tool_env)
+
+  # v11.4 [W14]: cluster self-test — verifies fast-path, /Rtmp, thread caps.
+  # Use to diagnose unserialize/connection errors before running real MCMC.
+  # Sys.setenv(BIOME_WORKER_DEBUG="1") before calling to get per-worker logs.
+  assign("biome_cluster_test", function(workers = 2L) {
+    workers <- max(1L, as.integer(workers))
+    cat(sprintf("  Testing biome_make_cluster(%d)...\n", workers))
+    cl <- tryCatch(
+      biome_make_cluster(workers = workers, worker_threads = 1L),
+      error = function(e) {
+        cat(sprintf("  [FAIL] Could not create cluster: %s\n", e$message))
+        return(NULL)
+      }
+    )
+    if (is.null(cl)) return(invisible(FALSE))
+    on.exit(tryCatch(parallel::stopCluster(cl), error = function(e) NULL), add = TRUE)
+
+    results <- tryCatch(
+      parallel::clusterCall(cl, function() {
+        list(
+          pid          = Sys.getpid(),
+          tempdir      = tempdir(),
+          worker_mode  = Sys.getenv("BIOME_WORKER_MODE", "NOT_SET"),
+          omp_threads  = Sys.getenv("OMP_NUM_THREADS",   "NOT_SET"),
+          blas_threads = Sys.getenv("OPENBLAS_NUM_THREADS", "NOT_SET"),
+          rtmp_ok      = dir.exists("/Rtmp"),
+          profile_fast = isTRUE(getOption("biome.profile.loaded")),
+          # XDR check: parallelly uses FALSE (little-endian), base uses TRUE
+          r_version    = paste0(R.version$major, ".", R.version$minor),
+          detected_by  = {
+            args <- commandArgs(trailingOnly = TRUE)
+            if (any(grepl("^MASTER=", args))) "commandArgs" else
+            if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) "env_var" else
+            "NEITHER — full profile loaded (BUG)"
+          }
+        )
+      }),
+      error = function(e) {
+        cat(sprintf("  [FAIL] clusterCall failed: %s\n", e$message))
+        NULL
+      }
+    )
+
+    if (is.null(results)) return(invisible(FALSE))
+
+    all_ok <- TRUE
+    for (i in seq_along(results)) {
+      r <- results[[i]]
+      ok <- r$profile_fast && r$rtmp_ok &&
+            r$worker_mode == "1" &&
+            r$omp_threads == "1" &&
+            !grepl("BUG", r$detected_by)
+      status <- if (ok) "[OK]  " else "[WARN]"
+      if (!ok) all_ok <- FALSE
+      cat(sprintf("  %s Worker %d | pid=%d | detected_by=%s | fast_path=%s | /Rtmp=%s | omp=%s\n",
+          status, i, r$pid, r$detected_by,
+          r$profile_fast, r$rtmp_ok, r$omp_threads))
+    }
+
+    if (all_ok) {
+      cat("  All workers passed. biome_make_cluster() is functioning correctly.\n")
+    } else {
+      cat("  WARNING: one or more workers did not take the fast path.\n")
+      cat("  Re-run with Sys.setenv(BIOME_WORKER_DEBUG='1') for per-worker logs in /tmp/.\n")
+    }
+    invisible(all_ok)
   }, envir = tool_env)
 
   # v11.0 [N10]: Worker log diagnostics
