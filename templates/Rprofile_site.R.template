@@ -385,17 +385,27 @@ local({
 # interactive rsession — NOT for ephemeral compute workers.
 #
 # When the parent creates PSOCK workers (via biome_make_cluster), it sets:
-#   BIOME_WORKER_MODE=1          — triggers this fast path
+#   BIOME_WORKER_MODE=1          — injected via rscript_envs → -e Sys.setenv()
+#                                  (arrives AFTER profile loads — see W13 fix)
 #   BIOME_WORKER_THREADS=<n>     — per-worker BLAS/OMP thread limit
-#   BIOME_NIMBLE_DIR=<path>      — parent's nimble scratch root (v11.0)
-#   BIOME_TMB_DIR=<path>         — parent's TMB scratch root (v11.0)
 #   BIOME_STAN_DIR=<path>        — parent's Stan scratch root (v11.0)
+#
+# [W13] Fast path is also triggered by commandArgs() MASTER= detection so that
+# bare parallel::makeCluster() workers (which never receive BIOME_WORKER_MODE)
+# and any parallelly worker on any R version also take the fast path.
 #
 # The fast path applies thread limits, creates per-PID compile subdirs,
 # sets nimble.dirName/TMB_COMPILE_DIR, and returns. No task callbacks, no
 # memory guards, no AI — workers are lean.
 # ══════════════════════════════════════════════════════════════════════════════
-if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+# v11.4-fix [W13]: parallelly::makeClusterPSOCK passes rscript_envs as
+# `-e Sys.setenv(...)` args, which execute AFTER Rprofile.site loads.
+# BIOME_WORKER_MODE=1 therefore arrives too late for the env-var check alone.
+# Fallback: PSOCK workers always have MASTER= in commandArgs(trailingOnly=TRUE)
+# (OS-level --args flag, present before any -e runs). Bare parallel::makeCluster
+# workers are caught the same way. Both paths now correctly take the fast path.
+.biome_is_psock_worker <- any(grepl("^MASTER=", commandArgs(trailingOnly = TRUE)))
+if (nzchar(Sys.getenv("BIOME_WORKER_MODE", "")) || .biome_is_psock_worker) {
   # ════════════════════════════════════════════════════════════════════════════
   # WORKER MODE FAST PATH
   # ════════════════════════════════════════════════════════════════════════════
@@ -467,9 +477,10 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
     if (nzchar(Sys.getenv("BIOME_WORKER_DEBUG", ""))) {
       tryCatch({
         log_path <- file.path("/tmp", paste0("biome_worker_", Sys.getpid(), ".log"))
-        cat(sprintf("[%s] BIOME worker fast-path v11.2 loaded | pid=%d | tempdir=%s | blas_threads=%s\n",
+        detected_by <- if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) "BIOME_WORKER_MODE" else "commandArgs(MASTER=)"
+        cat(sprintf("[%s] BIOME worker fast-path v11.4 loaded | pid=%d | tempdir=%s | blas_threads=%s | detected_by=%s\n",
                     format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-                    Sys.getpid(), tempdir(), wt),
+                    Sys.getpid(), tempdir(), wt, detected_by),
             file = log_path, append = TRUE)
       }, error = function(e) NULL)
     }
@@ -1828,7 +1839,7 @@ local({
     # (e.g. Martina's batch MCMC runs) would get zero guards if
     # addTaskCallback ever failed.
     is_rstudio <- nzchar(Sys.getenv("RSTUDIO", "")) ||
-                  identical(Sys.getenv("RSTUDIO_USER_IDENTITY"), "")
+                  nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", ""))
     if (!is_rstudio) {
       tryCatch({
         deferred_pkg_init()
