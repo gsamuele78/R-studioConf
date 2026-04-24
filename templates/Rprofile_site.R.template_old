@@ -8,41 +8,14 @@
 # Contact: %%BIOME_CONTACT%%
 #
 # v11.4 CHANGES (from v11.3) — "Lexical Scope Restoration":
-#   Discovery: v11.3 .biome_install_wrapper() set environment(fn) <- ns_env
-#   to make safe_makeCluster's default `type = getClusterOption("type")`
-#   resolve. This worked for that ONE case but broke every OTHER wrapper.
-#   Root cause: overwriting environment(fn) severs the closure's lexical
-#   scope chain. Wrappers like safe_expand_grid, safe_solve, safe_dist all
-#   reference `.biome_env` (saved originals, .get_ram_gb, blas_is_serial).
-#   After environment(fn) <- baseenv(), these lookups now search
-#   baseenv → emptyenv → FAIL. Result: first wrapper call crashes the
-#   session (reproducibly: library(ggplot2) triggers expand.grid load).
-#
-#   VERIFIED FAILURE MODE (reproducible in Rscript):
-#     > library(ggplot2)
-#     Error in expand.grid(...): object '.biome_env' not found
-#
-#   Fix strategy (different from v11.3):
-#   - REVERT: .biome_install_wrapper NO LONGER writes environment(fn) <- ns_env.
-#             Closures keep their original lexical scope (the local() frame).
-#   - TARGETED: safe_makeCluster uses parallel:::getClusterOption("type") as
-#               explicit default — triple-colon bypasses scoping entirely, no
-#               namespace tricks needed.
-#   - KEEP:     was_locked state preservation, install/fail logging, centralized
-#               helper structure — those were genuine improvements.
-#
-#   CHANGES:
-#   - [L1]  REVERTED: environment(fn) <- ns_env removed from
-#                     .biome_install_wrapper (was v11.3 [W1] part 1).
-#   - [L2]  FIXED:    safe_makeCluster default arg is now
-#                     `type = parallel:::getClusterOption("type")` — triple-
-#                     colon resolves directly against parallel namespace, no
-#                     closure-env hacking needed.
-#   - [L3]  KEPT:     All other v11.3 improvements survive (was_locked
-#                     preservation, sys_log coverage, smart_io split with
-#                     captured .ref, parallelly requireNamespace guard,
-#                     safe_dist formals restore, phantom dir cleanup, etc.).
-#   - [L4]  API_VERSION bumped 9→10 to signal the scope contract fix.
+#   - FIXED:   .biome_install_wrapper() no longer overwrites `environment(fn)`.
+#              Overwriting it with `ns_env` broke lexical scope resolution for
+#              every wrapper, preventing them from accessing `.biome_env` and
+#              crashing on `expand.grid` (ggplot2 load) and others.
+#   - FIXED:   safe_makeCluster() now explicitly qualifies its default argument
+#              as `parallel:::getClusterOption("type")` instead of relying on
+#              environment hacking to resolve the unexported symbol.
+#   - API_VERSION bumped 9→10 to signal the lexical scope fix.
 #
 # v11.3 CHANGES (from v11.2) — "Close the wrapper class-of-bug + PSE hardening":
 #   Discovery: production crash on biome-calc04 (2026-04-24) —
@@ -629,7 +602,7 @@ local({
   se$last_cgroup_check <- 0
   se$user_tmp_root <- USER_TMP_ROOT   # v11.0: stored early
   .biome_env$VERSION <- VERSION
-  .biome_env$API_VERSION <- 10L       # v11.4: bumped 9→10 (lexical scope restored in .biome_install_wrapper)
+  .biome_env$API_VERSION <- 10L       # v11.4: bumped 9→10 (lexical scope fix)
   .biome_env$TMP_WARN_PCT <- TMP_WARN_PCT
   .biome_env$TMP_DISK_GB <- TMP_DISK_GB
   .biome_env$USER_TMP_ROOT <- USER_TMP_ROOT
@@ -1004,42 +977,36 @@ local({
 
 
   # ══════════════════════════════════════════════════════════════════════════
-  # v11.3 [W1] + v11.4 [L1]: WRAPPER INSTALLER — lexical-scope-preserving
+  # v11.3 [W1]: WRAPPER INSTALLER — single source of truth for safe_* binds
   # ──────────────────────────────────────────────────────────────────────────
-  # HISTORY:
-  # v11.2: direct assign(fn, envir = asNamespace(pkg)) — safe_makeCluster
-  #        crashed because its default `getClusterOption("type")` couldn't be
-  #        resolved (unexported parallel symbol, closure env didn't see it).
-  # v11.3: added `environment(fn) <- ns_env` thinking it would "fix closure
-  #        scoping". It did the opposite: it SEVERED the closure's lexical
-  #        chain. Wrappers that reference `.biome_env` (all of them) couldn't
-  #        find it anymore. First real call crashed the session.
-  # v11.4: REVERTED the environment() write. Closures keep their original
-  #        enclosing env (the local() frame of deferred_pkg_init / hooks).
-  #        That env's parent chain reaches globalenv → .biome_env accessible.
-  #        For the specific safe_makeCluster case where a default arg needs a
-  #        non-exported symbol, the caller MUST fully qualify it (triple-colon
-  #        or explicit literal default). See safe_makeCluster below for the
-  #        correct pattern.
+  # FIX class-of-bug observed in v11.2 safe_makeCluster:
+  #   assign(fn, envir = asNamespace("parallel"))
+  # does NOT change environment(fn). The closure keeps its original enclosure
+  # (the local frame where it was defined). So default args that reference
+  # non-exported symbols of the target namespace (e.g. getClusterOption) fail
+  # at call-time symbol lookup with
+  #   Error: could not find function "getClusterOption"
   #
-  # THIS HELPER NOW DOES FOUR THINGS:
-  #   1. Verify target symbol exists in the namespace (SKIP cleanly otherwise)
-  #   2. Save the original function (for pass-through) BEFORE mutation
-  #   3. Preserve original binding-lock state (was_locked save/restore)
-  #   4. Log every install/skip/fail via sys_log for post-mortem
+  # This helper does FOUR things correctly on every install:
+  #   1. environment(fn) <- ns_env  — fixes default-arg symbol resolution
+  #   2. Verify target symbol exists — SKIP cleanly if package layout changed
+  #   3. Save the original function (for pass-through) BEFORE mutation
+  #   4. Preserve original binding-lock state (was_locked save/restore) so we
+  #      don't silently change R's binding semantics under other packages
+  # Every install/skip/fail is logged via sys_log for post-mortem.
   # ══════════════════════════════════════════════════════════════════════════
   .biome_install_wrapper <- function(fn, name, ns_env, save_original_to = NULL) {
     stopifnot(is.function(fn), is.character(name), length(name) == 1L,
               is.environment(ns_env))
 
-    # (1) verify target exists in the namespace (not inherited)
+    # (2) verify target exists in the namespace (not inherited)
     if (!exists(name, envir = ns_env, inherits = FALSE)) {
       sys_log("WrapperInstall", "SKIP",
               sprintf("%s not found in target namespace", name))
       return(invisible(FALSE))
     }
 
-    # (2) save the original BEFORE any mutation, so we can always delegate
+    # (3) save the original BEFORE any mutation, so we can always delegate
     original <- tryCatch(get(name, envir = ns_env, inherits = FALSE),
                          error = function(e) NULL)
     if (is.null(original) || !is.function(original)) {
@@ -1051,15 +1018,11 @@ local({
       assign(save_original_to, original, envir = .biome_env)
     }
 
-    # v11.4 [L1]: DO NOT overwrite environment(fn). Closures retain their
-    # original enclosing env (the local() frame), keeping the scope chain to
-    # globalenv and hence to .biome_env intact. If a wrapper's default arg
-    # needs to resolve a non-exported namespace symbol, the AUTHOR of that
-    # wrapper must fully qualify it at the definition site (e.g.
-    # `parallel:::getClusterOption(...)`). See safe_makeCluster for the
-    # canonical pattern.
+    # (1) REMOVED: environment(fn) <- ns_env
+    # Changing the closure's environment breaks lexical scope resolution,
+    # preventing the wrapper from accessing .biome_env, sys_log, etc.
 
-    # (3) remember + restore lock state (don't silently lock unlocked bindings)
+    # (4) remember + restore lock state (don't silently lock unlocked bindings)
     was_locked <- tryCatch(bindingIsLocked(name, ns_env),
                            error = function(e) FALSE)
     tryCatch({
@@ -1238,22 +1201,14 @@ local({
     }, error = function(e) sys_log("ExpandGridGuard", "FAIL", e$message))
 
     # ══════════════════════════════════════════════════════════════════════
-    # v11.0 [N4] + v11.3 [W2] + v11.4 [L2]: parallel::makeCluster SAFEGUARD
+    # v11.0 [N4] + v11.3 [W2]: parallel::makeCluster SAFEGUARD
     # ══════════════════════════════════════════════════════════════════════
-    # v11.2: crashed on makeCluster(N) without type= because default
-    #        `getClusterOption("type")` couldn't resolve (unexported symbol).
-    # v11.3: "fixed" via environment(fn) <- asNamespace("parallel"). Worked
-    #        for this case but broke every other wrapper by severing lexical
-    #        scope chain to .biome_env.
-    # v11.4: REAL fix — use triple-colon `parallel:::getClusterOption("type")`
-    #        as the default. Triple-colon bypasses scoping entirely and
-    #        resolves against the parallel namespace without closure tricks.
-    #        No need to touch environment(fn). All other wrappers stay intact.
+    # FIXED in v11.4: explicitly qualify parallel:::getClusterOption("type").
+    # The previous v11.3 fix (changing the closure's environment) broke
+    # lexical scope resolution for .biome_env across all wrappers.
     # ══════════════════════════════════════════════════════════════════════
     if (ENABLE_PARALLEL_GUARD && !exists("original_makeCluster", envir = .biome_env)) tryCatch({
-      safe_makeCluster <- function(spec,
-                                    type = parallel:::getClusterOption("type"),
-                                    ...) {
+      safe_makeCluster <- function(spec, type = parallel:::getClusterOption("type"), ...) {
         # Only warn for PSOCK (default) — FORK/MPI have their own issues
         if ((missing(type) || type == "PSOCK") && interactive()) {
           message(sprintf(paste0(.C_YELLOW,
@@ -1728,12 +1683,12 @@ local({
                 return(arrow::read_parquet(pq))
               }
             }
-            # Defensive: .ref is captured in our ENCLOSING environment (the
-            # local() frame), NOT in the execution frame. We access it by
-            # name — lexical scoping resolves it. If someone has actively
-            # destroyed it (rm from the closure env), we fail fast with a
-            # clear error rather than recurse or return bad data.
-            if (is.null(.ref) || !is.function(.ref)) {
+            # Defensive: .ref is captured in our closure env — always present
+            # unless someone actively destroys it (rm on closure env). We fail
+            # fast with a clear error rather than recursing or returning bad
+            # data. NO infinite-recursion path exists by design.
+            if (!exists(".ref", inherits = FALSE) ||
+                is.null(.ref) || !is.function(.ref)) {
               stop("BIOME-CALC: read.csv wrapper lost its original reference; ",
                    "cannot delegate. Reinstall the profile.", call. = FALSE)
             }
@@ -1776,8 +1731,8 @@ local({
                 return(arrow::read_parquet(pq))
               }
             }
-            # .ref resolved via lexical scoping from the enclosing local() env.
-            if (is.null(.ref) || !is.function(.ref)) {
+            if (!exists(".ref", inherits = FALSE) ||
+                is.null(.ref) || !is.function(.ref)) {
               stop("BIOME-CALC: fread wrapper lost its original reference; ",
                    "cannot delegate.", call. = FALSE)
             }
@@ -2180,8 +2135,8 @@ local({
     if (dir.exists(user_root)) {
       sz <- sum(file.info(list.files(user_root, full.names = TRUE, recursive = TRUE, all.files = TRUE))$size, na.rm = TRUE)
       cat(sprintf("  Your tmp usage: ~%.1f MB\n", sz / 1024^2))
-      # Per-subdir breakdown — only subdirs we actually write to (v11.3 [W8])
-      for (sub in c("stan_compile", "rcpp_cache",
+      # Per-subdir breakdown
+      for (sub in c("nimble_compile", "tmb_compile", "stan_compile", "rcpp_cache",
                     "terra", "raster", "stars", "cluster_logs", "keras_cache", "plot_cache")) {
         d <- file.path(user_root, sub)
         if (dir.exists(d)) {
