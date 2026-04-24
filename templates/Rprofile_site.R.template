@@ -2030,6 +2030,10 @@ local({
 
     results <- tryCatch(
       parallel::clusterCall(cl, function() {
+        # R 4.5+: explicit attach suppresses serialize() 'utils may not be
+        # available' warnings — utils is always present but not always attached
+        # at the exact moment clusterCall's closure is deserialized.
+        requireNamespace("utils", quietly = TRUE)
         list(
           pid          = Sys.getpid(),
           tempdir      = tempdir(),
