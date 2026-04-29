@@ -1,5 +1,4 @@
 # this code runs model 7 for the Foreste Casentinesi
-# Modified: Fixed PSOCK cluster serialization issues by removing compileNimble()
 
 library(splines)
 library(fields)
@@ -20,7 +19,7 @@ library(MCMCvis)
 # for CV
 library(scoringRules)
 
-setwd("/nfs/home/gianfranco.samuele2/test_Martina")
+setwd("BECAUSE")
 # avoid deleting the following objects: 'bash_script', 'check_quota', .Last.value (?)
 
 to_del <- ls()
@@ -151,17 +150,17 @@ N_post * n_chains # 20e3
 library(parallel)
 
 
-# FIX for PSOCK cluster serialization issues:
-# - Define function BEFORE cluster creation
-# - Use PSOCK explicitly instead of FORK
-# - Load libraries on all workers via clusterEvalQ
-# - Export all required objects to workers
-# - Remove compileNimble() to avoid serialization of compiled C++ code
-# Note: Using uncompiled MCMC is slower but avoids serialization errors
+# example borrowed from https://r-nimble.org/nimbleExamples/parallelizing_NIMBLE.html
+# the idea is to run nchains independent processes. To ensure independence, the whole procedure to create and run the model
+# is divided in independent runs
 
-# IMPORTANT: Define run_MCMC_allcode BEFORE creating the cluster so it can be exported
-# function for running independent processes - modified to avoid compileNimble()
-# This prevents serialization errors with PSOCK clusters
+detectCores() # 24
+
+N_cluster <- makeCluster(4, type = "FORK", outfile = "cluster_log.txt")
+
+# function for running independent processes - I modified the code related to wid_aic to have more control on whether waic should be computed or not
+# notice that waic is not used to compare model formulations - waic it evaluates model performance in the parameter space
+
 run_MCMC_allcode <- function(seed, data, code, constants, inits, niter, nburnin, thin = 1, smmry = T, wid_aic = F) {
   require(nimble)
   require(nimbleHMC)
@@ -186,50 +185,35 @@ run_MCMC_allcode <- function(seed, data, code, constants, inits, niter, nburnin,
   # build
   myMCMC <- buildMCMC(myConfig)
 
-  # IMPORTANT: Do NOT compile with compileNimble() when using PSOCK clusters
-  # Compiled C++ objects cannot be serialized across PSOCK workers
-  # Using uncompiled MCMC is slower but avoids serialization errors
-  # CmyModel <- compileNimble(myMCMC, myModel)
+  # compile
+  CmyModel <- compileNimble(myMCMC, myModel)
 
-  results <- runMCMC(myMCMC,
+  # if(useWAIC)
+  #  monitors <- myModel$getParents(myModel$getNodeNames(dataOnly = TRUE), stochOnly = TRUE)
+  ## One may also wish to add additional monitors
+  # CmyMCMC <- compileNimble(myMCMC)
+
+  results <- runMCMC(CmyModel$myMCMC,
     niter = niter, nburnin = nburnin, thin = thin, nchains = 1, inits = inits[[seed]],
     summary = smmry, WAIC = wid_aic, setSeed = seed
   )
 
-  rm(myModel, myConfig, myMCMC)
+  rm(myModel, myConfig, myMCMC, CmyModel)
 
   gc()
 
+
   return(results)
 }
-
-detectCores() # 24
-
-# Changed from FORK to PSOCK for better compatibility
-N_cluster <- makeCluster(4, type = "PSOCK", outfile = "cluster_log.txt")
-
-# Load required libraries on all worker nodes
-clusterEvalQ(N_cluster, {
-  library(nimble)
-  library(nimbleHMC)
-  NULL # Return something serializable
-})
-
-# Export all required objects to workers (including run_MCMC_allcode which is now defined above)
-clusterExport(N_cluster, varlist = c(
-  "run_MCMC_allcode", "nimble_code7_10var", "data_mod", "constants", "init_list",
-  "N_tot_iter", "N_burn", "N_thin"
-), envir = environment())
 
 
 # Note that you may get some warnings because we didn't initialize log_V where Z = 1.
 
 st_process <- proc.time()
 
-# Verify function is available on workers
-clusterEvalQ(N_cluster, exists("run_MCMC_allcode"))
-
+clusterExport(N_cluster, varlist = c("run_MCMC_allcode"), envir = environment())
 # run the MCMC
+
 chain_output <- parLapply(
   cl = N_cluster, X = 1:4,
   fun = run_MCMC_allcode,
@@ -237,10 +221,15 @@ chain_output <- parLapply(
   niter = N_tot_iter, nburnin = N_burn, thin = N_thin
 )
 
+clusterEvalQ(N_cluster, exists("run_MCMC_allcode"))
+
+
 # It's good practice to close the cluster when you're done with it.
 stopCluster(N_cluster)
 
+
 elapsed <- proc.time() - st_process
+
 
 # 18 ore
 

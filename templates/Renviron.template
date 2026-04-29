@@ -1,0 +1,87 @@
+# =============================================================================
+# BIOME-CALC /etc/R/Renviron.site
+# Phase: interim (v11.4 + cgroup migration in progress)
+# Topology: 4 RStudio servers, $HOME on shared NFS via 1 Gbps link
+# Last updated: 2026-04-27
+# =============================================================================
+
+# ── Library Paths ──
+# R Library Paths
+R_LIBS_SITE=/usr/local/lib/R/site-library/:${R_LIBS_SITE}:/usr/lib/R/library
+
+# OpenBLAS CORETYPE — NOT set here (migration-safe design).
+# Detected dynamically by OS-level wrappers BEFORE R starts:
+#   1. /etc/profile.d/biome-coretype.sh (for terminal R sessions)
+#   2. /etc/rstudio/rsession-profile (for RStudio Server web sessions)
+# This prevents OpenBLAS illegal opcode crashes by evaluating the CPU
+# directly from bash before libopenblas.so is dynamically loaded.
+
+# ── Library Paths ──
+# /usr/lib/R/site-library is LOCAL (apt-managed, bspm installs here)
+# User libraries (~/R/...) are on NFS — unavoidable, packages dlopen across NFS
+#R_LIBS_SITE=/usr/local/lib/R/site-library/:/usr/lib/R/library
+
+# ── Temporary Storage ──
+# CRITICAL: /Rtmp must be LOCAL on every server (verify with: df -T /Rtmp)
+# All R temp activity stays local; never crosses NFS.
+TMPDIR=/Rtmp
+TMP=/Rtmp
+TEMP=/Rtmp
+R_TEMPDIR=/Rtmp
+
+# ── BLAS Threading ──
+OPENBLAS_NUM_THREADS=1
+MKL_NUM_THREADS=1
+
+# ── OpenMP Threading ──
+OMP_NUM_THREADS=8
+
+# ── Python ──
+RETICULATE_PYTHON=/opt/biome-py/bin/python
+EARTHENGINE_PYTHON=/opt/biome-py/bin/python
+
+# Compilation flags
+_R_CHECK_COMPILATION_FLAGS_KNOWN_='-Wformat -Werror=format-security -Wdate-time'
+
+
+# ── TensorFlow ──
+TF_CPP_MIN_LOG_LEVEL=2
+CUDA_VISIBLE_DEVICES=-1
+TF_NUM_INTRAOP_THREADS=4
+TF_NUM_INTEROP_THREADS=2
+TF_ENABLE_ONEDNN_OPTS=1
+TF_XLA_FLAGS=--tf_xla_cpu_global_jit
+
+# ── Keras (NFS-aware) ──
+# DO NOT set KERAS_HOME to /Rtmp/keras — that's local-per-server and causes
+# multi-GB model re-downloads when the same user moves between RStudio servers.
+# Default ($HOME/.keras on NFS) means: download once, use on any server.
+# First load after server restart = 5-10s NFS read; subsequent = page-cached fast.
+KERAS_BACKEND=tensorflow
+
+# ── Spatial Libraries ──
+# GDAL: bounded threads (cgroup will throttle later regardless)
+GDAL_NUM_THREADS=4
+
+# CPL_TMPDIR: local /Rtmp (GDAL scratch on rasterize/warp ops — keeps off NFS)
+CPL_TMPDIR=/Rtmp
+
+# PROJ network grid downloads: ON.
+# Cache is in $HOME/.local/share/proj (NFS) — shared across all 4 servers,
+# so one warmup populates for everyone. Cost: first-use download ~5MB per grid.
+PROJ_NETWORK=ON
+
+# ── Arrow ──
+ARROW_DEFAULT_MEMORY_POOL=system
+
+# ── Fonts ──
+FONTCONFIG_PATH=/etc/fonts
+
+# ── R session behaviour ──
+# CRAN mirror: per-install bandwidth cost is real on shared 1 Gbps.
+# Consider deploying a local Posit Package Manager mirror eventually.
+R_REPOS=https://cloud.r-project.org
+
+# DO NOT set R_INSTALL_STAGED=TRUE — atomic rename on NFS is expensive
+# and can collide if multiple users install on multiple servers simultaneously.
+# Default behaviour is correct here.

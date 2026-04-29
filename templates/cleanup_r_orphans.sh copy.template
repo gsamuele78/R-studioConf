@@ -88,9 +88,6 @@ is_excluded() {
     for EXCL in "${EXCLUDE_PATTERNS[@]}"; do
         if echo "$CMD" | grep -qi "$EXCL"; then return 0; fi
     done
-    # v4.7: Explicitly exclude R PSOCK cluster workers (parallel:::.workRSOCK, parallel:::.slaveRSOCK)
-    # These are legitimate parallel processing workers, not orphaned processes
-    if echo "$CMD" | grep -qE 'parallel:::\.(workRSOCK|slaveRSOCK)'; then return 0; fi
     return 1
 }
 
