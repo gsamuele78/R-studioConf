@@ -411,9 +411,17 @@ run_MCMC_allcode_debug <- function(seed, data, code, constants, inits, niter, nb
     sink(type = "message")
     sink(type = "output")
     close(log_con)
+    worker_file_log <- paste0(worker_log_dir, "/worker_", seed, "_debug.log")
+
+    cat("\n")
+    cat("================================================================================\n")
+    cat("Log files: ", worker_file_log, "\n")
+    cat("================================================================================\n")
+    cat("\n")
+
 
     # Copy and rename the log file to the worker log directory
-    file.copy(from = log_file, to = paste0(worker_log_dir, "/worker_", seed, "_debug.log"))
+    file.copy(from = log_file, to = worker_file_log)
 
     return(result)
 }
@@ -465,11 +473,20 @@ stopCluster(N_cluster)
 
 elapsed <- proc.time() - st_process
 
+total_sec <- round(elapsed[3])
+hrs <- total_sec %/% 3600
+mins <- (total_sec %% 3600) %/% 60
+secs <- total_sec %% 60
+# cat("Tempo impiegato:", sprintf("%02d:%02d:%02d\n", hrs, mins, secs))
+
+
+
 cat("\n")
 cat("================================================================================\n")
 cat("ESECUZIONE COMPLETATA\n")
 cat("================================================================================\n")
-cat("Tempo impiegato:", round(elapsed[3] / 60, 2), "minuti\n")
+# cat("Tempo impiegato:", round(elapsed[3] / 60, 2), "minuti\n")
+cat("Tempo impiegato:", sprintf("%02d:%02d:%02d\n", hrs, mins, secs))
 cat("================================================================================\n")
 
 # Check for errors in results

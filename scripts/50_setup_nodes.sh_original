@@ -1095,164 +1095,6 @@ MFEOF
 }
 
 # ==============================================================================
-# STEP 11A: SYSTEMD CGROUP USER SLICE LIMITS (v12.0)
-# ==============================================================================
-setup_nodes_cgroups() {
-  log_step "Step 11A: Systemd cgroup limits (per-user dynamic fair-share)"
-
-  local user_slice_dir="/etc/systemd/system/user-.slice.d"
-  local system_slice_dir="/etc/systemd/system/system.slice.d"
-  local ollama_dir="/etc/systemd/system/ollama.service.d"
-
-  # ── Verify cgroup v2 is active ──
-  local cgroup_version
-  cgroup_version=$(stat -fc %T /sys/fs/cgroup/ 2>/dev/null)
-  if [[ "${cgroup_version}" != "cgroup2fs" ]]; then
-    log_error "cgroup v2 not detected (got: ${cgroup_version})"
-    log_error "Ubuntu 24.04 should have cgroup v2 by default. Check kernel cmdline:"
-    log_error "  grep cgroup /proc/cmdline"
-    log_error "  systemd.unified_cgroup_hierarchy=1 should be present (or no cgroup arg at all)"
-    exit 1
-  fi
-  log_info "cgroup v2 confirmed (cgroup2fs)"
-
-  run_cmd mkdir -p "${user_slice_dir}" "${system_slice_dir}"
-
-  # ── User slice limits (template applies to every logged-in user) ──
-  if [[ "${DRY_RUN}" == "true" ]]; then
-    log_info "[DRY-RUN] Would write ${user_slice_dir}/50-biome-limits.conf"
-  else
-    cat > "${user_slice_dir}/50-biome-limits.conf" <<USEREOF
-# BIOME-CALC: Per-user resource limits — generated $(date -Iseconds)
-#
-# DYNAMIC CPU FAIR-SHARE:
-#   No CPUQuota set — empty server gives 1 user all available cores.
-#   Multiple active users share via CPUWeight=100 proportionally.
-#
-# MEMORY:
-#   MemoryHigh = soft limit (throttling above it, no kill)
-#   MemoryMax  = catastrophic ceiling (kills inside this slice only)
-#   MemorySwapMax = small to keep swap as a brake, not a relief valve
-#
-# Tuned for: ${VM_VCORES} cores, ${VM_RAM_GB} GB RAM
-
-[Slice]
-MemoryAccounting=yes
-MemoryHigh=${USER_SLICE_MEMORY_HIGH}
-MemoryMax=${USER_SLICE_MEMORY_MAX}
-MemorySwapMax=${USER_SLICE_SWAP_MAX}
-
-CPUAccounting=yes
-CPUWeight=${USER_SLICE_CPU_WEIGHT}
-
-TasksAccounting=yes
-TasksMax=${USER_SLICE_TASKS_MAX}
-
-IOAccounting=yes
-IOWeight=${USER_SLICE_IO_WEIGHT}
-USEREOF
-    chmod 644 "${user_slice_dir}/50-biome-limits.conf"
-    log_success "User slice limits: MemoryHigh=${USER_SLICE_MEMORY_HIGH}, MemoryMax=${USER_SLICE_MEMORY_MAX}, dynamic CPU"
-  fi
-
-  # ── System slice protection (floor for nginx, sssd, telemetry, rstudio supervisor) ──
-  if [[ "${DRY_RUN}" == "true" ]]; then
-    log_info "[DRY-RUN] Would write ${system_slice_dir}/50-biome-reserve.conf"
-  else
-    cat > "${system_slice_dir}/50-biome-reserve.conf" <<SYSEOF
-# BIOME-CALC: Reserve resources for system services
-# Generated $(date -Iseconds)
-#
-# MemoryMin: hard kernel-enforced floor — users cannot eat into this
-# MemoryLow: soft floor — kernel reclaims from user.slice first under pressure
-# CPUWeight=200: system services prioritized 2:1 over users during contention
-
-[Slice]
-MemoryAccounting=yes
-MemoryMin=${SYSTEM_SLICE_MEMORY_MIN}
-MemoryLow=${SYSTEM_SLICE_MEMORY_LOW}
-
-CPUAccounting=yes
-CPUWeight=${SYSTEM_SLICE_CPU_WEIGHT}
-SYSEOF
-    chmod 644 "${system_slice_dir}/50-biome-reserve.conf"
-    log_success "System slice protection: MemoryMin=${SYSTEM_SLICE_MEMORY_MIN}, CPUWeight=${SYSTEM_SLICE_CPU_WEIGHT}"
-  fi
-
-  # ── Ollama CPU priority adjustment ──
-  if [[ "${SKIP_OLLAMA}" != "true" ]]; then
-    run_cmd mkdir -p "${ollama_dir}"
-    if [[ "${DRY_RUN}" == "true" ]]; then
-      log_info "[DRY-RUN] Would write ${ollama_dir}/50-biome-cpu.conf"
-    else
-      cat > "${ollama_dir}/50-biome-cpu.conf" <<OLLEOF
-# BIOME-CALC: Ollama CPU priority — yield to user compute
-# Existing biome-hardening.conf already sets MemoryMax=24G
-# This adds CPU weight so AI inference doesn't compete with research workloads
-[Service]
-CPUAccounting=yes
-CPUWeight=${OLLAMA_CPU_WEIGHT}
-OLLEOF
-      chmod 644 "${ollama_dir}/50-biome-cpu.conf"
-      log_success "Ollama CPUWeight=${OLLAMA_CPU_WEIGHT} (yields to user compute)"
-    fi
-  else
-    log_info "Skipping Ollama CPU config (SKIP_OLLAMA=true)"
-  fi
-
-  # ── Apply changes ──
-  run_cmd systemctl daemon-reload
-
-  if [[ "${DRY_RUN}" != "true" ]]; then
-    # Apply to any currently-active user slices
-    local active_user_slices
-    active_user_slices=$(systemctl list-units --type=slice --no-legend 2>/dev/null \
-                         | awk '/user-[0-9]+\.slice/ {print $1}')
-    if [[ -n "${active_user_slices}" ]]; then
-      log_info "Applying limits to currently-active user slices..."
-      while IFS= read -r slice; do
-        [[ -z "$slice" ]] && continue
-        systemctl set-property "$slice" \
-          MemoryHigh="${USER_SLICE_MEMORY_HIGH}" \
-          MemoryMax="${USER_SLICE_MEMORY_MAX}" \
-          MemorySwapMax="${USER_SLICE_SWAP_MAX}" \
-          CPUWeight="${USER_SLICE_CPU_WEIGHT}" \
-          TasksMax="${USER_SLICE_TASKS_MAX}" \
-          2>/dev/null && log_info "  Updated: $slice" \
-                      || log_warn "  Could not update $slice (may have ended)"
-      done <<< "${active_user_slices}"
-    fi
-
-    # Restart Ollama to pick up CPU weight (memory limit was already in place)
-    if [[ "${SKIP_OLLAMA}" != "true" ]] && systemctl is-active --quiet ollama; then
-      run_cmd systemctl restart ollama
-      log_info "Ollama restarted with new CPU weight"
-    fi
-  fi
-
-  # ── Verification ──
-  if [[ "${DRY_RUN}" != "true" ]]; then
-    log_info "Verifying deployed configuration..."
-    if systemctl cat user-.slice 2>/dev/null | grep -q "MemoryHigh=${USER_SLICE_MEMORY_HIGH}"; then
-      log_success "user-.slice template active and correct"
-    else
-      log_warn "user-.slice template may not be loaded — check: systemctl cat user-.slice"
-    fi
-
-    # Show what a fresh user session would inherit
-    log_info "Effective limits for new user sessions:"
-    log_info "  Memory: throttle@${USER_SLICE_MEMORY_HIGH}, kill@${USER_SLICE_MEMORY_MAX}"
-    log_info "  CPU:    weight=${USER_SLICE_CPU_WEIGHT} (dynamic fair-share, no hard cap)"
-    log_info "  Tasks:  max=${USER_SLICE_TASKS_MAX}"
-  fi
-
-  log_info "Existing logged-in users keep current limits until logout."
-  log_info "Monitor live: systemd-cgtop -P"
-}
-
-
-
-# ==============================================================================
 # STEP 11B: ORPHAN PROCESS CLEANUP
 # ==============================================================================
 setup_nodes_orphan_cleanup() {
@@ -1605,9 +1447,8 @@ echo "  4) Migrate user configs only (Step 9)"
 echo "  5) Ollama AI service only (Step 11)"
 echo "  6) Run BLAS smoke test only (Step 12)"
 echo "  7) Run Swap Creation only (Step 5b)"
-echo "  8) Setup CGroups only (Step 11a)"
-echo "  9) Setup Orphan Process Cleanup (Step 11b)"
-echo "  10) Setup BIOME Precision Archiver (Step 11c)"
+echo "  8) Setup Orphan Process Cleanup (Step 11b)"
+echo "  9) Setup BIOME Precision Archiver (Step 11c)"
 echo "  T) Setup BIOME Admin Tools (Step 11d)"
 echo "  R) Master Diagnostic Report (Step 11e)"
 echo "  O) Deploy Optimized Rprofile (Rust plugin + Template)"
@@ -1634,7 +1475,6 @@ case "${choice}" in
     setup_nodes_migrate_users
     setup_nodes_logging
     setup_nodes_ollama
-    setup_nodes_cgroups
     setup_nodes_orphan_cleanup
     setup_nodes_project_archiver
     setup_nodes_admin_tools
@@ -1667,13 +1507,9 @@ case "${choice}" in
     ;;
   8)
     setup_nodes_preflight
-    setup_nodes_cgroups
-    ;;
-  9)
-    setup_nodes_preflight
     setup_nodes_orphan_cleanup
     ;;
-  10)
+  9)
     setup_nodes_preflight
     setup_nodes_project_archiver
     ;;

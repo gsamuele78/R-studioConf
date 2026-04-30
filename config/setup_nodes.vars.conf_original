@@ -113,57 +113,6 @@ OPENBLAS_BLAS_PATH="/usr/lib/x86_64-linux-gnu/openblas-serial/libblas.so.3"
 OPENBLAS_LAPACK_PATH="/usr/lib/x86_64-linux-gnu/openblas-serial/liblapack.so.3"
 
 # =============================================================================
-# CGROUP USER SLICE LIMITS (v12.0)
-# =============================================================================
-# Per-user resource enforcement via systemd user-.slice template.
-# Replaces dynamic resource management in Rprofile.site.
-#
-# DESIGN:
-#   - CPU: weight-based dynamic fair-share (no hard quota)
-#     1 user alone → all available cores
-#     4 users active → ~6 cores each via CPUWeight
-#   - RAM: soft per-user ceiling (MemoryHigh) with no hard cap
-#     Empty server: 1 user can burst above 120G with degraded performance
-#     System floor (MemoryMin) protects nginx/sssd/ollama from user pressure
-#   - Catastrophic ceiling: MemoryMax kills runaway processes inside one slice
-#     before they can OOM the entire host
-#
-# Sized for: 32 vCores, 512 GB RAM, 4 concurrent heavy users target
-
-# Per-user soft limit — kernel throttles above this, no kill
-USER_SLICE_MEMORY_HIGH="120G"
-
-# Per-user catastrophic ceiling — kernel kills inside the user's slice only
-# Set to ~80% of total RAM so a single broken script cannot starve the host
-USER_SLICE_MEMORY_MAX="400G"
-
-# Swap allowed before the OOM killer fires inside the user's slice
-USER_SLICE_SWAP_MAX="4G"
-
-# Process count ceiling (catches fork bombs, allows real NIMBLE compile chains)
-USER_SLICE_TASKS_MAX="4096"
-
-# Relative CPU priority among user slices (default 100; higher = more CPU under contention)
-USER_SLICE_CPU_WEIGHT="100"
-
-# IO priority (default 100)
-USER_SLICE_IO_WEIGHT="100"
-
-# Reserved memory floor for system services (nginx, sssd, telemetry, rstudio supervisor)
-# Hard floor — users cannot eat into this even under pressure
-SYSTEM_SLICE_MEMORY_MIN="16G"
-
-# Soft floor — kernel reclaims from user.slice before system.slice when total RAM is tight
-SYSTEM_SLICE_MEMORY_LOW="24G"
-
-# System services CPU priority (200 = 2× user priority during contention)
-SYSTEM_SLICE_CPU_WEIGHT="200"
-
-# Ollama CPU priority — lower than users so AI inference yields to research compute
-OLLAMA_CPU_WEIGHT="80"
-
-
-# =============================================================================
 # OLLAMA AI SERVICE
 # =============================================================================
 

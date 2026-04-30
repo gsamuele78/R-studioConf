@@ -8,14 +8,41 @@
 # Contact: %%BIOME_CONTACT%%
 #
 # v11.4 CHANGES (from v11.3) — "Lexical Scope Restoration":
-#   - FIXED:   .biome_install_wrapper() no longer overwrites `environment(fn)`.
-#              Overwriting it with `ns_env` broke lexical scope resolution for
-#              every wrapper, preventing them from accessing `.biome_env` and
-#              crashing on `expand.grid` (ggplot2 load) and others.
-#   - FIXED:   safe_makeCluster() now explicitly qualifies its default argument
-#              as `parallel:::getClusterOption("type")` instead of relying on
-#              environment hacking to resolve the unexported symbol.
-#   - API_VERSION bumped 9→10 to signal the lexical scope fix.
+#   Discovery: v11.3 .biome_install_wrapper() set environment(fn) <- ns_env
+#   to make safe_makeCluster's default `type = getClusterOption("type")`
+#   resolve. This worked for that ONE case but broke every OTHER wrapper.
+#   Root cause: overwriting environment(fn) severs the closure's lexical
+#   scope chain. Wrappers like safe_expand_grid, safe_solve, safe_dist all
+#   reference `.biome_env` (saved originals, .get_ram_gb, blas_is_serial).
+#   After environment(fn) <- baseenv(), these lookups now search
+#   baseenv → emptyenv → FAIL. Result: first wrapper call crashes the
+#   session (reproducibly: library(ggplot2) triggers expand.grid load).
+#
+#   VERIFIED FAILURE MODE (reproducible in Rscript):
+#     > library(ggplot2)
+#     Error in expand.grid(...): object '.biome_env' not found
+#
+#   Fix strategy (different from v11.3):
+#   - REVERT: .biome_install_wrapper NO LONGER writes environment(fn) <- ns_env.
+#             Closures keep their original lexical scope (the local() frame).
+#   - TARGETED: safe_makeCluster uses parallel:::getClusterOption("type") as
+#               explicit default — triple-colon bypasses scoping entirely, no
+#               namespace tricks needed.
+#   - KEEP:     was_locked state preservation, install/fail logging, centralized
+#               helper structure — those were genuine improvements.
+#
+#   CHANGES:
+#   - [L1]  REVERTED: environment(fn) <- ns_env removed from
+#                     .biome_install_wrapper (was v11.3 [W1] part 1).
+#   - [L2]  FIXED:    safe_makeCluster default arg is now
+#                     `type = parallel:::getClusterOption("type")` — triple-
+#                     colon resolves directly against parallel namespace, no
+#                     closure-env hacking needed.
+#   - [L3]  KEPT:     All other v11.3 improvements survive (was_locked
+#                     preservation, sys_log coverage, smart_io split with
+#                     captured .ref, parallelly requireNamespace guard,
+#                     safe_dist formals restore, phantom dir cleanup, etc.).
+#   - [L4]  API_VERSION bumped 9→10 to signal the scope contract fix.
 #
 # v11.3 CHANGES (from v11.2) — "Close the wrapper class-of-bug + PSE hardening":
 #   Discovery: production crash on biome-calc04 (2026-04-24) —
@@ -227,6 +254,21 @@
 #   - [B4]  Belt-and-suspenders: OPENBLAS_NUM_THREADS=1 in Renviron.site
 # ==============================================================================
 
+
+# ── Early Boot Error Handler ──
+# Failsafe logging for early boot stages where sys_log and .biome_env are not yet defined.
+.biome_early_err <- function(stage) {
+  function(e) {
+    tryCatch({
+      log_file <- file.path("/tmp", paste0("biome_boot_errors_", Sys.getpid(), ".log"))
+      cat(sprintf("[%s] [STAGE: %s] Error: %s\n", 
+                  format(Sys.time(), "%Y-%m-%d %H:%M:%S"), 
+                  stage, e$message), 
+          file = log_file, append = TRUE)
+    }, error = function(e2) NULL)
+  }
+}
+
 # ── L2: Template Integrity Self-Check ──
 # If template placeholders were not substituted, abort early to prevent
 # syntax errors and silent profile failure.
@@ -269,7 +311,7 @@ if (!nzchar(Sys.getenv("OPENBLAS_CORETYPE", ""))) {
       } else {
         NULL
       }
-    }, error = function(e) NULL)
+    }, error = .biome_early_err("coretype_detection"))
 
     if (!is.null(coretype)) {
       Sys.setenv(OPENBLAS_CORETYPE = coretype)
@@ -301,7 +343,7 @@ local({
   if (dir.exists(rtmp_path)) {
     tryCatch({
       if (!dir.exists(user_tmp)) dir.create(user_tmp, recursive = TRUE, showWarnings = FALSE, mode = "0700")
-    }, error = function(e) NULL)
+    }, error = .biome_early_err("create_user_tmp"))
     Sys.setenv(BIOME_USER_TMP = user_tmp)
     # v11.3: only pre-create dirs that SOMETHING actually writes to.
     # stan_compile:  options(cmdstanr_output_dir) writes here (real)
@@ -313,7 +355,7 @@ local({
                   "cluster_logs", "keras_cache", "plot_cache")) {
       d <- file.path(user_tmp, sub)
       if (!dir.exists(d)) tryCatch(dir.create(d, recursive = TRUE, showWarnings = FALSE, mode = "0700"),
-                                   error = function(e) NULL)
+                                   error = .biome_early_err("create_worker_subdirs"))
     }
     Sys.setenv(
       # v11.3: removed BIOME_NIMBLE_DIR / BIOME_TMB_DIR — phantom APIs
@@ -358,17 +400,27 @@ local({
 # interactive rsession — NOT for ephemeral compute workers.
 #
 # When the parent creates PSOCK workers (via biome_make_cluster), it sets:
-#   BIOME_WORKER_MODE=1          — triggers this fast path
+#   BIOME_WORKER_MODE=1          — injected via rscript_envs → -e Sys.setenv()
+#                                  (arrives AFTER profile loads — see W13 fix)
 #   BIOME_WORKER_THREADS=<n>     — per-worker BLAS/OMP thread limit
-#   BIOME_NIMBLE_DIR=<path>      — parent's nimble scratch root (v11.0)
-#   BIOME_TMB_DIR=<path>         — parent's TMB scratch root (v11.0)
 #   BIOME_STAN_DIR=<path>        — parent's Stan scratch root (v11.0)
+#
+# [W13] Fast path is also triggered by commandArgs() MASTER= detection so that
+# bare parallel::makeCluster() workers (which never receive BIOME_WORKER_MODE)
+# and any parallelly worker on any R version also take the fast path.
 #
 # The fast path applies thread limits, creates per-PID compile subdirs,
 # sets nimble.dirName/TMB_COMPILE_DIR, and returns. No task callbacks, no
 # memory guards, no AI — workers are lean.
 # ══════════════════════════════════════════════════════════════════════════════
-if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+# v11.4-fix [W13]: parallelly::makeClusterPSOCK passes rscript_envs as
+# `-e Sys.setenv(...)` args, which execute AFTER Rprofile.site loads.
+# BIOME_WORKER_MODE=1 therefore arrives too late for the env-var check alone.
+# Fallback: PSOCK workers always have MASTER= in commandArgs(trailingOnly=TRUE)
+# (OS-level --args flag, present before any -e runs). Bare parallel::makeCluster
+# workers are caught the same way. Both paths now correctly take the fast path.
+.biome_is_psock_worker <- any(grepl("^MASTER=", commandArgs(trailingOnly = TRUE)))
+if (nzchar(Sys.getenv("BIOME_WORKER_MODE", "")) || .biome_is_psock_worker) {
   # ════════════════════════════════════════════════════════════════════════════
   # WORKER MODE FAST PATH
   # ════════════════════════════════════════════════════════════════════════════
@@ -392,7 +444,7 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
       tryCatch({
         RhpcBLASctl::blas_set_num_threads(as.integer(wt))
         RhpcBLASctl::omp_set_num_threads(as.integer(wt))
-      }, error = function(e) NULL)
+      }, error = .biome_early_err("worker_blas_threads"))
     }
 
     # ── v11.2 [H1-H8]: NIMBLE / TMB compile routing ─────────────────────────
@@ -424,7 +476,7 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
       stan_out <- file.path(tempdir(), "cmdstan_output")
       tryCatch(dir.create(stan_out, recursive = TRUE, showWarnings = FALSE,
                           mode = "0700"),
-               error = function(e) NULL)
+               error = .biome_early_err("worker_stan_dir"))
       if (dir.exists(stan_out)) {
         options(
           cmdstanr_output_dir = stan_out,
@@ -440,11 +492,12 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
     if (nzchar(Sys.getenv("BIOME_WORKER_DEBUG", ""))) {
       tryCatch({
         log_path <- file.path("/tmp", paste0("biome_worker_", Sys.getpid(), ".log"))
-        cat(sprintf("[%s] BIOME worker fast-path v11.2 loaded | pid=%d | tempdir=%s | blas_threads=%s\n",
+        detected_by <- if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) "BIOME_WORKER_MODE" else "commandArgs(MASTER=)"
+        cat(sprintf("[%s] BIOME worker fast-path v11.4 loaded | pid=%d | tempdir=%s | blas_threads=%s | detected_by=%s\n",
                     format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-                    Sys.getpid(), tempdir(), wt),
+                    Sys.getpid(), tempdir(), wt, detected_by),
             file = log_path, append = TRUE)
-      }, error = function(e) NULL)
+      }, error = .biome_early_err("worker_debug_log"))
     }
 
     options(biome.profile.loaded = TRUE)
@@ -462,7 +515,14 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
       options(bspm.sudo = TRUE)
       suppressMessages(bspm::enable())
     }
-  }, error = function(e) NULL)
+  }, error = function(e) {
+    if (BIOME_GLOBAL_DEBUG) tryCatch({
+      line <- sprintf("[%s] [PID:%-6d] [%-22s] [%-4s] %s\n",
+          format(Sys.time(), "%H:%M:%OS3"), Sys.getpid(), "bspm", "FAIL", e$message)
+      message(trimws(line))
+      if (nzchar(BIOME_DEBUG_LOG)) cat(line, file = BIOME_DEBUG_LOG, append = TRUE)
+    }, error = function(e2) NULL)
+  })
 
   # ── SECTION 1: Early options (rJava heap set dynamically in hook — see N11) ──
   # DO NOT set -Xmx here (was hardcoded 4g in v10.0). The rJava hook below
@@ -474,7 +534,7 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
     if (isTRUE(getOption("biome.profile.loaded"))) return(TRUE)
     if (exists(".biome_env", envir = .GlobalEnv, inherits = FALSE)) {
       .existing_be <- tryCatch(get(".biome_env", envir = .GlobalEnv),
-                                error = function(e) NULL)
+                                error = .biome_early_err("check_existing_biome_env"))
       if (is.environment(.existing_be) && !is.null(.existing_be$VERSION)) {
         options(biome.profile.loaded = TRUE)
         return(TRUE)
@@ -550,6 +610,25 @@ local({
   r_ver_short  <- paste0(R.version$major, ".", substr(R.version$minor, 1, 1))
   personal_lib <- file.path(Sys.getenv("HOME"), "R", "x86_64-pc-linux-gnu-library", r_ver_short)
 
+  # ── Global Debug Mode ──
+  # Set BIOME_DEBUG=1 in the shell BEFORE starting R to enable verbose logging.
+  # All sys_log() calls will also print to stderr (visible in terminal/console)
+  # and to /tmp/biome_debug_<user>_<pid>.log for post-mortem inspection.
+  # Use biome_debug_dump() inside R to tail/inspect the log at any time.
+  BIOME_GLOBAL_DEBUG <- nzchar(Sys.getenv("BIOME_DEBUG", ""))
+  BIOME_DEBUG_LOG    <- if (BIOME_GLOBAL_DEBUG)
+    file.path("/tmp", sprintf("biome_debug_%s_%d.log", curr_user, Sys.getpid()))
+  else ""
+  if (BIOME_GLOBAL_DEBUG) tryCatch({
+    cat(sprintf(
+      "=== BIOME DEBUG LOG === pid=%d user=%s r=%s started=%s ===\n",
+      Sys.getpid(), curr_user,
+      paste0(R.version$major, ".", R.version$minor),
+      format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+      file = BIOME_DEBUG_LOG, append = FALSE)
+    message(sprintf("[BIOME-DEBUG] Logging to %s", BIOME_DEBUG_LOG))
+  }, error = .biome_early_err("global_debug_log_init"))
+
   # v11.0: USER_TMP_ROOT is set in Section -1.8 via env var. Read it back
   # (or recompute if missing) so the main session and child processes agree.
   USER_TMP_ROOT <- Sys.getenv("BIOME_USER_TMP", file.path(RTMP_PATH, paste0("biome_", curr_user)))
@@ -602,7 +681,7 @@ local({
   se$last_cgroup_check <- 0
   se$user_tmp_root <- USER_TMP_ROOT   # v11.0: stored early
   .biome_env$VERSION <- VERSION
-  .biome_env$API_VERSION <- 10L       # v11.4: bumped 9→10 (lexical scope fix)
+  .biome_env$API_VERSION <- 10L       # v11.4: bumped 9→10 (lexical scope restored in .biome_install_wrapper)
   .biome_env$TMP_WARN_PCT <- TMP_WARN_PCT
   .biome_env$TMP_DISK_GB <- TMP_DISK_GB
   .biome_env$USER_TMP_ROOT <- USER_TMP_ROOT
@@ -626,13 +705,38 @@ local({
         .biome_env$shared_env$diag_logs <- logs[seq(keep_from, length(logs))]
       }
       .biome_env$shared_env$diag_logs[[section]] <- list(status = status, msg = msg, ts = Sys.time())
-    }, error = function(e) NULL)
+    }, error = .biome_early_err("sys_log_internal_diag"))
     if (ENABLE_SYS_LOGGING) tryCatch({
       cat(sprintf("[%s] [USER: %-12s] [SEC: %-14s] [STAT: %-4s] %s\n",
           format(Sys.time(), "%Y-%m-%d %H:%M:%S"), curr_user, section, status, msg),
           file = LOG_PATH, append = TRUE)
-    }, error = function(e) NULL)
+    }, error = .biome_early_err("sys_log_internal_file"))
+    # Global debug: mirror every log entry to stderr + dedicated debug log.
+    # Only active when BIOME_DEBUG=1 was set before starting R.
+    if (BIOME_GLOBAL_DEBUG) tryCatch({
+      line <- sprintf("[%s] [PID:%-6d] [%-22s] [%-4s] %s",
+          format(Sys.time(), "%H:%M:%OS3"), Sys.getpid(), section, status, msg)
+      message(line)
+      if (nzchar(BIOME_DEBUG_LOG))
+        cat(line, "\n", file = BIOME_DEBUG_LOG, append = TRUE, sep = "")
+    }, error = .biome_early_err("sys_log_internal_debug"))
   }
+
+  # ── Pessimistic Error Capture ──
+  .biome_swerr <- function(tag) {
+    function(e) {
+      call_str <- if (!is.null(e$call)) paste(deparse(e$call)[1], collapse=" ") else "unknown context"
+      sys_log(tag, "SWALLOW", sprintf("Error: %s | Call: %s", e$message, call_str))
+      NULL
+    }
+  }
+
+  # ── Timing Infrastructure ──
+  .biome_env$shared_env$timers <- list()
+  .biome_mark_time <- function(section) {
+    .biome_env$shared_env$timers[[section]] <- as.numeric(difftime(Sys.time(), .start_time, units="secs"))
+  }
+  .biome_mark_time("sys_log_init")
 
   get_session_timeout <- function() {
     conf_file <- "%%RSESSION_CONF_PATH%%"
@@ -646,7 +750,7 @@ local({
           if (!is.na(mins) && mins > 0) timeout_h <- ceiling(mins / 60) + 1
           else if (grepl("=0", m[1])) timeout_h <- 168
         }
-      }, error = function(e) NULL)
+      }, error = .biome_swerr("Line_722"))
     }
     return(timeout_h)
   }
@@ -657,7 +761,7 @@ local({
     if (!dir.exists(personal_lib)) dir.create(personal_lib, recursive=TRUE, showWarnings=FALSE)
     if (!personal_lib %in% .libPaths()) .libPaths(c(personal_lib, .libPaths()))
     sys_log("LibPaths", "OK", paste("Primary:", personal_lib))
-  }, error = function(e) NULL)
+  }, error = .biome_swerr("Line_733"))
 
   if (ENABLE_TMP_CLEANUP && MY_UID >= 0) {
     tryCatch({
@@ -713,9 +817,10 @@ local({
           }
         }
       }
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_789"))
   }
 
+  .biome_mark_time("cgroups_init")
   # ── Hardware Topology & Cgroups ──
   total_vcores <- tryCatch(parallel::detectCores(logical=TRUE), error=function(e) VM_VCORES)
 
@@ -741,7 +846,12 @@ local({
        if (!is.na(q) && q>0 && !is.na(d) && d>0) .biome_env$shared_env$cgroup_cpus <- q/d
     }
   }, error = function(e) sys_log("Cgroup", "WARN", e$message))
+  sys_log("Cgroup", "DBG", sprintf("vcores=%d cgroup_cpus=%s cgroup_ram_gb=%s",
+    total_vcores,
+    format(.biome_env$shared_env$cgroup_cpus),
+    format(.biome_env$shared_env$cgroup_ram_gb)))
 
+  .biome_mark_time("resource_engine")
   # ── Resource Engine ──
   .biome_raw_ram_gb <- function() {
     tryCatch({
@@ -846,7 +956,7 @@ local({
               con <- suppressWarnings(socketConnection("127.0.0.1", port=11434, open="r", timeout=1.5))
               close(con)
               .biome_env$shared_env$ai_active <- TRUE
-          }, error = function(e) NULL)
+          }, error = .biome_swerr("Line_926"))
       }
 
       prev <- .biome_env$shared_env$last_quota
@@ -860,6 +970,9 @@ local({
       .biome_env$shared_env$last_quota <- quota
       .biome_env$shared_env$last_cores <- fair_cores
       .biome_env$shared_env$last_threads <- bt
+      sys_log("Resources", "DBG", sprintf(
+        "ram_gb=%d n_procs=%d quota=%d eff_vc=%d fair_cores=%d bt=%d",
+        ram_gb, n_procs, quota, eff_vc, fair_cores, bt))
 
       if (ENABLE_CGROUP_AWARE && (now - .biome_env$shared_env$last_cgroup_check) > 300) {
         .biome_env$shared_env$last_cgroup_check <- now
@@ -869,7 +982,7 @@ local({
             v <- trimws(readLines(cg2_mem, n=1, warn=FALSE))
             if (v != "max") .biome_env$shared_env$cgroup_ram_gb <- as.numeric(v)/(1024^3)
           }
-        }, error = function(e) NULL)
+        }, error = .biome_swerr("Line_952"))
       }
 
       if (ENABLE_SMART_ROUTING) tryCatch({
@@ -884,7 +997,7 @@ local({
           }
           sys_log("TmpDisk", "WARN", sprintf("/Rtmp at %d%%", as.integer(tmp_pct)))
         }
-      }, error = function(e) NULL)
+      }, error = .biome_swerr("Line_967"))
 
     }, error=function(e) sys_log("ResMgmt", "FAIL", e$message))
   }
@@ -915,7 +1028,7 @@ local({
     if (is.null(outfile)) {
       cl_dir <- file.path(USER_TMP_ROOT, "cluster_logs")
       if (!dir.exists(cl_dir)) tryCatch(dir.create(cl_dir, recursive = TRUE, showWarnings = FALSE),
-                                        error = function(e) NULL)
+                                        error = .biome_swerr("Line_998"))
       outfile <- file.path(cl_dir,
                            sprintf("psock_%s_pid%d.log",
                                    format(Sys.time(), "%Y%m%d_%H%M%S"),
@@ -977,38 +1090,44 @@ local({
 
 
   # ══════════════════════════════════════════════════════════════════════════
-  # v11.3 [W1]: WRAPPER INSTALLER — single source of truth for safe_* binds
+  # v11.3 [W1] + v11.4 [L1]: WRAPPER INSTALLER — lexical-scope-preserving
   # ──────────────────────────────────────────────────────────────────────────
-  # FIX class-of-bug observed in v11.2 safe_makeCluster:
-  #   assign(fn, envir = asNamespace("parallel"))
-  # does NOT change environment(fn). The closure keeps its original enclosure
-  # (the local frame where it was defined). So default args that reference
-  # non-exported symbols of the target namespace (e.g. getClusterOption) fail
-  # at call-time symbol lookup with
-  #   Error: could not find function "getClusterOption"
+  # HISTORY:
+  # v11.2: direct assign(fn, envir = asNamespace(pkg)) — safe_makeCluster
+  #        crashed because its default `getClusterOption("type")` couldn't be
+  #        resolved (unexported parallel symbol, closure env didn't see it).
+  # v11.3: added `environment(fn) <- ns_env` thinking it would "fix closure
+  #        scoping". It did the opposite: it SEVERED the closure's lexical
+  #        chain. Wrappers that reference `.biome_env` (all of them) couldn't
+  #        find it anymore. First real call crashed the session.
+  # v11.4: REVERTED the environment() write. Closures keep their original
+  #        enclosing env (the local() frame of deferred_pkg_init / hooks).
+  #        That env's parent chain reaches globalenv → .biome_env accessible.
+  #        For the specific safe_makeCluster case where a default arg needs a
+  #        non-exported symbol, the caller MUST fully qualify it (triple-colon
+  #        or explicit literal default). See safe_makeCluster below for the
+  #        correct pattern.
   #
-  # This helper does FOUR things correctly on every install:
-  #   1. environment(fn) <- ns_env  — fixes default-arg symbol resolution
-  #   2. Verify target symbol exists — SKIP cleanly if package layout changed
-  #   3. Save the original function (for pass-through) BEFORE mutation
-  #   4. Preserve original binding-lock state (was_locked save/restore) so we
-  #      don't silently change R's binding semantics under other packages
-  # Every install/skip/fail is logged via sys_log for post-mortem.
+  # THIS HELPER NOW DOES FOUR THINGS:
+  #   1. Verify target symbol exists in the namespace (SKIP cleanly otherwise)
+  #   2. Save the original function (for pass-through) BEFORE mutation
+  #   3. Preserve original binding-lock state (was_locked save/restore)
+  #   4. Log every install/skip/fail via sys_log for post-mortem
   # ══════════════════════════════════════════════════════════════════════════
   .biome_install_wrapper <- function(fn, name, ns_env, save_original_to = NULL) {
     stopifnot(is.function(fn), is.character(name), length(name) == 1L,
               is.environment(ns_env))
 
-    # (2) verify target exists in the namespace (not inherited)
+    # (1) verify target exists in the namespace (not inherited)
     if (!exists(name, envir = ns_env, inherits = FALSE)) {
       sys_log("WrapperInstall", "SKIP",
               sprintf("%s not found in target namespace", name))
       return(invisible(FALSE))
     }
 
-    # (3) save the original BEFORE any mutation, so we can always delegate
+    # (2) save the original BEFORE any mutation, so we can always delegate
     original <- tryCatch(get(name, envir = ns_env, inherits = FALSE),
-                         error = function(e) NULL)
+                         error = .biome_swerr("Line_1097"))
     if (is.null(original) || !is.function(original)) {
       sys_log("WrapperInstall", "SKIP",
               sprintf("%s is not a function in namespace", name))
@@ -1018,11 +1137,15 @@ local({
       assign(save_original_to, original, envir = .biome_env)
     }
 
-    # (1) REMOVED: environment(fn) <- ns_env
-    # Changing the closure's environment breaks lexical scope resolution,
-    # preventing the wrapper from accessing .biome_env, sys_log, etc.
+    # v11.4 [L1]: DO NOT overwrite environment(fn). Closures retain their
+    # original enclosing env (the local() frame), keeping the scope chain to
+    # globalenv and hence to .biome_env intact. If a wrapper's default arg
+    # needs to resolve a non-exported namespace symbol, the AUTHOR of that
+    # wrapper must fully qualify it at the definition site (e.g.
+    # `parallel:::getClusterOption(...)`). See safe_makeCluster for the
+    # canonical pattern.
 
-    # (4) remember + restore lock state (don't silently lock unlocked bindings)
+    # (3) remember + restore lock state (don't silently lock unlocked bindings)
     was_locked <- tryCatch(bindingIsLocked(name, ns_env),
                            error = function(e) FALSE)
     tryCatch({
@@ -1042,11 +1165,13 @@ local({
     })
   }
 
+  .biome_mark_time("deferred_init_def")
   # ══════════════════════════════════════════════════════════════════════════
   # DEFERRED PACKAGE INIT — installs base memory guards (one-shot)
   # ══════════════════════════════════════════════════════════════════════════
   deferred_pkg_init <- function() {
     if (.biome_env$shared_env$deferred_done) return(invisible(NULL))
+    sys_log("DeferredInit", "DBG", "starting guard installation")
     fc <- .biome_env$shared_env$last_cores
     qr <- .biome_env$shared_env$last_quota
     msg_parts <- c()
@@ -1102,14 +1227,14 @@ local({
               if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
                 RhpcBLASctl::blas_set_num_threads(reduced_threads)
                 RhpcBLASctl::omp_set_num_threads(reduced_threads)
-              }, error = function(e) NULL)
+              }, error = .biome_swerr("Line_1196"))
               on.exit({
                 Sys.setenv(OPENBLAS_NUM_THREADS = as.character(curr_threads),
                            OMP_NUM_THREADS = as.character(curr_threads))
                 if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
                   RhpcBLASctl::blas_set_num_threads(curr_threads)
                   RhpcBLASctl::omp_set_num_threads(curr_threads)
-                }, error = function(e) NULL)
+                }, error = .biome_swerr("Line_1203"))
               }, add = TRUE)
             }
           }
@@ -1201,15 +1326,28 @@ local({
     }, error = function(e) sys_log("ExpandGridGuard", "FAIL", e$message))
 
     # ══════════════════════════════════════════════════════════════════════
-    # v11.0 [N4] + v11.3 [W2]: parallel::makeCluster SAFEGUARD
+    # v11.0 [N4] + v11.3 [W2] + v11.4 [L2]: parallel::makeCluster SAFEGUARD
     # ══════════════════════════════════════════════════════════════════════
-    # FIXED in v11.4: explicitly qualify parallel:::getClusterOption("type").
-    # The previous v11.3 fix (changing the closure's environment) broke
-    # lexical scope resolution for .biome_env across all wrappers.
+    # v11.2: crashed on makeCluster(N) without type= because default
+    #        `getClusterOption("type")` couldn't resolve (unexported symbol).
+    # v11.3: "fixed" via environment(fn) <- asNamespace("parallel"). Worked
+    #        for this case but broke every other wrapper by severing lexical
+    #        scope chain to .biome_env.
+    # v11.4: REAL fix — use triple-colon `parallel:::getClusterOption("type")`
+    #        as the default. Triple-colon bypasses scoping entirely and
+    #        resolves against the parallel namespace without closure tricks.
+    #        No need to touch environment(fn). All other wrappers stay intact.
     # ══════════════════════════════════════════════════════════════════════
     if (ENABLE_PARALLEL_GUARD && !exists("original_makeCluster", envir = .biome_env)) tryCatch({
-      safe_makeCluster <- function(spec, type = parallel:::getClusterOption("type"), ...) {
+      safe_makeCluster <- function(spec,
+                                    type = tryCatch(parallel:::getClusterOption("type"),
+                                                    error = function(e) "PSOCK"),
+                                    ...) {
         # Only warn for PSOCK (default) — FORK/MPI have their own issues
+        sys_log("SafeMakeCluster", "DBG", sprintf(
+          "called: spec=%s type=%s interactive=%s",
+          if (is.numeric(spec)) as.character(spec) else paste(spec, collapse=","),
+          type, interactive()))
         if ((missing(type) || type == "PSOCK") && interactive()) {
           message(sprintf(paste0(.C_YELLOW,
             "\U0001F6E1\ufe0f  BIOME-CALC: parallel::makeCluster(%s) detected.\n",
@@ -1222,6 +1360,7 @@ local({
         }
         .biome_env$original_makeCluster(spec, type = type, ...)
       }
+        sys_log("SafeMakeCluster", "DBG", "delegating to original_makeCluster")
       ok <- .biome_install_wrapper(safe_makeCluster, "makeCluster",
                                     asNamespace("parallel"),
                                     save_original_to = "original_makeCluster")
@@ -1230,6 +1369,7 @@ local({
 
     # v11.0-fix: Set deferred_done AFTER all guards are installed
     .biome_env$shared_env$deferred_done <- TRUE
+    sys_log("DeferredInit", "DBG", paste("guards installed:", paste(msg_parts, collapse=", ")))
 
     # ══ Per-user /Rtmp setup (defensive — already done in Section -1.8) ══
     tryCatch({
@@ -1239,6 +1379,7 @@ local({
     }, error = function(e) sys_log("DeferredInit", "FAIL", e$message))
   }
 
+  .biome_mark_time("deferred_hooks_def")
   # ══════════════════════════════════════════════════════════════════════════
   # DEFERRED PACKAGE HOOKS — runs on EVERY callback (fires as packages load)
   # ══════════════════════════════════════════════════════════════════════════
@@ -1264,7 +1405,7 @@ local({
       terra::terraOptions(memfrac = 0.6, tempdir = td, verbose = FALSE)
       .biome_env$shared_env$terra_threads <- tt
       msg_parts <- c(msg_parts, "Terra [LocalDisk]")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1373"))
 
     # ── raster ──
     if (ENABLE_SMART_ROUTING && isNamespaceLoaded("raster") &&
@@ -1274,7 +1415,7 @@ local({
       raster::rasterOptions(tmpdir = rt)
       .biome_env$shared_env$.raster_hook_done <- TRUE
       msg_parts <- c(msg_parts, "Raster [LocalDisk]")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1383"))
 
     # ── stars ──
     if (ENABLE_SMART_ROUTING && isNamespaceLoaded("stars") &&
@@ -1284,7 +1425,7 @@ local({
       Sys.setenv(GDAL_PAM_PROXY_DIR = st)
       .biome_env$shared_env$.stars_hook_done <- TRUE
       msg_parts <- c(msg_parts, "Stars [LocalDisk]")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1393"))
 
     # ── sf (GDAL routing) ──
     if (ENABLE_SMART_ROUTING && isNamespaceLoaded("sf") &&
@@ -1294,7 +1435,7 @@ local({
       Sys.setenv(CPL_TMPDIR = sf_tmp)   # GDAL temp
       .biome_env$shared_env$.sf_hook_done <- TRUE
       msg_parts <- c(msg_parts, "sf/GDAL [LocalDisk]")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1403"))
 
     # ── ncdf4 ──
     if (ENABLE_SMART_ROUTING && isNamespaceLoaded("ncdf4") &&
@@ -1303,7 +1444,7 @@ local({
       if (!dir.exists(nc_tmp)) dir.create(nc_tmp, recursive=TRUE, showWarnings=FALSE)
       .biome_env$shared_env$.ncdf4_hook_done <- TRUE
       msg_parts <- c(msg_parts, "NetCDF [LocalDisk]")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1412"))
 
     # ── gstat / fields / spatstat ──
     if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("gstat") || isNamespaceLoaded("fields") ||
@@ -1316,7 +1457,7 @@ local({
                   if (isNamespaceLoaded("spatstat")) "Spatstat")
       .biome_env$shared_env$.spatial_stats_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("%s [LocalDisk]", paste(loaded, collapse="+")))
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1425"))
 
     # ── keras / tensorflow ──
     if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("keras") || isNamespaceLoaded("tensorflow")) &&
@@ -1327,7 +1468,7 @@ local({
       Sys.setenv(TF_XLA_FLAGS = paste0("--tf_xla_enable_xla_devices --tf_xla_cpu_global_jit --tf_xla_auto_jit=2 --tf_xla_fallback_tmpdir=", kt))
       .biome_env$shared_env$.keras_hook_done <- TRUE
       msg_parts <- c(msg_parts, "Keras [LocalDisk]")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1436"))
 
     # ── ggplot / plotly / tmap / mapview ──
     if (ENABLE_GGPLOT_OPT && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly") ||
@@ -1343,7 +1484,7 @@ local({
       options(ggplot2.continuous.colour = "viridis", ggplot2.continuous.fill = "viridis")
       Sys.setenv(FONTCONFIG_PATH = "/etc/fonts")
       if (requireNamespace("systemfonts", quietly = TRUE)) {
-        tryCatch(systemfonts::system_fonts(), error = function(e) NULL)
+        tryCatch(systemfonts::system_fonts(), error = .biome_swerr("Line_1452"))
       }
       backend_label <- if (has_ragg) "ragg" else "cairo"
       vis_pkgs <- c("Ggplot", if (isNamespaceLoaded("tmap")) "Tmap",
@@ -1351,7 +1492,7 @@ local({
       .biome_env$shared_env$.ggplot_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("%s [%s/LocalDisk]", paste(vis_pkgs, collapse="+"),
                                          backend_label))
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1460"))
 
     # ── arrow ──
     if (ENABLE_ARROW_OPT && isNamespaceLoaded("arrow") &&
@@ -1359,7 +1500,7 @@ local({
       at <- min(fc, 16L); arrow::set_cpu_count(at); arrow::set_io_thread_count(min(at,8L))
       .biome_env$shared_env$arrow_threads <- at
       msg_parts <- c(msg_parts, "Arrow")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1468"))
 
     # ── geosphere safeguard (v11.3 [W4+W5]: ... passthrough + helper) ──
     if (ENABLE_SMART_ROUTING && isNamespaceLoaded("geosphere") &&
@@ -1398,7 +1539,7 @@ local({
       future::plan(future::cluster, workers = cl)
       .biome_env$shared_env$future_workers <- fw
       msg_parts <- c(msg_parts, "Future")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1507"))
 
     # ── doParallel safeguard (v11.3 [W5]: migrated to helper) ──
     if (isNamespaceLoaded("doParallel") &&
@@ -1487,7 +1628,7 @@ local({
           "   Thread cap: %d. Use biome_make_cluster() for multi-chain MCMC.",
           .C_RESET), file.path(tempdir(), "nimble_generatedCode"), nimble_threads))
       }
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1596"))
 
     # ══════════════════════════════════════════════════════════════════════
     # v11.2 [H4-H5]: TMB/glmmTMB — OMP thread cap only
@@ -1505,7 +1646,7 @@ local({
       tmb_label <- if (isNamespaceLoaded("glmmTMB")) "TMB+glmmTMB" else "TMB"
       .biome_env$shared_env$.tmb_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("%s [%d threads]", tmb_label, tmb_threads))
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1614"))
 
     # ══════════════════════════════════════════════════════════════════════
     # v11.2 [H9-H10] + v11.3 [W9]: rstan / cmdstanr / brms — REAL options only
@@ -1531,7 +1672,7 @@ local({
                             paste0("session_", Sys.getpid()))
       if (!dir.exists(stan_tmp)) tryCatch(dir.create(stan_tmp, recursive = TRUE,
                                              showWarnings = FALSE, mode = "0700"),
-                                           error = function(e) NULL)
+                                           error = .biome_swerr("Line_1640"))
       bt <- .biome_env$shared_env$last_threads
       stan_cores <- max(1L, min(4L, as.integer(bt / 2)))
 
@@ -1562,7 +1703,7 @@ local({
         if (!isTRUE(.biome_env$shared_env$.rstan_auto_write_hook)) {
           setHook(packageEvent("rstan", "attach"), function(...) {
             tryCatch(rstan::rstan_options(auto_write = TRUE),
-                     error = function(e) NULL)
+                     error = .biome_swerr("Line_1671"))
           }, action = "append")
           .biome_env$shared_env$.rstan_auto_write_hook <- TRUE
         }
@@ -1591,7 +1732,7 @@ local({
                 if (isNamespaceLoaded("ranger")) "ranger")
       .biome_env$shared_env$.omp_pkg_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("%s [OMP=%d]", paste(pkgs, collapse="+"), omp_cap))
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1700"))
 
     # ══════════════════════════════════════════════════════════════════════
     # v11.0 [N11]: rJava — DYNAMIC heap (replaces hardcoded -Xmx4g)
@@ -1614,7 +1755,7 @@ local({
       }
       .biome_env$shared_env$.rjava_hook_done <- TRUE
       msg_parts <- c(msg_parts, sprintf("rJava [Xmx%dg]", java_heap_gb))
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1723"))
 
     # ── chattr ──
     if (ENABLE_AI_ASSISTANT && isNamespaceLoaded("chattr") &&
@@ -1622,7 +1763,7 @@ local({
       options(chattr.model = AI_MODEL, chattr.provider = "ollama")
       .biome_env$shared_env$.chattr_hook_done <- TRUE
       msg_parts <- c(msg_parts, "Chattr")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1731"))
 
     # ── Rcpp / devtools compile cache routing ──
     # v11.0 [N6]: Rcpp::sourceCpp uses tempdir() which inherits TMPDIR=/Rtmp ✓
@@ -1634,7 +1775,7 @@ local({
       Sys.setenv(RCPP_CACHE_DIR = rcpp_dir)
       .biome_env$shared_env$.rcpp_hook_done <- TRUE
       msg_parts <- c(msg_parts, "Rcpp [LocalDisk]")
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_1743"))
 
     if (length(msg_parts) > 0 && interactive()) {
       message(paste0(.C_GREEN, "   \U0001F680 BIOME-CALC: Engines Initialized: ",
@@ -1683,12 +1824,12 @@ local({
                 return(arrow::read_parquet(pq))
               }
             }
-            # Defensive: .ref is captured in our closure env — always present
-            # unless someone actively destroys it (rm on closure env). We fail
-            # fast with a clear error rather than recursing or returning bad
-            # data. NO infinite-recursion path exists by design.
-            if (!exists(".ref", inherits = FALSE) ||
-                is.null(.ref) || !is.function(.ref)) {
+            # Defensive: .ref is captured in our ENCLOSING environment (the
+            # local() frame), NOT in the execution frame. We access it by
+            # name — lexical scoping resolves it. If someone has actively
+            # destroyed it (rm from the closure env), we fail fast with a
+            # clear error rather than recurse or return bad data.
+            if (is.null(.ref) || !is.function(.ref)) {
               stop("BIOME-CALC: read.csv wrapper lost its original reference; ",
                    "cannot delegate. Reinstall the profile.", call. = FALSE)
             }
@@ -1731,8 +1872,8 @@ local({
                 return(arrow::read_parquet(pq))
               }
             }
-            if (!exists(".ref", inherits = FALSE) ||
-                is.null(.ref) || !is.function(.ref)) {
+            # .ref resolved via lexical scoping from the enclosing local() env.
+            if (is.null(.ref) || !is.function(.ref)) {
               stop("BIOME-CALC: fread wrapper lost its original reference; ",
                    "cannot delegate.", call. = FALSE)
             }
@@ -1749,6 +1890,7 @@ local({
     })
   }
 
+  .biome_mark_time("callbacks_init")
   # ── CALLBACKS ──
   .biome_env$shared_env$last_update <- 0
   .biome_env$deferred_pkg_init <- deferred_pkg_init
@@ -1775,15 +1917,15 @@ local({
         tryCatch(deferred_pkg_init(), error = function(e)
           sys_log("DeferredFallback", "FAIL", e$message))
       }
-      tryCatch(deferred_pkg_hooks(), error = function(e) NULL)
-      tryCatch(update_resources(quiet = TRUE), error = function(e) NULL)
+      tryCatch(deferred_pkg_hooks(), error = .biome_swerr("Line_1884"))
+      tryCatch(update_resources(quiet = TRUE), error = .biome_swerr("Line_1885"))
     }, action = "append")
     # (b) Non-RStudio fallback (plain R / Rscript) — run init/hooks NOW so
     # base guards are at least installed. Without this path, Rscript users
     # (e.g. Martina's batch MCMC runs) would get zero guards if
     # addTaskCallback ever failed.
     is_rstudio <- nzchar(Sys.getenv("RSTUDIO", "")) ||
-                  identical(Sys.getenv("RSTUDIO_USER_IDENTITY"), "")
+                  nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", ""))
     if (!is_rstudio) {
       tryCatch({
         deferred_pkg_init()
@@ -1792,6 +1934,22 @@ local({
       }, error = function(e2) sys_log("ImmediateFallback", "FAIL", e2$message))
     }
   })
+
+  # 2. GUARANTEED FALLBACK for Terminal and Rscript
+  # This runs immediately if we are NOT in RStudio, OR if we are running 
+  # a non-interactive batch script (like Rscript Mod7.R).
+  is_rstudio <- nzchar(Sys.getenv("RSTUDIO", "")) || 
+                nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", ""))
+  
+  if (!is_rstudio || !interactive()) {
+    tryCatch({
+      deferred_pkg_init()
+      deferred_pkg_hooks()
+      update_resources(quiet = TRUE)
+      sys_log("Callback", "OK", "Terminal/Rscript immediate initialization executed")
+    }, error = function(e) sys_log("ImmediateFallback", "FAIL", e$message))
+  }
+
 
 
   # ══════════════════════════════════════════════════════════════════════════
@@ -1873,7 +2031,7 @@ local({
     ), stdout = TRUE, stderr = FALSE))
     if (length(res) > 0) {
       if (requireNamespace("jsonlite", quietly=TRUE)) {
-        out <- tryCatch(jsonlite::fromJSON(paste(res, collapse="")), error=function(e) NULL)
+        out <- tryCatch(jsonlite::fromJSON(paste(res, collapse="")), error = .biome_swerr("Line_1998"))
         if (!is.null(out$response)) cat(paste0("\n", .C_GREEN, "\U0001F916 ", model, ":", .C_RESET, "\n", out$response, "\n"))
         else cat("Error: Invalid JSON response from AI.\n")
       }
@@ -1938,6 +2096,114 @@ local({
       return(invisible("cluster"))
     }
   }, envir = tool_env)
+
+  # v11.4 [W14]: cluster self-test — verifies fast-path, /Rtmp, thread caps.
+  # Use to diagnose unserialize/connection errors before running real MCMC.
+  # Sys.setenv(BIOME_WORKER_DEBUG="1") before calling to get per-worker logs.
+  assign("biome_cluster_test", function(workers = 2L) {
+    workers <- max(1L, as.integer(workers))
+    cat(sprintf("  Testing biome_make_cluster(%d)...\n", workers))
+    cl <- tryCatch(
+      biome_make_cluster(workers = workers, worker_threads = 1L),
+      error = function(e) {
+        cat(sprintf("  [FAIL] Could not create cluster: %s\n", e$message))
+        return(NULL)
+      }
+    )
+    if (is.null(cl)) return(invisible(FALSE))
+    on.exit(tryCatch(parallel::stopCluster(cl), error = .biome_swerr("Line_2078")), add = TRUE)
+
+    results <- tryCatch(
+      parallel::clusterCall(cl, function() {
+        # R 4.5+: explicit attach suppresses serialize() 'utils may not be
+        # available' warnings — utils is always present but not always attached
+        # at the exact moment clusterCall's closure is deserialized.
+        requireNamespace("utils", quietly = TRUE)
+        list(
+          pid          = Sys.getpid(),
+          tempdir      = tempdir(),
+          worker_mode  = Sys.getenv("BIOME_WORKER_MODE", "NOT_SET"),
+          omp_threads  = Sys.getenv("OMP_NUM_THREADS",   "NOT_SET"),
+          blas_threads = Sys.getenv("OPENBLAS_NUM_THREADS", "NOT_SET"),
+          rtmp_ok      = dir.exists("/Rtmp"),
+          profile_fast = isTRUE(getOption("biome.profile.loaded")),
+          # XDR check: parallelly uses FALSE (little-endian), base uses TRUE
+          r_version    = paste0(R.version$major, ".", R.version$minor),
+          detected_by  = {
+            args <- commandArgs(trailingOnly = TRUE)
+            if (any(grepl("^MASTER=", args))) "commandArgs" else
+            if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) "env_var" else
+            "NEITHER — full profile loaded (BUG)"
+          }
+        )
+      }),
+      error = function(e) {
+        cat(sprintf("  [FAIL] clusterCall failed: %s\n", e$message))
+        NULL
+      }
+    )
+
+    if (is.null(results)) return(invisible(FALSE))
+
+    all_ok <- TRUE
+    for (i in seq_along(results)) {
+      r <- results[[i]]
+      ok <- r$profile_fast && r$rtmp_ok &&
+            r$worker_mode == "1" &&
+            r$omp_threads == "1" &&
+            !grepl("BUG", r$detected_by)
+      status <- if (ok) "[OK]  " else "[WARN]"
+      if (!ok) all_ok <- FALSE
+      cat(sprintf("  %s Worker %d | pid=%d | detected_by=%s | fast_path=%s | /Rtmp=%s | omp=%s\n",
+          status, i, r$pid, r$detected_by,
+          r$profile_fast, r$rtmp_ok, r$omp_threads))
+    }
+
+    if (all_ok) {
+      cat("  All workers passed. biome_make_cluster() is functioning correctly.\n")
+    } else {
+      cat("  WARNING: one or more workers did not take the fast path.\n")
+      cat("  Re-run with Sys.setenv(BIOME_WORKER_DEBUG='1') for per-worker logs in /tmp/.\n")
+    }
+    invisible(all_ok)
+  }, envir = tool_env)
+
+  # v11.4 [W15]: Global debug dump — shows debug log + live session state.
+  # Only useful when BIOME_DEBUG=1 was set before starting R.
+  assign("biome_debug_dump", function(tail_n = 60L) {
+    dbg_log <- .biome_env$BIOME_DEBUG_LOG
+    if (!nzchar(dbg_log)) {
+      cat("BIOME_DEBUG not active. Restart R with:\n")
+      cat("  BIOME_DEBUG=1 R\n")
+      cat("  BIOME_DEBUG=1 Rscript your_script.R\n\n")
+      cat("--- In-memory diag_logs (last 20 entries) ---\n")
+      logs <- .biome_env$shared_env$diag_logs
+      if (length(logs) == 0) { cat("  (empty)\n"); return(invisible(NULL)) }
+      for (nm in tail(names(logs), 20L)) {
+        e <- logs[[nm]]
+        cat(sprintf("  [%s] [%-20s] [%-4s] %s\n",
+            format(e$ts, "%H:%M:%S"), nm, e$status, e$msg))
+      }
+      return(invisible(NULL))
+    }
+    if (!file.exists(dbg_log)) {
+      cat(sprintf("Debug log not found: %s\n", dbg_log))
+      return(invisible(NULL))
+    }
+    lines <- readLines(dbg_log, warn = FALSE)
+    cat(sprintf("--- %s (%d lines, showing last %d) ---\n",
+        dbg_log, length(lines), min(tail_n, length(lines))))
+    cat(paste(tail(lines, tail_n), collapse = "\n"), "\n")
+    cat(sprintf("\n--- Live state | pid=%d | cores=%d | threads=%d | quota=%d GB ---\n",
+        Sys.getpid(),
+        .biome_env$shared_env$last_cores,
+        .biome_env$shared_env$last_threads,
+        .biome_env$shared_env$last_quota))
+  }, envir = tool_env)
+
+  # Store debug log path in .biome_env so biome_debug_dump() can find it
+  .biome_env$BIOME_DEBUG_LOG    <- BIOME_DEBUG_LOG
+  .biome_env$BIOME_GLOBAL_DEBUG <- BIOME_GLOBAL_DEBUG
 
   # v11.0 [N10]: Worker log diagnostics
   assign("biome_worker_diagnostics", function(n = 5, since_hours = 24) {
@@ -2044,7 +2310,7 @@ local({
     ws_objects <- ls(envir = .GlobalEnv)
     ws_size <- 0; excluded_count <- 0L
     for (obj_name in ws_objects) {
-      obj <- tryCatch(get(obj_name, envir = .GlobalEnv, inherits = FALSE), error = function(e) NULL)
+      obj <- tryCatch(get(obj_name, envir = .GlobalEnv, inherits = FALSE), error = .biome_swerr("Line_2277"))
       if (!is.null(obj)) {
         if (inherits(obj, EXCLUDE_CLASSES)) { excluded_count <- excluded_count + 1L }
         else { ws_size <- ws_size + tryCatch(as.numeric(object.size(obj)), error = function(e) 0) }
@@ -2069,7 +2335,7 @@ local({
             as.integer(free_gb)), call. = FALSE, immediate. = TRUE)
         }
       }
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_2302"))
     message(paste0("\n\U0001f4be Saving to: ", target, " ..."))
     tryCatch({
       save.image(file = target)
@@ -2121,7 +2387,7 @@ local({
     cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Plot Budget ===", .C_RESET, "\n"))
     tmp_info <- tryCatch(
       system2("df", args = c("-P", "-BG", RTMP_PATH), stdout = TRUE, stderr = FALSE),
-      error = function(e) NULL
+      error = .biome_swerr("Line_2354")
     )
     if (!is.null(tmp_info) && length(tmp_info) >= 2) {
       p <- strsplit(trimws(tmp_info[2]), "\\s+")[[1]]
@@ -2135,8 +2401,8 @@ local({
     if (dir.exists(user_root)) {
       sz <- sum(file.info(list.files(user_root, full.names = TRUE, recursive = TRUE, all.files = TRUE))$size, na.rm = TRUE)
       cat(sprintf("  Your tmp usage: ~%.1f MB\n", sz / 1024^2))
-      # Per-subdir breakdown
-      for (sub in c("nimble_compile", "tmb_compile", "stan_compile", "rcpp_cache",
+      # Per-subdir breakdown — only subdirs we actually write to (v11.3 [W8])
+      for (sub in c("stan_compile", "rcpp_cache",
                     "terra", "raster", "stars", "cluster_logs", "keras_cache", "plot_cache")) {
         d <- file.path(user_root, sub)
         if (dir.exists(d)) {
@@ -2178,6 +2444,7 @@ local({
   assign("biome_restore", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
   assign("show_quota", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
 
+  .biome_mark_time("finalization")
   # ── FINALIZATION ──
   setHook("rstudio.sessionInit", function(newSession) {
     if (newSession && interactive()) {
@@ -2187,7 +2454,7 @@ local({
            message(paste0("\n", .C_RED, " WARNING: Previous session killed by OOM ", .C_RESET))
            try(file.remove(cf), silent=TRUE)
         }
-      }, error = function(e) NULL)
+      }, error = .biome_swerr("Line_2420"))
 
       bn <- "**********************************************************"
       message(paste0("\n", .C_CYAN, bn))
@@ -2219,7 +2486,7 @@ local({
         lapack_ver <- ei[["LAPACK"]]
         if (is.null(lapack_ver) || !nzchar(lapack_ver)) lapack_ver <- "system"
         message(sprintf("   LAPACK:     %s (%s)", blas_lib, lapack_ver))
-      }, error = function(e) NULL)
+      }, error = .biome_swerr("Line_2452"))
 
       tryCatch({
         df_out <- system2("df", args = c("-h", RTMP_PATH), stdout = TRUE, stderr = FALSE)
@@ -2227,7 +2494,7 @@ local({
           p <- strsplit(trimws(df_out[2]), "\\s+")[[1]]
           message(sprintf("   /Rtmp:      %s free of %s (%s)", p[4], p[2], p[5]))
         }
-      }, error = function(e) NULL)
+      }, error = .biome_swerr("Line_2460"))
 
       message(sprintf("   UserTmp:    %s", .biome_env$USER_TMP_ROOT))
 
@@ -2251,7 +2518,7 @@ local({
   }, action = "append")
 
   reg.finalizer(.biome_env, function(env) {
-    tryCatch({ sys_log("Session", "END", sprintf("User: %s", curr_user)) }, error = function(e) NULL)
+    tryCatch({ sys_log("Session", "END", sprintf("User: %s", curr_user)) }, error = .biome_swerr("Line_2484"))
     # v11.3 [W8]: cleanup only real compile dirs (stan_compile is the only one
     # that writes per-session subdirs; nimble/tmb were phantom in v11.0-v11.2)
     tryCatch({
@@ -2259,10 +2526,29 @@ local({
         d <- file.path(.biome_env$USER_TMP_ROOT, sub, paste0("session_", Sys.getpid()))
         if (dir.exists(d)) unlink(d, recursive = TRUE, force = FALSE)
       }
-    }, error = function(e) NULL)
+    }, error = .biome_swerr("Line_2492"))
   }, onexit = TRUE)
 
+  .biome_mark_time("profile_end")
   sys_log("Profile", "OK", "Loaded successfully (v11.3)")
+  
+  # ── Final Load Report ──
+  if (BIOME_GLOBAL_DEBUG) {
+    cat("\n=== BIOME DEBUG LOAD REPORT ===\n")
+    for (nm in names(.biome_env$shared_env$timers)) {
+      cat(sprintf("  [%-20s] %7.3fs\n", nm, .biome_env$shared_env$timers[[nm]]))
+    }
+    swallowed <- Filter(function(x) identical(x$status, "SWALLOW"), .biome_env$shared_env$diag_logs)
+    if (length(swallowed) > 0) {
+      cat(sprintf("\n  Caught %d swallowed errors:\n", length(swallowed)))
+      for (nm in names(swallowed)) {
+        cat(sprintf("  - [%s] %s\n", nm, swallowed[[nm]]$msg))
+      }
+    } else {
+      cat("\n  No swallowed errors detected.\n")
+    }
+    cat("===============================\n")
+  }
 })
   }  # end of: if (!.biome_skip_main) { ...main block... }
 

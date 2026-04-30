@@ -459,71 +459,6 @@ check_biome_user_layout() {
     return 0
 }
 
-check_biome_cgroups() {
-    log "INFO" "=== Checking cgroup v2 user slice limits (v12.0) ==="
-
-    # cgroup v2 active?
-    local cg_type
-    cg_type=$(stat -fc %T /sys/fs/cgroup/ 2>/dev/null)
-    if [[ "$cg_type" == "cgroup2fs" ]]; then
-        printf "  ✅ cgroup v2 active\n"
-    else
-        printf "  ❌ cgroup v2 NOT active (got: %s)\n" "$cg_type"
-        return 1
-    fi
-
-    # User slice template deployed?
-    if [[ -f /etc/systemd/system/user-.slice.d/50-biome-limits.conf ]]; then
-        printf "  ✅ user-.slice template deployed\n"
-        # Show effective values
-        local mem_high mem_max cpu_weight
-        mem_high=$(grep '^MemoryHigh=' /etc/systemd/system/user-.slice.d/50-biome-limits.conf | cut -d= -f2)
-        mem_max=$(grep '^MemoryMax=' /etc/systemd/system/user-.slice.d/50-biome-limits.conf | cut -d= -f2)
-        cpu_weight=$(grep '^CPUWeight=' /etc/systemd/system/user-.slice.d/50-biome-limits.conf | cut -d= -f2)
-        printf "      MemoryHigh=%s, MemoryMax=%s, CPUWeight=%s\n" "$mem_high" "$mem_max" "$cpu_weight"
-        if grep -q '^CPUQuota=' /etc/systemd/system/user-.slice.d/50-biome-limits.conf; then
-            printf "  ⚠️  CPUQuota present — defeats dynamic fair-share\n"
-        fi
-    else
-        printf "  ❌ user-.slice template NOT deployed\n"
-        printf "      Run: sudo bash scripts/50_setup_nodes.sh, option C\n"
-    fi
-
-    # System slice protection?
-    if [[ -f /etc/systemd/system/system.slice.d/50-biome-reserve.conf ]]; then
-        local sys_min
-        sys_min=$(cat /sys/fs/cgroup/system.slice/memory.min 2>/dev/null)
-        if [[ -n "$sys_min" && "$sys_min" -gt 0 ]]; then
-            printf "  ✅ system.slice protected: %d GB floor\n" "$((sys_min / 1024 / 1024 / 1024))"
-        else
-            printf "  ⚠️  system.slice memory.min is 0 — services unprotected\n"
-        fi
-    else
-        printf "  ❌ system.slice protection NOT deployed\n"
-    fi
-
-    # Live status — show top 3 user slices by memory
-    local user_slices
-    user_slices=$(systemctl list-units --type=slice --no-legend 2>/dev/null | awk '/user-[0-9]+\.slice/ {print $1}')
-    if [[ -n "$user_slices" ]]; then
-        printf "  ── Active user slices ──\n"
-        while IFS= read -r slice; do
-            [[ -z "$slice" ]] && continue
-            local uid user mem_current
-            uid=$(echo "$slice" | sed 's/user-//;s/.slice//')
-            user=$(getent passwd "$uid" | cut -d: -f1)
-            mem_current=$(cat "/sys/fs/cgroup/user.slice/${slice}/memory.current" 2>/dev/null)
-            if [[ -n "$mem_current" ]]; then
-                printf "      %-20s using %d GB\n" "${user:-uid=$uid}" "$((mem_current / 1024 / 1024 / 1024))"
-            fi
-        done <<< "$user_slices"
-    else
-        printf "  ── No active user sessions ──\n"
-    fi
-
-    return 0
-}
-
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -558,8 +493,7 @@ main() {
     echo ""
     check_biome_user_layout
     echo ""
-    check_biome_cgroups
-    echo ""
+
     echo "════════════════════════════════════════════════════════════"
     echo "Health check complete."
 }

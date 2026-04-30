@@ -1,0 +1,329 @@
+# ==============================================================================
+# %%BIOME_HOST%% SYSTEM PROFILE v12.0 — RUN-SPECIFIC COMPILE ROUTING (TEST)
+# ==============================================================================
+# This is a TEST companion file that adds run-specific timestamped compile
+# directories to the BIOME-CALC architecture. It can be sourced from the main
+# Rprofile_site.R.template OR loaded standalone via:
+#   source("/etc/R/Rprofile_site.R.template_v12_nimble_router")
+#
+# NEW STRUCTURE (per-user, per-run, per-worker):
+#   /Rtmp/biome_<user>/
+#   ├── nimble/<YYYY-MM-DD_HH-MM>_pid<PID>/
+#   │   ├── master/                     ← Main session
+#   │   └── worker_<seed>/               ← Each PSOCK worker
+#   │       └── logs/
+#   ├── stan/<YYYY-MM-DD_HH-MM>_pid<PID>/
+#   │   ├── master/
+#   │   └── worker_<seed>/
+#   ├── rcpp/<YYYY-MM-DD_HH-MM>_pid<PID>/
+#   │   ├── master/
+#   │   └── worker_<seed>/
+#   └── tmb/<YYYY-MM-DD_HH-MM>_pid<PID>/
+#       ├── master/
+#       └── worker_<seed>/
+#
+# v12.0 ADDITIONS (from v11.4):
+#   - [R1]  BIOME_RUN_TIMESTAMP / BIOME_RUN_ID captured once per session
+#   - [R2]  .biome_get_compile_dir(pkg, worker_id) — auto-creates dir per call
+#   - [R3]  safe_compileNimble wrapper — auto-injects dirName when NULL
+#   - [R4]  safe_compileTMB wrapper — auto-injects dir when missing
+#   - [R5]  Stan output_dir auto-routing in cmdstanr/brms hooks
+#   - [R6]  Rcpp cache routing per run/worker
+#   - [R7]  biome_make_cluster() exports BIOME_RUN_ID + per-pkg run dirs
+#   - [R8]  Worker fast-path reads BIOME_RUN_ID and creates worker_<pid>/ subdir
+#   - [R9]  biome_run_diagnostics() helper — lists current run's compile dirs
+#   - [R10] Cleanup hook: removes run dirs older than 7 days at session start
+#
+# DESIGN PRINCIPLE:
+#   When a user runs ANY script that calls compileNimble/compileTMB/cmdstanr/Rcpp,
+#   the wrapper transparently routes compile artifacts to a unique, run-specific,
+#   worker-isolated directory on /Rtmp. ZERO configuration required from user.
+# ==============================================================================
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R1: RUN ID — captured once per session
+# ══════════════════════════════════════════════════════════════════════════════
+# Format: <YYYY-MM-DD_HH-MM>_pid<PID>
+# - Timestamp ensures multiple runs (same session) don't collide if user re-sources
+# - PID ensures concurrent sessions on same VM don't collide
+# - Captured ONCE — no Sys.time() drift between subdirs created later
+# ══════════════════════════════════════════════════════════════════════════════
+local({
+  # Allow override via env var (for testing or explicit run grouping)
+  existing_id <- Sys.getenv("BIOME_RUN_ID", "")
+  if (!nzchar(existing_id)) {
+    ts_folder <- format(Sys.time(), "%Y-%m-%d_%H-%M")
+    run_id <- paste0(ts_folder, "_pid", Sys.getpid())
+    Sys.setenv(
+      BIOME_RUN_TIMESTAMP = ts_folder,
+      BIOME_RUN_ID        = run_id
+    )
+  }
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R2: HELPER — .biome_get_compile_dir()
+# ══════════════════════════════════════════════════════════════════════════════
+# Returns the proper compile directory for a given package, creating it if
+# missing. Worker-aware: when called inside a PSOCK worker, returns the
+# worker-specific subdir (worker_<pid>/). When called in master, returns master/.
+#
+# Usage:
+#   d <- .biome_get_compile_dir("nimble")              # master/
+#   d <- .biome_get_compile_dir("nimble", worker_id=2) # worker_2/
+# ══════════════════════════════════════════════════════════════════════════════
+.biome_get_compile_dir <- function(pkg = c("nimble", "stan", "rcpp", "tmb"),
+                                    worker_id = NULL) {
+  pkg <- match.arg(pkg)
+  
+  # Resolve user_tmp_root from env or fallback
+  user_tmp_root <- Sys.getenv("BIOME_USER_TMP", "")
+  if (!nzchar(user_tmp_root)) {
+    curr_user <- tryCatch(Sys.info()[["user"]], error = function(e) "unknown")
+    user_tmp_root <- file.path("/Rtmp", paste0("biome_", curr_user))
+  }
+  
+  # Resolve run_id from env (set by Section R1)
+  run_id <- Sys.getenv("BIOME_RUN_ID", "")
+  if (!nzchar(run_id)) {
+    # Fallback if R1 didn't run (defensive)
+    run_id <- paste0(format(Sys.time(), "%Y-%m-%d_%H-%M"), "_pid", Sys.getpid())
+  }
+  
+  # Detect worker context if not explicitly passed
+  if (is.null(worker_id)) {
+    is_worker <- nzchar(Sys.getenv("BIOME_WORKER_MODE", "")) ||
+                 any(grepl("^MASTER=", commandArgs(trailingOnly = TRUE)))
+    if (is_worker) worker_id <- Sys.getpid()
+  }
+  
+  subdir <- if (is.null(worker_id)) "master" else paste0("worker_", worker_id)
+  full_path <- file.path(user_tmp_root, pkg, run_id, subdir)
+  
+  if (!dir.exists(full_path)) {
+    tryCatch(
+      dir.create(full_path, recursive = TRUE, showWarnings = FALSE, mode = "0700"),
+      error = function(e) {
+        warning(sprintf("BIOME-CALC: cannot create compile dir %s: %s",
+                        full_path, e$message), call. = FALSE)
+      }
+    )
+  }
+  
+  full_path
+}
+
+# Make accessible globally (also via tools:biome_calc env)
+assign(".biome_get_compile_dir", .biome_get_compile_dir, envir = globalenv())
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R3: safe_compileNimble — auto-route compile artifacts
+# ══════════════════════════════════════════════════════════════════════════════
+# Wraps nimble::compileNimble() so that when dirName is NULL (user didn't set
+# it), we transparently inject a run-specific, worker-isolated path.
+#
+# This installs ONLY if nimble is already loaded (or via setHook for late load).
+# ══════════════════════════════════════════════════════════════════════════════
+.biome_install_nimble_wrapper <- function() {
+  if (!requireNamespace("nimble", quietly = TRUE)) return(invisible(FALSE))
+  
+  ns_env <- asNamespace("nimble")
+  if (!exists("compileNimble", envir = ns_env, inherits = FALSE)) return(invisible(FALSE))
+  
+  # Don't double-wrap
+  current <- get("compileNimble", envir = ns_env, inherits = FALSE)
+  if (isTRUE(attr(current, "biome_wrapper"))) return(invisible(FALSE))
+  
+  # Save original
+  if (!exists(".biome_env", envir = globalenv(), inherits = FALSE)) {
+    assign(".biome_env", new.env(parent = emptyenv()), envir = globalenv())
+  }
+  be <- get(".biome_env", envir = globalenv())
+  be$original_compileNimble <- current
+  
+  safe_compileNimble <- function(..., dirName = NULL,
+                                  showCompilerOutput = FALSE,
+                                  resetFunctions = FALSE,
+                                  project = NULL) {
+    if (is.null(dirName)) {
+      dirName <- .biome_get_compile_dir("nimble")
+      if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+        message(sprintf("BIOME-CALC: routing nimble compile -> %s", dirName))
+      }
+    }
+    be$original_compileNimble(..., dirName = dirName,
+                               showCompilerOutput = showCompilerOutput,
+                               resetFunctions = resetFunctions,
+                               project = project)
+  }
+  attr(safe_compileNimble, "biome_wrapper") <- TRUE
+  
+  was_locked <- tryCatch(bindingIsLocked("compileNimble", ns_env),
+                          error = function(e) FALSE)
+  tryCatch({
+    if (was_locked) unlockBinding("compileNimble", ns_env)
+    assign("compileNimble", safe_compileNimble, envir = ns_env)
+    if (was_locked) lockBinding("compileNimble", ns_env)
+    TRUE
+  }, error = function(e) {
+    warning(sprintf("BIOME-CALC: failed to wrap compileNimble: %s",
+                    e$message), call. = FALSE)
+    FALSE
+  })
+}
+
+# Try immediate install; also register hook for late load
+.biome_install_nimble_wrapper()
+setHook(packageEvent("nimble", "onLoad"), function(...) {
+  tryCatch(.biome_install_nimble_wrapper(), error = function(e) NULL)
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R4: safe_compileTMB / safe_compile (TMB)
+# ══════════════════════════════════════════════════════════════════════════════
+# TMB::compile() compiles in the current working directory by default. We can't
+# transparently route TMB compiles via dirName= (TMB doesn't accept that arg).
+# Instead, we provide a HELPER that users explicitly call:
+#   biome_tmb_compile_dir() returns a run-specific path; user does setwd() to it.
+# ══════════════════════════════════════════════════════════════════════════════
+biome_tmb_compile_dir <- function() {
+  d <- .biome_get_compile_dir("tmb")
+  if (interactive()) {
+    message(sprintf("BIOME-CALC: TMB compile dir: %s\n  Use: setwd('%s') before TMB::compile()",
+                     d, d))
+  }
+  d
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R5: Stan / cmdstanr output dir auto-routing
+# ══════════════════════════════════════════════════════════════════════════════
+# Hook into cmdstanr load → set options(cmdstanr_output_dir = run-specific path)
+# ══════════════════════════════════════════════════════════════════════════════
+.biome_route_stan <- function() {
+  if (requireNamespace("cmdstanr", quietly = TRUE)) {
+    stan_dir <- .biome_get_compile_dir("stan")
+    options(cmdstanr_output_dir = stan_dir)
+    if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+      message(sprintf("BIOME-CALC: routing cmdstanr output -> %s", stan_dir))
+    }
+  }
+}
+.biome_route_stan()
+setHook(packageEvent("cmdstanr", "onLoad"), function(...) {
+  tryCatch(.biome_route_stan(), error = function(e) NULL)
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R6: Rcpp cache routing
+# ══════════════════════════════════════════════════════════════════════════════
+local({
+  rcpp_dir <- .biome_get_compile_dir("rcpp")
+  Sys.setenv(RCPP_CACHE_DIR = rcpp_dir)
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R9: Diagnostics helper
+# ══════════════════════════════════════════════════════════════════════════════
+# Show current run's compile directories (master + any worker dirs that exist)
+# ══════════════════════════════════════════════════════════════════════════════
+biome_run_diagnostics <- function() {
+  user_tmp_root <- Sys.getenv("BIOME_USER_TMP", "")
+  run_id        <- Sys.getenv("BIOME_RUN_ID", "")
+  
+  if (!nzchar(user_tmp_root) || !nzchar(run_id)) {
+    cat("BIOME-CALC: run not initialized (BIOME_USER_TMP or BIOME_RUN_ID missing)\n")
+    return(invisible(NULL))
+  }
+  
+  cat(sprintf("\n=== BIOME-CALC Run Diagnostics ===\n"))
+  cat(sprintf("  User tmp root: %s\n", user_tmp_root))
+  cat(sprintf("  Run ID:        %s\n", run_id))
+  cat(sprintf("  PID:           %d\n", Sys.getpid()))
+  cat("\n")
+  
+  for (pkg in c("nimble", "stan", "rcpp", "tmb")) {
+    pkg_run_dir <- file.path(user_tmp_root, pkg, run_id)
+    if (dir.exists(pkg_run_dir)) {
+      subdirs <- list.dirs(pkg_run_dir, recursive = FALSE, full.names = FALSE)
+      total_size <- sum(file.info(list.files(pkg_run_dir, recursive = TRUE,
+                                              full.names = TRUE,
+                                              all.files = TRUE))$size,
+                         na.rm = TRUE)
+      cat(sprintf("  [%s] %s\n", pkg, pkg_run_dir))
+      cat(sprintf("        size: %.1f MB | subdirs: %s\n",
+                   total_size / 1024^2,
+                   if (length(subdirs)) paste(subdirs, collapse = ", ") else "(none)"))
+    }
+  }
+  cat("\n")
+  invisible(NULL)
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R10: Cleanup — remove old run dirs (>7 days)
+# ══════════════════════════════════════════════════════════════════════════════
+local({
+  user_tmp_root <- Sys.getenv("BIOME_USER_TMP", "")
+  if (!nzchar(user_tmp_root) || !dir.exists(user_tmp_root)) return(invisible())
+  
+  for (pkg in c("nimble", "stan", "rcpp", "tmb")) {
+    pkg_dir <- file.path(user_tmp_root, pkg)
+    if (!dir.exists(pkg_dir)) next
+    
+    runs <- list.dirs(pkg_dir, recursive = FALSE, full.names = TRUE)
+    if (length(runs) == 0) next
+    
+    # Don't delete current run
+    current_run_dir <- file.path(pkg_dir, Sys.getenv("BIOME_RUN_ID", ""))
+    runs <- runs[runs != current_run_dir]
+    
+    if (length(runs) > 0) {
+      run_info <- file.info(runs)
+      age_days <- as.numeric(difftime(Sys.time(), run_info$mtime, units = "days"))
+      old <- runs[!is.na(age_days) & age_days > 7]
+      if (length(old) > 0) {
+        tryCatch(
+          unlink(old, recursive = TRUE, force = FALSE),
+          error = function(e) NULL
+        )
+      }
+    }
+  }
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R11: Worker fast-path enhancement
+# ══════════════════════════════════════════════════════════════════════════════
+# Workers inherit BIOME_RUN_ID from master via rscript_envs (set by
+# biome_make_cluster patch in R7 below). On worker startup, the wrapper
+# automatically routes compileNimble to worker_<pid>/ via .biome_get_compile_dir
+# which detects worker context from BIOME_WORKER_MODE env var.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION R7: biome_make_cluster() — export BIOME_RUN_ID to workers
+# ══════════════════════════════════════════════════════════════════════════════
+# This is the patch users should add to the existing biome_make_cluster
+# function in the main Rprofile_site.R.template. The env_vec must include:
+#
+#   BIOME_RUN_ID = Sys.getenv("BIOME_RUN_ID"),
+#   BIOME_RUN_TIMESTAMP = Sys.getenv("BIOME_RUN_TIMESTAMP"),
+#
+# This propagation is REQUIRED so workers create their compile subdirs
+# under the same run folder as the master.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Final: announce loading
+# ══════════════════════════════════════════════════════════════════════════════
+if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+  message(sprintf(paste0(
+    "\n=== BIOME-CALC v12 Compile Router (TEST) Loaded ===\n",
+    "  Run ID: %s\n",
+    "  Use biome_run_diagnostics() to inspect compile dirs.\n",
+    "  Use .biome_get_compile_dir('nimble') for explicit routing.\n"
+  ), Sys.getenv("BIOME_RUN_ID")))
+}
+
+# === END v12 ROUTER ===
