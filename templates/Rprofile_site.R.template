@@ -967,7 +967,7 @@ local({
     total_vcores,
     format(.biome_env$shared_env$cgroup_cpus),
     format(.biome_env$shared_env$cgroup_ram_gb),
-    .biome_env$shared_env$cgroup_source %||% "none"))
+    {cs <- .biome_env$shared_env$cgroup_source; if (is.null(cs)) "none" else cs}))
 
   .biome_mark_time("resource_engine")
   # ── Resource Engine ──
@@ -2568,6 +2568,7 @@ local({
     cat(paste0("  ", .C_BOLD, "biome_make_cluster()", .C_RESET, "         - PSOCK cluster for MCMC.\n"))
     cat(paste0("  ", .C_BOLD, "biome_future_plan()", .C_RESET, "          - Set future::plan (auto/callr/cluster).\n"))
     cat(paste0("  ", .C_BOLD, "biome_worker_diagnostics()", .C_RESET, "   - Post-mortem of worker crashes.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_cgroup_verify()", .C_RESET, "        - Verify cgroup limits are active.\n"))
     cat(paste0("  ", .C_BOLD, "ask_ai(txt)", .C_RESET, "                  - Ask AI.\n"))
     cat(paste0("  ", .C_BOLD, "biome_help()", .C_RESET, "                 - This message.\n"))
     cat(sprintf("\n  Support: %s\n", "%%BIOME_CONTACT%%"))
@@ -2576,6 +2577,57 @@ local({
   assign("get_tmp_disk_use_pct", get_tmp_disk_use_pct, envir = tool_env)
   assign("biome_restore", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
   assign("show_quota", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
+
+  # ── biome_cgroup_verify: R-side 3-layer cgroup verification tool (v11.4) ──
+  # Checks: systemd dropin file, kernel memory.max, current session state.
+  # Guides users when cgroup limits are "Inf (not detected)" — typically means
+  # the user logged in BEFORE the cgroup deployment was applied.
+  assign("biome_cgroup_verify", function() {
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Cgroup Verification ===", .C_RESET, "\n"))
+    uid <- tryCatch(MY_UID, error = function(e) -1L)
+
+    # Layer 1: systemd drop-in file
+    dropin <- "/etc/systemd/system/user-.slice.d/50-biome-limits.conf"
+    dropin_status <- if (file.exists(dropin)) {
+      paste0(.C_GREEN, "[PRESENT]", .C_RESET)
+    } else {
+      paste0(.C_RED, "[MISSING]", .C_RESET,
+             " — run: sudo 50_setup_nodes.sh, option 8")
+    }
+    cat(sprintf("  Systemd dropin:   %s\n", dropin_status))
+
+    # Layer 2: kernel-reported cgroup limits
+    cg <- tryCatch(
+      .biome_cgroup_read_limits(uid),
+      error = function(e) list(ram_gb = Inf, cpus = Inf, source = "error")
+    )
+    cg_ram_str <- if (is.finite(cg$ram_gb)) sprintf("%.0f GB", cg$ram_gb) else "max (no limit set)"
+    cg_cpu_str <- if (is.finite(cg$cpus)) sprintf("%.1f vCPUs", cg$cpus) else "unlimited"
+    cg_src_str <- if (!is.null(cg$source) && nzchar(cg$source)) cg$source else "none"
+    cat(sprintf("  Kernel reports:   RAM=%s | CPU=%s | source=%s\n",
+                cg_ram_str, cg_cpu_str, cg_src_str))
+
+    # Layer 3: current Rprofile session state (read during profile load)
+    sess_ram <- .biome_env$shared_env$cgroup_ram_gb
+    sess_cpu <- .biome_env$shared_env$cgroup_cpus
+    cat(sprintf("  Session state:    cgroup_ram_gb=%s | cgroup_cpus=%s\n",
+                format(sess_ram), format(sess_cpu)))
+
+    # Diagnosis
+    if (!is.finite(sess_ram)) {
+      cat(paste0("\n  ", .C_YELLOW, "[ACTION NEEDED]", .C_RESET,
+                 " Kernel shows 'max' (unlimited) for your session.\n"))
+      cat("  Your login session predates the cgroup deployment. Solutions:\n")
+      cat("    1. Log out of RStudio and log back in.\n")
+      cat("    2. Ask admin to run: loginctl terminate-user <your-username>\n")
+      cat("    3. Admin can verify server-side: sudo 50_setup_nodes.sh --verify\n")
+    } else {
+      cat(paste0("\n  ", .C_GREEN, "[OK]", .C_RESET,
+                 " Cgroup memory limits are active for this session.\n"))
+    }
+
+    invisible(cg)
+  }, envir = tool_env)
 
   .biome_mark_time("finalization")
   # ── FINALIZATION ──
