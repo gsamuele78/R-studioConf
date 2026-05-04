@@ -50,14 +50,17 @@ AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v28.R.template"
 SKIP_OLLAMA="${SKIP_OLLAMA:-false}"
 DRY_RUN=false
 DO_UNINSTALL=false
+DO_VERIFY=false
 
 for arg in "$@"; do
   case "$arg" in
     --skip-ollama) SKIP_OLLAMA=true ;;
     --dry-run)     DRY_RUN=true ;;
     --uninstall)   DO_UNINSTALL=true ;;
+    --verify)      DO_VERIFY=true ;;
     --help|-h)
-      echo "Usage: sudo $0 [--skip-ollama] [--dry-run] [--uninstall]"
+      echo "Usage: sudo $0 [--skip-ollama] [--dry-run] [--uninstall] [--verify]"
+      echo "  --verify    Run 3-layer cgroup + Rprofile version check without deploying"
       exit 0
       ;;
   esac
@@ -805,7 +808,16 @@ tryCatch({parse(file='${rprofile}');cat('PARSE_OK')},
   error=function(e) cat(sprintf('PARSE_FAIL: %s',e\$message)))" 2>&1)
 
   if echo "${parse_result}" | grep -q "PARSE_OK"; then
-    log_success "Rprofile.site deployed and syntax validated"
+    # ── Version assertion: rendered file must match RPROFILE_VERSION from vars.conf ──
+    local rendered_version
+    rendered_version=$(grep -oP 'VERSION\s*<-\s*"\K[0-9.]+' "${rprofile}" | head -1)
+    if [[ -n "${rendered_version}" && "${rendered_version}" != "${RPROFILE_VERSION}" ]]; then
+      log_error "Version drift: rendered='${rendered_version}' expected='${RPROFILE_VERSION}'"
+      log_error "  → Check template or update RPROFILE_VERSION in config/setup_nodes.vars.conf"
+      [[ -f "${rprofile}.bak" ]] && cp "${rprofile}.bak" "${rprofile}"
+      exit 1
+    fi
+    log_success "Rprofile.site deployed and syntax validated (v${rendered_version:-unknown})"
   else
     log_error "Parse error: ${parse_result}"
     log_warn "Restoring backup..."
@@ -1248,9 +1260,90 @@ OLLEOF
 
   log_info "Existing logged-in users keep current limits until logout."
   log_info "Monitor live: systemd-cgtop -P"
+
+  # Run 3-layer verification after deployment (non-dry-run only)
+  [[ "${DRY_RUN}" != "true" ]] && setup_nodes_verify_cgroups
 }
 
+# ==============================================================================
+# CGROUP DEPLOYMENT VERIFICATION (3-layer)
+# ==============================================================================
+setup_nodes_verify_cgroups() {
+  log_step "Cgroup Deployment Verification (3-layer check)"
+  local all_ok=true
 
+  # ── Layer 1: Drop-in file present ──
+  local dropin="/etc/systemd/system/user-.slice.d/50-biome-limits.conf"
+  if [[ -f "${dropin}" ]]; then
+    log_success "Layer 1 [PASS] Drop-in present: ${dropin}"
+  else
+    log_error "Layer 1 [FAIL] Drop-in missing: ${dropin}"
+    log_warn  "         → Run: sudo $0  then select option 8"
+    all_ok=false
+  fi
+
+  # ── Layer 2: systemd template loaded and shows correct values ──
+  if systemctl cat user-.slice 2>/dev/null | grep -q "MemoryMax=${USER_SLICE_MEMORY_MAX}"; then
+    log_success "Layer 2 [PASS] systemd reports MemoryMax=${USER_SLICE_MEMORY_MAX}"
+  else
+    log_warn "Layer 2 [WARN] systemctl cat user-.slice does not show MemoryMax=${USER_SLICE_MEMORY_MAX}"
+    log_warn "         → Try: systemctl daemon-reload"
+    all_ok=false
+  fi
+
+  # ── Layer 3: Kernel cgroup files for active user sessions ──
+  local active_slices
+  active_slices=$(systemctl list-units --type=slice --no-legend 2>/dev/null \
+                  | awk '/user-[0-9]+\.slice/ {print $1}')
+  if [[ -z "${active_slices}" ]]; then
+    log_info "Layer 3: No active user slices (no users currently logged in)"
+  else
+    log_info "Layer 3: Checking kernel cgroup files for active user slices..."
+    while IFS= read -r slice; do
+      [[ -z "$slice" ]] && continue
+      local uid
+      uid=$(echo "$slice" | grep -oP 'user-\K[0-9]+')
+      [[ -z "$uid" ]] && continue
+
+      # cgroup v2 path
+      local cg_mem_file="/sys/fs/cgroup/user.slice/user-${uid}.slice/memory.max"
+      if [[ -f "${cg_mem_file}" ]]; then
+        local cg_val
+        cg_val=$(cat "${cg_mem_file}" 2>/dev/null || echo "error")
+        if [[ "${cg_val}" == "max" ]]; then
+          log_warn "Layer 3 [WARN] ${slice}: kernel shows 'max' (unlimited) — user must logout and login again"
+          log_warn "         → Admin force-reset: loginctl terminate-user $(id -nu "${uid}" 2>/dev/null || echo "${uid}")"
+          all_ok=false
+        else
+          local cg_gb
+          cg_gb=$(awk "BEGIN{printf \"%.0f\", ${cg_val}/1073741824}")
+          log_success "Layer 3 [PASS] ${slice}: memory.max = ${cg_gb} GB (kernel-enforced)"
+        fi
+      else
+        # Fallback: check cgroup v1
+        local cg_v1
+        cg_v1=$(find /sys/fs/cgroup/memory -name "memory.limit_in_bytes" \
+                      -path "*user-${uid}*" 2>/dev/null | head -1)
+        if [[ -n "${cg_v1}" ]]; then
+          local v1_val
+          v1_val=$(cat "${cg_v1}" 2>/dev/null || echo "error")
+          log_info "Layer 3 [INFO] ${slice}: cgroup v1 memory = ${v1_val} bytes (${cg_v1})"
+        else
+          log_warn "Layer 3 [WARN] ${slice}: no cgroup memory file found (v2 path missing, v1 not found)"
+          all_ok=false
+        fi
+      fi
+    done <<< "${active_slices}"
+  fi
+
+  if [[ "${all_ok}" == true ]]; then
+    log_success "All cgroup verification layers passed."
+  else
+    log_warn "One or more cgroup checks failed — see details above."
+    log_info "  Users needing re-login: ask them to log out and back in."
+    log_info "  Force-reset a session:  loginctl terminate-user <username>"
+  fi
+}
 
 # ==============================================================================
 # STEP 11B: ORPHAN PROCESS CLEANUP
@@ -1590,6 +1683,26 @@ if [[ "${DO_UNINSTALL}" == true ]]; then
   exit 0
 fi
 
+# ── Handle --verify CLI flag (non-interactive cgroup + version check) ──
+if [[ "${DO_VERIFY}" == true ]]; then
+  setup_nodes_preflight
+  setup_nodes_verify_cgroups
+  # Check deployed Rprofile version
+  deployed_ver=$(grep -oP 'VERSION\s*<-\s*"\K[0-9.]+' /etc/R/Rprofile.site 2>/dev/null | head -1)
+  if [[ -n "${deployed_ver}" ]]; then
+    if [[ "${deployed_ver}" == "${RPROFILE_VERSION}" ]]; then
+      log_success "Rprofile version: deployed=v${deployed_ver} expected=v${RPROFILE_VERSION} [OK]"
+    else
+      log_warn "Rprofile version drift: deployed=v${deployed_ver} expected=v${RPROFILE_VERSION}"
+      log_warn "  → Re-deploy: sudo $0  then select option 3"
+    fi
+  else
+    log_warn "Could not read deployed Rprofile version from /etc/R/Rprofile.site"
+    log_warn "  → File may not exist or was deployed without the version assertion"
+  fi
+  exit 0
+fi
+
 echo ""
 echo "============================================================"
 echo "  BIOME-CALC NODE SETUP"
@@ -1611,6 +1724,7 @@ echo "  10) Setup BIOME Precision Archiver (Step 11c)"
 echo "  T) Setup BIOME Admin Tools (Step 11d)"
 echo "  R) Master Diagnostic Report (Step 11e)"
 echo "  O) Deploy Optimized Rprofile (Rust plugin + Template)"
+echo "  V) Verify deployment (cgroups + Rprofile version)"
 echo "  U) Uninstall (remove deployed files)"
 echo "  Q) Quit"
 echo ""
@@ -1690,6 +1804,10 @@ case "${choice}" in
     RPROFILE_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site_optimized.R.template"
     setup_nodes_rust_compile
     setup_nodes_config_files
+    ;;
+  V)
+    setup_nodes_preflight
+    setup_nodes_verify_cgroups
     ;;
   U)
     setup_nodes_uninstall
