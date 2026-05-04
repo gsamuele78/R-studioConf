@@ -821,35 +821,153 @@ local({
   }
 
   .biome_mark_time("cgroups_init")
-  # ── Hardware Topology & Cgroups ──
+  # ════════════════════════════════════════════════════════════════════════════
+  # CENTRALIZED CGROUP LIMIT READER (v11.4-fix)
+  # ════════════════════════════════════════════════════════════════════════════
+  # Handles both cgroup v1 (controller-prefixed) and v2 (unified hierarchy).
+  # Checks per-user slice paths first (most specific), then falls back to root.
+  # Returns a named list: list(ram_gb = ..., cpus = ..., source = ...)
+  # ════════════════════════════════════════════════════════════════════════════
+  .biome_cgroup_read_limits <- function(uid = MY_UID) {
+    result <- list(ram_gb = Inf, cpus = Inf, source = "none")
+
+    if (!ENABLE_CGROUP_AWARE) return(result)
+
+    # ── Build per-user slice paths ─────────────────────────────────────────
+    # cgroup v2: unified hierarchy under /sys/fs/cgroup
+    # cgroup v1: controller-specific mountpoints (e.g., /sys/fs/cgroup/memory/)
+    user_slice_rel <- if (uid >= 0) {
+      sprintf("user.slice/user-%d.slice", uid)
+    } else {
+      NULL
+    }
+
+    # ── Try cgroup v2 (unified) per-user slice first ──────────────────────
+    if (!is.null(user_slice_rel)) {
+      # Memory: /sys/fs/cgroup/user.slice/user-<uid>.slice/memory.max
+      mem_path <- file.path("/sys/fs/cgroup", user_slice_rel, "memory.max")
+      if (file.exists(mem_path)) {
+        tryCatch({
+          v <- trimws(readLines(mem_path, n = 1, warn = FALSE))
+          if (v != "max") {
+            result$ram_gb <- as.numeric(v) / (1024^3)
+            result$source <- "cgroupv2-user-slice"
+          }
+        }, error = function(e) NULL)
+      }
+      # CPU: /sys/fs/cgroup/user.slice/user-<uid>.slice/cpu.max
+      cpu_path <- file.path("/sys/fs/cgroup", user_slice_rel, "cpu.max")
+      if (file.exists(cpu_path)) {
+        tryCatch({
+          p <- strsplit(trimws(readLines(cpu_path, n = 1, warn = FALSE)), " ")[[1]]
+          if (p[1] != "max" && length(p) == 2) {
+            q <- as.numeric(p[1]); d <- as.numeric(p[2])
+            if (!is.na(q) && !is.na(d) && d > 0) {
+              result$cpus <- q / d
+              if (result$source == "none") result$source <- "cgroupv2-user-slice"
+            }
+          }
+        }, error = function(e) NULL)
+      }
+    }
+
+    # ── Fall back to cgroup v2 root ────────────────────────────────────────
+    if (result$ram_gb == Inf) {
+      cg2_mem <- "/sys/fs/cgroup/memory.max"
+      if (file.exists(cg2_mem)) {
+        tryCatch({
+          v <- trimws(readLines(cg2_mem, n = 1, warn = FALSE))
+          if (v != "max") result$ram_gb <- as.numeric(v) / (1024^3)
+          if (result$source == "none") result$source <- "cgroupv2-root"
+        }, error = function(e) NULL)
+      }
+    }
+    if (result$cpus == Inf) {
+      cg2_cpu <- "/sys/fs/cgroup/cpu.max"
+      if (file.exists(cg2_cpu)) {
+        tryCatch({
+          p <- strsplit(trimws(readLines(cg2_cpu, n = 1, warn = FALSE)), " ")[[1]]
+          if (p[1] != "max" && length(p) == 2) {
+            q <- as.numeric(p[1]); d <- as.numeric(p[2])
+            if (!is.na(q) && !is.na(d) && d > 0) result$cpus <- q / d
+          }
+        }, error = function(e) NULL)
+      }
+    }
+
+    # ── Fall back to cgroup v1 (controller-prefixed paths) ────────────────
+    # P2-fix: v1 uses /sys/fs/cgroup/<controller>/<path>, NOT /sys/fs/cgroup/<path>
+    if (result$ram_gb == Inf) {
+      # Per-user: /sys/fs/cgroup/memory/user.slice/user-<uid>.slice/memory.limit_in_bytes
+      if (!is.null(user_slice_rel)) {
+        cg1_mem_user <- file.path("/sys/fs/cgroup/memory", user_slice_rel, "memory.limit_in_bytes")
+        if (file.exists(cg1_mem_user)) {
+          tryCatch({
+            v <- as.numeric(readLines(cg1_mem_user, n = 1, warn = FALSE))
+            if (!is.na(v) && v < 1e18) result$ram_gb <- v / (1024^3)
+            if (result$source == "none") result$source <- "cgroupv1-user-slice"
+          }, error = function(e) NULL)
+        }
+      }
+      # Root: /sys/fs/cgroup/memory/memory.limit_in_bytes
+      cg1_mem_root <- "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+      if (file.exists(cg1_mem_root)) {
+        tryCatch({
+          v <- as.numeric(readLines(cg1_mem_root, n = 1, warn = FALSE))
+          if (!is.na(v) && v < 1e18) result$ram_gb <- v / (1024^3)
+          if (result$source == "none") result$source <- "cgroupv1-root"
+        }, error = function(e) NULL)
+      }
+    }
+    if (result$cpus == Inf) {
+      # Per-user: /sys/fs/cgroup/cpu/user.slice/user-<uid>.slice/cpu.cfs_quota_us
+      if (!is.null(user_slice_rel)) {
+        cg1_cpu_user <- file.path("/sys/fs/cgroup/cpu", user_slice_rel, "cpu.cfs_quota_us")
+        if (file.exists(cg1_cpu_user)) {
+          tryCatch({
+            q <- as.numeric(readLines(cg1_cpu_user, n = 1, warn = FALSE))
+            p <- file.path("/sys/fs/cgroup/cpu", user_slice_rel, "cpu.cfs_period_us")
+            d <- if (file.exists(p)) as.numeric(readLines(p, n = 1, warn = FALSE)) else NA
+            if (!is.na(q) && q > 0 && !is.na(d) && d > 0) result$cpus <- q / d
+          }, error = function(e) NULL)
+        }
+      }
+      # Root: /sys/fs/cgroup/cpu/cpu.cfs_quota_us
+      cg1_cpu_root <- "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
+      if (file.exists(cg1_cpu_root)) {
+        tryCatch({
+          q <- as.numeric(readLines(cg1_cpu_root, n = 1, warn = FALSE))
+          d <- as.numeric(readLines("/sys/fs/cgroup/cpu/cpu.cfs_period_us", n = 1, warn = FALSE))
+          if (!is.na(q) && q > 0 && !is.na(d) && d > 0) result$cpus <- q / d
+        }, error = function(e) NULL)
+      }
+    }
+
+    # ── Diagnostic on fallback to Inf ──────────────────────────────────────
+    if (result$ram_gb == Inf || result$cpus == Inf) {
+      sys_log("Cgroup", "INFO", sprintf(
+        "No cgroup limits detected (ram_gb=%s, cpus=%s) — check systemd slice config",
+        result$ram_gb, result$cpus))
+    }
+
+    return(result)
+  }
+
+  # ── Hardware Topology & Initial Cgroup Read ──
   total_vcores <- tryCatch(parallel::detectCores(logical=TRUE), error=function(e) VM_VCORES)
 
   if (ENABLE_CGROUP_AWARE) tryCatch({
-    cg2_mem <- "/sys/fs/cgroup/memory.max"; cg1_mem <- "/sys/fs/cgroup/memory/memory.limit_in_bytes"
-    cg2_cpu <- "/sys/fs/cgroup/cpu.max";    cg1_cq  <- "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
-    if (file.exists(cg2_mem)) {
-      v <- trimws(readLines(cg2_mem, n=1, warn=FALSE))
-      if (v != "max") .biome_env$shared_env$cgroup_ram_gb <- as.numeric(v)/(1024^3)
-    } else if (file.exists(cg1_mem)) {
-      v <- as.numeric(readLines(cg1_mem, n=1, warn=FALSE))
-      if (!is.na(v) && v < 1e18) .biome_env$shared_env$cgroup_ram_gb <- v/(1024^3)
-    }
-    if (file.exists(cg2_cpu)) {
-      p <- strsplit(trimws(readLines(cg2_cpu, n=1, warn=FALSE)), " ")[[1]]
-      if (p[1] != "max" && length(p)==2) {
-        q <- as.numeric(p[1]); d <- as.numeric(p[2])
-        if (!is.na(q) && !is.na(d) && d>0) .biome_env$shared_env$cgroup_cpus <- q/d
-      }
-    } else if (file.exists(cg1_cq)) {
-       q <- as.numeric(readLines(cg1_cq, n=1, warn=FALSE))
-       d <- as.numeric(readLines("/sys/fs/cgroup/cpu/cpu.cfs_period_us", n=1, warn=FALSE))
-       if (!is.na(q) && q>0 && !is.na(d) && d>0) .biome_env$shared_env$cgroup_cpus <- q/d
-    }
+    cg <- .biome_cgroup_read_limits(MY_UID)
+    .biome_env$shared_env$cgroup_ram_gb <- cg$ram_gb
+    .biome_env$shared_env$cgroup_cpus <- cg$cpus
+    .biome_env$shared_env$cgroup_source <- cg$source
   }, error = function(e) sys_log("Cgroup", "WARN", e$message))
-  sys_log("Cgroup", "DBG", sprintf("vcores=%d cgroup_cpus=%s cgroup_ram_gb=%s",
+
+  sys_log("Cgroup", "DBG", sprintf("vcores=%d cgroup_cpus=%s cgroup_ram_gb=%s source=%s",
     total_vcores,
     format(.biome_env$shared_env$cgroup_cpus),
-    format(.biome_env$shared_env$cgroup_ram_gb)))
+    format(.biome_env$shared_env$cgroup_ram_gb),
+    .biome_env$shared_env$cgroup_source %||% "none"))
 
   .biome_mark_time("resource_engine")
   # ── Resource Engine ──
@@ -977,11 +1095,10 @@ local({
       if (ENABLE_CGROUP_AWARE && (now - .biome_env$shared_env$last_cgroup_check) > 300) {
         .biome_env$shared_env$last_cgroup_check <- now
         tryCatch({
-          cg2_mem <- "/sys/fs/cgroup/memory.max"
-          if (file.exists(cg2_mem)) {
-            v <- trimws(readLines(cg2_mem, n=1, warn=FALSE))
-            if (v != "max") .biome_env$shared_env$cgroup_ram_gb <- as.numeric(v)/(1024^3)
-          }
+          cg <- .biome_cgroup_read_limits(MY_UID)
+          .biome_env$shared_env$cgroup_ram_gb <- cg$ram_gb
+          .biome_env$shared_env$cgroup_cpus <- cg$cpus
+          .biome_env$shared_env$cgroup_source <- cg$source
         }, error = .biome_swerr("Line_952"))
       }
 
@@ -1971,6 +2088,22 @@ local({
     update_resources(quiet = FALSE)
     cat(paste0("\n", .C_CYAN, "=== BIOME-CALC v", .biome_env$VERSION, " | System Dashboard ===", .C_RESET, "\n"))
     cat(sprintf("  RAM Quota:    %d GB (fair-share)\n", .biome_env$shared_env$last_quota))
+    # ── Cgroup ceiling display (v11.4-fix: labeled by source to avoid misinterpretation) ──
+    cg_ram  <- .biome_env$shared_env$cgroup_ram_gb
+    cg_cpu  <- .biome_env$shared_env$cgroup_cpus
+    cg_src  <- .biome_env$shared_env$cgroup_source
+    if (is.null(cg_src)) cg_src <- "none"
+    cg_ram_str <- if (is.finite(cg_ram)) sprintf("%.1f GB", cg_ram) else "Inf (not detected)"
+    cg_cpu_str <- if (is.finite(cg_cpu)) sprintf("%.1f vCPUs", cg_cpu) else "Inf (not detected)"
+    cg_src_label <- switch(cg_src,
+      "cgroupv2-user-slice" = "user.slice ceiling [cgroup v2]",
+      "cgroupv2-root"       = "root cgroup ceiling [cgroup v2]",
+      "cgroupv1-user-slice" = "user.slice ceiling [cgroup v1]",
+      "cgroupv1-root"       = "root cgroup ceiling [cgroup v1]",
+      "none"                = "not detected — check systemd slice config"
+    )
+    cat(sprintf("  Cgroup RAM:   %s (%s)\n", cg_ram_str, cg_src_label))
+    cat(sprintf("  Cgroup CPU:   %s (%s)\n", cg_cpu_str, cg_src_label))
     cat(sprintf("  vCPU Cores:   %d (Allocated)\n", .biome_env$shared_env$last_cores))
     cat(sprintf("  Active Users: %d\n", get_active_users()))
     tmp_str <- tryCatch({

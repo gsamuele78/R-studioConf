@@ -262,6 +262,29 @@ clusterExport(N_cluster, varlist = c(
 # DEBUG function for running independent processes with detailed logging
 # Each worker creates its own log file in /Rtmp
 run_MCMC_allcode_debug <- function(seed, data, code, constants, inits, niter, nburnin, thin = 1, smmry = T, wid_aic = F) {
+    # ─── SETUP LOG FILE PATHS FIRST (available for all code paths) ───
+    # Align with BIOME-CALC architecture: /Rtmp/biome_<user>/nimble/<timestamp>/<worker>/
+    curr_user <- Sys.info()[["user"]]
+    user_tmp_root <- file.path("/Rtmp", paste0("biome_", curr_user))
+
+    # Create nimble run directory with timestamp
+    nimble_run_dir <- file.path(user_tmp_root, "nimble", TIMESTAMPS$folder)
+    worker_compile_dir <- file.path(nimble_run_dir, paste0("nimble_worker_", seed))
+    worker_log_dir <- file.path(worker_compile_dir, "logs")
+    worker_file_log <- paste0(worker_log_dir, "/worker_", seed, "_debug.log")
+
+    # Create directories if they don't exist
+    if (!dir.exists(nimble_run_dir)) {
+        dir.create(nimble_run_dir, recursive = TRUE, showWarnings = FALSE, mode = "0700")
+    }
+    if (!dir.exists(worker_compile_dir)) {
+        dir.create(worker_compile_dir, recursive = TRUE, showWarnings = FALSE, mode = "0700")
+    }
+    if (!dir.exists(worker_log_dir)) {
+        dir.create(worker_log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0700")
+    }
+
+    # ─── CREATE LOG FILE AND REDIRECT OUTPUT ───
     # Create a unique log file for this worker
     log_file <- paste0("/Rtmp/worker_", seed, "_debug.log")
     log_con <- file(log_file, open = "wt")
@@ -274,29 +297,11 @@ run_MCMC_allcode_debug <- function(seed, data, code, constants, inits, niter, nb
     cat("--- Inizio Worker Seed:", seed, "---\n")
     cat("--- Timestamp:", TIMESTAMPS$display, "---\n")
     cat("================================================================================\n")
+    cat("Worker log directory:", worker_log_dir, "\n")
+    cat("Worker file log:", worker_file_log, "\n")
 
     result <- tryCatch(
         {
-            # Align with BIOME-CALC architecture: /Rtmp/biome_<user>/nimble/<timestamp>/<worker>/
-            curr_user <- Sys.info()[["user"]]
-            user_tmp_root <- file.path("/Rtmp", paste0("biome_", curr_user))
-
-            # Create nimble run directory with timestamp
-            nimble_run_dir <- file.path(user_tmp_root, "nimble", TIMESTAMPS$folder)
-            worker_compile_dir <- file.path(nimble_run_dir, paste0("nimble_worker_", seed))
-            worker_log_dir <- file.path(worker_compile_dir, "logs")
-
-            # Create directories if they don't exist
-            if (!dir.exists(nimble_run_dir)) {
-                dir.create(nimble_run_dir, recursive = TRUE, showWarnings = FALSE, mode = "0700")
-            }
-            if (!dir.exists(worker_compile_dir)) {
-                dir.create(worker_compile_dir, recursive = TRUE, showWarnings = FALSE, mode = "0700")
-            }
-            if (!dir.exists(worker_log_dir)) {
-                dir.create(worker_log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0700")
-            }
-
             # Set temp directory for compilation (unique per worker)
             Sys.setenv(TMPDIR = worker_compile_dir)
             cat("TMPDIR impostato a:", Sys.getenv("TMPDIR"), "\n")
@@ -407,21 +412,23 @@ run_MCMC_allcode_debug <- function(seed, data, code, constants, inits, niter, nb
         }
     )
 
-    # Close log file
+    # ─── FLUSH AND CLOSE LOG FILE ───
     sink(type = "message")
     sink(type = "output")
     close(log_con)
-    worker_file_log <- paste0(worker_log_dir, "/worker_", seed, "_debug.log")
 
-    cat("\n")
-    cat("================================================================================\n")
-    cat("Log files: ", worker_file_log, "\n")
-    cat("================================================================================\n")
-    cat("\n")
-
-
-    # Copy and rename the log file to the worker log directory
-    file.copy(from = log_file, to = worker_file_log)
+    # ─── COPY LOG TO FINAL LOCATION ───
+    # Now copy the temporary log file to the worker's log directory
+    # This happens AFTER sinks are closed, so all output is captured
+    tryCatch(
+        {
+            file.copy(from = log_file, to = worker_file_log, overwrite = TRUE)
+            cat("Log file copied to:", worker_file_log, "\n")
+        },
+        error = function(e) {
+            cat("Failed to copy log file:", conditionMessage(e), "\n")
+        }
+    )
 
     return(result)
 }
@@ -437,7 +444,8 @@ cat("AVVIO ESECUZIONE PARALLELA CON DEBUG\n")
 cat("================================================================================\n")
 cat("Numero di worker:", n_chains, "\n")
 cat("Tipo cluster: PSOCK\n")
-cat("Log files: /Rtmp/worker_*_debug.log\n")
+cat("Log files (temp): /Rtmp/worker_*_debug.log\n")
+cat("Log files (final): /Rtmp/biome_", Sys.info()[["user"]], "/nimble/", TIMESTAMP_FOLDER, "/nimble_worker_*/logs/\n", sep = "")
 cat("================================================================================\n")
 cat("\n")
 
@@ -457,7 +465,8 @@ if (!all(unlist(check_results))) {
 }
 
 cat("\nEsecuzione MCMC in corso...\n")
-cat("I log dettagliati saranno disponibili in /Rtmp/worker_*_debug.log\n")
+cat("I log dettagliati saranno disponibili in:\n")
+cat("  /Rtmp/biome_", Sys.info()[["user"]], "/nimble/", TIMESTAMP_FOLDER, "/nimble_worker_*/logs/worker_*_debug.log\n", sep = "")
 cat("\n")
 
 # run the MCMC with debug function
@@ -496,7 +505,8 @@ for (i in 1:4) {
         cat("!!! Worker", i, "ha riportato un errore:\n")
         cat("   Messaggio:", chain_output[[i]]$message, "\n")
         cat("   Call:", chain_output[[i]]$call, "\n")
-        cat("   Controlla il log: /Rtmp/worker_", i, "_debug.log\n")
+        cat("   Controlla il log completo in:\n")
+        cat("   /Rtmp/biome_", Sys.info()[["user"]], "/nimble/", TIMESTAMP_FOLDER, "/nimble_worker_", i, "/logs/worker_", i, "_debug.log\n", sep = "")
     } else {
         cat("Worker", i, ": OK\n")
     }
@@ -506,15 +516,15 @@ cat("\n")
 cat("================================================================================\n")
 cat("ISTRUZIONI PER IL DEBUG\n")
 cat("================================================================================\n")
-cat("Per analizzare gli errori, controlla i file di log:\n")
-cat("  /Rtmp/worker_1_debug.log\n")
-cat("  /Rtmp/worker_2_debug.log\n")
-cat("  /Rtmp/worker_3_debug.log\n")
-cat("  /Rtmp/worker_4_debug.log\n")
+cat("Per analizzare gli errori, controlla i file di log COMPLETI:\n")
+cat("  /Rtmp/biome_", Sys.info()[["user"]], "/nimble/", TIMESTAMP_FOLDER, "/nimble_worker_1/logs/worker_1_debug.log\n", sep = "")
+cat("  /Rtmp/biome_", Sys.info()[["user"]], "/nimble/", TIMESTAMP_FOLDER, "/nimble_worker_2/logs/worker_2_debug.log\n", sep = "")
+cat("  /Rtmp/biome_", Sys.info()[["user"]], "/nimble/", TIMESTAMP_FOLDER, "/nimble_worker_3/logs/worker_3_debug.log\n", sep = "")
+cat("  /Rtmp/biome_", Sys.info()[["user"]], "/nimble/", TIMESTAMP_FOLDER, "/nimble_worker_4/logs/worker_4_debug.log\n", sep = "")
 cat("\n")
 cat("Per visualizzare un log:\n")
-cat("  cat /Rtmp/worker_1_debug.log\n")
-cat("  tail -n 100 /Rtmp/worker_1_debug.log\n")
+cat("  cat /Rtmp/biome_", Sys.info()[["user"]], "/nimble/", TIMESTAMP_FOLDER, "/nimble_worker_1/logs/worker_1_debug.log\n", sep = "")
+cat("  tail -n 100 /Rtmp/biome_", Sys.info()[["user"]], "/nimble/", TIMESTAMP_FOLDER, "/nimble_worker_1/logs/worker_1_debug.log\n", sep = "")
 cat("================================================================================\n")
 
 # 18 ore
