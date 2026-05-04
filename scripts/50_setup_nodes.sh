@@ -1282,12 +1282,15 @@ setup_nodes_verify_cgroups() {
     all_ok=false
   fi
 
-  # ── Layer 2: systemd template loaded and shows correct values ──
-  if systemctl cat user-.slice 2>/dev/null | grep -q "MemoryMax=${USER_SLICE_MEMORY_MAX}"; then
-    log_success "Layer 2 [PASS] systemd reports MemoryMax=${USER_SLICE_MEMORY_MAX}"
+  # ── Layer 2: Drop-in file content verification ──
+  # Note: systemctl cat user-.slice is unreliable for template units on Ubuntu 24.04.
+  # The user-.slice is a template that may not show drop-in config until a concrete
+  # instance (user-1000.slice) exists. We verify the drop-in file content directly.
+  if grep -q "MemoryMax=${USER_SLICE_MEMORY_MAX}" "${dropin}" 2>/dev/null; then
+    log_success "Layer 2 [PASS] Drop-in contains MemoryMax=${USER_SLICE_MEMORY_MAX}"
   else
-    log_warn "Layer 2 [WARN] systemctl cat user-.slice does not show MemoryMax=${USER_SLICE_MEMORY_MAX}"
-    log_warn "         → Try: systemctl daemon-reload"
+    log_warn "Layer 2 [WARN] Drop-in does not contain MemoryMax=${USER_SLICE_MEMORY_MAX}"
+    log_warn "         → Re-run: sudo $0 then select option 8"
     all_ok=false
   fi
 
