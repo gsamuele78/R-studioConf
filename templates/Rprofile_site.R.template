@@ -7,6 +7,41 @@
 # OpenMP:  libgomp (capped by OMP_NUM_THREADS, coordinated per-user)
 # Contact: %%BIOME_CONTACT%%
 #
+# v12.0 CHANGES (from v11.4) — "cgroup fair-share enforcement: remove R-level user-counting":
+#   Context: 50_setup_nodes.sh now deploys systemd cgroup v2 slice limits via
+#   setup_nodes_cgroups() (Step 11A). Kernel enforces per-user memory and CPU
+#   scheduling at the slice level — R-level user counting was a best-effort
+#   approximation that is now redundant and misleading.
+#
+#   WHAT CHANGED:
+#   - [C1]  REMOVED: get_active_users() — /proc-scanning to count R processes.
+#           The kernel's CPUWeight=100 on user-.slice enforces proportional CPU
+#           fair-share automatically. Counting pids was both unreliable
+#           (Rscript/future workers inflate count) and unnecessary.
+#   - [C2]  REMOVED: per-user RAM division in update_resources().
+#           quota = ram_gb / n_procs → now quota = ram_gb * 0.9.
+#           MemoryHigh/MemoryMax on user slice is the real enforcement boundary.
+#   - [C3]  REMOVED: fair_cores = eff_vc / n_procs division.
+#           CPUWeight handles scheduler fairness. fair_cores now reflects the
+#           full cgroup-capped vcore count; bt = min(fair_cores, MAX_THREADS)
+#           still prevents BLAS livelock (CPUWeight != thread count cap).
+#   - [C4]  REMOVED: BIOME-RESCALE notification box.
+#           Was triggered by n_procs change; kernel throttles silently now.
+#   - [C5]  REMOVED: ENABLE_RESOURCE_MGMT flag — only gated removed logic.
+#           Thread management (OMP/BLAS/MKL) is now under ENABLE_BLAS_MGMT.
+#   - [C6]  FIXED:  ENABLE_CGROUP_AWARE path bug — previous code read
+#           /sys/fs/cgroup/memory.max (root cgroup, always "max"). User slice
+#           limits live at user.slice/user-<uid>.slice/. MY_UID is resolved
+#           before this block runs (Section: Portable UID).
+#   - [C7]  UPDATED: status() and startup banner reflect cgroup enforcement.
+<<<<<<< HEAD
+#   - [C8]  API_VERSION bumped 10↑11.
+#   NOTE: biome_cgroup_verify() and .biome_cgroup_read_limits() preserved from v11.4.
+#
+=======
+#   - [C8]  API_VERSION bumped 10→11.
+>>>>>>> e177009fb7907acd64b05a3f52a8c7d2be48d808
+#
 # v11.4 CHANGES (from v11.3) — "Lexical Scope Restoration":
 #   Discovery: v11.3 .biome_install_wrapper() set environment(fn) <- ns_env
 #   to make safe_makeCluster's default `type = getClusterOption("type")`
@@ -567,7 +602,6 @@ local({
   .C_ITALIC <- paste0(.ESC, "[3m")
 
   # ── Feature Flags ──
-  ENABLE_RESOURCE_MGMT <- TRUE
   ENABLE_SMART_IO      <- TRUE
   ENABLE_SMART_ROUTING <- TRUE
   ENABLE_AI_ASSISTANT  <- TRUE
@@ -681,7 +715,11 @@ local({
   se$last_cgroup_check <- 0
   se$user_tmp_root <- USER_TMP_ROOT   # v11.0: stored early
   .biome_env$VERSION <- VERSION
-  .biome_env$API_VERSION <- 10L       # v11.4: bumped 9→10 (lexical scope restored in .biome_install_wrapper)
+<<<<<<< HEAD
+  .biome_env$API_VERSION <- 11L       # v12.0: bumped 10↑11 (cgroup fair-share; removed get_active_users)
+=======
+  .biome_env$API_VERSION <- 11L       # v12.0: bumped 10→11 (cgroup fair-share; removed get_active_users)
+>>>>>>> e177009fb7907acd64b05a3f52a8c7d2be48d808
   .biome_env$TMP_WARN_PCT <- TMP_WARN_PCT
   .biome_env$TMP_DISK_GB <- TMP_DISK_GB
   .biome_env$USER_TMP_ROOT <- USER_TMP_ROOT
@@ -957,10 +995,39 @@ local({
   total_vcores <- tryCatch(parallel::detectCores(logical=TRUE), error=function(e) VM_VCORES)
 
   if (ENABLE_CGROUP_AWARE) tryCatch({
+<<<<<<< HEAD
     cg <- .biome_cgroup_read_limits(MY_UID)
     .biome_env$shared_env$cgroup_ram_gb <- cg$ram_gb
     .biome_env$shared_env$cgroup_cpus <- cg$cpus
     .biome_env$shared_env$cgroup_source <- cg$source
+=======
+    # v12.0 [C6]: Read the USER's own slice, not the root cgroup.
+    # Root cgroup /sys/fs/cgroup/memory.max is always "max" on a non-containerised host.
+    # systemd places each user session under user.slice/user-<uid>.slice/.
+    # MY_UID is resolved above (Section: Portable UID) before this block.
+    cg2_mem <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/memory.max",    MY_UID)
+    cg1_mem <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/memory.limit_in_bytes", MY_UID)
+    cg2_cpu <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/cpu.max",        MY_UID)
+    cg1_cq  <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/cpu.cfs_quota_us", MY_UID)
+    if (file.exists(cg2_mem)) {
+      v <- trimws(readLines(cg2_mem, n=1, warn=FALSE))
+      if (v != "max") .biome_env$shared_env$cgroup_ram_gb <- as.numeric(v)/(1024^3)
+    } else if (file.exists(cg1_mem)) {
+      v <- as.numeric(readLines(cg1_mem, n=1, warn=FALSE))
+      if (!is.na(v) && v < 1e18) .biome_env$shared_env$cgroup_ram_gb <- v/(1024^3)
+    }
+    if (file.exists(cg2_cpu)) {
+      p <- strsplit(trimws(readLines(cg2_cpu, n=1, warn=FALSE)), " ")[[1]]
+      if (p[1] != "max" && length(p)==2) {
+        q <- as.numeric(p[1]); d <- as.numeric(p[2])
+        if (!is.na(q) && !is.na(d) && d>0) .biome_env$shared_env$cgroup_cpus <- q/d
+      }
+    } else if (file.exists(cg1_cq)) {
+       q <- as.numeric(readLines(cg1_cq, n=1, warn=FALSE))
+       d <- as.numeric(readLines("/sys/fs/cgroup/cpu/cpu.cfs_period_us", n=1, warn=FALSE))
+       if (!is.na(q) && q>0 && !is.na(d) && d>0) .biome_env$shared_env$cgroup_cpus <- q/d
+    }
+>>>>>>> e177009fb7907acd64b05a3f52a8c7d2be48d808
   }, error = function(e) sys_log("Cgroup", "WARN", e$message))
 
   sys_log("Cgroup", "DBG", sprintf("vcores=%d cgroup_cpus=%s cgroup_ram_gb=%s source=%s",
@@ -995,41 +1062,9 @@ local({
     }, error=function(e) 16L)
   }
 
-  get_active_users <- function() {
-    # v11.3 [W11]: count rsession + Rscript + bare R processes for fair-share.
-    # Future::multisession and callr spawn Rscript, not rsession — previous
-    # version undercounted them, causing quota over-allocation.
-    # We read /proc/<pid>/cmdline via readBin (NUL-separated argv) and
-    # inspect basename(argv[0]). Can't use strsplit on "\0" literal because
-    # R source disallows NUL in strings — we replace NULs -> spaces first.
-    tryCatch({
-      pids <- list.dirs("/proc", full.names = FALSE, recursive = FALSE)
-      pids <- pids[grepl("^[0-9]+$", pids)]
-      count <- 0L; scanned <- 0L
-      for (p in pids) {
-        scanned <- scanned + 1L
-        if (scanned > 2000L) break
-        cmdline_file <- file.path("/proc", p, "cmdline")
-        if (file.exists(cmdline_file)) {
-          raw_cmd <- tryCatch(readBin(cmdline_file, what = "raw", n = 512L),
-                              error = function(e) raw(0L))
-          if (length(raw_cmd) > 0L) {
-            # Replace NUL argv separators with space so strsplit works
-            raw_cmd[raw_cmd == as.raw(0L)] <- charToRaw(" ")
-            cmd <- tryCatch(rawToChar(raw_cmd), error = function(e) "")
-            if (nzchar(cmd)) {
-              first_tok <- basename(trimws(strsplit(cmd, " ", fixed = TRUE)[[1]][1]))
-              if (first_tok %in% c("rsession", "Rscript", "R") ||
-                  grepl("^rsession", first_tok, fixed = FALSE)) {
-                count <- count + 1L
-              }
-            }
-          }
-        }
-      }
-      if (count < 1L) 1L else count
-    }, error = function(e) 1L)
-  }
+  # v12.0 [C1]: get_active_users() removed — CPUWeight on user.slice handles
+  # fair-share scheduling at the kernel level. /proc-scanning was unreliable
+  # (future/callr Rscript workers inflated the count) and is now redundant.
 
   update_resources <- function(quiet = TRUE) {
     tryCatch({
@@ -1037,13 +1072,16 @@ local({
       if (quiet && (now - .biome_env$shared_env$last_update) < 30) return(invisible(NULL))
       .biome_env$shared_env$last_update <- now
 
-      ram_gb  <- get_system_ram_gb()
-      n_procs <- get_active_users()
-      quota   <- max(2L, as.integer(floor((ram_gb / n_procs) * 0.9)))
-      eff_vc <- total_vcores
-      if (is.finite(.biome_env$shared_env$cgroup_cpus)) eff_vc <- min(eff_vc, as.integer(ceiling(.biome_env$shared_env$cgroup_cpus)))
-      fair_cores <- max(1L, as.integer(floor(eff_vc / n_procs)))
-      bt <- min(fair_cores, MAX_THREADS)
+      # v12.0 [C2,C3]: No per-user division — MemoryHigh/Max on user.slice is the
+      # enforcement boundary. fair_cores reflects the cgroup-capped vcore count;
+      # bt still caps BLAS threads (CPUWeight != thread count limit).
+      ram_gb     <- get_system_ram_gb()
+      quota      <- max(2L, as.integer(floor(ram_gb * 0.9)))
+      eff_vc     <- total_vcores
+      if (is.finite(.biome_env$shared_env$cgroup_cpus))
+        eff_vc <- min(eff_vc, as.integer(ceiling(.biome_env$shared_env$cgroup_cpus)))
+      fair_cores <- max(1L, eff_vc)
+      bt         <- min(fair_cores, MAX_THREADS)
 
       Sys.setenv(OMP_NUM_THREADS=as.character(bt),
                  OPENBLAS_NUM_THREADS=as.character(bt),
@@ -1077,28 +1115,37 @@ local({
           }, error = .biome_swerr("Line_926"))
       }
 
-      prev <- .biome_env$shared_env$last_quota
-      if (!quiet && interactive() && prev > 0 && abs(quota - prev) > 1) {
-        .bx_h <- intToUtf8(0x2550); .bx_v <- intToUtf8(0x2551)
-        message(paste0("\n", .C_YELLOW, intToUtf8(0x2554), strrep(.bx_h, 50), intToUtf8(0x2557)))
-        message(sprintf("%s \u26a1 BIOME-RESCALE: Activity Detected (Users: %-2d)  %s", .bx_v, n_procs, .bx_v))
-        message(sprintf("%s    RAM Quota: %-3d GB | Threads: %-2d              %s", .bx_v, quota, bt, .bx_v))
-        message(paste0(intToUtf8(0x255A), strrep(.bx_h, 50), intToUtf8(0x255D), .C_RESET))
-      }
+<<<<<<< HEAD
+      # v12.0 [C4]: BIOME-RESCALE notification removed — it fired on n_procs changes
+=======
+      # v12.0 [C4]: BIOME-RESCALE notification removed \u2014 it fired on n_procs changes
+>>>>>>> e177009fb7907acd64b05a3f52a8c7d2be48d808
+      # which no longer exists. Kernel throttles silently via MemoryHigh.
       .biome_env$shared_env$last_quota <- quota
       .biome_env$shared_env$last_cores <- fair_cores
       .biome_env$shared_env$last_threads <- bt
       sys_log("Resources", "DBG", sprintf(
-        "ram_gb=%d n_procs=%d quota=%d eff_vc=%d fair_cores=%d bt=%d",
-        ram_gb, n_procs, quota, eff_vc, fair_cores, bt))
+        "ram_gb=%d quota=%d eff_vc=%d fair_cores=%d bt=%d cg_ram=%.0f cg_cpu=%.1f",
+        ram_gb, quota, eff_vc, fair_cores, bt,
+        .biome_env$shared_env$cgroup_ram_gb,
+        .biome_env$shared_env$cgroup_cpus))
 
       if (ENABLE_CGROUP_AWARE && (now - .biome_env$shared_env$last_cgroup_check) > 300) {
         .biome_env$shared_env$last_cgroup_check <- now
         tryCatch({
+<<<<<<< HEAD
           cg <- .biome_cgroup_read_limits(MY_UID)
           .biome_env$shared_env$cgroup_ram_gb <- cg$ram_gb
           .biome_env$shared_env$cgroup_cpus <- cg$cpus
           .biome_env$shared_env$cgroup_source <- cg$source
+=======
+          # v12.0 [C6]: Use user-slice path, consistent with initial read above.
+          cg2_mem <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/memory.max", MY_UID)
+          if (file.exists(cg2_mem)) {
+            v <- trimws(readLines(cg2_mem, n=1, warn=FALSE))
+            if (v != "max") .biome_env$shared_env$cgroup_ram_gb <- as.numeric(v)/(1024^3)
+          }
+>>>>>>> e177009fb7907acd64b05a3f52a8c7d2be48d808
         }, error = .biome_swerr("Line_952"))
       }
 
@@ -2087,14 +2134,12 @@ local({
   assign("status", function() {
     update_resources(quiet = FALSE)
     cat(paste0("\n", .C_CYAN, "=== BIOME-CALC v", .biome_env$VERSION, " | System Dashboard ===", .C_RESET, "\n"))
-    cat(sprintf("  RAM Quota:    %d GB (fair-share)\n", .biome_env$shared_env$last_quota))
-    # ── Cgroup ceiling display (v11.4-fix: labeled by source to avoid misinterpretation) ──
+    # v12.0 [C7]: Show cgroup-enforced limits. No active-user count — kernel handles it.
+<<<<<<< HEAD
     cg_ram  <- .biome_env$shared_env$cgroup_ram_gb
     cg_cpu  <- .biome_env$shared_env$cgroup_cpus
     cg_src  <- .biome_env$shared_env$cgroup_source
     if (is.null(cg_src)) cg_src <- "none"
-    cg_ram_str <- if (is.finite(cg_ram)) sprintf("%.1f GB", cg_ram) else "Inf (not detected)"
-    cg_cpu_str <- if (is.finite(cg_cpu)) sprintf("%.1f vCPUs", cg_cpu) else "Inf (not detected)"
     cg_src_label <- switch(cg_src,
       "cgroupv2-user-slice" = "user.slice ceiling [cgroup v2]",
       "cgroupv2-root"       = "root cgroup ceiling [cgroup v2]",
@@ -2102,10 +2147,22 @@ local({
       "cgroupv1-root"       = "root cgroup ceiling [cgroup v1]",
       "none"                = "not detected — check systemd slice config"
     )
-    cat(sprintf("  Cgroup RAM:   %s (%s)\n", cg_ram_str, cg_src_label))
-    cat(sprintf("  Cgroup CPU:   %s (%s)\n", cg_cpu_str, cg_src_label))
-    cat(sprintf("  vCPU Cores:   %d (Allocated)\n", .biome_env$shared_env$last_cores))
-    cat(sprintf("  Active Users: %d\n", get_active_users()))
+    cg_ram_str <- if (is.finite(cg_ram))
+      sprintf("%.0f GB slice limit", cg_ram) else "no slice limit (CPUWeight fair-share)"
+    cg_cpu_str <- if (is.finite(cg_cpu))
+      sprintf("%.1f vCPUs (slice quota)", cg_cpu) else "CPUWeight fair-share (no hard quota)"
+    cat(sprintf("  RAM Available: %d GB  [cgroup: %s | src: %s]\n",
+                .biome_env$shared_env$last_quota, cg_ram_str, cg_src_label))
+    cat(sprintf("  BLAS Threads:  %d cap  [%s]\n",
+                .biome_env$shared_env$last_threads, cg_cpu_str))
+=======
+    cg_ram_str <- if (is.finite(.biome_env$shared_env$cgroup_ram_gb))
+      sprintf("%.0f GB slice limit", .biome_env$shared_env$cgroup_ram_gb) else "no slice limit (CPUWeight fair-share)"
+    cg_cpu_str <- if (is.finite(.biome_env$shared_env$cgroup_cpus))
+      sprintf("%.1f vCPUs (slice quota)", .biome_env$shared_env$cgroup_cpus) else "CPUWeight fair-share (no hard quota)"
+    cat(sprintf("  RAM Available: %d GB  [cgroup: %s]\n", .biome_env$shared_env$last_quota, cg_ram_str))
+    cat(sprintf("  BLAS Threads:  %d cap  [%s]\n", .biome_env$shared_env$last_threads, cg_cpu_str))
+>>>>>>> e177009fb7907acd64b05a3f52a8c7d2be48d808
     tmp_str <- tryCatch({
       df <- system2("df", args = c("-P", "-BG", RTMP_PATH), stdout = TRUE, stderr = FALSE)
       if (length(df) >= 2) {
@@ -2120,7 +2177,7 @@ local({
     cat(sprintf("  BLAS Type:    %s\n", ct))
     cat(sprintf("  User TMP:     %s\n", .biome_env$USER_TMP_ROOT))
     cat(paste0("\n  ", .C_BOLD, "Engines & Services:", .C_RESET, "\n"))
-    r_sys <- .fmt_eng("Resource Mgmt", ENABLE_RESOURCE_MGMT, TRUE)
+    r_sys <- .fmt_eng("Thread/BLAS Mgmt", ENABLE_BLAS_MGMT, TRUE)
     r_sio <- .fmt_eng("Smart I/O", ENABLE_SMART_IO, TRUE)
     r_tmp <- .fmt_eng("Tmp Cleanup", ENABLE_TMP_CLEANUP, TRUE)
     r_ai  <- .fmt_eng(paste0("AI (", AI_MODEL, ")"), ENABLE_AI_ASSISTANT, .biome_env$shared_env$ai_active)
@@ -2392,9 +2449,11 @@ local({
     cat(paste0("\n", .C_CYAN, "=== BIOME-CALC v", VERSION, ": User Guide ===", .C_RESET, "\n"))
     cat("This system automatically optimizes resources. Services are 'Lazy' [\u25CB] by default\n")
     cat("and become 'Active' [\u2713] the moment you use them.\n\n")
-    cat(paste0(.C_BOLD, "1. Resource Management (Auto)", .C_RESET, "\n"))
-    cat("   - RAM & CPU are dynamically allocated based on active users.\n")
-    cat("   - Check your current quota anytime: status()\n\n")
+    cat(paste0(.C_BOLD, "1. Resource Management (cgroup-enforced)", .C_RESET, "\n"))
+    cat("   - RAM bounded by systemd MemoryHigh/MemoryMax (kernel-enforced per user).\n")
+    cat("   - CPU fair-share via CPUWeight — no hard core cap, scheduler proportional.\n")
+    cat("   - BLAS/OMP thread counts capped per-session to prevent QEMU livelock.\n")
+    cat("   - Check live state anytime: status()\n\n")
     cat(paste0(.C_BOLD, "2. Smart I/O (Auto-Parquet)", .C_RESET, "\n"))
     cat("   - If 'data.csv.parquet' exists, it replaces 'data.csv' automatically.\n\n")
     cat(paste0(.C_BOLD, "3. AI Assistant", .C_RESET, "\n"))
@@ -2651,10 +2710,16 @@ local({
       message("*** Don't share your password with anyone...           ***")
       message(paste0(bn, .C_RESET))
 
-      message(sprintf("\n   RAM Quota:  %-3d GB  (VM ~%dGB, full RAM available)",
-                       .biome_env$shared_env$last_quota, VM_RAM_GB))
-      message(sprintf("   vCPU:       %-3d / %d  (Adapts to active users)",
-                       .biome_env$shared_env$last_cores, total_vcores))
+      # v12.0 [C7]: Banner reflects cgroup enforcement reality.
+      .cg_ram <- .biome_env$shared_env$cgroup_ram_gb
+      .cg_cpu <- .biome_env$shared_env$cgroup_cpus
+      message(sprintf("\n   RAM:        %-3d GB available  (VM %dGB | slice limit: %s)",
+                       .biome_env$shared_env$last_quota, VM_RAM_GB,
+                       if (is.finite(.cg_ram)) sprintf("%.0f GB", .cg_ram) else "none"))
+      message(sprintf("   BLAS/OMP:   %d threads capped  (cores: %d | slice CPU: %s)",
+                       .biome_env$shared_env$last_threads,
+                       .biome_env$shared_env$last_cores,
+                       if (is.finite(.cg_cpu)) sprintf("%.1f", .cg_cpu) else "CPUWeight fair-share"))
 
       ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto")
       cpuv <- tryCatch({
@@ -2715,7 +2780,7 @@ local({
   }, onexit = TRUE)
 
   .biome_mark_time("profile_end")
-  sys_log("Profile", "OK", "Loaded successfully (v11.3)")
+  sys_log("Profile", "OK", "Loaded successfully (v12.0)")
   
   # ── Final Load Report ──
   if (BIOME_GLOBAL_DEBUG) {
