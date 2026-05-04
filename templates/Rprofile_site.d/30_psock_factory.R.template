@@ -1,0 +1,103 @@
+# templates/Rprofile_site.d/30_psock_factory.R.template
+# Fragment extracted from Rprofile_site.R.template (v12.1 monolith, lines 857-951)
+# Section: PSOCK CLUSTER FACTORY + biome_make_cluster + .biome_env stash
+# Loaded by dispatcher via: source(file, local=TRUE) inside main local({...})
+# Inherits closure: .biome_env, sys_log, .biome_mark_time, ENABLE_* flags, .C_* colors,
+#                   VERSION, curr_user, USER_TMP_ROOT, MAX_THREADS, and all locals
+#                   defined in lines 321-591 of the dispatcher.
+# ──────────────────────────────────────────────────────────────────────────────
+  # ══════════════════════════════════════════════════════════════════════════
+  # PSOCK CLUSTER FACTORY (v11.0 — full routing env + outfile default)
+  # v11.3 [W7]: explicit requireNamespace guard on parallelly.
+  # ══════════════════════════════════════════════════════════════════════════
+  .biome_make_cluster_impl <- function(workers = NULL, worker_threads = 1L,
+                                        outfile = NULL, ...) {
+    # Fail fast with actionable message if parallelly is missing.
+    # Installing parallelly via apt (r-cran-parallelly) or install.packages.
+    if (!requireNamespace("parallelly", quietly = TRUE)) {
+      stop("BIOME-CALC: package 'parallelly' is required for biome_make_cluster().\n",
+           "  Install: apt install r-cran-parallelly  OR  install.packages('parallelly')\n",
+           "  This is a hard dependency — no silent fallback to parallel::makeCluster.",
+           call. = FALSE)
+    }
+    if (is.null(workers)) {
+      fc <- .biome_env$shared_env$last_cores
+      workers <- max(1L, if (fc > 0) fc - 1L else 3L)
+    }
+    workers <- as.integer(workers)
+    worker_threads <- as.integer(min(worker_threads, MAX_THREADS))
+    coretype <- Sys.getenv("OPENBLAS_CORETYPE", "")
+
+    # v11.0 [N3]: Default outfile routes to cluster_logs/ for post-mortem.
+    if (is.null(outfile)) {
+      cl_dir <- file.path(USER_TMP_ROOT, "cluster_logs")
+      if (!dir.exists(cl_dir)) tryCatch(dir.create(cl_dir, recursive = TRUE, showWarnings = FALSE),
+                                        error = .biome_swerr("Line_998"))
+      outfile <- file.path(cl_dir,
+                           sprintf("psock_%s_pid%d.log",
+                                   format(Sys.time(), "%Y%m%d_%H%M%S"),
+                                   Sys.getpid()))
+    }
+
+    # v11.0 [N3] + v11.3 [W8]: Propagate only REAL routing env vars to workers.
+    # Removed BIOME_NIMBLE_DIR / BIOME_TMB_DIR — neither NIMBLE nor TMB read them.
+    env_vec <- c(
+      BIOME_WORKER_MODE       = "1",
+      BIOME_WORKER_THREADS    = as.character(worker_threads),
+      OMP_NUM_THREADS         = as.character(worker_threads),
+      OPENBLAS_NUM_THREADS    = as.character(worker_threads),
+      MKL_NUM_THREADS         = as.character(worker_threads),
+      VECLIB_MAXIMUM_THREADS  = as.character(worker_threads),
+      NUMEXPR_NUM_THREADS     = as.character(worker_threads),
+      GOTO_NUM_THREADS        = as.character(worker_threads),
+      BLIS_NUM_THREADS        = as.character(worker_threads),
+      TMP                     = RTMP_PATH,
+      TEMP                    = RTMP_PATH,
+      TMPDIR                  = RTMP_PATH,
+      R_TEMPDIR               = RTMP_PATH,
+      BIOME_USER_TMP          = USER_TMP_ROOT,
+      # v12.1 [R7]: propagate run-id so workers land under same run folder
+      BIOME_RUN_ID            = Sys.getenv("BIOME_RUN_ID", ""),
+      BIOME_RUN_TIMESTAMP     = Sys.getenv("BIOME_RUN_TIMESTAMP", ""),
+      BIOME_STAN_DIR          = file.path(USER_TMP_ROOT, "stan_compile"),
+      BIOME_RCPP_CACHE        = file.path(USER_TMP_ROOT, "rcpp_cache"),
+      # GDAL routing for terra/sf/raster/stars in workers
+      GDAL_NUM_THREADS        = as.character(worker_threads),
+      CPL_TMPDIR              = file.path(USER_TMP_ROOT, "sf_gdal"),
+      GDAL_PAM_PROXY_DIR      = file.path(USER_TMP_ROOT, "stars"),
+      CUDA_VISIBLE_DEVICES    = "-1",
+      TF_CPP_MIN_LOG_LEVEL    = "2",
+      # Fontconfig for ragg/systemfonts (workers doing ggsave in parallel)
+      FONTCONFIG_PATH         = "/etc/fonts"
+    )
+    if (nchar(coretype) > 0) env_vec <- c(env_vec, OPENBLAS_CORETYPE = coretype)
+
+    parallelly::makeClusterPSOCK(
+      workers,
+      revtunnel = FALSE,
+      homogeneous = TRUE,
+      outfile = outfile,
+      rscript_envs = env_vec,
+      ...
+    )
+  }
+
+  # v12.1: expose .biome_make_cluster_impl via .biome_env so the
+  # safe_makeCluster auto-route path can reach it from outside this closure.
+  tryCatch({ .biome_env$.biome_make_cluster_impl <- .biome_make_cluster_impl },
+           error = function(e) NULL)
+
+  # ── Deferred helpers ──
+  get_tmp_disk_use_pct <- function() {
+    tryCatch({
+      df_out <- system2("df", args = c("-P", RTMP_PATH), stdout = TRUE, stderr = FALSE)
+      if (length(df_out) >= 2) {
+        parts <- strsplit(trimws(df_out[2]), "[[:space:]]+")[[1]]
+        pct_str <- gsub("[^0-9]", "", parts[5])
+        if (nchar(pct_str) > 0) return(as.numeric(pct_str))
+      }
+      0
+    }, error = function(e) 0)
+  }
+
+

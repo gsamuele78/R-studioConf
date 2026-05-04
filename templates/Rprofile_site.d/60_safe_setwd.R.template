@@ -1,0 +1,67 @@
+# templates/Rprofile_site.d/60_safe_setwd.R.template
+# ==============================================================================
+# FRAGMENT 60 — safe_setwd HARD-FAIL GUARD (v12.1)
+# ==============================================================================
+# Deployed to: /etc/R/Rprofile_site.d/60_safe_setwd.R
+#
+# Root cause of Martina-gate (v11.2 CHANGELOG): an unresolved placeholder
+#   setwd("BECAUSE")
+# silently succeeded in producing a "dir does not exist" warning, then later
+# parLapply's serialize() died with an opaque `unserialize(node$con)` error.
+# The real failure was 5 frames upstream.
+#
+# Fix: wrap base::setwd so a missing target path fails FAST with a clear
+# message, before any downstream code can execute against wrong cwd.
+#
+# Opt-out: options(biome.strict_setwd = FALSE)
+# ==============================================================================
+
+local({
+  # Idempotent — re-source safe
+  if (exists(".biome_original_setwd", envir = globalenv(), inherits = FALSE)) {
+    return(invisible())
+  }
+
+  # Prefer the monolith's installer if present (preserves lexical scope +
+  # was_locked contract). Fall back to a minimal inline install otherwise.
+  use_installer <- exists(".biome_env", envir = globalenv(), inherits = FALSE) &&
+                   exists("sys_log", inherits = TRUE)
+
+  base_ns      <- asNamespace("base")
+  original_fn  <- get("setwd", envir = base_ns, inherits = FALSE)
+  assign(".biome_original_setwd", original_fn, envir = globalenv())
+
+  safe_setwd <- function(dir) {
+    if (isTRUE(getOption("biome.strict_setwd", TRUE))) {
+      if (missing(dir) || is.null(dir) || !is.character(dir) || length(dir) != 1L ||
+          !nzchar(dir)) {
+        stop("BIOME-CALC safe_setwd: `dir` must be a single non-empty string, got: ",
+             deparse(dir), call. = FALSE)
+      }
+      if (!dir.exists(dir)) {
+        stop(sprintf(
+          paste0("BIOME-CALC safe_setwd: target directory does not exist: '%s'\n",
+                 "  cwd was:    %s\n",
+                 "  This guard prevents the 'unserialize(node$con)' class of bug.\n",
+                 "  To override (not recommended): options(biome.strict_setwd = FALSE)"),
+          dir, getwd()), call. = FALSE)
+      }
+    }
+    .biome_original_setwd(dir)
+  }
+
+  was_locked <- tryCatch(bindingIsLocked("setwd", base_ns),
+                          error = function(e) FALSE)
+  tryCatch({
+    if (was_locked) unlockBinding("setwd", base_ns)
+    assign("setwd", safe_setwd, envir = base_ns)
+    if (was_locked) lockBinding("setwd", base_ns)
+    if (use_installer) {
+      tryCatch(sys_log("SafeSetwd", "OK", "installed setwd guard"),
+               error = function(e) NULL)
+    }
+  }, error = function(e) {
+    warning(sprintf("BIOME-CALC: failed to install safe_setwd: %s",
+                    e$message), call. = FALSE)
+  })
+})

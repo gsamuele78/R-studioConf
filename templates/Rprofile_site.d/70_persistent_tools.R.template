@@ -1,0 +1,683 @@
+# templates/Rprofile_site.d/70_persistent_tools.R.template
+# Fragment extracted from Rprofile_site.R.template (v12.1 monolith, lines 1822-2502)
+# Section: PERSISTENT TOOLS (biome_cluster_test, biome_worker_diagnostics, biome_plot_budget) + FINALIZE
+# Loaded by dispatcher via: source(file, local=TRUE) inside main local({...})
+# Inherits closure: .biome_env, sys_log, .biome_mark_time, ENABLE_* flags, .C_* colors,
+#                   VERSION, curr_user, USER_TMP_ROOT, MAX_THREADS, and all locals
+#                   defined in lines 321-591 of the dispatcher.
+# ──────────────────────────────────────────────────────────────────────────────
+  # ══════════════════════════════════════════════════════════════════════════
+  # PERSISTENT TOOLS — attached to tools:biome_calc
+  # ══════════════════════════════════════════════════════════════════════════
+  tool_env_name <- "tools:biome_calc"
+  tool_env <- tryCatch({
+    pos <- match(tool_env_name, search())
+    if (!is.na(pos)) as.environment(pos) else attach(NULL, name = tool_env_name)
+  }, error = function(e) attach(NULL, name = tool_env_name))
+
+  .fmt_eng <- function(name, enabled, loaded) {
+      if (!enabled) return(paste0(.C_GRAY, "[\u2717] ", name, .C_RESET))
+      if (loaded)   return(paste0(.C_GREEN, "[\u2713] ", name, .C_RESET))
+      return(paste0(.C_CYAN, "[\u25CB] ", name, .C_RESET))
+  }
+
+  assign("status", function() {
+    update_resources(quiet = FALSE)
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC v", .biome_env$VERSION, " | System Dashboard ===", .C_RESET, "\n"))
+    # v12.0 [C7]: Show cgroup-enforced limits. No active-user count — kernel handles it.
+    cg_ram  <- .biome_env$shared_env$cgroup_ram_gb
+    cg_cpu  <- .biome_env$shared_env$cgroup_cpus
+    cg_src  <- .biome_env$shared_env$cgroup_source
+    if (is.null(cg_src)) cg_src <- "none"
+    cg_src_label <- switch(cg_src,
+      "cgroupv2-user-slice" = "user.slice ceiling [cgroup v2]",
+      "cgroupv2-root"       = "root cgroup ceiling [cgroup v2]",
+      "cgroupv1-user-slice" = "user.slice ceiling [cgroup v1]",
+      "cgroupv1-root"       = "root cgroup ceiling [cgroup v1]",
+      "none"                = "not detected — check systemd slice config"
+    )
+    cg_ram_str <- if (is.finite(cg_ram))
+      sprintf("%.0f GB slice limit", cg_ram) else "no slice limit (CPUWeight fair-share)"
+    cg_cpu_str <- if (is.finite(cg_cpu))
+      sprintf("%.1f vCPUs (slice quota)", cg_cpu) else "CPUWeight fair-share (no hard quota)"
+    cat(sprintf("  RAM Available: %d GB  [cgroup: %s | src: %s]\n",
+                .biome_env$shared_env$last_quota, cg_ram_str, cg_src_label))
+    cat(sprintf("  BLAS Threads:  %d cap  [%s]\n",
+                .biome_env$shared_env$last_threads, cg_cpu_str))
+    tmp_str <- tryCatch({
+      df <- system2("df", args = c("-P", "-BG", RTMP_PATH), stdout = TRUE, stderr = FALSE)
+      if (length(df) >= 2) {
+         p <- strsplit(df[2], "\\s+")[[1]]
+         sprintf("%s free of %s (%s used | Local Disk | Warn @%d%%)",
+                 p[4], p[2], p[5], TMP_WARN_PCT)
+      } else "Unknown"
+    }, error = function(e) "Unknown")
+    cat(sprintf("  /Rtmp Disk:   %s\n", tmp_str))
+    cat(sprintf("  Tmp Cleanup:  Files >%d hours\n", .biome_env$shared_env$timeout_hours))
+    ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto")
+    cat(sprintf("  BLAS Type:    %s\n", ct))
+    cat(sprintf("  User TMP:     %s\n", .biome_env$USER_TMP_ROOT))
+    cat(paste0("\n  ", .C_BOLD, "Engines & Services:", .C_RESET, "\n"))
+    r_sys <- .fmt_eng("Thread/BLAS Mgmt", ENABLE_BLAS_MGMT, TRUE)
+    r_sio <- .fmt_eng("Smart I/O", ENABLE_SMART_IO, TRUE)
+    r_tmp <- .fmt_eng("Tmp Cleanup", ENABLE_TMP_CLEANUP, TRUE)
+    r_ai  <- .fmt_eng(paste0("AI (", AI_MODEL, ")"), ENABLE_AI_ASSISTANT, .biome_env$shared_env$ai_active)
+    r_ter <- .fmt_eng("Terra (Geospatial)", ENABLE_TERRA_OPT, isNamespaceLoaded("terra"))
+    r_arr <- .fmt_eng("Arrow (Parquet)", ENABLE_ARROW_OPT, isNamespaceLoaded("arrow"))
+    r_fut <- .fmt_eng("Future (Parallel)", ENABLE_FUTURE_OPT, isNamespaceLoaded("future"))
+    r_gee <- .fmt_eng("RGEE (Earth Engine)", ENABLE_RGEE_OPT, isNamespaceLoaded("rgee"))
+    r_tf  <- .fmt_eng("Keras/TF (CPU)", ENABLE_TF_MGMT, isNamespaceLoaded("tensorflow"))
+    r_nim <- .fmt_eng("NIMBLE [LocalDisk]", TRUE,
+                       isNamespaceLoaded("nimble") || isNamespaceLoaded("nimbleHMC"))
+    r_tmb <- .fmt_eng("TMB/glmmTMB",  TRUE,
+                       isNamespaceLoaded("TMB") || isNamespaceLoaded("glmmTMB"))
+    r_stn <- .fmt_eng("Stan/brms", ENABLE_STAN_OPT,
+                       isNamespaceLoaded("rstan") || isNamespaceLoaded("cmdstanr") ||
+                       isNamespaceLoaded("brms"))
+    cat(sprintf("  %s  %s  %s\n", r_sys, r_sio, r_tmp))
+    cat(sprintf("  %s  %s  %s\n", r_ter, r_arr, r_gee))
+    cat(sprintf("  %s  %s  %s\n", r_ai, r_fut, r_tf))
+    cat(sprintf("  %s  %s  %s\n", r_nim, r_tmb, r_stn))
+    cat(paste0("\n  ", .C_GRAY, "[\u2713]=Active  [\u25CB]=Lazy(Standby)  [\u2717]=Disabled", .C_RESET, "\n"))
+    invisible(NULL)
+  }, envir = tool_env)
+
+  assign("ask_ai", function(prompt, model=AI_MODEL) {
+    if (!.biome_env$shared_env$ai_active) stop("Ollama service is not responding on port 11434.")
+    message(paste0(.C_CYAN, "Thinking (", model, ")...", .C_RESET))
+    tf <- tempfile(pattern = "ollama_req_", fileext = ".json")
+    on.exit(unlink(tf), add = TRUE)
+    if (requireNamespace("jsonlite", quietly=TRUE)) {
+      body <- jsonlite::toJSON(list(model=model, prompt=prompt, stream=FALSE), auto_unbox=TRUE)
+      writeLines(as.character(body), tf)
+    } else {
+      clean_prompt <- gsub('"', '\\\\"', prompt)
+      clean_prompt <- gsub('\n', '\\\\n', clean_prompt)
+      json_body <- sprintf('{"model": "%s", "prompt": "%s", "stream": false}', model, clean_prompt)
+      writeLines(json_body, tf)
+    }
+    res <- suppressWarnings(system2("curl", args = c(
+      "-s", "-m", as.character(AI_CURL_TIMEOUT), "--connect-timeout", "5",
+      "-X", "POST", OLLAMA_API, "-d", paste0("@", tf)
+    ), stdout = TRUE, stderr = FALSE))
+    if (length(res) > 0) {
+      if (requireNamespace("jsonlite", quietly=TRUE)) {
+        out <- tryCatch(jsonlite::fromJSON(paste(res, collapse="")), error = .biome_swerr("Line_1998"))
+        if (!is.null(out$response)) cat(paste0("\n", .C_GREEN, "\U0001F916 ", model, ":", .C_RESET, "\n", out$response, "\n"))
+        else cat("Error: Invalid JSON response from AI.\n")
+      }
+    } else cat("No response from AI service (timeout or connection refused).\n")
+  }, envir = tool_env)
+
+  # v11.0 [N3]: biome_make_cluster with outfile support
+  assign("biome_make_cluster", function(workers = NULL, worker_threads = 1L,
+                                         outfile = NULL, ...) {
+    .biome_make_cluster_impl(workers = workers, worker_threads = worker_threads,
+                              outfile = outfile, ...)
+  }, envir = tool_env)
+
+  # v11.0 [N9]: biome_future_plan — picks best backend for workload
+  assign("biome_future_plan", function(workers = NULL, strategy = c("auto", "cluster", "callr", "sequential")) {
+    strategy <- match.arg(strategy)
+    if (!requireNamespace("future", quietly = TRUE)) {
+      stop("Package 'future' is required. install.packages('future')")
+    }
+    if (is.null(workers)) {
+      workers <- max(1L, .biome_env$shared_env$last_cores - 1L)
+    }
+    workers <- as.integer(workers)
+
+    if (strategy == "auto") {
+      # Auto-pick: if NIMBLE or Stan is loaded, callr is safer (fresh R process
+      # per task, no socket to corrupt during long compilations).
+      # Otherwise cluster (faster startup, shared state).
+      if (isNamespaceLoaded("nimble") || isNamespaceLoaded("rstan") ||
+          isNamespaceLoaded("cmdstanr") || isNamespaceLoaded("brms")) {
+        strategy <- "callr"
+      } else {
+        strategy <- "cluster"
+      }
+    }
+
+    if (strategy == "sequential") {
+      future::plan(future::sequential)
+      message(paste0(.C_CYAN, "BIOME-CALC: future::plan = sequential (no parallelism)", .C_RESET))
+      return(invisible("sequential"))
+    } else if (strategy == "callr") {
+      if (!requireNamespace("future.callr", quietly = TRUE)) {
+        message(paste0(.C_YELLOW,
+          "BIOME-CALC: future.callr not installed. Falling back to cluster.\n",
+          "  Install: install.packages('future.callr')", .C_RESET))
+        strategy <- "cluster"
+      } else {
+        future::plan(future.callr::callr, workers = workers)
+        message(sprintf(paste0(.C_GREEN,
+          "\U0001F680 BIOME-CALC: future::plan = callr, %d workers (fresh R per task, MCMC-safe)",
+          .C_RESET), workers))
+        return(invisible("callr"))
+      }
+    }
+
+    if (strategy == "cluster") {
+      cl <- .biome_make_cluster_impl(workers = workers, worker_threads = 1L)
+      future::plan(future::cluster, workers = cl)
+      message(sprintf(paste0(.C_GREEN,
+        "\U0001F680 BIOME-CALC: future::plan = cluster, %d PSOCK workers (BIOME_WORKER_MODE=1)",
+        .C_RESET), workers))
+      return(invisible("cluster"))
+    }
+  }, envir = tool_env)
+
+  # v11.4 [W14]: cluster self-test — verifies fast-path, /Rtmp, thread caps.
+  # Use to diagnose unserialize/connection errors before running real MCMC.
+  # Sys.setenv(BIOME_WORKER_DEBUG="1") before calling to get per-worker logs.
+  assign("biome_cluster_test", function(workers = 2L) {
+    workers <- max(1L, as.integer(workers))
+    cat(sprintf("  Testing biome_make_cluster(%d)...\n", workers))
+    cl <- tryCatch(
+      biome_make_cluster(workers = workers, worker_threads = 1L),
+      error = function(e) {
+        cat(sprintf("  [FAIL] Could not create cluster: %s\n", e$message))
+        return(NULL)
+      }
+    )
+    if (is.null(cl)) return(invisible(FALSE))
+    on.exit(tryCatch(parallel::stopCluster(cl), error = .biome_swerr("Line_2078")), add = TRUE)
+
+    results <- tryCatch(
+      parallel::clusterCall(cl, function() {
+        # R 4.5+: explicit attach suppresses serialize() 'utils may not be
+        # available' warnings — utils is always present but not always attached
+        # at the exact moment clusterCall's closure is deserialized.
+        requireNamespace("utils", quietly = TRUE)
+        list(
+          pid          = Sys.getpid(),
+          tempdir      = tempdir(),
+          worker_mode  = Sys.getenv("BIOME_WORKER_MODE", "NOT_SET"),
+          omp_threads  = Sys.getenv("OMP_NUM_THREADS",   "NOT_SET"),
+          blas_threads = Sys.getenv("OPENBLAS_NUM_THREADS", "NOT_SET"),
+          rtmp_ok      = dir.exists("/Rtmp"),
+          profile_fast = isTRUE(getOption("biome.profile.loaded")),
+          # XDR check: parallelly uses FALSE (little-endian), base uses TRUE
+          r_version    = paste0(R.version$major, ".", R.version$minor),
+          detected_by  = {
+            args <- commandArgs(trailingOnly = TRUE)
+            if (any(grepl("^MASTER=", args))) "commandArgs" else
+            if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) "env_var" else
+            "NEITHER — full profile loaded (BUG)"
+          }
+        )
+      }),
+      error = function(e) {
+        cat(sprintf("  [FAIL] clusterCall failed: %s\n", e$message))
+        NULL
+      }
+    )
+
+    if (is.null(results)) return(invisible(FALSE))
+
+    all_ok <- TRUE
+    for (i in seq_along(results)) {
+      r <- results[[i]]
+      ok <- r$profile_fast && r$rtmp_ok &&
+            r$worker_mode == "1" &&
+            r$omp_threads == "1" &&
+            !grepl("BUG", r$detected_by)
+      status <- if (ok) "[OK]  " else "[WARN]"
+      if (!ok) all_ok <- FALSE
+      cat(sprintf("  %s Worker %d | pid=%d | detected_by=%s | fast_path=%s | /Rtmp=%s | omp=%s\n",
+          status, i, r$pid, r$detected_by,
+          r$profile_fast, r$rtmp_ok, r$omp_threads))
+    }
+
+    if (all_ok) {
+      cat("  All workers passed. biome_make_cluster() is functioning correctly.\n")
+    } else {
+      cat("  WARNING: one or more workers did not take the fast path.\n")
+      cat("  Re-run with Sys.setenv(BIOME_WORKER_DEBUG='1') for per-worker logs in /tmp/.\n")
+    }
+    invisible(all_ok)
+  }, envir = tool_env)
+
+  # v11.4 [W15]: Global debug dump — shows debug log + live session state.
+  # Only useful when BIOME_DEBUG=1 was set before starting R.
+  assign("biome_debug_dump", function(tail_n = 60L) {
+    dbg_log <- .biome_env$BIOME_DEBUG_LOG
+    if (!nzchar(dbg_log)) {
+      cat("BIOME_DEBUG not active. Restart R with:\n")
+      cat("  BIOME_DEBUG=1 R\n")
+      cat("  BIOME_DEBUG=1 Rscript your_script.R\n\n")
+      cat("--- In-memory diag_logs (last 20 entries) ---\n")
+      logs <- .biome_env$shared_env$diag_logs
+      if (length(logs) == 0) { cat("  (empty)\n"); return(invisible(NULL)) }
+      for (nm in tail(names(logs), 20L)) {
+        e <- logs[[nm]]
+        cat(sprintf("  [%s] [%-20s] [%-4s] %s\n",
+            format(e$ts, "%H:%M:%S"), nm, e$status, e$msg))
+      }
+      return(invisible(NULL))
+    }
+    if (!file.exists(dbg_log)) {
+      cat(sprintf("Debug log not found: %s\n", dbg_log))
+      return(invisible(NULL))
+    }
+    lines <- readLines(dbg_log, warn = FALSE)
+    cat(sprintf("--- %s (%d lines, showing last %d) ---\n",
+        dbg_log, length(lines), min(tail_n, length(lines))))
+    cat(paste(tail(lines, tail_n), collapse = "\n"), "\n")
+    cat(sprintf("\n--- Live state | pid=%d | cores=%d | threads=%d | quota=%d GB ---\n",
+        Sys.getpid(),
+        .biome_env$shared_env$last_cores,
+        .biome_env$shared_env$last_threads,
+        .biome_env$shared_env$last_quota))
+  }, envir = tool_env)
+
+  # Store debug log path in .biome_env so biome_debug_dump() can find it
+  .biome_env$BIOME_DEBUG_LOG    <- BIOME_DEBUG_LOG
+  .biome_env$BIOME_GLOBAL_DEBUG <- BIOME_GLOBAL_DEBUG
+
+  # v11.0 [N10]: Worker log diagnostics
+  assign("biome_worker_diagnostics", function(n = 5, since_hours = 24) {
+    cl_dir <- file.path(.biome_env$USER_TMP_ROOT, "cluster_logs")
+    if (!dir.exists(cl_dir)) {
+      message("No cluster_logs/ directory yet. biome_make_cluster() creates one on first call.")
+      return(invisible(NULL))
+    }
+    logs <- list.files(cl_dir, pattern = "^psock_.*\\.log$", full.names = TRUE)
+    if (length(logs) == 0) {
+      message("No PSOCK worker logs in ", cl_dir)
+      return(invisible(NULL))
+    }
+    li <- file.info(logs)
+    recent_idx <- which(as.numeric(difftime(Sys.time(), li$mtime, units = "hours")) <= since_hours)
+    if (length(recent_idx) == 0) {
+      message(sprintf("No worker logs in last %d hours.", since_hours))
+      return(invisible(NULL))
+    }
+    logs <- logs[recent_idx]
+    li <- li[recent_idx, , drop = FALSE]
+    # Sort by mtime desc, take last n
+    ord <- order(li$mtime, decreasing = TRUE)
+    logs <- logs[ord][seq_len(min(n, length(logs)))]
+
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Worker Log Diagnostics ===", .C_RESET, "\n"))
+    cat(sprintf("  Directory: %s\n", cl_dir))
+    cat(sprintf("  Showing %d most recent logs (last %d hours)\n\n", length(logs), since_hours))
+    for (lg in logs) {
+      sz <- file.info(lg)$size
+      cat(paste0(.C_BOLD, basename(lg), .C_RESET,
+                 sprintf(" (%.1f KB, mtime: %s)\n", sz / 1024,
+                         format(file.info(lg)$mtime, "%Y-%m-%d %H:%M:%S"))))
+      # Show last 30 lines
+      txt <- tryCatch(tail(readLines(lg, warn = FALSE), 30), error = function(e) "")
+      if (length(txt) > 0) {
+        # Highlight errors/crashes
+        for (line in txt) {
+          if (grepl("Error|error|SIGSEGV|SIGKILL|fatal|unserialize|crash", line,
+                    ignore.case = FALSE)) {
+            cat(paste0("  ", .C_RED, line, .C_RESET, "\n"))
+          } else {
+            cat(paste0("  ", .C_GRAY, line, .C_RESET, "\n"))
+          }
+        }
+      }
+      cat("\n")
+    }
+    invisible(logs)
+  }, envir = tool_env)
+
+  assign("biome_tutorial", function() {
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC v", VERSION, ": User Guide ===", .C_RESET, "\n"))
+    cat("This system automatically optimizes resources. Services are 'Lazy' [\u25CB] by default\n")
+    cat("and become 'Active' [\u2713] the moment you use them.\n\n")
+    cat(paste0(.C_BOLD, "1. Resource Management (cgroup-enforced)", .C_RESET, "\n"))
+    cat("   - RAM bounded by systemd MemoryHigh/MemoryMax (kernel-enforced per user).\n")
+    cat("   - CPU fair-share via CPUWeight — no hard core cap, scheduler proportional.\n")
+    cat("   - BLAS/OMP thread counts capped per-session to prevent QEMU livelock.\n")
+    cat("   - Check live state anytime: status()\n\n")
+    cat(paste0(.C_BOLD, "2. Smart I/O (Auto-Parquet)", .C_RESET, "\n"))
+    cat("   - If 'data.csv.parquet' exists, it replaces 'data.csv' automatically.\n\n")
+    cat(paste0(.C_BOLD, "3. AI Assistant", .C_RESET, "\n"))
+    cat(sprintf("   - ask_ai(\"How do I run a PERMANOVA?\")  [Model: %s]\n\n", AI_MODEL))
+    cat(paste0(.C_BOLD, "4. Geospatial (Terra/RGEE/sf)", .C_RESET, "\n"))
+    cat("   - library(terra); library(rgee) \u2014 auto-threads & cache.\n")
+    cat("   - All GDAL/raster temp on local /Rtmp (fast, no RAM cost).\n\n")
+    cat(paste0(.C_BOLD, "5. Parallel MCMC (NIMBLE/Stan/TMB) \u2014 v11.0 ROUTE", .C_RESET, "\n"))
+    cat("   - ALWAYS use biome_make_cluster(), NEVER bare parallel::makeCluster():\n")
+    cat(paste0("       ", .C_GREEN, "cl <- biome_make_cluster(workers = 4, worker_threads = 1L)", .C_RESET, "\n"))
+    cat(paste0("       ", .C_GREEN, "on.exit(parallel::stopCluster(cl), add = TRUE)", .C_RESET, "\n"))
+    cat("       result <- parLapply(cl, 1:4, run_MCMC_fun, ...)\n")
+    cat("   - biome_make_cluster() does:\n")
+    cat("       * Caps BLAS/OMP threads per worker (no oversubscription)\n")
+    cat("       * Routes NIMBLE/TMB/Stan compile to LOCAL /Rtmp (not NFS)\n")
+    cat("       * Captures worker stderr to cluster_logs/ (post-mortem)\n")
+    cat("   - For alternative backends:\n")
+    cat(paste0("       ", .C_GREEN, "biome_future_plan(workers=4, strategy='callr')", .C_RESET,
+               "  # safer for 16h+ MCMC\n\n"))
+    cat(paste0(.C_BOLD, "6. /Rtmp Local Disk (v11.0)", .C_RESET, "\n"))
+    cat(sprintf("   - /Rtmp is a dedicated %dGB local disk (NOT RAM, NOT OS /tmp, NOT NFS).\n", TMP_DISK_GB))
+    cat(sprintf("   - Advisory warning at %d%% usage. No auto-redirect needed.\n", TMP_WARN_PCT))
+    cat("   - v11.0 routes ALL scratch to /Rtmp:\n")
+    cat("       * NIMBLE/TMB/Stan compile, Rcpp, terra/raster/stars, keras, ggplot cache\n")
+    cat("   - NFS $HOME keeps ONLY: packages (~/R), RData backups, your scripts & results.\n")
+    cat("   - Diagnostic: biome_plot_budget()\n\n")
+    cat(paste0(.C_BOLD, "7. Post-mortem for worker crashes", .C_RESET, "\n"))
+    cat("   - biome_worker_diagnostics()                 \u2014 last 5 crashes, 24h\n")
+    cat("   - biome_worker_diagnostics(n=10, since_hours=72)\n\n")
+    cat(paste0(.C_BOLD, "8. Ggplot Optimization", .C_RESET, "\n"))
+    cat("   - ragg backend auto-enabled (2-4x faster than cairo).\n")
+    cat("   - Viridis colorblind-safe palette as default.\n\n")
+    cat(paste0(.C_BOLD, "9. Safely Saving & Loading Work", .C_RESET, "\n"))
+    cat("   - Save: biome_save_session()       (NFS $HOME, persistent)\n")
+    cat("   - Load: biome_load_session()\n")
+    cat("   - NOTE: /Rtmp is LOCAL to this VM \u2014 DO NOT save final results there.\n")
+    cat("   - RStudio will NOT auto-save your data on logout!\n\n")
+    cat(paste0(.C_GRAY, "   Tip: sessioninfo::session_info() for full R/BLAS/LAPACK details.", .C_RESET, "\n"))
+    cat(sprintf("  Support: %s\n", "%%BIOME_CONTACT%%"))
+  }, envir = tool_env)
+
+  assign("biome_save_session", function(file_name = "biome_session_backup.RData") {
+    target <- file.path(Sys.getenv("HOME"), file_name)
+    EXCLUDE_CLASSES <- c("SpatRaster", "SpatVector", "stars", "RasterStack",
+                          "RasterBrick", "ff", "bigmemory")
+    ws_objects <- ls(envir = .GlobalEnv)
+    ws_size <- 0; excluded_count <- 0L
+    for (obj_name in ws_objects) {
+      obj <- tryCatch(get(obj_name, envir = .GlobalEnv, inherits = FALSE), error = .biome_swerr("Line_2277"))
+      if (!is.null(obj)) {
+        if (inherits(obj, EXCLUDE_CLASSES)) { excluded_count <- excluded_count + 1L }
+        else { ws_size <- ws_size + tryCatch(as.numeric(object.size(obj)), error = function(e) 0) }
+      }
+    }
+    ws_gb <- ws_size / 1024^3
+    if (ws_gb > 1.5) {
+      message(sprintf(paste0(.C_YELLOW,
+        "\n\u26a0\ufe0f  CRITICAL WARNING: Workspace is %.1f GB. Loading this in the future may crash the RStudio Web Interface!",
+        "\n   Please use saveRDS() for large dataframes instead of biome_save_session().",
+        "\n   %d spatial objects excluded (file-backed).",
+        .C_RESET), ws_gb, excluded_count))
+    }
+    tryCatch({
+      df_home <- system2("df", args = c("-P", "-BG", Sys.getenv("HOME")),
+                          stdout = TRUE, stderr = FALSE)
+      if (length(df_home) >= 2) {
+        free_gb <- as.numeric(gsub("[^0-9]", "", strsplit(trimws(df_home[2]), "\\s+")[[1]][4]))
+        if (!is.na(free_gb) && free_gb < max(ws_gb * 2, 5)) {
+          warning(sprintf(paste0(.C_RED,
+            "\n\u26a0\ufe0f  LOW DISK: Only ~%d GB free on HOME. Save may fail!", .C_RESET),
+            as.integer(free_gb)), call. = FALSE, immediate. = TRUE)
+        }
+      }
+    }, error = .biome_swerr("Line_2302"))
+    message(paste0("\n\U0001f4be Saving to: ", target, " ..."))
+    tryCatch({
+      save.image(file = target)
+      final_size <- tryCatch(file.info(target)$size / 1024^2, error = function(e) NA)
+      if (!is.na(final_size)) {
+        message(sprintf(paste0(.C_GREEN, "\U00002705 Done (%.1f MB). You may now safely log out.", .C_RESET), final_size))
+      }
+    }, error = function(e) {
+      message(sprintf(paste0(.C_RED, "\n\u274c SAVE FAILED: %s", .C_RESET), e$message))
+    })
+  }, envir = tool_env)
+
+  assign("biome_load_session", function(file_name = "biome_session_backup.RData") {
+    target <- file.path(Sys.getenv("HOME"), file_name)
+    if (!file.exists(target)) {
+      warning(paste0(.C_RED, "\u26a0\ufe0f No backup found at ", target, .C_RESET, "\n"),
+              call. = FALSE, immediate. = TRUE)
+      return(invisible(NULL))
+    }
+    file_mb <- tryCatch(file.info(target)$size / 1024^2, error = function(e) NA)
+    if (!is.na(file_mb)) {
+      ram_avail_mb <- tryCatch({
+        mi <- readLines("/proc/meminfo", warn = FALSE)
+        al <- grep("^MemAvailable:", mi, value = TRUE)
+        if (length(al) > 0) as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1])) / 1024
+        else Inf
+      }, error = function(e) Inf)
+      if (is.finite(ram_avail_mb) && file_mb > ram_avail_mb * 0.5) {
+        warning(sprintf(paste0(.C_RED,
+          "\n\u26a0\ufe0f  DANGER: File is %.1f GB but only %.1f GB RAM available.",
+          "\n   Consider: env <- new.env(); load('%s', envir=env); ls(env)", .C_RESET),
+          file_mb / 1024, ram_avail_mb / 1024, target),
+          call. = FALSE, immediate. = TRUE)
+      }
+    }
+    message(paste0("\n\U0001f504 Loading workspace from: ", target, " ..."))
+    tryCatch({
+      before_objs <- ls(envir = .GlobalEnv)
+      load(file = target, envir = .GlobalEnv)
+      after_objs <- ls(envir = .GlobalEnv)
+      message(sprintf(paste0(.C_GREEN, "\U00002705 Workspace restored! %d objects loaded.", .C_RESET),
+                       length(after_objs)))
+    }, error = function(e) {
+      message(sprintf(paste0(.C_RED, "\n\u274c LOAD FAILED: %s", .C_RESET), e$message))
+    })
+  }, envir = tool_env)
+
+  assign("biome_plot_budget", function() {
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Plot Budget ===", .C_RESET, "\n"))
+    tmp_info <- tryCatch(
+      system2("df", args = c("-P", "-BG", RTMP_PATH), stdout = TRUE, stderr = FALSE),
+      error = .biome_swerr("Line_2354")
+    )
+    if (!is.null(tmp_info) && length(tmp_info) >= 2) {
+      p <- strsplit(trimws(tmp_info[2]), "\\s+")[[1]]
+      cat(sprintf("  /Rtmp Disk:   Total: %s | Used: %s | Free: %s (%s)\n", p[2], p[3], p[4], p[5]))
+    }
+    backend <- if (requireNamespace("ragg", quietly = TRUE)) "ragg (fast)" else "cairo (default)"
+    cat(sprintf("  Render backend: %s\n", backend))
+    cat(sprintf("  Tmp storage:    Local Disk /Rtmp (no RAM cost)\n"))
+    cat(sprintf("  R tempdir:      %s\n", tempdir()))
+    user_root <- .biome_env$USER_TMP_ROOT
+    if (dir.exists(user_root)) {
+      sz <- sum(file.info(list.files(user_root, full.names = TRUE, recursive = TRUE, all.files = TRUE))$size, na.rm = TRUE)
+      cat(sprintf("  Your tmp usage: ~%.1f MB\n", sz / 1024^2))
+      # Per-subdir breakdown — only subdirs we actually write to (v11.3 [W8])
+      for (sub in c("stan_compile", "rcpp_cache",
+                    "nimble", "stan", "rcpp", "tmb",
+                    "terra", "raster", "stars", "cluster_logs", "keras_cache", "plot_cache")) {
+        d <- file.path(user_root, sub)
+        if (dir.exists(d)) {
+          fl <- list.files(d, full.names = TRUE, recursive = TRUE, all.files = TRUE)
+          sz <- sum(file.info(fl)$size, na.rm = TRUE)
+          if (sz > 0) cat(sprintf("    - %-20s ~%.1f MB (%d items)\n",
+                                   sub, sz / 1024^2, length(fl)))
+        }
+      }
+    }
+    tmp_pct <- get_tmp_disk_use_pct()
+    if (tmp_pct < TMP_WARN_PCT) {
+      cat(paste0("  Status:         ", .C_GREEN, "OK", .C_RESET, "\n"))
+    } else {
+      cat(paste0("  Status:         ", .C_YELLOW,
+                 sprintf("ADVISORY \u2014 /Rtmp at %d%% capacity", as.integer(tmp_pct)),
+                 .C_RESET, "\n"))
+    }
+    invisible(NULL)
+  }, envir = tool_env)
+
+  assign("biome_help", function() {
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Helper ===", .C_RESET, "\n"))
+    cat("  Commands:\n")
+    cat(paste0("  ", .C_BOLD, "status()", .C_RESET, "                     - System Dashboard.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_tutorial()", .C_RESET, "             - Code examples.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_save_session()", .C_RESET, "         - Save data to $HOME (NFS).\n"))
+    cat(paste0("  ", .C_BOLD, "biome_load_session()", .C_RESET, "         - Restore saved data.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_plot_budget()", .C_RESET, "          - /Rtmp disk breakdown per engine.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_make_cluster()", .C_RESET, "         - PSOCK cluster for MCMC.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_future_plan()", .C_RESET, "          - Set future::plan (auto/callr/cluster).\n"))
+    cat(paste0("  ", .C_BOLD, "biome_worker_diagnostics()", .C_RESET, "   - Post-mortem of worker crashes.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_cgroup_verify()", .C_RESET, "        - Verify cgroup limits are active.\n"))
+    cat(paste0("  ", .C_BOLD, "ask_ai(txt)", .C_RESET, "                  - Ask AI.\n"))
+    cat(paste0("  ", .C_BOLD, "biome_help()", .C_RESET, "                 - This message.\n"))
+    cat(sprintf("\n  Support: %s\n", "%%BIOME_CONTACT%%"))
+  }, envir = tool_env)
+
+  assign("get_tmp_disk_use_pct", get_tmp_disk_use_pct, envir = tool_env)
+  assign("biome_restore", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
+  assign("show_quota", function() { get("status", envir=as.environment("tools:biome_calc"))() }, envir = tool_env)
+
+  # ── biome_cgroup_verify: R-side 3-layer cgroup verification tool (v11.4) ──
+  # Checks: systemd dropin file, kernel memory.max, current session state.
+  # Guides users when cgroup limits are "Inf (not detected)" — typically means
+  # the user logged in BEFORE the cgroup deployment was applied.
+  assign("biome_cgroup_verify", function() {
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC Cgroup Verification ===", .C_RESET, "\n"))
+    uid <- tryCatch(MY_UID, error = function(e) -1L)
+
+    # Layer 1: systemd drop-in file
+    dropin <- "/etc/systemd/system/user-.slice.d/50-biome-limits.conf"
+    dropin_status <- if (file.exists(dropin)) {
+      paste0(.C_GREEN, "[PRESENT]", .C_RESET)
+    } else {
+      paste0(.C_RED, "[MISSING]", .C_RESET,
+             " — run: sudo 50_setup_nodes.sh, option 8")
+    }
+    cat(sprintf("  Systemd dropin:   %s\n", dropin_status))
+
+    # Layer 2: kernel-reported cgroup limits
+    cg <- tryCatch(
+      .biome_cgroup_read_limits(uid),
+      error = function(e) list(ram_gb = Inf, cpus = Inf, source = "error")
+    )
+    cg_ram_str <- if (is.finite(cg$ram_gb)) sprintf("%.0f GB", cg$ram_gb) else "max (no limit set)"
+    cg_cpu_str <- if (is.finite(cg$cpus)) sprintf("%.1f vCPUs", cg$cpus) else "unlimited"
+    cg_src_str <- if (!is.null(cg$source) && nzchar(cg$source)) cg$source else "none"
+    cat(sprintf("  Kernel reports:   RAM=%s | CPU=%s | source=%s\n",
+                cg_ram_str, cg_cpu_str, cg_src_str))
+
+    # Layer 3: current Rprofile session state (read during profile load)
+    sess_ram <- .biome_env$shared_env$cgroup_ram_gb
+    sess_cpu <- .biome_env$shared_env$cgroup_cpus
+    cat(sprintf("  Session state:    cgroup_ram_gb=%s | cgroup_cpus=%s\n",
+                format(sess_ram), format(sess_cpu)))
+
+    # Diagnosis
+    if (!is.finite(sess_ram)) {
+      cat(paste0("\n  ", .C_YELLOW, "[ACTION NEEDED]", .C_RESET,
+                 " Kernel shows 'max' (unlimited) for your session.\n"))
+      cat("  Your login session predates the cgroup deployment. Solutions:\n")
+      cat("    1. Log out of RStudio and log back in.\n")
+      cat("    2. Ask admin to run: loginctl terminate-user <your-username>\n")
+      cat("    3. Admin can verify server-side: sudo 50_setup_nodes.sh --verify\n")
+    } else {
+      cat(paste0("\n  ", .C_GREEN, "[OK]", .C_RESET,
+                 " Cgroup memory limits are active for this session.\n"))
+    }
+
+    invisible(cg)
+  }, envir = tool_env)
+
+  .biome_mark_time("finalization")
+  # ── FINALIZATION ──
+  setHook("rstudio.sessionInit", function(newSession) {
+    if (newSession && interactive()) {
+      tryCatch({
+        cf <- file.path(Sys.getenv("HOME"), "ULTIMO_CRASH_RAM.txt")
+        if (file.exists(cf)) {
+           message(paste0("\n", .C_RED, " WARNING: Previous session killed by OOM ", .C_RESET))
+           try(file.remove(cf), silent=TRUE)
+        }
+      }, error = .biome_swerr("Line_2420"))
+
+      bn <- "**********************************************************"
+      message(paste0("\n", .C_CYAN, bn))
+      message(sprintf("*** BIOME-CALC v%s (%s)%s***", VERSION, R_HOST,
+                       paste(rep(" ", max(1, 37 - nchar(VERSION) - nchar(R_HOST))), collapse="")))
+      message("*** Local-disk architecture: NIMBLE/TMB/Stan -> /Rtmp   ***")
+      message("*** If you have any problem please write an e-mail to: ***")
+      message(sprintf("*** %-52s ***", "%%BIOME_CONTACT%%"))
+      message("*** Don't share your password with anyone...           ***")
+      message(paste0(bn, .C_RESET))
+
+      # v12.0 [C7]: Banner reflects cgroup enforcement reality.
+      .cg_ram <- .biome_env$shared_env$cgroup_ram_gb
+      .cg_cpu <- .biome_env$shared_env$cgroup_cpus
+      message(sprintf("\n   RAM:        %-3d GB available  (VM %dGB | slice limit: %s)",
+                       .biome_env$shared_env$last_quota, VM_RAM_GB,
+                       if (is.finite(.cg_ram)) sprintf("%.0f GB", .cg_ram) else "none"))
+      message(sprintf("   BLAS/OMP:   %d threads capped  (cores: %d | slice CPU: %s)",
+                       .biome_env$shared_env$last_threads,
+                       .biome_env$shared_env$last_cores,
+                       if (is.finite(.cg_cpu)) sprintf("%.1f", .cg_cpu) else "CPUWeight fair-share"))
+
+      ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto")
+      cpuv <- tryCatch({
+        ci <- readLines("/proc/cpuinfo", n = 5, warn = FALSE)
+        vl <- grep("^vendor_id", ci, value = TRUE)[1]
+        if (!is.na(vl)) trimws(sub(".*:\\s*", "", vl)) else "unknown"
+      }, error = function(e) "unknown")
+      message(sprintf("   BLAS:       CORETYPE=%s (vendor=%s, serial=%s)",
+                       ct, cpuv, isTRUE(.biome_env$blas_is_serial)))
+
+      tryCatch({
+        ei <- extSoftVersion()
+        blas_lib <- basename(La_library())
+        lapack_ver <- ei[["LAPACK"]]
+        if (is.null(lapack_ver) || !nzchar(lapack_ver)) lapack_ver <- "system"
+        message(sprintf("   LAPACK:     %s (%s)", blas_lib, lapack_ver))
+      }, error = .biome_swerr("Line_2452"))
+
+      tryCatch({
+        df_out <- system2("df", args = c("-h", RTMP_PATH), stdout = TRUE, stderr = FALSE)
+        if (length(df_out) >= 2) {
+          p <- strsplit(trimws(df_out[2]), "\\s+")[[1]]
+          message(sprintf("   /Rtmp:      %s free of %s (%s)", p[4], p[2], p[5]))
+        }
+      }, error = .biome_swerr("Line_2460"))
+
+      message(sprintf("   UserTmp:    %s", .biome_env$USER_TMP_ROOT))
+
+      message(paste0("\n   ", .C_BOLD, "\U0001F680 Engines:", .C_RESET))
+      r_sio <- .fmt_eng("SmartIO", ENABLE_SMART_IO, TRUE)
+      r_ai  <- .fmt_eng("AI", ENABLE_AI_ASSISTANT, .biome_env$shared_env$ai_active)
+      r_ter <- .fmt_eng("Terra", ENABLE_TERRA_OPT, isNamespaceLoaded("terra"))
+      r_arr <- .fmt_eng("Arrow", ENABLE_ARROW_OPT, isNamespaceLoaded("arrow"))
+      r_tf  <- .fmt_eng("Keras/TF", ENABLE_TF_MGMT, isNamespaceLoaded("tensorflow"))
+      message(sprintf("   %s  %s  %s  %s  %s", r_sio, r_ai, r_ter, r_arr, r_tf))
+
+      message("----------------------------------------------------------")
+      message(paste0("   \U0001F4A1 Type ", .C_BOLD, "biome_help()", .C_RESET, " for commands."))
+      message(paste0("   \U0001F4DA Type ", .C_BOLD, "biome_tutorial()", .C_RESET, " for MCMC examples."))
+      message(paste0("   \U0001F4CA Type ", .C_BOLD, "status()", .C_RESET, " for resource quotas."))
+      message(paste0("   \U0001F50D Type ", .C_BOLD, "biome_worker_diagnostics()", .C_RESET, " after worker crashes."))
+      if (.biome_env$shared_env$ai_active) message(paste0("   \U0001F916 Try  ", .C_BOLD, 'ask_ai("Help me with R")', .C_RESET, "."))
+      message(sprintf("   Startup: %.2fs", as.numeric(difftime(Sys.time(), .start_time, units="secs"))))
+      message(paste0(.C_CYAN, bn, .C_RESET, "\n"))
+    }
+  }, action = "append")
+
+  reg.finalizer(.biome_env, function(env) {
+    tryCatch({ sys_log("Session", "END", sprintf("User: %s", curr_user)) }, error = .biome_swerr("Line_2484"))
+    # v11.3 [W8]: cleanup only real compile dirs (stan_compile is the only one
+    # that writes per-session subdirs; nimble/tmb were phantom in v11.0-v11.2)
+    tryCatch({
+      for (sub in c("stan_compile")) {
+        d <- file.path(.biome_env$USER_TMP_ROOT, sub, paste0("session_", Sys.getpid()))
+        if (dir.exists(d)) unlink(d, recursive = TRUE, force = FALSE)
+      }
+    }, error = .biome_swerr("Line_2492"))
+  }, onexit = TRUE)
+
+  .biome_mark_time("profile_end")
+  sys_log("Profile", "OK", "Loaded successfully (v12.0)")
+  
+  # ── Final Load Report ──
+  if (BIOME_GLOBAL_DEBUG) {
+    cat("\n=== BIOME DEBUG LOAD REPORT ===\n")
+    for (nm in names(.biome_env$shared_env$timers)) {
+      cat(sprintf("  [%-20s] %7.3fs\n", nm, .biome_env$shared_env$timers[[nm]]))
+    }
+    swallowed <- Filter(function(x) identical(x$status, "SWALLOW"), .biome_env$shared_env$diag_logs)
+    if (length(swallowed) > 0) {
+      cat(sprintf("\n  Caught %d swallowed errors:\n", length(swallowed)))
+      for (nm in names(swallowed)) {
+        cat(sprintf("  - [%s] %s\n", nm, swallowed[[nm]]$msg))
+      }
+    } else {
+      cat("\n  No swallowed errors detected.\n")
+    }
+    cat("===============================\n")
+  }

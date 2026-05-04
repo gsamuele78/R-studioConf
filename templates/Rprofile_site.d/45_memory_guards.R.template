@@ -1,0 +1,229 @@
+# templates/Rprofile_site.d/45_memory_guards.R.template
+# Fragment extracted from Rprofile_site.R.template (v12.1 monolith, lines 1028-1248)
+# Section: DEFERRED PACKAGE INIT (solve/dist/outer/expand.grid/safe_makeCluster guards)
+# Loaded by dispatcher via: source(file, local=TRUE) inside main local({...})
+# Inherits closure: .biome_env, sys_log, .biome_mark_time, ENABLE_* flags, .C_* colors,
+#                   VERSION, curr_user, USER_TMP_ROOT, MAX_THREADS, and all locals
+#                   defined in lines 321-591 of the dispatcher.
+# ──────────────────────────────────────────────────────────────────────────────
+  .biome_mark_time("deferred_init_def")
+  # ══════════════════════════════════════════════════════════════════════════
+  # DEFERRED PACKAGE INIT — installs base memory guards (one-shot)
+  # ══════════════════════════════════════════════════════════════════════════
+  deferred_pkg_init <- function() {
+    if (.biome_env$shared_env$deferred_done) return(invisible(NULL))
+    sys_log("DeferredInit", "DBG", "starting guard installation")
+    fc <- .biome_env$shared_env$last_cores
+    qr <- .biome_env$shared_env$last_quota
+    msg_parts <- c()
+
+    .biome_get_ram_gb <- .biome_env$.get_ram_gb
+    .blas_serial <- isTRUE(.biome_env$blas_is_serial)
+
+    # ── solve() guard (v11.3 [W5]: migrated to .biome_install_wrapper) ──
+    # NOTE [W12]: This guard protects DENSE base::solve() dispatch only.
+    # S4 methods (e.g., Matrix::solve for dgCMatrix) are dispatched via
+    # setMethod and bypass this wrapper completely. Users working with
+    # Matrix sparse types will NOT see these warnings — document in tutorial.
+    if (ENABLE_SMART_ROUTING && !isTRUE(attr(base::solve, "biome_guard"))) tryCatch({
+      safe_solve <- function(a, b, ...) {
+        if (is.matrix(a) && nrow(a) > 5000 && ncol(a) == nrow(a)) {
+          n <- nrow(a)
+          matrix_gb <- (n * n * 8) / 1024^3
+          ram_avail_gb <- .biome_get_ram_gb()
+          blas_serial <- isTRUE(.biome_env$blas_is_serial)
+
+          if (blas_serial) {
+            if (is.finite(ram_avail_gb) && matrix_gb * 2.06 > ram_avail_gb * 0.8) {
+              warning(sprintf(paste0(
+                "BIOME-CALC: solve() on %d x %d matrix (~%.0f GB) needs ~%.0f GB.\n",
+                "  Available RAM: ~%.0f GB. OOM risk is HIGH.\n",
+                "  BLAS: serial (no thread reduction available).\n",
+                "  Alternatives: Matrix::Cholesky() for SPD, or sparse methods."),
+                n, n, matrix_gb, matrix_gb * 2.06, ram_avail_gb),
+                call. = FALSE, immediate. = TRUE)
+            } else if (matrix_gb > 5 && interactive()) {
+              message(sprintf(paste0(.C_YELLOW,
+                "\U0001F4A1 BIOME-CALC: solve() on %d\u00d7%d matrix (~%.1f GB). ",
+                "BLAS: serial (safe, no thread conflict).", .C_RESET),
+                n, n, matrix_gb))
+            }
+          } else {
+            curr_threads <- as.integer(Sys.getenv("OPENBLAS_NUM_THREADS", "1"))
+            total_need_gb <- matrix_gb * (2 + 0.06 * curr_threads)
+            if (is.finite(ram_avail_gb) && total_need_gb > ram_avail_gb * 0.8) {
+              warning(sprintf(paste0(
+                "BIOME-CALC: solve() on %d x %d matrix (~%.0f GB) with %d BLAS threads needs ~%.0f GB.\n",
+                "  Available RAM: ~%.0f GB. OOM risk is HIGH."),
+                n, n, matrix_gb, curr_threads, total_need_gb, ram_avail_gb),
+                call. = FALSE, immediate. = TRUE)
+              if (interactive()) Sys.sleep(2)
+            }
+            reduced_threads <- if (n > 10000) 2L
+                               else if (n > 5000) max(4L, as.integer(curr_threads / 2))
+                               else curr_threads
+            if (reduced_threads < curr_threads) {
+              Sys.setenv(OPENBLAS_NUM_THREADS = as.character(reduced_threads),
+                         OMP_NUM_THREADS = as.character(reduced_threads))
+              if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
+                RhpcBLASctl::blas_set_num_threads(reduced_threads)
+                RhpcBLASctl::omp_set_num_threads(reduced_threads)
+              }, error = .biome_swerr("Line_1196"))
+              on.exit({
+                Sys.setenv(OPENBLAS_NUM_THREADS = as.character(curr_threads),
+                           OMP_NUM_THREADS = as.character(curr_threads))
+                if (isNamespaceLoaded("RhpcBLASctl")) tryCatch({
+                  RhpcBLASctl::blas_set_num_threads(curr_threads)
+                  RhpcBLASctl::omp_set_num_threads(curr_threads)
+                }, error = .biome_swerr("Line_1203"))
+              }, add = TRUE)
+            }
+          }
+        }
+        .biome_env$original_solve(a, b, ...)
+      }
+      attr(safe_solve, "biome_guard") <- TRUE
+      .biome_install_wrapper(safe_solve, "solve", baseenv(),
+                             save_original_to = "original_solve")
+    }, error = function(e) sys_log("SolveGuard", "FAIL", e$message))
+
+    # ── dist() guard (v11.3 [W3+W5]: restored formals, migrated to helper) ──
+    # NOTE [W12]: stats::dist is S3 but simple; no hidden S4 dispatch path.
+    # Restoring formal args allows tab completion, positional calls,
+    # lintr/styler introspection, and formals(dist) to behave correctly.
+    if (ENABLE_SMART_ROUTING && !isTRUE(attr(stats::dist, "biome_guard"))) tryCatch({
+      safe_dist <- function(x, method = "euclidean", diag = FALSE,
+                            upper = FALSE, p = 2) {
+        if (is.matrix(x) || is.data.frame(x)) {
+          n <- nrow(x)
+          result_gb <- (n * (n - 1) / 2 * 8) / 1024^3
+          if (result_gb > 5 && interactive()) {
+            ram_gb <- .biome_get_ram_gb()
+            full_matrix_gb <- (n * n * 8) / 1024^3
+            if (is.finite(ram_gb) && full_matrix_gb > ram_gb * 0.5) {
+              warning(sprintf(paste0(
+                "BIOME-CALC: dist() on %d observations will create a %.1f GB dist object.\n",
+                "  as.matrix() on this would need %.1f GB. Available RAM: ~%.0f GB.\n",
+                "  For N > 20,000: consider sparse distance methods or spatial indexing."),
+                n, result_gb, full_matrix_gb, ram_gb),
+                call. = FALSE, immediate. = TRUE)
+            }
+          }
+        }
+        # Delegate with EXPLICIT named args — no ... splat that could drop values
+        .biome_env$original_dist(x, method = method, diag = diag,
+                                 upper = upper, p = p)
+      }
+      attr(safe_dist, "biome_guard") <- TRUE
+      .biome_install_wrapper(safe_dist, "dist", asNamespace("stats"),
+                             save_original_to = "original_dist")
+    }, error = function(e) sys_log("DistGuard", "FAIL", e$message))
+
+    # ── outer() guard (v11.3 [W5]: migrated to .biome_install_wrapper) ──
+    if (ENABLE_SMART_ROUTING && !isTRUE(attr(base::outer, "biome_guard"))) tryCatch({
+      safe_outer <- function(X, Y = X, FUN = "*", ...) {
+        n1 <- length(X); n2 <- length(Y)
+        result_gb <- (n1 * n2 * 8) / 1024^3
+        if (result_gb > 5 && interactive()) {
+          ram_gb <- .biome_get_ram_gb()
+          if (is.finite(ram_gb) && result_gb > ram_gb * 0.5) {
+            warning(sprintf(paste0(
+              "BIOME-CALC: outer() will create a %d x %d matrix (%.1f GB). Available RAM: ~%.0f GB."),
+              n1, n2, result_gb, ram_gb), call. = FALSE, immediate. = TRUE)
+          }
+        }
+        .biome_env$original_outer(X, Y, FUN, ...)
+      }
+      attr(safe_outer, "biome_guard") <- TRUE
+      .biome_install_wrapper(safe_outer, "outer", baseenv(),
+                             save_original_to = "original_outer")
+    }, error = function(e) sys_log("OuterGuard", "FAIL", e$message))
+
+    # ── expand.grid() guard (v11.3 [W5]: migrated to .biome_install_wrapper) ──
+    if (ENABLE_SMART_ROUTING && !isTRUE(attr(base::expand.grid, "biome_guard"))) tryCatch({
+      safe_expand_grid <- function(...) {
+        args <- list(...)
+        if (length(args) > 0) {
+          total_rows <- prod(vapply(args, length, 1L))
+          ncols <- length(args)
+          result_gb <- (total_rows * ncols * 8) / 1024^3
+          if (result_gb > 2 && interactive()) {
+            ram_gb <- .biome_get_ram_gb()
+            msg <- sprintf("expand.grid() will create %.0f rows x %d cols (~%.1f GB)",
+                           total_rows, ncols, result_gb)
+            if (is.finite(ram_gb) && result_gb > ram_gb * 0.5) {
+              warning(sprintf(paste0(
+                "BIOME-CALC: %s. Available RAM: ~%.0f GB.\n",
+                "  Consider: data.table::CJ() for cross-joins, or iterators."), msg, ram_gb),
+                call. = FALSE, immediate. = TRUE)
+            }
+          }
+        }
+        .biome_env$original_expand_grid(...)
+      }
+      attr(safe_expand_grid, "biome_guard") <- TRUE
+      .biome_install_wrapper(safe_expand_grid, "expand.grid", baseenv(),
+                             save_original_to = "original_expand_grid")
+    }, error = function(e) sys_log("ExpandGridGuard", "FAIL", e$message))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # v11.0 [N4] + v11.3 [W2] + v11.4 [L2]: parallel::makeCluster SAFEGUARD
+    # ══════════════════════════════════════════════════════════════════════
+    # v11.2: crashed on makeCluster(N) without type= because default
+    #        `getClusterOption("type")` couldn't resolve (unexported symbol).
+    # v11.3: "fixed" via environment(fn) <- asNamespace("parallel"). Worked
+    #        for this case but broke every other wrapper by severing lexical
+    #        scope chain to .biome_env.
+    # v11.4: REAL fix — use triple-colon `parallel:::getClusterOption("type")`
+    #        as the default. Triple-colon bypasses scoping entirely and
+    #        resolves against the parallel namespace without closure tricks.
+    #        No need to touch environment(fn). All other wrappers stay intact.
+    # ══════════════════════════════════════════════════════════════════════
+    if (ENABLE_PARALLEL_GUARD && !exists("original_makeCluster", envir = .biome_env)) tryCatch({
+      # v12.1: upgrade from advisory to AUTO-ROUTE. Bare makeCluster(N) or
+      # makeCluster(N, type="PSOCK") is silently redirected to
+      # biome_make_cluster() which enforces BLAS caps, cluster_logs outfile,
+      # and BIOME_RUN_ID propagation. Opt-out: options(biome.strict_makecluster=TRUE)
+      safe_makeCluster <- function(spec,
+                                    type = tryCatch(parallel:::getClusterOption("type"),
+                                                    error = function(e) "PSOCK"),
+                                    ...) {
+        sys_log("SafeMakeCluster", "DBG", sprintf(
+          "called: spec=%s type=%s interactive=%s",
+          if (is.numeric(spec)) as.character(spec) else paste(spec, collapse=","),
+          type, interactive()))
+        strict <- isTRUE(getOption("biome.strict_makecluster", FALSE))
+        want_route <- (!strict) && is.numeric(spec) && length(spec) == 1 &&
+                      (missing(type) || identical(type, "PSOCK"))
+        if (want_route && exists(".biome_make_cluster_impl", envir = .biome_env, inherits = FALSE)) {
+          if (interactive()) {
+            message(sprintf(paste0(.C_YELLOW,
+              "\U0001F6E1\ufe0f  BIOME-CALC: rerouting parallel::makeCluster(%d) -> biome_make_cluster()\n",
+              "   (BLAS caps, cluster_logs outfile, BIOME_RUN_ID propagation).\n",
+              "   Opt out with options(biome.strict_makecluster = TRUE).", .C_RESET),
+              as.integer(spec)))
+          }
+          sys_log("SafeMakeCluster", "INFO", sprintf("auto-routing to biome_make_cluster(workers=%d)", as.integer(spec)))
+          return(.biome_env$.biome_make_cluster_impl(workers = as.integer(spec), worker_threads = 1L))
+        }
+        sys_log("SafeMakeCluster", "DBG", "delegating to original_makeCluster")
+        .biome_env$original_makeCluster(spec, type = type, ...)
+      }
+      ok <- .biome_install_wrapper(safe_makeCluster, "makeCluster",
+                                    asNamespace("parallel"),
+                                    save_original_to = "original_makeCluster")
+      if (isTRUE(ok)) msg_parts <- c(msg_parts, "parallel::makeCluster [Guard]")
+    }, error = function(e) sys_log("MakeClusterGuard", "FAIL", e$message))
+
+    # v11.0-fix: Set deferred_done AFTER all guards are installed
+    .biome_env$shared_env$deferred_done <- TRUE
+    sys_log("DeferredInit", "DBG", paste("guards installed:", paste(msg_parts, collapse=", ")))
+
+    # ══ Per-user /Rtmp setup (defensive — already done in Section -1.8) ══
+    tryCatch({
+      user_tmp_root <- file.path(RTMP_PATH, paste0("biome_", curr_user))
+      if (!dir.exists(user_tmp_root)) dir.create(user_tmp_root, recursive = TRUE, showWarnings = FALSE)
+      .biome_env$shared_env$user_tmp_root <- user_tmp_root
+    }, error = function(e) sys_log("DeferredInit", "FAIL", e$message))
+  }
+

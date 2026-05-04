@@ -1,0 +1,272 @@
+# templates/Rprofile_site.d/20_cgroup_reader.R.template
+# Fragment extracted from Rprofile_site.R.template (v12.1 monolith, lines 592-855)
+# Section: CENTRALIZED CGROUP LIMIT READER (v11.4-fix) + setup_adaptive_callback
+# Loaded by dispatcher via: source(file, local=TRUE) inside main local({...})
+# Inherits closure: .biome_env, sys_log, .biome_mark_time, ENABLE_* flags, .C_* colors,
+#                   VERSION, curr_user, USER_TMP_ROOT, MAX_THREADS, and all locals
+#                   defined in lines 321-591 of the dispatcher.
+# ──────────────────────────────────────────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════════
+  # CENTRALIZED CGROUP LIMIT READER (v11.4-fix)
+  # ════════════════════════════════════════════════════════════════════════════
+  # Handles both cgroup v1 (controller-prefixed) and v2 (unified hierarchy).
+  # Checks per-user slice paths first (most specific), then falls back to root.
+  # Returns a named list: list(ram_gb = ..., cpus = ..., source = ...)
+  # ════════════════════════════════════════════════════════════════════════════
+  .biome_cgroup_read_limits <- function(uid = MY_UID) {
+    result <- list(ram_gb = Inf, cpus = Inf, source = "none")
+
+    if (!ENABLE_CGROUP_AWARE) return(result)
+
+    # ── Build per-user slice paths ─────────────────────────────────────────
+    # cgroup v2: unified hierarchy under /sys/fs/cgroup
+    # cgroup v1: controller-specific mountpoints (e.g., /sys/fs/cgroup/memory/)
+    user_slice_rel <- if (uid >= 0) {
+      sprintf("user.slice/user-%d.slice", uid)
+    } else {
+      NULL
+    }
+
+    # ── Try cgroup v2 (unified) per-user slice first ──────────────────────
+    if (!is.null(user_slice_rel)) {
+      # Memory: /sys/fs/cgroup/user.slice/user-<uid>.slice/memory.max
+      mem_path <- file.path("/sys/fs/cgroup", user_slice_rel, "memory.max")
+      if (file.exists(mem_path)) {
+        tryCatch({
+          v <- trimws(readLines(mem_path, n = 1, warn = FALSE))
+          if (v != "max") {
+            result$ram_gb <- as.numeric(v) / (1024^3)
+            result$source <- "cgroupv2-user-slice"
+          }
+        }, error = function(e) NULL)
+      }
+      # CPU: /sys/fs/cgroup/user.slice/user-<uid>.slice/cpu.max
+      cpu_path <- file.path("/sys/fs/cgroup", user_slice_rel, "cpu.max")
+      if (file.exists(cpu_path)) {
+        tryCatch({
+          p <- strsplit(trimws(readLines(cpu_path, n = 1, warn = FALSE)), " ")[[1]]
+          if (p[1] != "max" && length(p) == 2) {
+            q <- as.numeric(p[1]); d <- as.numeric(p[2])
+            if (!is.na(q) && !is.na(d) && d > 0) {
+              result$cpus <- q / d
+              if (result$source == "none") result$source <- "cgroupv2-user-slice"
+            }
+          }
+        }, error = function(e) NULL)
+      }
+    }
+
+    # ── Fall back to cgroup v2 root ────────────────────────────────────────
+    if (result$ram_gb == Inf) {
+      cg2_mem <- "/sys/fs/cgroup/memory.max"
+      if (file.exists(cg2_mem)) {
+        tryCatch({
+          v <- trimws(readLines(cg2_mem, n = 1, warn = FALSE))
+          if (v != "max") result$ram_gb <- as.numeric(v) / (1024^3)
+          if (result$source == "none") result$source <- "cgroupv2-root"
+        }, error = function(e) NULL)
+      }
+    }
+    if (result$cpus == Inf) {
+      cg2_cpu <- "/sys/fs/cgroup/cpu.max"
+      if (file.exists(cg2_cpu)) {
+        tryCatch({
+          p <- strsplit(trimws(readLines(cg2_cpu, n = 1, warn = FALSE)), " ")[[1]]
+          if (p[1] != "max" && length(p) == 2) {
+            q <- as.numeric(p[1]); d <- as.numeric(p[2])
+            if (!is.na(q) && !is.na(d) && d > 0) result$cpus <- q / d
+          }
+        }, error = function(e) NULL)
+      }
+    }
+
+    # ── Fall back to cgroup v1 (controller-prefixed paths) ────────────────
+    # P2-fix: v1 uses /sys/fs/cgroup/<controller>/<path>, NOT /sys/fs/cgroup/<path>
+    if (result$ram_gb == Inf) {
+      # Per-user: /sys/fs/cgroup/memory/user.slice/user-<uid>.slice/memory.limit_in_bytes
+      if (!is.null(user_slice_rel)) {
+        cg1_mem_user <- file.path("/sys/fs/cgroup/memory", user_slice_rel, "memory.limit_in_bytes")
+        if (file.exists(cg1_mem_user)) {
+          tryCatch({
+            v <- as.numeric(readLines(cg1_mem_user, n = 1, warn = FALSE))
+            if (!is.na(v) && v < 1e18) result$ram_gb <- v / (1024^3)
+            if (result$source == "none") result$source <- "cgroupv1-user-slice"
+          }, error = function(e) NULL)
+        }
+      }
+      # Root: /sys/fs/cgroup/memory/memory.limit_in_bytes
+      cg1_mem_root <- "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+      if (file.exists(cg1_mem_root)) {
+        tryCatch({
+          v <- as.numeric(readLines(cg1_mem_root, n = 1, warn = FALSE))
+          if (!is.na(v) && v < 1e18) result$ram_gb <- v / (1024^3)
+          if (result$source == "none") result$source <- "cgroupv1-root"
+        }, error = function(e) NULL)
+      }
+    }
+    if (result$cpus == Inf) {
+      # Per-user: /sys/fs/cgroup/cpu/user.slice/user-<uid>.slice/cpu.cfs_quota_us
+      if (!is.null(user_slice_rel)) {
+        cg1_cpu_user <- file.path("/sys/fs/cgroup/cpu", user_slice_rel, "cpu.cfs_quota_us")
+        if (file.exists(cg1_cpu_user)) {
+          tryCatch({
+            q <- as.numeric(readLines(cg1_cpu_user, n = 1, warn = FALSE))
+            p <- file.path("/sys/fs/cgroup/cpu", user_slice_rel, "cpu.cfs_period_us")
+            d <- if (file.exists(p)) as.numeric(readLines(p, n = 1, warn = FALSE)) else NA
+            if (!is.na(q) && q > 0 && !is.na(d) && d > 0) result$cpus <- q / d
+          }, error = function(e) NULL)
+        }
+      }
+      # Root: /sys/fs/cgroup/cpu/cpu.cfs_quota_us
+      cg1_cpu_root <- "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
+      if (file.exists(cg1_cpu_root)) {
+        tryCatch({
+          q <- as.numeric(readLines(cg1_cpu_root, n = 1, warn = FALSE))
+          d <- as.numeric(readLines("/sys/fs/cgroup/cpu/cpu.cfs_period_us", n = 1, warn = FALSE))
+          if (!is.na(q) && q > 0 && !is.na(d) && d > 0) result$cpus <- q / d
+        }, error = function(e) NULL)
+      }
+    }
+
+    # ── Diagnostic on fallback to Inf ──────────────────────────────────────
+    if (result$ram_gb == Inf || result$cpus == Inf) {
+      sys_log("Cgroup", "INFO", sprintf(
+        "No cgroup limits detected (ram_gb=%s, cpus=%s) — check systemd slice config",
+        result$ram_gb, result$cpus))
+    }
+
+    return(result)
+  }
+
+  # ── Hardware Topology & Initial Cgroup Read ──
+  total_vcores <- tryCatch(parallel::detectCores(logical=TRUE), error=function(e) VM_VCORES)
+
+  if (ENABLE_CGROUP_AWARE) tryCatch({
+    cg <- .biome_cgroup_read_limits(MY_UID)
+    .biome_env$shared_env$cgroup_ram_gb <- cg$ram_gb
+    .biome_env$shared_env$cgroup_cpus <- cg$cpus
+    .biome_env$shared_env$cgroup_source <- cg$source
+  }, error = function(e) sys_log("Cgroup", "WARN", e$message))
+
+  sys_log("Cgroup", "DBG", sprintf("vcores=%d cgroup_cpus=%s cgroup_ram_gb=%s source=%s",
+    total_vcores,
+    format(.biome_env$shared_env$cgroup_cpus),
+    format(.biome_env$shared_env$cgroup_ram_gb),
+    {cs <- .biome_env$shared_env$cgroup_source; if (is.null(cs)) "none" else cs}))
+
+  .biome_mark_time("resource_engine")
+  # ── Resource Engine ──
+  .biome_raw_ram_gb <- function() {
+    tryCatch({
+      mi <- readLines("/proc/meminfo", warn = FALSE)
+      al <- grep("^MemAvailable:", mi, value = TRUE)
+      if (length(al) > 0) {
+        as.numeric(sub(".*:\\s+(\\d+).*", "\\1", al[1])) / 1024 / 1024
+      } else {
+        f <- as.numeric(sub(".*:\\s+(\\d+).*","\\1",grep("^MemFree:",mi,value=TRUE)[1]))
+        b <- as.numeric(sub(".*:\\s+(\\d+).*","\\1",grep("^Buffers:",mi,value=TRUE)[1]))
+        c <- as.numeric(sub(".*:\\s+(\\d+).*","\\1",grep("^Cached:", mi,value=TRUE)[1]))
+        sum(c(f,b,c), na.rm=TRUE) / 1024 / 1024
+      }
+    }, error = function(e) Inf)
+  }
+  .biome_env$.get_ram_gb <- .biome_raw_ram_gb
+
+  get_system_ram_gb <- function() {
+    tryCatch({
+      ra <- floor(.biome_raw_ram_gb())
+      if (is.finite(.biome_env$shared_env$cgroup_ram_gb)) ra <- min(ra, floor(.biome_env$shared_env$cgroup_ram_gb))
+      max(2L, as.integer(ra))
+    }, error=function(e) 16L)
+  }
+
+  # v12.0 [C1]: get_active_users() removed — CPUWeight on user.slice handles
+  # fair-share scheduling at the kernel level. /proc-scanning was unreliable
+  # (future/callr Rscript workers inflated the count) and is now redundant.
+
+  update_resources <- function(quiet = TRUE) {
+    tryCatch({
+      now <- as.numeric(Sys.time())
+      if (quiet && (now - .biome_env$shared_env$last_update) < 30) return(invisible(NULL))
+      .biome_env$shared_env$last_update <- now
+
+      # v12.0 [C2,C3]: No per-user division — MemoryHigh/Max on user.slice is the
+      # enforcement boundary. fair_cores reflects the cgroup-capped vcore count;
+      # bt still caps BLAS threads (CPUWeight != thread count limit).
+      ram_gb     <- get_system_ram_gb()
+      quota      <- max(2L, as.integer(floor(ram_gb * 0.9)))
+      eff_vc     <- total_vcores
+      if (is.finite(.biome_env$shared_env$cgroup_cpus))
+        eff_vc <- min(eff_vc, as.integer(ceiling(.biome_env$shared_env$cgroup_cpus)))
+      fair_cores <- max(1L, eff_vc)
+      bt         <- min(fair_cores, MAX_THREADS)
+
+      Sys.setenv(OMP_NUM_THREADS=as.character(bt),
+                 OPENBLAS_NUM_THREADS=as.character(bt),
+                 MKL_NUM_THREADS=as.character(bt),
+                 VECLIB_MAXIMUM_THREADS=as.character(bt),
+                 NUMEXPR_NUM_THREADS=as.character(bt),
+                 GOTO_NUM_THREADS=as.character(bt),
+                 BLIS_NUM_THREADS=as.character(bt))
+      options(mc.cores = fair_cores)
+
+      if (isNamespaceLoaded("data.table")) try(data.table::setDTthreads(bt), silent=TRUE)
+      if (isNamespaceLoaded("RhpcBLASctl")) try({RhpcBLASctl::blas_set_num_threads(bt); RhpcBLASctl::omp_set_num_threads(bt)}, silent=TRUE)
+
+      if (ENABLE_RGEE_OPT) {
+        rgee_mem <- floor(quota * 0.3 * 1024)
+        options(rgee.max_memory = rgee_mem, rgee.n_cores = min(4, fair_cores))
+      }
+      if (ENABLE_TF_MGMT) {
+         inter_op <- max(1L, floor(bt / 2))
+         Sys.setenv(TF_NUM_INTRAOP_THREADS = as.character(bt))
+         Sys.setenv(TF_NUM_INTEROP_THREADS = as.character(inter_op))
+         Sys.setenv(TF_ENABLE_ONEDNN_OPTS = "1")
+      }
+      if (ENABLE_AI_ASSISTANT) Sys.setenv(OLLAMA_NUM_THREADS = as.character(bt))
+
+      if (!.biome_env$shared_env$ai_active && ENABLE_AI_ASSISTANT) {
+          tryCatch({
+              con <- suppressWarnings(socketConnection("127.0.0.1", port=11434, open="r", timeout=1.5))
+              close(con)
+              .biome_env$shared_env$ai_active <- TRUE
+          }, error = .biome_swerr("Line_926"))
+      }
+
+      # v12.0 [C4]: BIOME-RESCALE notification removed — it fired on n_procs changes
+      # which no longer exists. Kernel throttles silently via MemoryHigh.
+      .biome_env$shared_env$last_quota <- quota
+      .biome_env$shared_env$last_cores <- fair_cores
+      .biome_env$shared_env$last_threads <- bt
+      sys_log("Resources", "DBG", sprintf(
+        "ram_gb=%d quota=%d eff_vc=%d fair_cores=%d bt=%d cg_ram=%.0f cg_cpu=%.1f",
+        ram_gb, quota, eff_vc, fair_cores, bt,
+        .biome_env$shared_env$cgroup_ram_gb,
+        .biome_env$shared_env$cgroup_cpus))
+
+      if (ENABLE_CGROUP_AWARE && (now - .biome_env$shared_env$last_cgroup_check) > 300) {
+        .biome_env$shared_env$last_cgroup_check <- now
+        tryCatch({
+          cg <- .biome_cgroup_read_limits(MY_UID)
+          .biome_env$shared_env$cgroup_ram_gb <- cg$ram_gb
+          .biome_env$shared_env$cgroup_cpus <- cg$cpus
+          .biome_env$shared_env$cgroup_source <- cg$source
+        }, error = .biome_swerr("Line_952"))
+      }
+
+      if (ENABLE_SMART_ROUTING) tryCatch({
+        tmp_pct <- get_tmp_disk_use_pct()
+        if (tmp_pct >= TMP_WARN_PCT && !isTRUE(getOption("biome_tmp_warn_shown"))) {
+          options(biome_tmp_warn_shown = TRUE)
+          if (interactive()) {
+            warning(sprintf(paste0(
+              "BIOME-CALC: /Rtmp local disk is at %d%% capacity.\n",
+              "  Clean up stale temp files or contact admin if persistent."),
+              as.integer(tmp_pct)), call. = FALSE, immediate. = TRUE)
+          }
+          sys_log("TmpDisk", "WARN", sprintf("/Rtmp at %d%%", as.integer(tmp_pct)))
+        }
+      }, error = .biome_swerr("Line_967"))
+
+    }, error=function(e) sys_log("ResMgmt", "FAIL", e$message))
+  }

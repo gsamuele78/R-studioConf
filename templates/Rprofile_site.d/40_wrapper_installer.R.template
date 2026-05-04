@@ -1,0 +1,84 @@
+# templates/Rprofile_site.d/40_wrapper_installer.R.template
+# Fragment extracted from Rprofile_site.R.template (v12.1 monolith, lines 952-1027)
+# Section: WRAPPER INSTALLER .biome_install_wrapper (lexical-scope-preserving)
+# Loaded by dispatcher via: source(file, local=TRUE) inside main local({...})
+# Inherits closure: .biome_env, sys_log, .biome_mark_time, ENABLE_* flags, .C_* colors,
+#                   VERSION, curr_user, USER_TMP_ROOT, MAX_THREADS, and all locals
+#                   defined in lines 321-591 of the dispatcher.
+# ──────────────────────────────────────────────────────────────────────────────
+  # ══════════════════════════════════════════════════════════════════════════
+  # v11.3 [W1] + v11.4 [L1]: WRAPPER INSTALLER — lexical-scope-preserving
+  # ──────────────────────────────────────────────────────────────────────────
+  # HISTORY:
+  # v11.2: direct assign(fn, envir = asNamespace(pkg)) — safe_makeCluster
+  #        crashed because its default `getClusterOption("type")` couldn't be
+  #        resolved (unexported parallel symbol, closure env didn't see it).
+  # v11.3: added `environment(fn) <- ns_env` thinking it would "fix closure
+  #        scoping". It did the opposite: it SEVERED the closure's lexical
+  #        chain. Wrappers that reference `.biome_env` (all of them) couldn't
+  #        find it anymore. First real call crashed the session.
+  # v11.4: REVERTED the environment() write. Closures keep their original
+  #        enclosing env (the local() frame of deferred_pkg_init / hooks).
+  #        That env's parent chain reaches globalenv → .biome_env accessible.
+  #        For the specific safe_makeCluster case where a default arg needs a
+  #        non-exported symbol, the caller MUST fully qualify it (triple-colon
+  #        or explicit literal default). See safe_makeCluster below for the
+  #        correct pattern.
+  #
+  # THIS HELPER NOW DOES FOUR THINGS:
+  #   1. Verify target symbol exists in the namespace (SKIP cleanly otherwise)
+  #   2. Save the original function (for pass-through) BEFORE mutation
+  #   3. Preserve original binding-lock state (was_locked save/restore)
+  #   4. Log every install/skip/fail via sys_log for post-mortem
+  # ══════════════════════════════════════════════════════════════════════════
+  .biome_install_wrapper <- function(fn, name, ns_env, save_original_to = NULL) {
+    stopifnot(is.function(fn), is.character(name), length(name) == 1L,
+              is.environment(ns_env))
+
+    # (1) verify target exists in the namespace (not inherited)
+    if (!exists(name, envir = ns_env, inherits = FALSE)) {
+      sys_log("WrapperInstall", "SKIP",
+              sprintf("%s not found in target namespace", name))
+      return(invisible(FALSE))
+    }
+
+    # (2) save the original BEFORE any mutation, so we can always delegate
+    original <- tryCatch(get(name, envir = ns_env, inherits = FALSE),
+                         error = .biome_swerr("Line_1097"))
+    if (is.null(original) || !is.function(original)) {
+      sys_log("WrapperInstall", "SKIP",
+              sprintf("%s is not a function in namespace", name))
+      return(invisible(FALSE))
+    }
+    if (!is.null(save_original_to)) {
+      assign(save_original_to, original, envir = .biome_env)
+    }
+
+    # v11.4 [L1]: DO NOT overwrite environment(fn). Closures retain their
+    # original enclosing env (the local() frame), keeping the scope chain to
+    # globalenv and hence to .biome_env intact. If a wrapper's default arg
+    # needs to resolve a non-exported namespace symbol, the AUTHOR of that
+    # wrapper must fully qualify it at the definition site (e.g.
+    # `parallel:::getClusterOption(...)`). See safe_makeCluster for the
+    # canonical pattern.
+
+    # (3) remember + restore lock state (don't silently lock unlocked bindings)
+    was_locked <- tryCatch(bindingIsLocked(name, ns_env),
+                           error = function(e) FALSE)
+    tryCatch({
+      if (was_locked) unlockBinding(name, ns_env)
+      assign(name, fn, envir = ns_env)
+      if (was_locked) lockBinding(name, ns_env)
+      sys_log("WrapperInstall", "OK",
+              sprintf("%s -> safe wrapper (was_locked=%s)", name, was_locked))
+      invisible(TRUE)
+    }, error = function(e) {
+      sys_log("WrapperInstall", "FAIL", sprintf("%s: %s", name, e$message))
+      # Attempt best-effort rollback if possible
+      tryCatch({
+        if (was_locked && !bindingIsLocked(name, ns_env)) lockBinding(name, ns_env)
+      }, error = function(e2) NULL)
+      invisible(FALSE)
+    })
+  }
+
