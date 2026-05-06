@@ -150,7 +150,27 @@ setup_nodes_preflight() {
     log_error "Missing: ${AUDIT_TEMPLATE}"
     exit 1
   fi
-  
+
+  # ── Kernel/fragment contract check ──
+  # If the Rprofile kernel template references Rprofile_site.d/, the
+  # companion templates directory MUST exist AND contain fragments.
+  # Otherwise deploy would ship a broken RStudio (v12.2 kernel expects fragments).
+  if grep -q 'Rprofile_site\.d' "${RPROFILE_TEMPLATE}" 2>/dev/null; then
+    local frag_src_dir="$(dirname "${RPROFILE_TEMPLATE}")/Rprofile_site.d"
+    if [[ ! -d "${frag_src_dir}" ]]; then
+      log_error "Kernel template references Rprofile_site.d/ but source dir missing: ${frag_src_dir}"
+      exit 1
+    fi
+    local src_count
+    src_count=$(find "${frag_src_dir}" -maxdepth 1 -type f -name '[0-9][0-9]_*.R.template' 2>/dev/null | wc -l)
+    if (( src_count == 0 )); then
+      log_error "Kernel template references Rprofile_site.d/ but 0 fragments in ${frag_src_dir}"
+      log_error "  Expected files matching: [0-9][0-9]_*.R.template"
+      exit 1
+    fi
+    log_info "Fragment contract: ${src_count} fragment template(s) present in ${frag_src_dir}"
+  fi
+
   log_success "All templates present"
 }
 
@@ -809,8 +829,13 @@ tryCatch({parse(file='${rprofile}');cat('PARSE_OK')},
 
   if echo "${parse_result}" | grep -q "PARSE_OK"; then
     # ── Version assertion: rendered file must match RPROFILE_VERSION from vars.conf ──
+    # NOTE: use `grep -m1` (not `grep | head -1`) — under `set -euo pipefail`,
+    # `head -1` closes stdin after the first line and grep receives SIGPIPE (exit 141),
+    # pipefail propagates it, and `set -e` silently kills this function BEFORE the
+    # Rprofile_site.d/ fragment deployment block below ever runs. This was the exact
+    # bug that left /etc/R/Rprofile_site.d/ empty on v12.2 kernel deployments.
     local rendered_version
-    rendered_version=$(grep -oP 'VERSION\s*<-\s*"\K[0-9.]+' "${rprofile}" | head -1)
+    rendered_version=$(grep -m1 -oP 'VERSION\s*<-\s*"\K[0-9.]+' "${rprofile}" || true)
     if [[ -n "${rendered_version}" && "${rendered_version}" != "${RPROFILE_VERSION}" ]]; then
       log_error "Version drift: rendered='${rendered_version}' expected='${RPROFILE_VERSION}'"
       log_error "  → Check template or update RPROFILE_VERSION in config/setup_nodes.vars.conf"
@@ -897,6 +922,20 @@ tryCatch({parse(file='${frag_tmp}');cat('PARSE_OK')},
     log_success "Rprofile_site.d: ${frag_count} fragment(s) deployed to ${frag_dst_dir}"
   else
     log_info "No Rprofile_site.d/ sources found at ${frag_src_dir} (optional)"
+  fi
+
+  # ── Post-deploy sanity: if kernel references Rprofile_site.d/, fragments must exist ──
+  # This turns silent failures (e.g. earlier SIGPIPE bug) into loud aborts.
+  if grep -q 'Rprofile_site\.d' "${rprofile}" 2>/dev/null; then
+    local deployed_frags
+    deployed_frags=$(find "${frag_dst_dir}" -maxdepth 1 -type f -name '[0-9][0-9]_*.R' 2>/dev/null | wc -l)
+    if (( deployed_frags == 0 )); then
+      log_error "Kernel Rprofile.site references Rprofile_site.d/ but 0 fragments deployed in ${frag_dst_dir}"
+      log_error "  → Check that ${frag_src_dir} contains [0-9][0-9]_*.R.template files"
+      log_error "  → Aborting to avoid shipping a broken RStudio environment"
+      exit 1
+    fi
+    log_success "Post-deploy sanity: ${deployed_frags} fragment(s) present in ${frag_dst_dir}"
   fi
 }
 
@@ -1762,8 +1801,8 @@ fi
 if [[ "${DO_VERIFY}" == true ]]; then
   setup_nodes_preflight
   setup_nodes_verify_cgroups
-  # Check deployed Rprofile version
-  deployed_ver=$(grep -oP 'VERSION\s*<-\s*"\K[0-9.]+' /etc/R/Rprofile.site 2>/dev/null | head -1)
+  # Check deployed Rprofile version (grep -m1, not `grep | head -1`: see SIGPIPE note above)
+  deployed_ver=$(grep -m1 -oP 'VERSION\s*<-\s*"\K[0-9.]+' /etc/R/Rprofile.site 2>/dev/null || true)
   if [[ -n "${deployed_ver}" ]]; then
     if [[ "${deployed_ver}" == "${RPROFILE_VERSION}" ]]; then
       log_success "Rprofile version: deployed=v${deployed_ver} expected=v${RPROFILE_VERSION} [OK]"
@@ -1774,6 +1813,51 @@ if [[ "${DO_VERIFY}" == true ]]; then
   else
     log_warn "Could not read deployed Rprofile version from /etc/R/Rprofile.site"
     log_warn "  → File may not exist or was deployed without the version assertion"
+  fi
+
+  # ── Rprofile_site.d fragments verification ──
+  log_step "Rprofile_site.d/ Fragment Verification"
+  frag_src_dir="$(dirname "${RPROFILE_TEMPLATE}")/Rprofile_site.d"
+  frag_dst_dir="/etc/R/Rprofile_site.d"
+  kernel_needs_frags=false
+  if [[ -f /etc/R/Rprofile.site ]] && grep -q 'Rprofile_site\.d' /etc/R/Rprofile.site; then
+    kernel_needs_frags=true
+  fi
+
+  if [[ "${kernel_needs_frags}" == true ]]; then
+    log_info "Deployed kernel references Rprofile_site.d/ → fragments are REQUIRED"
+  else
+    log_info "Deployed kernel does NOT reference Rprofile_site.d/ → fragments optional"
+  fi
+
+  if [[ -d "${frag_dst_dir}" ]]; then
+    deployed_count=$(find "${frag_dst_dir}" -maxdepth 1 -type f -name '[0-9][0-9]_*.R' 2>/dev/null | wc -l)
+    log_info "Deployed fragments in ${frag_dst_dir}: ${deployed_count}"
+    if (( deployed_count > 0 )); then
+      find "${frag_dst_dir}" -maxdepth 1 -type f -name '[0-9][0-9]_*.R' -printf '  %f\n' 2>/dev/null | sort
+    fi
+  else
+    deployed_count=0
+    log_warn "Directory ${frag_dst_dir} does NOT exist"
+  fi
+
+  if [[ -d "${frag_src_dir}" ]]; then
+    src_count=$(find "${frag_src_dir}" -maxdepth 1 -type f -name '[0-9][0-9]_*.R.template' 2>/dev/null | wc -l)
+    log_info "Source fragment templates in ${frag_src_dir}: ${src_count}"
+  else
+    src_count=0
+  fi
+
+  if [[ "${kernel_needs_frags}" == true ]]; then
+    if (( deployed_count == 0 )); then
+      log_error "FAIL — kernel needs fragments but none are deployed"
+      log_error "  → Re-deploy: sudo $0  then select option 3"
+    elif (( src_count > 0 && deployed_count != src_count )); then
+      log_warn "Fragment count mismatch: ${deployed_count} deployed vs ${src_count} in source"
+      log_warn "  → Re-deploy option 3 to sync"
+    else
+      log_success "Fragments OK: ${deployed_count} deployed"
+    fi
   fi
   exit 0
 fi
