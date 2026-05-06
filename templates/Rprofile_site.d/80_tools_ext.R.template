@@ -1,0 +1,103 @@
+# templates/Rprofile_site.d/80_tools_ext.R.template
+# ==============================================================================
+# FRAGMENT 80 — tools:biome_calc EXTENSIONS (v12.1)
+# ==============================================================================
+# Deployed to: /etc/R/Rprofile_site.d/80_tools_ext.R
+#
+# Attaches two helpers to the persistent tools:biome_calc environment set up
+# by the monolith, so they survive rm(list=ls()) and are visible to
+# interactive users:
+#
+#   biome_tmb_compile(file, ...)   — TMB::compile() with on.exit setwd routing
+#   biome_run_diagnostics()        — inspect current run's compile dirs
+#
+# If tools:biome_calc is not yet attached (master boot ordering edge case),
+# this fragment skips silently; fragment loader catches no error.
+# ==============================================================================
+
+local({
+  tool_env_name <- "tools:biome_calc"
+  if (!(tool_env_name %in% search())) {
+    # monolith hasn't attached tools env yet — skip, no error
+    return(invisible())
+  }
+  tool_env <- as.environment(tool_env_name)
+
+  # ── biome_tmb_compile() — explicit TMB compile routing helper ──────────────
+  # Pattern: create run-specific dir, on.exit-restore cwd, call TMB::compile.
+  # This replaces the paradigm-leak "user must setwd() manually before
+  # TMB::compile()" with a single-call helper.
+  assign("biome_tmb_compile", function(file, ...) {
+    if (!requireNamespace("TMB", quietly = TRUE)) {
+      stop("biome_tmb_compile: package 'TMB' not available", call. = FALSE)
+    }
+    if (missing(file) || !is.character(file) || length(file) != 1L || !nzchar(file)) {
+      stop("biome_tmb_compile: `file` must be a single non-empty path to a .cpp file",
+           call. = FALSE)
+    }
+    if (!file.exists(file)) {
+      stop(sprintf("biome_tmb_compile: file not found: %s", file), call. = FALSE)
+    }
+
+    # Resolve compile dir (fragment 35 provides .biome_get_compile_dir)
+    if (!exists(".biome_get_compile_dir", inherits = TRUE)) {
+      stop("biome_tmb_compile: fragment 35_compile_routing.R not loaded", call. = FALSE)
+    }
+    compile_dir <- .biome_get_compile_dir("tmb")
+
+    # Copy the .cpp into compile_dir (TMB::compile writes .o/.so beside the .cpp)
+    cpp_name <- basename(file)
+    dest_cpp <- file.path(compile_dir, cpp_name)
+    tryCatch(file.copy(file, dest_cpp, overwrite = TRUE),
+             error = function(e) stop(
+               sprintf("biome_tmb_compile: cannot stage cpp in %s: %s",
+                       compile_dir, e$message), call. = FALSE))
+
+    old_wd <- getwd()
+    on.exit(tryCatch(setwd(old_wd), error = function(e) NULL), add = TRUE)
+
+    # Use the ORIGINAL setwd (bypass safe_setwd guard for our internal hop,
+    # compile_dir is always freshly created so it exists).
+    if (exists(".biome_original_setwd", envir = globalenv(), inherits = FALSE)) {
+      get(".biome_original_setwd", envir = globalenv())(compile_dir)
+    } else {
+      setwd(compile_dir)
+    }
+
+    if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+      message(sprintf("BIOME-CALC: TMB::compile('%s') in %s", cpp_name, compile_dir))
+    }
+    TMB::compile(cpp_name, ...)
+  }, envir = tool_env)
+
+  # ── biome_run_diagnostics() — summary of current run's compile dirs ────────
+  assign("biome_run_diagnostics", function() {
+    user_tmp_root <- Sys.getenv("BIOME_USER_TMP", "")
+    run_id        <- Sys.getenv("BIOME_RUN_ID", "")
+    if (!nzchar(user_tmp_root) || !nzchar(run_id)) {
+      cat("BIOME-CALC: run not initialized (BIOME_USER_TMP or BIOME_RUN_ID missing)\n")
+      return(invisible(NULL))
+    }
+    cat(sprintf("\n=== BIOME-CALC Run Diagnostics ===\n"))
+    cat(sprintf("  User tmp root: %s\n", user_tmp_root))
+    cat(sprintf("  Run ID:        %s\n", run_id))
+    cat(sprintf("  PID:           %d (master=%s)\n",
+                Sys.getpid(),
+                if (!nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) "yes" else "no"))
+    cat("\n")
+    for (pkg in c("nimble", "stan", "rcpp", "tmb")) {
+      pkg_run_dir <- file.path(user_tmp_root, pkg, run_id)
+      if (!dir.exists(pkg_run_dir)) next
+      subdirs <- list.dirs(pkg_run_dir, recursive = FALSE, full.names = FALSE)
+      fl      <- list.files(pkg_run_dir, recursive = TRUE, full.names = TRUE,
+                             all.files = TRUE)
+      total   <- sum(file.info(fl)$size, na.rm = TRUE)
+      cat(sprintf("  [%-6s] %s\n", pkg, pkg_run_dir))
+      cat(sprintf("           size=%.1f MB | subdirs: %s\n",
+                  total / 1024^2,
+                  if (length(subdirs)) paste(subdirs, collapse = ", ") else "(none)"))
+    }
+    cat("\n")
+    invisible(NULL)
+  }, envir = tool_env)
+})

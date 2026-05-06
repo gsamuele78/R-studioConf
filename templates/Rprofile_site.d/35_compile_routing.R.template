@@ -1,0 +1,184 @@
+# templates/Rprofile_site.d/35_compile_routing.R.template
+# ==============================================================================
+# FRAGMENT 35 — RUN-SPECIFIC COMPILE ROUTING (v12.1)
+# ==============================================================================
+# Deployed to: /etc/R/Rprofile_site.d/35_compile_routing.R
+# Sourced by:  SECTION F fragment loader in Rprofile_site.R
+#
+# Absorbs Rprofile_site.R.template_v12_nimble_router. Adds:
+#   BIOME_RUN_ID / BIOME_RUN_TIMESTAMP env vars (master: captured; workers: inherited)
+#   .biome_get_compile_dir(pkg, worker_id) — /Rtmp/biome_<u>/<pkg>/<run>/{master|worker_<pid>}/
+#   safe_compileNimble wrapper — auto-injects dirName when NULL
+#   Stan / Rcpp / TMB routing via .biome_env scope
+#
+# This fragment MUST run in workers too so compileNimble() inside parLapply()
+# tasks routes to the same run folder (workers get BIOME_RUN_ID from
+# biome_make_cluster's env_vec — see monolith env_vec patch [R7]).
+# ==============================================================================
+
+local({
+  # ── R1: RUN ID — capture once per session (master) or inherit (worker) ────
+  existing_id <- Sys.getenv("BIOME_RUN_ID", "")
+  if (!nzchar(existing_id)) {
+    ts_folder <- format(Sys.time(), "%Y-%m-%d_%H-%M")
+    Sys.setenv(
+      BIOME_RUN_TIMESTAMP = ts_folder,
+      BIOME_RUN_ID        = paste0(ts_folder, "_pid", Sys.getpid())
+    )
+  }
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# R2: .biome_get_compile_dir(pkg, worker_id)
+# ══════════════════════════════════════════════════════════════════════════════
+.biome_get_compile_dir <- function(pkg = c("nimble", "stan", "rcpp", "tmb"),
+                                    worker_id = NULL) {
+  pkg <- match.arg(pkg)
+
+  user_tmp_root <- Sys.getenv("BIOME_USER_TMP", "")
+  if (!nzchar(user_tmp_root)) {
+    curr_user     <- tryCatch(Sys.info()[["user"]], error = function(e) "unknown")
+    user_tmp_root <- file.path("/Rtmp", paste0("biome_", curr_user))
+    # loud warning (visible in logs) — fallback is a symptom of broken boot
+    if (exists("sys_log", inherits = TRUE)) {
+      tryCatch(sys_log("CompileRouting", "WARN",
+                       sprintf("BIOME_USER_TMP missing; fallback=%s", user_tmp_root)),
+               error = function(e) NULL)
+    } else {
+      warning(sprintf("BIOME-CALC: BIOME_USER_TMP missing; fallback=%s", user_tmp_root),
+              call. = FALSE)
+    }
+  }
+
+  run_id <- Sys.getenv("BIOME_RUN_ID", "")
+  if (!nzchar(run_id)) {
+    run_id <- paste0(format(Sys.time(), "%Y-%m-%d_%H-%M"), "_pid", Sys.getpid())
+  }
+
+  if (is.null(worker_id)) {
+    is_worker <- nzchar(Sys.getenv("BIOME_WORKER_MODE", "")) ||
+                 any(grepl("^MASTER=", commandArgs(trailingOnly = TRUE)))
+    if (is_worker) worker_id <- Sys.getpid()
+  }
+
+  subdir    <- if (is.null(worker_id)) "master" else paste0("worker_", worker_id)
+  full_path <- file.path(user_tmp_root, pkg, run_id, subdir)
+
+  if (!dir.exists(full_path)) {
+    tryCatch(
+      dir.create(full_path, recursive = TRUE, showWarnings = FALSE, mode = "0700"),
+      error = function(e) warning(sprintf(
+        "BIOME-CALC: cannot create compile dir %s: %s", full_path, e$message),
+        call. = FALSE))
+  }
+  full_path
+}
+# Expose to global scope + .biome_env so wrappers created later (in other
+# namespaces' onLoad hooks) can reach it.
+assign(".biome_get_compile_dir", .biome_get_compile_dir, envir = globalenv())
+if (exists(".biome_env", envir = globalenv(), inherits = FALSE)) {
+  tryCatch({
+    .biome_env <- get(".biome_env", envir = globalenv())
+    .biome_env$.biome_get_compile_dir <- .biome_get_compile_dir
+  }, error = function(e) NULL)
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# R3: safe_compileNimble wrapper
+# ══════════════════════════════════════════════════════════════════════════════
+# Uses the monolith's .biome_install_wrapper (lexical-scope-preserving) when
+# available; otherwise falls back to a local install routine that still
+# respects the was_locked contract.
+# ══════════════════════════════════════════════════════════════════════════════
+.biome_install_nimble_wrapper <- function() {
+  if (!requireNamespace("nimble", quietly = TRUE)) return(invisible(FALSE))
+  ns_env <- asNamespace("nimble")
+  if (!exists("compileNimble", envir = ns_env, inherits = FALSE)) return(invisible(FALSE))
+
+  current <- get("compileNimble", envir = ns_env, inherits = FALSE)
+  if (isTRUE(attr(current, "biome_wrapper"))) return(invisible(TRUE))
+
+  # Save original via .biome_env if present, else in a hidden global.
+  save_store <- if (exists(".biome_env", envir = globalenv(), inherits = FALSE))
+                  get(".biome_env", envir = globalenv())
+                else globalenv()
+  assign(".biome_original_compileNimble", current, envir = save_store)
+
+  safe_compileNimble <- function(..., dirName = NULL,
+                                  showCompilerOutput = FALSE,
+                                  resetFunctions = FALSE,
+                                  project = NULL) {
+    if (is.null(dirName)) {
+      dirName <- .biome_get_compile_dir("nimble")
+      if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+        message(sprintf("BIOME-CALC: routing nimble compile -> %s", dirName))
+      }
+    }
+    orig <- get(".biome_original_compileNimble", envir = save_store)
+    orig(..., dirName = dirName,
+         showCompilerOutput = showCompilerOutput,
+         resetFunctions     = resetFunctions,
+         project            = project)
+  }
+  attr(safe_compileNimble, "biome_wrapper") <- TRUE
+
+  was_locked <- tryCatch(bindingIsLocked("compileNimble", ns_env),
+                          error = function(e) FALSE)
+  tryCatch({
+    if (was_locked) unlockBinding("compileNimble", ns_env)
+    assign("compileNimble", safe_compileNimble, envir = ns_env)
+    if (was_locked) lockBinding("compileNimble", ns_env)
+    if (exists("sys_log", inherits = TRUE)) {
+      tryCatch(sys_log("CompileRouting", "OK",
+                       "installed safe_compileNimble wrapper"),
+               error = function(e) NULL)
+    }
+    TRUE
+  }, error = function(e) {
+    warning(sprintf("BIOME-CALC: failed to wrap compileNimble: %s",
+                    e$message), call. = FALSE)
+    FALSE
+  })
+}
+
+# Try immediate install (if nimble already loaded) + register onLoad hook
+.biome_install_nimble_wrapper()
+setHook(packageEvent("nimble", "onLoad"), function(...) {
+  tryCatch(.biome_install_nimble_wrapper(), error = function(e) NULL)
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# R5: Stan / cmdstanr routing
+# ══════════════════════════════════════════════════════════════════════════════
+.biome_route_stan <- function() {
+  if (!requireNamespace("cmdstanr", quietly = TRUE)) return(invisible())
+  stan_dir <- .biome_get_compile_dir("stan")
+  options(cmdstanr_output_dir = stan_dir)
+  if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+    message(sprintf("BIOME-CALC: routing cmdstanr output -> %s", stan_dir))
+  }
+}
+tryCatch(.biome_route_stan(), error = function(e) NULL)
+setHook(packageEvent("cmdstanr", "onLoad"), function(...) {
+  tryCatch(.biome_route_stan(), error = function(e) NULL)
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# R6: Rcpp cache routing (env var is REAL — Rcpp reads RCPP_CACHE_DIR)
+# ══════════════════════════════════════════════════════════════════════════════
+local({
+  rcpp_dir <- tryCatch(.biome_get_compile_dir("rcpp"),
+                        error = function(e) NULL)
+  if (!is.null(rcpp_dir)) Sys.setenv(RCPP_CACHE_DIR = rcpp_dir)
+})
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Announce (master only, interactive only)
+# ══════════════════════════════════════════════════════════════════════════════
+if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+  message(sprintf(paste0(
+    "BIOME-CALC v12.1 compile router loaded. Run ID: %s\n",
+    "  Compile artifacts land under: $BIOME_USER_TMP/<pkg>/%s/{master|worker_<pid>}/\n",
+    "  Helpers: biome_run_diagnostics(), biome_tmb_compile(file)"),
+    Sys.getenv("BIOME_RUN_ID"), Sys.getenv("BIOME_RUN_ID")))
+}

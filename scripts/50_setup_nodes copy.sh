@@ -824,82 +824,7 @@ tryCatch({parse(file='${rprofile}');cat('PARSE_OK')},
     cp "${rprofile}.bak" "${rprofile}"
     exit 1
   fi
-
-  # ── Rprofile_site.d/ FRAGMENTS (v12.1 modular-additive) ──────────────────────
-  # Deploy every templates/Rprofile_site.d/*.R.template to /etc/R/Rprofile_site.d/
-  # Each fragment is independently rollback-able. See templates/Rprofile_site.d/README.md
-  local frag_src_dir="$(dirname "${RPROFILE_TEMPLATE}")/Rprofile_site.d"
-  local frag_dst_dir="/etc/R/Rprofile_site.d"
-
-  if [[ -d "${frag_src_dir}" ]]; then
-    log_info "Deploying Rprofile_site.d/ feature fragments from ${frag_src_dir}"
-    run_cmd mkdir -p "${frag_dst_dir}"
-    run_cmd chmod 755 "${frag_dst_dir}"
-
-    # Backup existing deployed fragments (if any) in one timestamped tarball
-    if compgen -G "${frag_dst_dir}/*.R" >/dev/null 2>&1; then
-      local frag_bak="${frag_dst_dir}.bak.$(date +%s)"
-      run_cmd cp -a "${frag_dst_dir}" "${frag_bak}" && \
-        log_info "  backup: ${frag_bak}"
-    fi
-
-    local frag_count=0 frag_failed=0
-    shopt -s nullglob
-    for frag_tpl in "${frag_src_dir}"/[0-9][0-9]_*.R.template; do
-      local frag_name
-      frag_name="$(basename "${frag_tpl}" .template)"   # strip .template → *.R
-      local frag_dst="${frag_dst_dir}/${frag_name}"
-      local frag_tmp
-      frag_tmp=$(mktemp /tmp/Rfrag.XXXXXX.R)
-
-      # Substitute %%VARS%% (same key set as the main Rprofile). Fragments
-      # that don't reference any var will just pass through unchanged.
-      local generated_frag
-      process_template "${frag_tpl}" generated_frag \
-        BIOME_HOST="${BIOME_HOST}" \
-        RPROFILE_VERSION="${RPROFILE_VERSION}" \
-        VM_VCORES="${VM_VCORES}" \
-        VM_RAM_GB="${VM_RAM_GB}" \
-        BIOME_CONTACT="${BIOME_CONTACT}" \
-        MAX_BLAS_THREADS="${MAX_BLAS_THREADS}" \
-        BIOME_CONF="${BIOME_CONF}" \
-        LOG_FILE="${LOG_FILE}" \
-        RAMDISK_GB="${RAMDISK_GB}" \
-        RSESSION_CONF_PATH="${RSESSION_CONF_PATH}" \
-        TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-80}"
-
-      printf "%s" "${generated_frag}" > "${frag_tmp}"
-
-      # Parse-check each fragment BEFORE deploying (fail-fast: PSE rule)
-      local fpr
-      fpr=$(Rscript --vanilla -e "
-tryCatch({parse(file='${frag_tmp}');cat('PARSE_OK')},
-  error=function(e) cat(sprintf('PARSE_FAIL: %s',e\$message)))" 2>&1)
-
-      if echo "${fpr}" | grep -q "PARSE_OK"; then
-        run_cmd cp "${frag_tmp}" "${frag_dst}"
-        run_cmd chmod 644 "${frag_dst}"
-        rm -f "${frag_tmp}"
-        log_success "  deployed fragment: ${frag_name}"
-        frag_count=$((frag_count + 1))
-      else
-        log_error "  parse-fail fragment ${frag_name}: ${fpr}"
-        rm -f "${frag_tmp}"
-        frag_failed=$((frag_failed + 1))
-      fi
-    done
-    shopt -u nullglob
-
-    if (( frag_failed > 0 )); then
-      log_error "Rprofile_site.d: ${frag_failed} fragment(s) failed to parse — NOT deployed"
-      exit 1
-    fi
-    log_success "Rprofile_site.d: ${frag_count} fragment(s) deployed to ${frag_dst_dir}"
-  else
-    log_info "No Rprofile_site.d/ sources found at ${frag_src_dir} (optional)"
-  fi
 }
-
 
 # ==============================================================================
 # STEP 9: USER HOME MIGRATION
@@ -1453,8 +1378,8 @@ setup_nodes_orphan_cleanup() {
     local node_sender
     node_sender="noreply-$(hostname -s)@unibo.it"
     
-    export SMTP_HOST SMTP_PORT SENDER_EMAIL="${node_sender}" MAIL_DOMAIN MAIL_DOMAINS_USER SMTP_DNS_SERVERS="${dns_csv}" KILL_TIMEOUT BIOME_CONF
-    envsubst "\${SMTP_HOST} \${SMTP_PORT} \${SENDER_EMAIL} \${MAIL_DOMAIN} \${MAIL_DOMAINS_USER} \${SMTP_DNS_SERVERS} \${KILL_TIMEOUT} \${BIOME_CONF}" < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
+    export SMTP_HOST SMTP_PORT SENDER_EMAIL="${node_sender}" MAIL_DOMAIN SMTP_DNS_SERVERS="${dns_csv}" KILL_TIMEOUT BIOME_CONF
+    envsubst "\${SMTP_HOST} \${SMTP_PORT} \${SENDER_EMAIL} \${MAIL_DOMAIN} \${SMTP_DNS_SERVERS} \${KILL_TIMEOUT} \${BIOME_CONF}" < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
     run_cmd chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   fi
 

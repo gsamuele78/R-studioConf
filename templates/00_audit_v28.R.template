@@ -1944,8 +1944,8 @@ run_audit("14.19", "Stan output_dir routing (v11.0 [N7])", {
   hook_done <- tryCatch(.biome_env$shared_env$.stan_hook_done, error = function(e) FALSE)
   if (!isTRUE(hook_done)) warning("Stan hook not fired yet")
   # CMDSTANR_OUTPUT_DIR env
-  cmdstanr_dir <- Sys.getenv("CMDSTANR_OUTPUT_DIR", "")
-  stan_tmpdir <- Sys.getenv("STAN_TMPDIR", "")
+  cmdstanr_dir <- getOption("cmdstanr_output_dir", "")
+  stan_tmpdir <- ""  # v12.1: STAN_TMPDIR phantom (v11.2 [H7])
   rstan_opt <- getOption("rstan.auto_write", FALSE)
   brms_opt <- getOption("brms.file_refit", "")
 

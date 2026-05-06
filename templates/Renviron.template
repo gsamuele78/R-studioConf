@@ -85,3 +85,15 @@ R_REPOS=https://cloud.r-project.org
 # DO NOT set R_INSTALL_STAGED=TRUE — atomic rename on NFS is expensive
 # and can collide if multiple users install on multiple servers simultaneously.
 # Default behaviour is correct here.
+
+
+CFLAGS=-fopenmp
+FFLAGS=-fopenmp
+FLIBS=-fopenmp
+SHLIB_OPENMP_CFLAGS=-fopenmp
+SHLIB_OPENMP_CXXFLAGS=-fopenmp
+SHLIB_OPENMP_FCFLAGS=-fopenmp
+SHLIB_OPENMP_FFLAGS=-fopenmp
+BLAS_LIBS=-lopenblas
+LAPACK_LIBS=-lopenblas
+

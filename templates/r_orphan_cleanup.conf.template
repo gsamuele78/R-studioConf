@@ -13,8 +13,12 @@ SMTP_PORT="${SMTP_PORT}"
 SENDER_EMAIL="${SENDER_EMAIL}"
 DNS_SERVERS="${SMTP_DNS_SERVERS}"
 
-# ── User Email Domain ─────────────────────────────────────────
+# ── User Email Domain(s) ──────────────────────────────────────
+# Legacy single-domain fallback
 MAIL_DOMAIN="${MAIL_DOMAIN}"
+# Active multi-domain list (space-separated). If set, resolve_user_email()
+# returns a CSV "user@d1,user@d2" when no override exists in user_email_map.txt
+MAIL_DOMAINS_USER="${MAIL_DOMAINS_USER}"
 
 # ── Admin Recipients ──────────────────────────────────────────
 # Set to the recipients list deployed during setup

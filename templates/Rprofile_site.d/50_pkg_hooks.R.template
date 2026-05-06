@@ -1,0 +1,581 @@
+# templates/Rprofile_site.d/50_pkg_hooks.R.template
+# Fragment extracted from Rprofile_site.R.template (v12.1 monolith, lines 1249-1821)
+# Section: DEFERRED PACKAGE HOOKS (terra/raster/stars/sf/ncdf4/spatial/keras/ggplot/arrow/geosphere/future/doParallel/doSNOW/nimble/stan/rstan/...)
+# Loaded by dispatcher via: source(file, local=TRUE) inside main local({...})
+# Inherits closure: .biome_env, sys_log, .biome_mark_time, ENABLE_* flags, .C_* colors,
+#                   VERSION, curr_user, USER_TMP_ROOT, MAX_THREADS, and all locals
+#                   defined in lines 321-591 of the dispatcher.
+# ──────────────────────────────────────────────────────────────────────────────
+  .biome_mark_time("deferred_hooks_def")
+  # ══════════════════════════════════════════════════════════════════════════
+  # DEFERRED PACKAGE HOOKS — runs on EVERY callback (fires as packages load)
+  # ══════════════════════════════════════════════════════════════════════════
+  deferred_pkg_hooks <- function() {
+    if (!.biome_env$shared_env$deferred_done) return(invisible(NULL))
+    fc <- .biome_env$shared_env$last_cores
+    qr <- .biome_env$shared_env$last_quota
+    msg_parts <- c()
+
+    user_tmp_root <- .biome_env$shared_env$user_tmp_root
+    if (is.null(user_tmp_root)) {
+      user_tmp_root <- file.path(RTMP_PATH, paste0("biome_", curr_user))
+      if (!dir.exists(user_tmp_root)) dir.create(user_tmp_root, recursive = TRUE, showWarnings = FALSE)
+    }
+
+    # ── terra ──
+    if (ENABLE_TERRA_OPT && isNamespaceLoaded("terra") &&
+        .biome_env$shared_env$terra_threads == 0L) tryCatch({
+      tt <- min(fc, 8L); gc_mb <- as.integer(floor(qr * 0.2 * 1024))
+      Sys.setenv(GDAL_NUM_THREADS = as.character(tt), GDAL_CACHEMAX = as.character(gc_mb))
+      td <- file.path(user_tmp_root, "terra")
+      if (!dir.exists(td)) dir.create(td, recursive = TRUE, showWarnings = FALSE)
+      terra::terraOptions(memfrac = 0.6, tempdir = td, verbose = FALSE)
+      .biome_env$shared_env$terra_threads <- tt
+      msg_parts <- c(msg_parts, "Terra [LocalDisk]")
+    }, error = .biome_swerr("Line_1373"))
+
+    # ── raster ──
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("raster") &&
+        !isTRUE(.biome_env$shared_env$.raster_hook_done)) tryCatch({
+      rt <- file.path(user_tmp_root, "raster")
+      if (!dir.exists(rt)) dir.create(rt, recursive=TRUE, showWarnings=FALSE)
+      raster::rasterOptions(tmpdir = rt)
+      .biome_env$shared_env$.raster_hook_done <- TRUE
+      msg_parts <- c(msg_parts, "Raster [LocalDisk]")
+    }, error = .biome_swerr("Line_1383"))
+
+    # ── stars ──
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("stars") &&
+        !isTRUE(.biome_env$shared_env$.stars_hook_done)) tryCatch({
+      st <- file.path(user_tmp_root, "stars")
+      if (!dir.exists(st)) dir.create(st, recursive=TRUE, showWarnings=FALSE)
+      Sys.setenv(GDAL_PAM_PROXY_DIR = st)
+      .biome_env$shared_env$.stars_hook_done <- TRUE
+      msg_parts <- c(msg_parts, "Stars [LocalDisk]")
+    }, error = .biome_swerr("Line_1393"))
+
+    # ── sf (GDAL routing) ──
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("sf") &&
+        !isTRUE(.biome_env$shared_env$.sf_hook_done)) tryCatch({
+      sf_tmp <- file.path(user_tmp_root, "sf_gdal")
+      if (!dir.exists(sf_tmp)) dir.create(sf_tmp, recursive = TRUE, showWarnings = FALSE)
+      Sys.setenv(CPL_TMPDIR = sf_tmp)   # GDAL temp
+      .biome_env$shared_env$.sf_hook_done <- TRUE
+      msg_parts <- c(msg_parts, "sf/GDAL [LocalDisk]")
+    }, error = .biome_swerr("Line_1403"))
+
+    # ── ncdf4 ──
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("ncdf4") &&
+        !isTRUE(.biome_env$shared_env$.ncdf4_hook_done)) tryCatch({
+      nc_tmp <- file.path(user_tmp_root, "ncdf4")
+      if (!dir.exists(nc_tmp)) dir.create(nc_tmp, recursive=TRUE, showWarnings=FALSE)
+      .biome_env$shared_env$.ncdf4_hook_done <- TRUE
+      msg_parts <- c(msg_parts, "NetCDF [LocalDisk]")
+    }, error = .biome_swerr("Line_1412"))
+
+    # ── gstat / fields / spatstat ──
+    if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("gstat") || isNamespaceLoaded("fields") ||
+                                  isNamespaceLoaded("spatstat")) &&
+        !isTRUE(.biome_env$shared_env$.spatial_stats_hook_done)) tryCatch({
+      sp_tmp <- file.path(user_tmp_root, "spatial_stats")
+      if (!dir.exists(sp_tmp)) dir.create(sp_tmp, recursive=TRUE, showWarnings=FALSE)
+      loaded <- c(if (isNamespaceLoaded("gstat")) "Gstat",
+                  if (isNamespaceLoaded("fields")) "Fields",
+                  if (isNamespaceLoaded("spatstat")) "Spatstat")
+      .biome_env$shared_env$.spatial_stats_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("%s [LocalDisk]", paste(loaded, collapse="+")))
+    }, error = .biome_swerr("Line_1425"))
+
+    # ── keras / tensorflow ──
+    if (ENABLE_SMART_ROUTING && (isNamespaceLoaded("keras") || isNamespaceLoaded("tensorflow")) &&
+        !isTRUE(.biome_env$shared_env$.keras_hook_done)) tryCatch({
+      kt <- file.path(user_tmp_root, "keras_cache")
+      if (!dir.exists(kt)) dir.create(kt, recursive=TRUE, showWarnings=FALSE)
+      Sys.setenv(KERAS_CACHE_DIR = kt)
+      Sys.setenv(TF_XLA_FLAGS = paste0("--tf_xla_enable_xla_devices --tf_xla_cpu_global_jit --tf_xla_auto_jit=2 --tf_xla_fallback_tmpdir=", kt))
+      .biome_env$shared_env$.keras_hook_done <- TRUE
+      msg_parts <- c(msg_parts, "Keras [LocalDisk]")
+    }, error = .biome_swerr("Line_1436"))
+
+    # ── ggplot / plotly / tmap / mapview ──
+    if (ENABLE_GGPLOT_OPT && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly") ||
+                               isNamespaceLoaded("tmap") || isNamespaceLoaded("mapview")) &&
+        !isTRUE(.biome_env$shared_env$.ggplot_hook_done)) tryCatch({
+      gt <- file.path(user_tmp_root, "plot_cache")
+      if (!dir.exists(gt)) dir.create(gt, recursive = TRUE, showWarnings = FALSE)
+      # Note: we do NOT overwrite TMP/TEMP globally here because that breaks other stuff.
+      # Per-plot temp is handled by ragg/cairo via tempfile() → inherits TMPDIR = /Rtmp ✓
+      has_ragg <- requireNamespace("ragg", quietly = TRUE)
+      if (has_ragg) options(device = ragg::agg_png)
+      options(bitmapType = "cairo")
+      options(ggplot2.continuous.colour = "viridis", ggplot2.continuous.fill = "viridis")
+      Sys.setenv(FONTCONFIG_PATH = "/etc/fonts")
+      if (requireNamespace("systemfonts", quietly = TRUE)) {
+        tryCatch(systemfonts::system_fonts(), error = .biome_swerr("Line_1452"))
+      }
+      backend_label <- if (has_ragg) "ragg" else "cairo"
+      vis_pkgs <- c("Ggplot", if (isNamespaceLoaded("tmap")) "Tmap",
+                    if (isNamespaceLoaded("mapview")) "Mapview")
+      .biome_env$shared_env$.ggplot_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("%s [%s/LocalDisk]", paste(vis_pkgs, collapse="+"),
+                                         backend_label))
+    }, error = .biome_swerr("Line_1460"))
+
+    # ── arrow ──
+    if (ENABLE_ARROW_OPT && isNamespaceLoaded("arrow") &&
+        .biome_env$shared_env$arrow_threads == 0L) tryCatch({
+      at <- min(fc, 16L); arrow::set_cpu_count(at); arrow::set_io_thread_count(min(at,8L))
+      .biome_env$shared_env$arrow_threads <- at
+      msg_parts <- c(msg_parts, "Arrow")
+    }, error = .biome_swerr("Line_1468"))
+
+    # ── geosphere safeguard (v11.3 [W4+W5]: ... passthrough + helper) ──
+    if (ENABLE_SMART_ROUTING && isNamespaceLoaded("geosphere") &&
+        !exists("original_distm", envir = .biome_env)) tryCatch({
+      safe_distm <- function(x, y = x, fun = geosphere::distHaversine, ...) {
+        n1 <- if (is.matrix(x) || is.data.frame(x)) nrow(x) else length(x) / 2
+        n2 <- if (is.matrix(y) || is.data.frame(y)) nrow(y) else length(y) / 2
+        matrix_gb <- (n1 * n2 * 8) / 1024^3
+        ram_avail_gb <- .biome_env$.get_ram_gb()
+        if (matrix_gb > 5 && interactive()) {
+          message(sprintf(paste0(.C_YELLOW,
+            "\n\u26a0\ufe0f  BIOME-CALC: geosphere::distm() will create a %.0f x %.0f matrix (%.1f GB).",
+            "\n   Available RAM: ~%.0f GB. solve() on this matrix needs ~%.0f GB.",
+            "\n   For N > 20,000: consider sparse matrices or NNGP (see biome_tutorial()).", .C_RESET),
+            n1, n2, matrix_gb, ram_avail_gb, matrix_gb * 4))
+        }
+        if (is.finite(ram_avail_gb) && matrix_gb > ram_avail_gb * 0.5) {
+          warning(sprintf(paste0(
+            "BIOME-CALC: distm() output (%.1f GB) would exceed 50%% of available RAM (%.0f GB).\n",
+            "  Solutions: (1) sparse matrices, (2) BRISC/spNNGP, (3) bigmemory chunking."),
+            matrix_gb, ram_avail_gb), call. = FALSE, immediate. = TRUE)
+        }
+        .biome_env$original_distm(x, y, fun, ...)
+      }
+      ok <- .biome_install_wrapper(safe_distm, "distm",
+                                    asNamespace("geosphere"),
+                                    save_original_to = "original_distm")
+      if (isTRUE(ok)) msg_parts <- c(msg_parts, "Geosphere [SafeGuard]")
+    }, error = function(e) sys_log("DistmGuard", "FAIL", e$message))
+
+    # ── future ──
+    if (ENABLE_FUTURE_OPT && isNamespaceLoaded("future") &&
+        .biome_env$shared_env$future_workers == 0L) tryCatch({
+      fw <- max(1L, fc - 1L)
+      cl <- .biome_make_cluster_impl(workers = fw, worker_threads = 1L)
+      future::plan(future::cluster, workers = cl)
+      .biome_env$shared_env$future_workers <- fw
+      msg_parts <- c(msg_parts, "Future")
+    }, error = .biome_swerr("Line_1507"))
+
+    # ── doParallel safeguard (v11.3 [W5]: migrated to helper) ──
+    if (isNamespaceLoaded("doParallel") &&
+        !exists("original_registerDoParallel", envir = .biome_env)) tryCatch({
+      safe_registerDoParallel <- function(cl = NULL, cores = NULL, ...) {
+        if (is.null(cl) && !is.null(cores)) {
+          cl <- .biome_make_cluster_impl(workers = as.integer(cores), worker_threads = 1L)
+          if (interactive()) {
+            message(sprintf(paste0(.C_GREEN,
+              "\U0001F6E1\ufe0f BIOME-CALC: doParallel registered with %d workers (BLAS threads capped at 1/worker).",
+              .C_RESET), as.integer(cores)))
+          }
+        } else if (is.null(cl)) {
+          fw <- max(1L, .biome_env$shared_env$last_cores - 1L)
+          cl <- .biome_make_cluster_impl(workers = fw, worker_threads = 1L)
+        }
+        .biome_env$original_registerDoParallel(cl, ...)
+      }
+      ok <- .biome_install_wrapper(safe_registerDoParallel, "registerDoParallel",
+                                    asNamespace("doParallel"),
+                                    save_original_to = "original_registerDoParallel")
+      if (isTRUE(ok)) msg_parts <- c(msg_parts, "DoParallel [SafeGuard]")
+    }, error = function(e) sys_log("DoParallelGuard", "FAIL", e$message))
+
+    # ── v11.0 [N5] + v11.3 [W5]: doSNOW safeguard (migrated to helper) ──
+    if (isNamespaceLoaded("doSNOW") &&
+        !exists("original_registerDoSNOW", envir = .biome_env)) tryCatch({
+      safe_registerDoSNOW <- function(cl) {
+        if (!inherits(cl, "cluster") && interactive()) {
+          message(paste0(.C_YELLOW,
+            "\U0001F4A1 BIOME-CALC: doSNOW::registerDoSNOW() called without a cluster.\n",
+            "   Recommended: cl <- biome_make_cluster(workers=N); registerDoSNOW(cl)",
+            .C_RESET))
+        }
+        .biome_env$original_registerDoSNOW(cl)
+      }
+      ok <- .biome_install_wrapper(safe_registerDoSNOW, "registerDoSNOW",
+                                    asNamespace("doSNOW"),
+                                    save_original_to = "original_registerDoSNOW")
+      if (isTRUE(ok)) msg_parts <- c(msg_parts, "DoSNOW [SafeGuard]")
+    }, error = function(e) sys_log("DoSNOWGuard", "FAIL", e$message))
+
+
+    # ══════════════════════════════════════════════════════════════════════
+    # v11.0 [N1]: NIMBLE/nimbleHMC — LOCAL-DISK compile (was NFS in v10.0)
+    # ──────────────────────────────────────────────────────────────────────
+    # ROOT CAUSE of unserialize() crashes in multi-chain parLapply MCMC:
+    #   1. v10.0 routed nimble.dirName to $HOME/.nimble_compile/session_<pid>
+    #   2. $HOME is NFS mount with acregmin=60,acdirmin=60 (dir attr cache = 60s)
+    #   3. compileNimble() spawns R CMD SHLIB → g++ → writes .cpp/.o/.so
+    #   4. When 4 parLapply workers compile concurrently on the same parent dir,
+    #      NFS directory-listing cache isn't consistent → make sees stale state →
+    #      either build fails OR produces a corrupt .so → dyn.load() SIGSEGV →
+    #      worker socket closes mid-serialize → master's unserialize() fails.
+    #
+    # v11.0 FIX: route everything to /Rtmp (local ext4, no NFS cache weirdness):
+    #   Master session:  /Rtmp/biome_<user>/nimble_compile/session_<pid>/
+    #   PSOCK workers:   /Rtmp/biome_<user>/nimble_compile/worker_<pid>/
+    # Each process has ITS OWN subdir → zero parent-dir contention.
+    # Compile artifacts are ephemeral (regenerated every session) — local-only OK.
+    # ══════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════
+    # v11.2 [H1-H2]: NIMBLE — OMP thread cap only (no compile-dir routing)
+    # ══════════════════════════════════════════════════════════════════════
+    # NIMBLE compile directory is handled automatically via tempdir(), which
+    # is /Rtmp/RtmpXXXXXX per R session (driven by TMPDIR=/Rtmp in Renviron).
+    # Previous v11.0/v11.1 set options(nimble.dirName) which NIMBLE never
+    # reads — confirmed by grep on nimble-dev/nimble source. Removed in v11.2.
+    # We still cap OMP threads here for multi-chain safety.
+    # ══════════════════════════════════════════════════════════════════════
+    if ((isNamespaceLoaded("nimble") || isNamespaceLoaded("nimbleHMC")) &&
+        !isTRUE(.biome_env$shared_env$.nimble_hook_done)) tryCatch({
+      # Cap threads for multi-chain safety (4 chains x 4 threads = 16 = VM cap)
+      bt <- .biome_env$shared_env$last_threads
+      nimble_threads <- max(2L, min(4L, as.integer(bt)))
+
+      # NIMBLE uses Eigen via OMP for dense linear algebra in derived models.
+      # Cap OMP threads conservatively when NIMBLE is loaded.
+      Sys.setenv(OMP_NUM_THREADS = as.character(nimble_threads))
+
+      .biome_env$shared_env$.nimble_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("NIMBLE [tempdir/%d threads]", nimble_threads))
+      if (interactive()) {
+        message(sprintf(paste0(.C_GREEN,
+          "\U0001F9EA BIOME-CALC: NIMBLE compile dir -> %s (per-process tempdir).\n",
+          "   Thread cap: %d. Use biome_make_cluster() for multi-chain MCMC.",
+          .C_RESET), file.path(tempdir(), "nimble_generatedCode"), nimble_threads))
+      }
+    }, error = .biome_swerr("Line_1596"))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # v11.2 [H4-H5]: TMB/glmmTMB — OMP thread cap only
+    # ══════════════════════════════════════════════════════════════════════
+    # Sys.setenv(TMB_COMPILE_DIR) was phantom (TMB never reads it) — removed.
+    # TMB::compile() compiles in the current working directory by default;
+    # users should setwd() to a scratch dir if needed, or pass `dir=` to
+    # TMB::compile(). options(TMB.threads) IS real — kept.
+    # ══════════════════════════════════════════════════════════════════════
+    if ((isNamespaceLoaded("TMB") || isNamespaceLoaded("glmmTMB")) &&
+        !isTRUE(.biome_env$shared_env$.tmb_hook_done)) tryCatch({
+      bt <- .biome_env$shared_env$last_threads
+      tmb_threads <- max(1L, min(4L, as.integer(bt)))
+      options(TMB.threads = tmb_threads)
+      tmb_label <- if (isNamespaceLoaded("glmmTMB")) "TMB+glmmTMB" else "TMB"
+      .biome_env$shared_env$.tmb_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("%s [%d threads]", tmb_label, tmb_threads))
+    }, error = .biome_swerr("Line_1614"))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # v11.2 [H9-H10] + v11.3 [W9]: rstan / cmdstanr / brms — REAL options only
+    # ══════════════════════════════════════════════════════════════════════
+    # Kept:   options(cmdstanr_output_dir)  — REAL (cmdstanr/R/options.R:27)
+    #         options(brms.file_refit)      — REAL (brms/R/brm.R:469)
+    #         options(mc.cores)             — REAL (base R)
+    # Removed: options(rstan.auto_write)    — PHANTOM; rstan uses its own
+    #         rstan_options() storage, not base::options(). Users who want
+    #         auto_write should call rstan::rstan_options(auto_write = TRUE)
+    #         after loading rstan — we can't do it here because the option
+    #         doesn't exist until rstan is attached (not just namespaced).
+    # Removed: Sys.setenv(STAN_TMPDIR)      — PHANTOM; Stan doesn't read this.
+    #
+    # v11.3 [W9]: separate hook-done flags per package so late-loaded
+    # packages still get their routing applied. Previous unified flag
+    # .stan_hook_done caused e.g. brms to miss options() if loaded after
+    # cmdstanr had already triggered the block.
+    # ══════════════════════════════════════════════════════════════════════
+    if (ENABLE_STAN_OPT) {
+      # Pre-compute shared resources used by all three blocks
+      stan_tmp <- file.path(user_tmp_root, "stan_compile",
+                            paste0("session_", Sys.getpid()))
+      if (!dir.exists(stan_tmp)) tryCatch(dir.create(stan_tmp, recursive = TRUE,
+                                             showWarnings = FALSE, mode = "0700"),
+                                           error = .biome_swerr("Line_1640"))
+      bt <- .biome_env$shared_env$last_threads
+      stan_cores <- max(1L, min(4L, as.integer(bt / 2)))
+
+      # cmdstanr block (independent flag)
+      if (isNamespaceLoaded("cmdstanr") &&
+          !isTRUE(.biome_env$shared_env$.cmdstanr_hook_done)) tryCatch({
+        options(cmdstanr_output_dir = stan_tmp)
+        options(mc.cores = stan_cores)
+        .biome_env$shared_env$.cmdstanr_hook_done <- TRUE
+        msg_parts <- c(msg_parts, sprintf("cmdstanr [LocalDisk/cores=%d]", stan_cores))
+      }, error = function(e) sys_log("CmdstanrHook", "FAIL", e$message))
+
+      # brms block (independent flag)
+      if (isNamespaceLoaded("brms") &&
+          !isTRUE(.biome_env$shared_env$.brms_hook_done)) tryCatch({
+        options(brms.file_refit = "on_change")
+        options(mc.cores = stan_cores)
+        .biome_env$shared_env$.brms_hook_done <- TRUE
+        msg_parts <- c(msg_parts, sprintf("brms [cores=%d]", stan_cores))
+      }, error = function(e) sys_log("BrmsHook", "FAIL", e$message))
+
+      # rstan block (independent flag) — auto_write is deferred to attach event
+      if (isNamespaceLoaded("rstan") &&
+          !isTRUE(.biome_env$shared_env$.rstan_hook_done)) tryCatch({
+        options(mc.cores = stan_cores)
+        # auto_write via rstan_options() can only fire after ATTACH, not ns-load.
+        # Register a package-attach hook exactly once.
+        if (!isTRUE(.biome_env$shared_env$.rstan_auto_write_hook)) {
+          setHook(packageEvent("rstan", "attach"), function(...) {
+            tryCatch(rstan::rstan_options(auto_write = TRUE),
+                     error = .biome_swerr("Line_1671"))
+          }, action = "append")
+          .biome_env$shared_env$.rstan_auto_write_hook <- TRUE
+        }
+        .biome_env$shared_env$.rstan_hook_done <- TRUE
+        msg_parts <- c(msg_parts, sprintf("rstan [cores=%d]", stan_cores))
+      }, error = function(e) sys_log("RstanHook", "FAIL", e$message))
+    }
+
+    # ══════════════════════════════════════════════════════════════════════
+    # v11.0 [N8]: BRISC / spNNGP / ranger — OMP thread cap
+    # These packages use OpenMP DIRECTLY (not via BLAS), so OPENBLAS_NUM_THREADS
+    # doesn't affect them. They check their own n.omp.threads argument.
+    # We can't intercept per-call, but we can set option defaults they pick up.
+    # ══════════════════════════════════════════════════════════════════════
+    if ((isNamespaceLoaded("BRISC") || isNamespaceLoaded("spNNGP") ||
+         isNamespaceLoaded("ranger")) &&
+        !isTRUE(.biome_env$shared_env$.omp_pkg_hook_done)) tryCatch({
+      bt <- .biome_env$shared_env$last_threads
+      omp_cap <- max(1L, min(8L, as.integer(bt)))
+      # These are READ by the packages if set via Sys.setenv before the call
+      Sys.setenv(OMP_NUM_THREADS = as.character(omp_cap))
+      # ranger: use default num.threads = all cores unless user sets -1
+      options(ranger.num.threads = omp_cap)
+      pkgs <- c(if (isNamespaceLoaded("BRISC")) "BRISC",
+                if (isNamespaceLoaded("spNNGP")) "spNNGP",
+                if (isNamespaceLoaded("ranger")) "ranger")
+      .biome_env$shared_env$.omp_pkg_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("%s [OMP=%d]", paste(pkgs, collapse="+"), omp_cap))
+    }, error = .biome_swerr("Line_1700"))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # v11.0 [N11]: rJava — DYNAMIC heap (replaces hardcoded -Xmx4g)
+    # ══════════════════════════════════════════════════════════════════════
+    if (isNamespaceLoaded("rJava") &&
+        !isTRUE(.biome_env$shared_env$.rjava_hook_done)) tryCatch({
+      # Scale heap with user's RAM quota: 25% of quota, min 2GB, max 16GB.
+      # Java large-heap causes long GC pauses, so cap at 16GB.
+      java_heap_gb <- max(2L, min(16L, as.integer(floor(qr * 0.25))))
+      options(java.parameters = sprintf("-Xmx%dg", java_heap_gb))
+      # If rJava is not yet initialized, options() will take effect on first .jinit()
+      # If already initialized, new heap size won't apply — warn the user.
+      if (exists(".jinit", envir = asNamespace("rJava"), inherits = FALSE)) {
+        is_init <- tryCatch(rJava::.jinit(silent = TRUE), error = function(e) -1)
+        if (isTRUE(is_init) && interactive()) {
+          message(paste0(.C_GRAY,
+            "   \u2139 rJava already initialized — heap change takes effect next session.",
+            .C_RESET))
+        }
+      }
+      .biome_env$shared_env$.rjava_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("rJava [Xmx%dg]", java_heap_gb))
+    }, error = .biome_swerr("Line_1723"))
+
+    # ── chattr ──
+    if (ENABLE_AI_ASSISTANT && isNamespaceLoaded("chattr") &&
+        !isTRUE(.biome_env$shared_env$.chattr_hook_done)) tryCatch({
+      options(chattr.model = AI_MODEL, chattr.provider = "ollama")
+      .biome_env$shared_env$.chattr_hook_done <- TRUE
+      msg_parts <- c(msg_parts, "Chattr")
+    }, error = .biome_swerr("Line_1731"))
+
+    # ── Rcpp / devtools compile cache routing ──
+    # v11.0 [N6]: Rcpp::sourceCpp uses tempdir() which inherits TMPDIR=/Rtmp ✓
+    # No specific option needed, but we log the routing on first load.
+    if (isNamespaceLoaded("Rcpp") &&
+        !isTRUE(.biome_env$shared_env$.rcpp_hook_done)) tryCatch({
+      rcpp_dir <- file.path(user_tmp_root, "rcpp_cache")
+      if (!dir.exists(rcpp_dir)) dir.create(rcpp_dir, recursive = TRUE, showWarnings = FALSE)
+      Sys.setenv(RCPP_CACHE_DIR = rcpp_dir)
+      .biome_env$shared_env$.rcpp_hook_done <- TRUE
+      msg_parts <- c(msg_parts, "Rcpp [LocalDisk]")
+    }, error = .biome_swerr("Line_1743"))
+
+    if (length(msg_parts) > 0 && interactive()) {
+      message(paste0(.C_GREEN, "   \U0001F680 BIOME-CALC: Engines Initialized: ",
+                     paste(msg_parts, collapse=", "), .C_RESET))
+    }
+  }
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # Smart I/O — v11.3 [W6]: split into two dedicated wrappers
+  # ──────────────────────────────────────────────────────────────────────────
+  # Previous unified .biome_smart_io dispatched on sys.call()[1] string match.
+  # Problems:
+  #   (a) Infinite-recursion risk: fallback `utils::read.csv(file, ...)` re-
+  #       resolves to the wrapper binding, causing stack overflow if
+  #       .biome_env$original_read_csv got cleared.
+  #   (b) sys.call() dispatch fragile: do.call(fread, ...) defeats detection.
+  #   (c) fread signature mismatch: fread() takes (input, file, text, cmd, ...)
+  #       not (file, ...). Users calling fread(cmd="zcat ...") got misrouted.
+  #
+  # v11.3 fix:
+  #   - Two wrappers, each tied to ONE function, matching its real signature.
+  #   - Original function captured via CLOSURE (not namespace lookup) — cannot
+  #     recurse even if .biome_env is destroyed.
+  #   - Explicit stop() on unexpected loss of original ref (fail fast).
+  # ══════════════════════════════════════════════════════════════════════════
+  if (ENABLE_SMART_IO) {
+
+    # -------- read.csv wrapper --------
+    if (requireNamespace("utils", quietly = TRUE)) tryCatch({
+      ue <- as.environment("package:utils")
+      if (exists("read.csv", envir = ue, inherits = FALSE)) {
+        # Capture the CURRENT read.csv into the wrapper's closure env — this
+        # is the ONLY reference the wrapper uses for delegation. No recursion,
+        # ever, even if .biome_env is wiped mid-session.
+        .biome_original_read_csv <- get("read.csv", envir = ue, inherits = FALSE)
+        assign("original_read_csv", .biome_original_read_csv, envir = .biome_env)
+
+        .biome_smart_read_csv <- local({
+          .ref <- .biome_original_read_csv
+          function(file, ...) {
+            if (is.character(file) && length(file) == 1L) {
+              pq <- paste0(file, ".parquet")
+              if (file.exists(pq) && interactive() &&
+                  requireNamespace("arrow", quietly = TRUE)) {
+                message("BIOME-IO: Using .parquet accelerator (read.csv -> arrow)")
+                return(arrow::read_parquet(pq))
+              }
+            }
+            # Defensive: .ref is captured in our ENCLOSING environment (the
+            # local() frame), NOT in the execution frame. We access it by
+            # name — lexical scoping resolves it. If someone has actively
+            # destroyed it (rm from the closure env), we fail fast with a
+            # clear error rather than recurse or return bad data.
+            if (is.null(.ref) || !is.function(.ref)) {
+              stop("BIOME-CALC: read.csv wrapper lost its original reference; ",
+                   "cannot delegate. Reinstall the profile.", call. = FALSE)
+            }
+            .ref(file, ...)
+          }
+        })
+        was_locked <- tryCatch(bindingIsLocked("read.csv", ue),
+                               error = function(e) FALSE)
+        if (was_locked) unlockBinding("read.csv", ue)
+        assign("read.csv", .biome_smart_read_csv, envir = ue)
+        if (was_locked) lockBinding("read.csv", ue)
+        sys_log("SmartIO", "OK", "read.csv wrapped (utils)")
+      }
+    }, error = function(e) sys_log("SmartIO", "FAIL", paste("read.csv:", e$message)))
+
+    # -------- fread wrapper (deferred to data.table load) --------
+    # Hook fires when package:data.table is attached; captures fread and wraps
+    # with its REAL signature (input, file, text, cmd, ...).
+    setHook(packageEvent("data.table", "onLoad"), function(...) {
+      tryCatch({
+        de <- as.environment("package:data.table")
+        if (!exists("fread", envir = de, inherits = FALSE)) return(invisible())
+        .biome_original_fread <- get("fread", envir = de, inherits = FALSE)
+        assign("original_fread", .biome_original_fread, envir = .biome_env)
+
+        .biome_smart_fread <- local({
+          .ref <- .biome_original_fread
+          function(input = "", file = NULL, text = NULL, cmd = NULL, ...) {
+            # Parquet sidecar detection: try input if it's a path, then file=
+            target <- NULL
+            if (is.character(input) && length(input) == 1L && nzchar(input) &&
+                file.exists(input)) target <- input
+            if (is.null(target) && !is.null(file) && is.character(file) &&
+                length(file) == 1L && file.exists(file)) target <- file
+            if (!is.null(target)) {
+              pq <- paste0(target, ".parquet")
+              if (file.exists(pq) && interactive() &&
+                  requireNamespace("arrow", quietly = TRUE)) {
+                message("BIOME-IO: Using .parquet accelerator (fread -> arrow)")
+                return(arrow::read_parquet(pq))
+              }
+            }
+            # .ref resolved via lexical scoping from the enclosing local() env.
+            if (is.null(.ref) || !is.function(.ref)) {
+              stop("BIOME-CALC: fread wrapper lost its original reference; ",
+                   "cannot delegate.", call. = FALSE)
+            }
+            .ref(input = input, file = file, text = text, cmd = cmd, ...)
+          }
+        })
+        was_locked <- tryCatch(bindingIsLocked("fread", de),
+                               error = function(e) FALSE)
+        if (was_locked) unlockBinding("fread", de)
+        assign("fread", .biome_smart_fread, envir = de)
+        if (was_locked) lockBinding("fread", de)
+        sys_log("SmartIO", "OK", "fread wrapped (data.table)")
+      }, error = function(e) sys_log("SmartIO", "FAIL", paste("fread:", e$message)))
+    })
+  }
+
+  .biome_mark_time("callbacks_init")
+  # ── CALLBACKS ──
+  .biome_env$shared_env$last_update <- 0
+  .biome_env$deferred_pkg_init <- deferred_pkg_init
+  .biome_env$deferred_pkg_hooks <- deferred_pkg_hooks
+  update_resources(quiet = TRUE)
+  tryCatch({
+    addTaskCallback(function(...) {
+      try({
+        deferred_pkg_init()
+        deferred_pkg_hooks()
+        update_resources(quiet = TRUE)
+      }, silent = TRUE)
+      TRUE
+    }, name = "biome_resource_monitor")
+    if (!"biome_resource_monitor" %in% getTaskCallbackNames()) {
+      sys_log("Callback", "FAIL", "addTaskCallback returned but name not found")
+    }
+  }, error = function(e) {
+    sys_log("Callback", "FAIL", paste("addTaskCallback failed:", e$message))
+    # v11.3 [W10]: two fallback paths.
+    # (a) RStudio-specific sessionInit hook — runs once when rsession fully loaded.
+    setHook("rstudio.sessionInit", function(newSession) {
+      if (!.biome_env$shared_env$deferred_done) {
+        tryCatch(deferred_pkg_init(), error = function(e)
+          sys_log("DeferredFallback", "FAIL", e$message))
+      }
+      tryCatch(deferred_pkg_hooks(), error = .biome_swerr("Line_1884"))
+      tryCatch(update_resources(quiet = TRUE), error = .biome_swerr("Line_1885"))
+    }, action = "append")
+    # (b) Non-RStudio fallback (plain R / Rscript) — run init/hooks NOW so
+    # base guards are at least installed. Without this path, Rscript users
+    # (e.g. Martina's batch MCMC runs) would get zero guards if
+    # addTaskCallback ever failed.
+    is_rstudio <- nzchar(Sys.getenv("RSTUDIO", "")) ||
+                  nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", ""))
+    if (!is_rstudio) {
+      tryCatch({
+        deferred_pkg_init()
+        deferred_pkg_hooks()
+        sys_log("Callback", "OK", "Non-RStudio immediate fallback executed")
+      }, error = function(e2) sys_log("ImmediateFallback", "FAIL", e2$message))
+    }
+  })
+
+  # 2. GUARANTEED FALLBACK for Terminal and Rscript
+  # This runs immediately if we are NOT in RStudio, OR if we are running 
+  # a non-interactive batch script (like Rscript Mod7.R).
+  is_rstudio <- nzchar(Sys.getenv("RSTUDIO", "")) || 
+                nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", ""))
+  
+  if (!is_rstudio || !interactive()) {
+    tryCatch({
+      deferred_pkg_init()
+      deferred_pkg_hooks()
+      update_resources(quiet = TRUE)
+      sys_log("Callback", "OK", "Terminal/Rscript immediate initialization executed")
+    }, error = function(e) sys_log("ImmediateFallback", "FAIL", e$message))
+  }
+
+
+
