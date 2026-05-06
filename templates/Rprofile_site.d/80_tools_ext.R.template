@@ -71,31 +71,42 @@ local({
   }, envir = tool_env)
 
   # ── biome_run_diagnostics() — summary of current run's compile dirs ────────
+  # Styled to match status() / biome_tutorial(): cyan "=== BIOME-CALC v... ===" header.
   assign("biome_run_diagnostics", function() {
+    ver <- tryCatch(.biome_env$VERSION, error = function(e) "?")
+    cat(paste0("\n", .C_CYAN, "=== BIOME-CALC v", ver,
+               " | Run Diagnostics ===", .C_RESET, "\n"))
     user_tmp_root <- Sys.getenv("BIOME_USER_TMP", "")
     run_id        <- Sys.getenv("BIOME_RUN_ID", "")
     if (!nzchar(user_tmp_root) || !nzchar(run_id)) {
-      cat("BIOME-CALC: run not initialized (BIOME_USER_TMP or BIOME_RUN_ID missing)\n")
+      cat(paste0("  ", .C_YELLOW,
+                 "run not initialized (BIOME_USER_TMP or BIOME_RUN_ID missing)",
+                 .C_RESET, "\n\n"))
       return(invisible(NULL))
     }
-    cat(sprintf("\n=== BIOME-CALC Run Diagnostics ===\n"))
-    cat(sprintf("  User tmp root: %s\n", user_tmp_root))
+    master_flag <- if (!nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) "yes" else "no"
+    cat(sprintf("  User TMP Root: %s\n", user_tmp_root))
     cat(sprintf("  Run ID:        %s\n", run_id))
-    cat(sprintf("  PID:           %d (master=%s)\n",
-                Sys.getpid(),
-                if (!nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) "yes" else "no"))
-    cat("\n")
+    cat(sprintf("  PID:           %d (master=%s)\n", Sys.getpid(), master_flag))
+
+    cat(paste0("\n  ", .C_BOLD, "Compile Artifacts:", .C_RESET, "\n"))
+    found_any <- FALSE
     for (pkg in c("nimble", "stan", "rcpp", "tmb")) {
       pkg_run_dir <- file.path(user_tmp_root, pkg, run_id)
       if (!dir.exists(pkg_run_dir)) next
+      found_any <- TRUE
       subdirs <- list.dirs(pkg_run_dir, recursive = FALSE, full.names = FALSE)
       fl      <- list.files(pkg_run_dir, recursive = TRUE, full.names = TRUE,
                              all.files = TRUE)
       total   <- sum(file.info(fl)$size, na.rm = TRUE)
-      cat(sprintf("  [%-6s] %s\n", pkg, pkg_run_dir))
+      cat(sprintf("  %s[%-6s]%s %s\n", .C_GREEN, pkg, .C_RESET, pkg_run_dir))
       cat(sprintf("           size=%.1f MB | subdirs: %s\n",
                   total / 1024^2,
                   if (length(subdirs)) paste(subdirs, collapse = ", ") else "(none)"))
+    }
+    if (!found_any) {
+      cat(paste0("  ", .C_GRAY, "(no compile dirs yet — run library(nimble/TMB/cmdstanr) first)",
+                 .C_RESET, "\n"))
     }
     cat("\n")
     invisible(NULL)

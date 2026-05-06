@@ -176,9 +176,17 @@ local({
 # Announce (master only, interactive only)
 # ══════════════════════════════════════════════════════════════════════════════
 if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
-  message(sprintf(paste0(
-    "BIOME-CALC v12.1 compile router loaded. Run ID: %s\n",
-    "  Compile artifacts land under: $BIOME_USER_TMP/<pkg>/%s/{master|worker_<pid>}/\n",
-    "  Helpers: biome_run_diagnostics(), biome_tmb_compile(file)"),
-    Sys.getenv("BIOME_RUN_ID"), Sys.getenv("BIOME_RUN_ID")))
+  # Styled to match status() / biome_tutorial() / biome_run_diagnostics():
+  # cyan "=== BIOME-CALC v<VERSION> | ... ===" header. Version comes from
+  # .biome_env$VERSION (set by the main dispatcher) — no more hardcoded v12.1.
+  .biome_ver <- tryCatch(.biome_env$VERSION, error = function(e) "?")
+  .biome_rid <- Sys.getenv("BIOME_RUN_ID")
+  message(paste0("\n", .C_CYAN, "=== BIOME-CALC v", .biome_ver,
+                 " | Compile Router Loaded ===", .C_RESET))
+  message(sprintf("  Run ID:    %s", .biome_rid))
+  message(sprintf("  Artifacts: $BIOME_USER_TMP/<pkg>/%s/{master|worker_<pid>}/",
+                  .biome_rid))
+  message(paste0("  Helpers:   ", .C_BOLD, "biome_run_diagnostics()", .C_RESET,
+                 ", ", .C_BOLD, "biome_tmb_compile(file)", .C_RESET))
+  rm(.biome_ver, .biome_rid)
 }
