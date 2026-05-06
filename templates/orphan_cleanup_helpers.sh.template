@@ -54,30 +54,53 @@ resolve_admin_recipients() {
     return 0
 }
 
-# ── Risolvi email utente (con mapping opzionale) ──────────────
-# Se esiste un file di mapping, usa quello. Altrimenti fallback
-# a <username>@MAIL_DOMAIN
+# ── Risolvi email utente (con mapping opzionale e multi-dominio) ──
+# Ordine di risoluzione:
+#   1. Override esplicito in /etc/biome-calc/conf/user_email_map.txt
+#   2. Se MAIL_DOMAINS_USER è definito (space-separated list), ritorna
+#      un CSV "user@d1,user@d2" così che sendemail spedisca a tutti i
+#      domini AD attivi (es. "unibo.it studio.unibo.it"). Il relay
+#      assorbe i bounce degli indirizzi inesistenti.
+#   3. Fallback: <username>@DEFAULT_DOMAIN (dominio passato come $2).
 #
 # Uso:
 #   USER_EMAIL=$(resolve_user_email "$USERNAME" "$MAIL_DOMAIN")
 #
 resolve_user_email() {
     local USERNAME="$1"
-    local DEFAULT_DOMAIN="$2"
-    # Unified configuration path for BIOME-CALC
+    local DEFAULT_DOMAIN="${2:-unibo.it}"
     local MAP_FILE="/etc/biome-calc/conf/user_email_map.txt"
 
+    # 1) Override esplicito (vince su tutto)
     if [ -f "$MAP_FILE" ]; then
         local MAPPED
-        MAPPED=$(grep "^${USERNAME}[[:space:]]" "$MAP_FILE" | awk '{print $2}' | head -1)
-        if [ -n "$MAPPED" ]; then
+        MAPPED=$(awk -v u="$USERNAME" '
+            $1 !~ /^#/ && $1==u {print $2; exit}' "$MAP_FILE")
+        if [ -n "$MAPPED" ] && [[ "$MAPPED" == *"@"* ]]; then
             echo "$MAPPED"
             return 0
         fi
     fi
 
-    # Fallback al dominio di default (es. studio.unibo.it per studenti)
-    # Se PhD o Staff, dovrebbero essere mappati in user_email_map.txt
+    # 2) Multi-dominio (spara-a-entrambi) se MAIL_DOMAINS_USER è popolato
+    if [ -n "${MAIL_DOMAINS_USER:-}" ]; then
+        local out=""
+        local d
+        for d in ${MAIL_DOMAINS_USER}; do
+            [ -z "$d" ] && continue
+            if [ -z "$out" ]; then
+                out="${USERNAME}@${d}"
+            else
+                out="${out},${USERNAME}@${d}"
+            fi
+        done
+        if [ -n "$out" ]; then
+            echo "$out"
+            return 0
+        fi
+    fi
+
+    # 3) Fallback single-domain (legacy)
     echo "${USERNAME}@${DEFAULT_DOMAIN}"
     return 0
 }

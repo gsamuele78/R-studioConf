@@ -8,7 +8,7 @@
 #                         -u <subject> -m <message_body_file> \
 #                         -d <dns_server1,dns_server2> \
 #                         (-t <recipients_file> | -T "rcpt1,rcpt2") \
-#                         [-H] [-L <log_prefix>]
+#                         [-B "bcc1,bcc2"] [-H] [-L <log_prefix>]
 
 # --- Robustness settings ---
 set -o errexit
@@ -54,18 +54,20 @@ SMTP_PORT="25"
 SENDER_EMAIL=""
 RECIPIENTS_FILE=""
 RECIPIENTS_STRING=""
+BCC_RECIPIENTS=""
 SUBJECT=""
 MESSAGE_BODY_FILE=""
 DNS_SERVERS_CSV="" # Comma-separated
 IS_HTML_BODY=0
 
-while getopts "s:p:f:t:T:u:m:d:HL:" opt; do
+while getopts "s:p:f:t:T:B:u:m:d:HL:" opt; do
   case $opt in
     s) SMTP_SERVER_HOSTNAME="$OPTARG" ;;
     p) SMTP_PORT="$OPTARG" ;;
     f) SENDER_EMAIL="$OPTARG" ;;
     t) RECIPIENTS_FILE="$OPTARG" ;;
     T) RECIPIENTS_STRING="$OPTARG" ;;
+    B) BCC_RECIPIENTS="$OPTARG" ;;
     u) SUBJECT="$OPTARG" ;;
     m) MESSAGE_BODY_FILE="$OPTARG" ;;
     d) DNS_SERVERS_CSV="$OPTARG" ;;
@@ -176,6 +178,9 @@ fi
 log_util_message "INFO" "Attempting to send email..."
 log_util_message "INFO" "  From: $SENDER_EMAIL"
 log_util_message "INFO" "  To: $ALL_RECIPIENTS"
+if [[ -n "$BCC_RECIPIENTS" ]]; then
+    log_util_message "INFO" "  Bcc: $BCC_RECIPIENTS"
+fi
 log_util_message "INFO" "  Subject: $SUBJECT"
 log_util_message "INFO" "  Body File: $MESSAGE_BODY_FILE"
 log_util_message "INFO" "  SMTP Server: $SMTP_SERVER_IP:$SMTP_PORT (resolved from $SMTP_SERVER_HOSTNAME)"
@@ -193,6 +198,10 @@ sendemail_cmd_array=("$SENDEMAIL_CMD_PATH"
 
 if [[ "$IS_HTML_BODY" -eq 1 ]]; then
     sendemail_cmd_array+=("-o" "message-content-type=html")
+fi
+
+if [[ -n "$BCC_RECIPIENTS" ]]; then
+    sendemail_cmd_array+=("-bcc" "$BCC_RECIPIENTS")
 fi
 
 send_output=""

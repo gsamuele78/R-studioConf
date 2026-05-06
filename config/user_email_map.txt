@@ -1,4 +1,35 @@
-# /usr/local/custom/rstudio/conf/user_email_map.txt
-# formato: username  email
-#martina.livornese2   martina.livornese2@studio.unibo.it
-#duccio.rocchini      duccio.rocchini@unibo.it
+# /etc/biome-calc/conf/user_email_map.txt
+# ============================================================================
+# USER EMAIL OVERRIDE MAP
+# ============================================================================
+# Formato: <username>  <email>
+#   - Una voce per riga.
+#   - Separatore: uno o più spazi/tab.
+#   - Righe vuote e linee che iniziano con '#' sono ignorate.
+#
+# COMPORTAMENTO DI DEFAULT (nessuna voce qui):
+#   resolve_user_email() usa MAIL_DOMAINS_USER (setup_nodes.vars.conf),
+#   attualmente "unibo.it studio.unibo.it", e invia la notifica a TUTTI
+#   i domini attivi:  <username>@unibo.it, <username>@studio.unibo.it
+#   Il relay assorbe silenziosamente i bounce degli indirizzi inesistenti.
+#
+# QUANDO AGGIUNGERE UN OVERRIDE:
+#   - Lo username AD non coincide con il local-part dell'email
+#     (es. account di servizio, alias storici).
+#   - Si vuole forzare UN SOLO indirizzo (staff che ha anche account studente,
+#     collaboratori esterni, dottorandi con mail personali, ecc.).
+#   - Un utente chiede esplicitamente di non ricevere copia ai domini multipli.
+#
+# ESEMPI:
+#   # Staff — forza solo il dominio istituzionale
+#   duccio.rocchini       duccio.rocchini@unibo.it
+#
+#   # Studente/PhD — forza solo il dominio studenti
+#   martina.livornese2    martina.livornese2@studio.unibo.it
+#
+#   # Collaboratore esterno
+#   jdoe                  j.doe@external-partner.org
+#
+#   # Account di servizio — redirige a una mailing list
+#   svc-biome-bot         biome-ops@unibo.it
+# ============================================================================

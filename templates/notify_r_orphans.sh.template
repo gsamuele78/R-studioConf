@@ -121,24 +121,26 @@ for USER_LOG in "${NOTIFY_DIR}"/*.log; do
     SUBJECT="[${NODE_ID}] Cleanup risorse: ${N_ORPHANS} processi terminati"
 
     # ── Destinatari ───────────────────────────────────────────────
-    ALL_RCPT="$USER_EMAIL"
+    # Utente in To: (CSV multi-dominio se MAIL_DOMAINS_USER è settato)
+    # Admin in Bcc: per audit silenzioso (l'utente non li vede negli header)
+    log_notify "SENDING | user=${USERNAME} | to=${USER_EMAIL} | bcc=${ADMIN_RECIPIENTS} | orphans=${N_ORPHANS}"
+
+    SEND_ARGS=(
+        -s "$SMTP_HOST"
+        -p "$SMTP_PORT"
+        -f "$SENDER_EMAIL"
+        -T "$USER_EMAIL"
+        -u "$SUBJECT"
+        -m "$BODY_FILE"
+        -d "$DNS_SERVERS"
+        -L "r-orphan-notify"
+    )
     if [ -n "$ADMIN_RECIPIENTS" ]; then
-        ALL_RCPT="${USER_EMAIL},${ADMIN_RECIPIENTS}"
+        SEND_ARGS+=(-B "$ADMIN_RECIPIENTS")
     fi
 
-    log_notify "SENDING | user=${USERNAME} | email=${USER_EMAIL} | orphans=${N_ORPHANS}"
-
     # ── Invia ─────────────────────────────────────────────────
-    "$SEND_EMAIL_SCRIPT" \
-        -s "$SMTP_HOST" \
-        -p "$SMTP_PORT" \
-        -f "$SENDER_EMAIL" \
-        -T "$ALL_RCPT" \
-        -u "$SUBJECT" \
-        -m "$BODY_FILE" \
-        -d "$DNS_SERVERS" \
-        -L "r-orphan-notify" \
-    >> "$NOTIFY_LOG" 2>&1
+    "$SEND_EMAIL_SCRIPT" "${SEND_ARGS[@]}" >> "$NOTIFY_LOG" 2>&1
 
     if [ $? -eq 0 ]; then
         log_notify "SENT OK | user=${USERNAME}"
