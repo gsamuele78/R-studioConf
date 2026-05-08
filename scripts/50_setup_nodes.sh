@@ -1010,6 +1010,19 @@ tryCatch({
         bundle_bytes=$(stat -c%s "${bundle_dir}/bundle.Rc" 2>/dev/null || echo 0)
         frag_md5_count=$(wc -l < "${bundle_dir}/manifest.txt")
         log_success "Fragment bundle: ${bundle_dir}/bundle.Rc (${bundle_bytes} bytes, ${frag_md5_count} fragments hashed)"
+
+        # v12.3: Page-cache warm-up — prime kernel page cache for the very
+        # first R session after deploy so it hits warm disk for the
+        # dispatcher + bundle + fragments instead of paying cold-I/O.
+        # Non-fatal (PSE fail-safe): warm-up errors NEVER break deploy.
+        log_info "Warming page cache for Rprofile + fragment bundle..."
+        { cat "${rprofile}" \
+              "${renviron}" \
+              "${bundle_dir}/bundle.Rc" \
+              "${bundle_dir}/manifest.txt" \
+              "${frag_dst_dir}"/[0-9][0-9]_*.R \
+              > /dev/null 2>&1; } || true
+        log_success "Page cache primed (dispatcher + Renviron + bundle + fragments)"
       else
         # Non-fatal: dispatcher will use the legacy per-fragment loop.
         log_warn "Fragment bundle compile failed — dispatcher will use legacy per-fragment load"
