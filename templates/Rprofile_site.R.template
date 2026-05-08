@@ -685,29 +685,104 @@ local({
     } else {
       .biome_frag_err_log <- file.path("/tmp",
         sprintf("biome_frag_errors_%d.log", Sys.getpid()))
-      for (.biome_frag_f in .biome_frags) {
-        tryCatch({
-          sys.source(.biome_frag_f, envir = .biome_frag_env,
-                     keep.source = FALSE)
-          tryCatch(sys_log("FragLoader", "OK", basename(.biome_frag_f)),
-                   error = function(e) NULL)
+
+      # ── v12.3: Fragment BUNDLE fast-path ────────────────────────────────
+      # Deploy step (50_setup_nodes.sh) byte-compiles all fragments into a
+      # single bundle.Rc plus an md5 manifest.txt. Here we validate the
+      # manifest against the on-disk fragments and, if identical, load the
+      # compiled bundle in ONE call (skipping 9 separate parse passes).
+      # Any failure (missing bundle, stale manifest, load error, corruption)
+      # silently falls through to the legacy per-fragment sys.source() loop.
+      # PSE invariant: fast-path is an OPTIONAL optimization; the legacy
+      # loop remains the ground-truth code path and is always safe.
+      # Emergency opt-out: set BIOME_DISABLE_BUNDLE=1 to force legacy loop.
+      # ────────────────────────────────────────────────────────────────────
+      .biome_bundle_dir  <- file.path(.biome_frag_dir, ".compiled")
+      .biome_bundle_rc   <- file.path(.biome_bundle_dir, "bundle.Rc")
+      .biome_bundle_mfs  <- file.path(.biome_bundle_dir, "manifest.txt")
+      .biome_bundle_ok   <- FALSE
+      .biome_bundle_done <- FALSE
+
+      if (!nzchar(Sys.getenv("BIOME_DISABLE_BUNDLE", "")) &&
+          file.exists(.biome_bundle_rc) &&
+          file.exists(.biome_bundle_mfs)) {
+        .biome_bundle_ok <- tryCatch({
+          mf_lines <- readLines(.biome_bundle_mfs, warn = FALSE)
+          mf_lines <- mf_lines[nzchar(mf_lines) & !grepl("^\\s*#", mf_lines)]
+          parts <- strsplit(mf_lines, "\\s+")
+          if (!length(parts) || !all(vapply(parts, length, 0L) >= 2L)) {
+            FALSE
+          } else {
+            expected <- vapply(parts, `[`, character(1), 1L)
+            names(expected) <- vapply(parts, `[`, character(1), 2L)
+            actual <- unname(tools::md5sum(.biome_frags))
+            names_actual <- basename(.biome_frags)
+            names(actual) <- names_actual
+            # Both sets must match exactly (file list + hashes)
+            length(expected) == length(actual) &&
+              identical(sort(names(expected)), sort(names_actual)) &&
+              identical(expected[names_actual], actual)
+          }
         }, error = function(e) {
-          tryCatch(cat(sprintf("[%s] [%s] %s\n",
-              format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-              basename(.biome_frag_f), conditionMessage(e)),
+          tryCatch(cat(sprintf("[%s] [bundle_manifest] %s\n",
+              format(Sys.time(), "%Y-%m-%d %H:%M:%S"), conditionMessage(e)),
             file = .biome_frag_err_log, append = TRUE),
             error = function(e2) NULL)
-          tryCatch(sys_log("FragLoader", "FAIL",
-            sprintf("%s: %s", basename(.biome_frag_f), conditionMessage(e))),
-            error = function(e2) NULL)
-          # NEVER rethrow — PSE fail-safe
+          FALSE
         })
       }
-      tryCatch(sys_log("FragLoader", "DONE",
-        sprintf("loaded %d fragments from %s",
-                length(.biome_frags), .biome_frag_dir)),
-        error = function(e) NULL)
-      rm(.biome_frag_err_log, .biome_frag_f, .biome_frags)
+
+      if (isTRUE(.biome_bundle_ok)) {
+        .biome_bundle_done <- tryCatch({
+          compiler::loadcmp(.biome_bundle_rc, envir = .biome_frag_env)
+          TRUE
+        }, error = function(e) {
+          tryCatch(cat(sprintf("[%s] [bundle_load] %s\n",
+              format(Sys.time(), "%Y-%m-%d %H:%M:%S"), conditionMessage(e)),
+            file = .biome_frag_err_log, append = TRUE),
+            error = function(e2) NULL)
+          tryCatch(sys_log("FragLoader", "WARN",
+            sprintf("bundle load failed, falling back to per-fragment: %s",
+                    conditionMessage(e))),
+            error = function(e2) NULL)
+          FALSE
+        })
+      }
+
+      if (isTRUE(.biome_bundle_done)) {
+        tryCatch(sys_log("FragLoader", "DONE",
+          sprintf("loaded %d fragments from bundle fast-path (%s)",
+                  length(.biome_frags), basename(.biome_bundle_rc))),
+          error = function(e) NULL)
+      } else {
+        # Legacy per-fragment loop — ground truth, always safe.
+        for (.biome_frag_f in .biome_frags) {
+          tryCatch({
+            sys.source(.biome_frag_f, envir = .biome_frag_env,
+                       keep.source = FALSE)
+            tryCatch(sys_log("FragLoader", "OK", basename(.biome_frag_f)),
+                     error = function(e) NULL)
+          }, error = function(e) {
+            tryCatch(cat(sprintf("[%s] [%s] %s\n",
+                format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+                basename(.biome_frag_f), conditionMessage(e)),
+              file = .biome_frag_err_log, append = TRUE),
+              error = function(e2) NULL)
+            tryCatch(sys_log("FragLoader", "FAIL",
+              sprintf("%s: %s", basename(.biome_frag_f), conditionMessage(e))),
+              error = function(e2) NULL)
+            # NEVER rethrow — PSE fail-safe
+          })
+        }
+        tryCatch(sys_log("FragLoader", "DONE",
+          sprintf("loaded %d fragments from %s (legacy path)",
+                  length(.biome_frags), .biome_frag_dir)),
+          error = function(e) NULL)
+        if (exists(".biome_frag_f", inherits = FALSE)) rm(.biome_frag_f)
+      }
+      rm(.biome_frag_err_log, .biome_frags,
+         .biome_bundle_dir, .biome_bundle_rc, .biome_bundle_mfs,
+         .biome_bundle_ok, .biome_bundle_done)
     }
   }
   rm(.biome_frag_dir, .biome_frag_env)

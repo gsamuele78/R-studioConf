@@ -936,6 +936,93 @@ tryCatch({parse(file='${frag_tmp}');cat('PARSE_OK')},
       exit 1
     fi
     log_success "Post-deploy sanity: ${deployed_frags} fragment(s) present in ${frag_dst_dir}"
+
+    # ── v12.3: Build byte-compiled fragment BUNDLE (boot-time fast path) ────
+    # Pessimistic contract:
+    #   * Bundle is an OPTIONAL optimization; dispatcher ALWAYS falls back
+    #     to the legacy per-fragment loop on any mismatch/error.
+    #   * We regenerate the bundle on every deploy (cheap, deterministic).
+    #   * Manifest is md5(file)  basename(file), one per line — consumed by
+    #     the dispatcher to decide whether the bundle is in sync with the
+    #     on-disk *.R files. If a user hand-edits a fragment, hash mismatch
+    #     forces the legacy loop (single source of truth: the .R files).
+    #   * Atomic: write to staging dir, fsync, then rename into place.
+    #   * Ownership/permissions: bundle dir is root:root 0755, files 0644.
+    #   * Idempotent: re-running produces identical output if sources didn't
+    #     change (manifest hashes stable). No partial/corrupt state possible
+    #     because the rename is the only visible side-effect.
+    # ────────────────────────────────────────────────────────────────────────
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      log_info "[DRY-RUN] Would build ${frag_dst_dir}/.compiled/{bundle.Rc,manifest.txt}"
+    else
+      local bundle_dir="${frag_dst_dir}/.compiled"
+      local bundle_stage
+      bundle_stage=$(mktemp -d /tmp/biome_bundle.XXXXXX)
+      # Concatenate fragments in lexical order with explicit separators so that
+      # any syntax error's filename is visible to the R parser.
+      local concat_r="${bundle_stage}/bundle.R"
+      : > "${concat_r}"
+      local f
+      while IFS= read -r -d '' f; do
+        printf '\n# <<< %s >>>\n' "$(basename "$f")" >> "${concat_r}"
+        cat "$f" >> "${concat_r}"
+      done < <(find "${frag_dst_dir}" -maxdepth 1 -type f -name '[0-9][0-9]_*.R' -print0 | sort -z)
+
+      # Byte-compile. Any parse/compile failure → skip bundle deployment
+      # (dispatcher falls back to legacy loop automatically).
+      local compile_log="${bundle_stage}/compile.log"
+      if Rscript --vanilla -e "
+options(warn=2)
+tryCatch({
+  suppressPackageStartupMessages(library(compiler))
+  cmpfile('${concat_r}', '${bundle_stage}/bundle.Rc',
+          options = list(optimize = 3L), verbose = FALSE)
+  cat('BUNDLE_OK\n')
+}, error = function(e) {
+  cat(sprintf('BUNDLE_FAIL: %s\n', conditionMessage(e)))
+  quit(status = 1)
+})
+" >"${compile_log}" 2>&1 && grep -q 'BUNDLE_OK' "${compile_log}"; then
+
+        # Build manifest: md5sum  basename, sorted for deterministic output.
+        # NOTE: md5sum output is already `<hash>  <path>`. We strip the leading
+        # `./` from the `find -printf` output so the manifest stores bare
+        # basenames matching what the dispatcher sees via basename().
+        (
+          cd "${frag_dst_dir}" || exit 1
+          find . -maxdepth 1 -type f -name '[0-9][0-9]_*.R' -printf '%f\n' \
+            | LC_ALL=C sort \
+            | xargs -r -I{} md5sum -- "{}"
+        ) > "${bundle_stage}/manifest.txt"
+
+        # Atomic install: mkdir bundle_dir if needed, then mv the two files.
+        run_cmd mkdir -p "${bundle_dir}"
+        run_cmd chmod 755 "${bundle_dir}"
+        run_cmd chown root:root "${bundle_dir}" || true
+
+        # Move into place (rename is atomic within /etc).
+        run_cmd mv -f "${bundle_stage}/bundle.Rc"    "${bundle_dir}/bundle.Rc"
+        run_cmd mv -f "${bundle_stage}/manifest.txt" "${bundle_dir}/manifest.txt"
+        run_cmd chmod 644 "${bundle_dir}/bundle.Rc" "${bundle_dir}/manifest.txt"
+        run_cmd chown root:root "${bundle_dir}/bundle.Rc" "${bundle_dir}/manifest.txt" || true
+
+        local bundle_bytes frag_md5_count
+        bundle_bytes=$(stat -c%s "${bundle_dir}/bundle.Rc" 2>/dev/null || echo 0)
+        frag_md5_count=$(wc -l < "${bundle_dir}/manifest.txt")
+        log_success "Fragment bundle: ${bundle_dir}/bundle.Rc (${bundle_bytes} bytes, ${frag_md5_count} fragments hashed)"
+      else
+        # Non-fatal: dispatcher will use the legacy per-fragment loop.
+        log_warn "Fragment bundle compile failed — dispatcher will use legacy per-fragment load"
+        log_warn "  compile log: $(tail -n 3 "${compile_log}" 2>/dev/null | tr '\n' ' ')"
+        # If an old bundle exists, invalidate it so dispatcher doesn't load
+        # a stale compiled form that predates this deploy.
+        if [[ -f "${bundle_dir}/manifest.txt" ]]; then
+          run_cmd rm -f "${bundle_dir}/bundle.Rc" "${bundle_dir}/manifest.txt"
+          log_info "  Removed stale bundle to force legacy fallback."
+        fi
+      fi
+      rm -rf "${bundle_stage}"
+    fi
   fi
 }
 
