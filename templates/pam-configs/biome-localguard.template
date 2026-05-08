@@ -1,8 +1,0 @@
-Name: BIOME local-user guard (skip AD password stack for uid<10000)
-Default: yes
-Priority: 900
-Password-Type: Primary
-Password:
-	[success=ignore default=2]	pam_succeed_if.so	quiet uid >= 10000
-Password-Initial:
-	[success=ignore default=2]	pam_succeed_if.so	quiet uid >= 10000

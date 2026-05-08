@@ -58,6 +58,7 @@ biome_plot_budget()
 ## SYMPTOM 1: RStudio Sessions Crashing with SIGSEGV
 
 ### Diagnostic
+
 ```bash
 # Check which BLAS is active
 update-alternatives --display libblas.so.3-x86_64-linux-gnu
@@ -71,6 +72,7 @@ dpkg -l | grep openblas
 ```
 
 ### Root Cause
+
 `openblas-pthread` is installed/active. Its internal thread pool races with RStudio's `rsession` pthreads during `solve()`/`crossprod()` → `SIGSEGV` in `blas_thread_server`.
 
 ### Fix Chain
@@ -100,6 +102,7 @@ Rscript --vanilla -e "sessionInfo()" | grep BLAS
 ```
 
 ### Verify
+
 ```bash
 # BLAS smoke test
 Rscript --vanilla -e "
@@ -114,6 +117,7 @@ Rscript --vanilla -e "
 ## SYMPTOM 2: Server-Wide OOM Kill (All Users Affected)
 
 ### Diagnostic
+
 ```bash
 # Check kernel OOM events
 dmesg | grep -i oom | tail -20
@@ -133,12 +137,14 @@ mount | grep tmpfs | grep -v /sys | grep -v /run
 ```
 
 ### Root Cause Checklist
+
 1. **Wrong diagnosis**: `/Rtmp` full ≠ RAM issue (it's disk-backed). Confirm `/Rtmp` is NOT tmpfs
 2. **User ran unguarded operation**: Despite guards, edge cases exist (e.g., `Rcpp::sourceCpp()` with 50GB intermediate objects)
 3. **Swap exhausted**: Check if `SWAP_SIZE_GB=32` is enough for workload
 4. **Ollama hogging memory**: Ollama has `MemoryMax=24G` cgroup, but verify
 
 ### Fix Chain
+
 ```bash
 # Step 1: Kill heaviest R sessions (triage)
 # List by memory (columns: PID, USER, %MEM, RSS_MB, COMMAND)
@@ -174,6 +180,7 @@ sudo systemctl restart rstudio-server
 ## SYMPTOM 3: NFS Stale File Handle / Home Directory Unavailable
 
 ### Diagnostic
+
 ```bash
 # Check NFS mount status
 mount | grep nfs
@@ -192,6 +199,7 @@ showmount -e <truenas_ip>
 ```
 
 ### Fix Chain
+
 ```bash
 # Step 1: Force unmount stale NFS
 sudo umount -f /nfs/home  # Force unmount
@@ -221,6 +229,7 @@ sudo systemctl restart rstudio-server
 ## SYMPTOM 4: User Cannot Log In (PAM/AD Authentication Failure)
 
 ### Diagnostic
+
 ```bash
 # Test user resolution
 getent passwd john.doe
@@ -245,6 +254,7 @@ tail -50 /var/log/auth.log | grep -iE 'fail|denied|error|pam'
 ### Fix Chain by Error Type
 
 **Error: "User not found via getent"**
+
 ```bash
 # Clear SSSD cache
 sudo sss_cache -E
@@ -254,6 +264,7 @@ getent passwd john.doe
 ```
 
 **Error: "PAM authentication failed"**
+
 ```bash
 # Check PAM config
 cat /etc/pam.d/rstudio
@@ -266,6 +277,7 @@ sudo systemctl restart winbind
 ```
 
 **Error: "Home directory not created"**
+
 ```bash
 # Check pam_mkhomedir
 grep pam_mkhomedir /etc/pam.d/common-session
@@ -282,6 +294,7 @@ sudo chown -R john.doe:domain\ users /nfs/home/john.doe
 ## SYMPTOM 5: /Rtmp Disk Full (R Temp Operations Failing)
 
 ### Diagnostic
+
 ```bash
 # Check /Rtmp usage
 df -h /Rtmp
@@ -298,6 +311,7 @@ cat /etc/tmpfiles.d/biome-rtmp-cleanup.conf 2>/dev/null
 ```
 
 ### Fix Chain
+
 ```bash
 # Step 1: Identify stale sessions
 ls -la /Rtmp/biome_*/
@@ -330,6 +344,7 @@ df -h /Rtmp
 ## SYMPTOM 6: NGINX 502 Bad Gateway / Portal Not Loading
 
 ### Diagnostic
+
 ```bash
 # Config syntax
 sudo nginx -t
@@ -347,6 +362,7 @@ tail -50 /var/log/nginx/error.log
 ```
 
 ### Fix Chain
+
 ```bash
 # Most common: RStudio is down behind NGINX
 sudo systemctl restart rstudio-server
@@ -370,6 +386,7 @@ openssl x509 -enddate -noout -in /etc/nginx/ssl/cert.crt
 ## SYMPTOM 7: Rprofile Failed to Load (Welcome Banner Missing)
 
 ### Diagnostic
+
 ```bash
 # Test Rprofile syntax
 Rscript --vanilla -e "
@@ -387,6 +404,7 @@ cat /etc/R/Renviron.site
 ```
 
 ### Fix Chain
+
 ```bash
 # If %%PLACEHOLDERS%% are still present:
 # The template wasn't processed. Redeploy:
@@ -411,6 +429,7 @@ Rscript --vanilla -e "tryCatch({parse(file='/etc/R/Rprofile.site');cat('PARSE_OK
 ## SYMPTOM 8: Orphan R Processes Accumulating (Memory Leak)
 
 ### Diagnostic
+
 ```bash
 # Count orphan R-related processes (PPID=1 means parent died → adopted by init)
 ps -eo pid,ppid,user,rss,args | awk '$2 == 1' | grep -E 'Rscript|R --slave|R --no-save' | wc -l
@@ -427,6 +446,7 @@ tail -30 /var/log/biome-log/r_orphan_cleanup.log
 ```
 
 ### Fix Chain
+
 ```bash
 # Step 1: Run cleanup manually
 sudo bash /etc/biome-calc/conf/cleanup_r_orphans.sh
@@ -454,6 +474,7 @@ ps -eo pid,ppid,args | awk '$2 == 1 && /Rscript|R --slave|R --no-save/' | awk '{
 ## SYMPTOM 9: OPENBLAS_CORETYPE Wrong After VM Migration
 
 ### Diagnostic
+
 ```bash
 # Current detected CORETYPE
 cat /etc/biome-calc/coretype
@@ -477,6 +498,7 @@ Rscript --vanilla -e "
 ```
 
 ### Fix Chain
+
 ```bash
 # Redeploy CORETYPE detection (updates all 3 levels)
 cd /path/to/R-studioConf
@@ -495,6 +517,7 @@ sudo systemctl restart rstudio-server
 ## SYMPTOM 10: Ollama AI Not Responding
 
 ### Diagnostic
+
 ```bash
 systemctl status ollama.service
 curl -sf http://127.0.0.1:11434/api/tags
@@ -508,6 +531,7 @@ ollama list
 ```
 
 ### Fix Chain
+
 ```bash
 # Step 1: Restart if crashed
 sudo systemctl restart ollama.service
@@ -542,9 +566,11 @@ This is **expected behavior**, not a bug. Explanation:
 | 5 users, all computing | 32×5=160 threads (thrashing) | 6 threads each (fair share) | Total throughput HIGHER |
 
 ### What to Tell the User
+>
 > "Your script has fewer threads because others are also using the server. Run `status()` to see your current allocation. If the server is idle, you'll get up to 16 threads. The old server gave you 32 threads, but with 5 users it actually ran slower due to CPU thrashing."
 
 ### If Genuinely Slow
+
 ```bash
 # Check if user is I/O bound (NFS latency)
 iotop -oa -d 5 -P | grep rsession
@@ -563,6 +589,7 @@ rm /Rtmp/test_file
 ## SYMPTOM 12: Swap Constantly Full / Excessive Swapping
 
 ### Diagnostic
+
 ```bash
 free -h
 swapon --show
@@ -571,6 +598,7 @@ cat /proc/sys/vm/swappiness  # Should be 10
 ```
 
 ### Fix Chain
+
 ```bash
 # Step 1: Find who's using all the RAM
 ps aux --sort=-%mem | head -10
@@ -711,6 +739,7 @@ grep "session-timeout" /etc/rstudio/rsession.conf
 ```
 
 **Common causes:**
+
 - Browser tab was closed → session continues in background (normal behavior)
 - VPN disconnected → WebSocket drops → user thinks "it crashed" but session is fine
 - NGINX `proxy_read_timeout` exceeded during a long computation (no console output)
@@ -739,6 +768,7 @@ grep "<username>" /var/log/biome-log/r_biome_system.log | tail -20
 The BIOME-CALC Rprofile guards intercept **6 specific functions**. Many common ecology/botany R patterns are NOT covered:
 
 #### Currently Guarded Functions
+
 | Function | Guard Behavior | Package |
 |:---|:---|:---|
 | `solve(a)` | Warns + drops threads if matrix > 5000×5000 and workspace > 80% RAM | base |
@@ -887,6 +917,7 @@ if (ENABLE_SMART_ROUTING && !isTRUE(attr(pkg::dangerous_func, "biome_guard"))) t
 ```
 
 **After adding a guard:**
+
 1. Edit `templates/Rprofile_site.R.template`
 2. Run `sudo bash scripts/50_setup_nodes.sh` → option 3 (Config files only)
 3. The script validates R syntax before deploying; will rollback on parse error
@@ -898,6 +929,7 @@ if (ENABLE_SMART_ROUTING && !isTRUE(attr(pkg::dangerous_func, "biome_guard"))) t
 These are the most frequent rewrites you'll need to suggest:
 
 **Problem: `as.matrix(dist(big_data))` → OOM**
+
 ```r
 # BEFORE (crashes on >15,000 observations):
 d <- dist(community_matrix)
@@ -914,6 +946,7 @@ nmds <- vegan::metaMDS(d)          # Works with dist directly
 ```
 
 **Problem: `do.call(rbind, lapply(files, read.csv))` → O(n²) copies**
+
 ```r
 # BEFORE (copies entire data frame on each rbind):
 all_data <- do.call(rbind, lapply(csv_files, read.csv))
@@ -924,6 +957,7 @@ all_data <- rbindlist(lapply(csv_files, fread))
 ```
 
 **Problem: `ggplot()` on millions of points → RStudio render freeze**
+
 ```r
 # BEFORE (renders all 5 million points):
 ggplot(occurrence_data, aes(lon, lat)) + geom_point()
@@ -935,6 +969,7 @@ ggplot(occurrence_data, aes(lon, lat)) +
 ```
 
 **Problem: `raster::stack("*.tif")` → loads all in RAM**
+
 ```r
 # BEFORE (legacy raster — loads everything into RAM):
 s <- raster::stack(list.files(".", "*.tif", full.names=TRUE))
@@ -945,6 +980,7 @@ r <- terra::rast(list.files(".", "*.tif", full.names=TRUE))
 ```
 
 **Problem: Large NIMBLE model compiles → temp disk spike + RAM**
+
 ```r
 # BEFORE (no control over compilation resources):
 cModel <- compileNimble(model)
@@ -1065,72 +1101,127 @@ the `password` stack for a local user.
 
 ### Fix (repo-level, permanent)
 
+The fix is intentionally minimal: **remove `libpam-krb5` entirely**. The
+default Debian/Ubuntu `pam-auth-update` stack (`pam_unix` + `pam_sss` OR
+`pam_winbind`, with success-branching) already routes local users
+(uid < 10000) to `pam_unix` and AD users (uid ≥ 10000) to the AD module.
+**No custom pam-config profile is needed.**
+
+> ⚠️ Older releases shipped a custom `pam-auth-update` profile named
+> `biome-localguard` (Priority 900, injecting `pam_succeed_if uid >= 10000`
+> into `common-password`). That guard was incompatible with the Ubuntu 24.04
+> "`pam_unix` first" layout and produced **"Authentication token manipulation
+> error"** when local users ran `passwd`. It has been **removed**. Both the
+> primary and retrofit scripts now actively **purge** it.
+
 1. **`libpam-krb5` is no longer installed.** Removed from:
    - `scripts/12_lib_kerberos_setup.sh`
    - `scripts/30_install_nginx.sh`
    - `next_gen/ansible/roles/kerberos/tasks/main.yml`
 
-2. **`scripts/13_harden_pam_password.sh`** installs a `pam-auth-update` profile
-   `/usr/share/pam-configs/biome-localguard` (Priority 900, runs **before**
-   winbind@704 / sss) that short-circuits the AD primary blocks for local users:
+2. **`scripts/13_harden_pam_password.sh`** now does strip-and-regenerate only:
+   - Backs up `/etc/pam.d/common-*` to `/root/pam-backup-<ts>/`
+   - Removes `/usr/share/pam-configs/biome-localguard` (obsolete) and
+     `/usr/share/pam-configs/krb5` (leftover from libpam-krb5)
+   - Strips any dangling `pam_krb5.so` lines from every `common-*`
+     (critical: a dangling line in `common-account` breaks `sudo` with
+     *"Module is unknown"*)
+   - Strips any legacy `pam_succeed_if.so ... uid >= 10000` guard lines
+   - Truncates hand-edits **after** the `# end of pam-auth-update config`
+     marker (rogue `pam_deny requisite` lines that reject local users tend
+     to live there)
+   - Runs `pam-auth-update --force --package` to regenerate the managed
+     block
 
-   ```
-   Password-Type: Primary
-   Password:
-       [success=ignore default=2] pam_succeed_if.so quiet uid >= 10000
-   ```
+3. **`scripts/fix_pam_segfault_inplace.sh`** is the retrofit for already-
+   deployed nodes. Same logic as above, plus `apt-get purge libpam-krb5`
+   if still installed. Supports `--check` (dry-run) and `--rollback` modes.
 
-   For uid < 10000 this skips both the AD primary module and its follow-up
-   `pam_deny`, dropping control to `pam_unix.so` in the Additional block.
-   For uid ≥ 10000 (all AD users) the guard is a no-op.
-
-3. The script then removes any leftover `/usr/share/pam-configs/krb5` and runs
-   `pam-auth-update --package` to regenerate `/etc/pam.d/common-*`.
-
-4. `scripts/10_join_domain_sssd.sh` and `scripts/11_join_domain_samba.sh` now call
-   `pam-auth-update` with `--disable krb5` and invoke
+4. `scripts/10_join_domain_sssd.sh` and `scripts/11_join_domain_samba.sh`
+   call `pam-auth-update` with `--disable krb5` and invoke
    `scripts/13_harden_pam_password.sh` at the end of `configure_pam()`.
 
 ### What is lost (and why it's acceptable)
 
-Only one feature is sacrificed: **`pam_ccreds action=validate` offline Kerberos
-TGT validation** during login. This is compensated by `pam_winbind`'s
-`cached_login = yes` / `pam_sss`'s `cache_credentials = True`, which already
-provide offline auth for AD users via the SSSD/winbind cache. Local users
-(uid < 10000) never used Kerberos in the first place.
+Only one feature is sacrificed: **`pam_ccreds action=validate` offline
+Kerberos TGT validation** during login. This is compensated by
+`pam_winbind`'s `cached_login = yes` / `pam_sss`'s
+`cache_credentials = True`, which already provide offline auth for AD
+users via the SSSD/winbind cache. Local users (uid < 10000) never used
+Kerberos in the first place.
 
-Nothing else changes: AD login, kinit-on-login (via `pam_sss`/`pam_winbind`
-internals), NSS resolution, Samba home shares, GSSAPI to NFS — all unaffected.
+Nothing else changes: AD login, kinit-on-login (via `pam_sss` /
+`pam_winbind` internals), NSS resolution, Samba home shares, GSSAPI to
+NFS — all unaffected.
 
 ### Verification
 
-On any AD-joined node, after running `scripts/10_join_domain_sssd.sh` or
-`scripts/11_join_domain_samba.sh`:
+On any AD-joined node, after running `scripts/10_join_domain_sssd.sh`,
+`scripts/11_join_domain_samba.sh`, or the retrofit script:
 
 ```bash
-# 1. pam_krb5.so must be absent from common-password
+# 1. pam_krb5.so must be absent from EVERY common-* (incl. common-account)
 sudo grep -n pam_krb5 /etc/pam.d/common-*          # must print nothing
 
-# 2. biome-localguard must be active
-sudo grep -n 'uid >= 10000' /etc/pam.d/common-password
-# → pam_succeed_if.so quiet uid >= 10000
+# 2. No legacy biome-localguard guard lines
+sudo grep -n 'uid >= 10000' /etc/pam.d/common-*    # must print nothing
 
-# 3. krb5 pam-config must be gone
-ls /usr/share/pam-configs/krb5 2>/dev/null          # must be missing
-ls /usr/share/pam-configs/biome-localguard          # must exist
+# 3. Neither obsolete pam-config profile must remain
+ls /usr/share/pam-configs/krb5            2>/dev/null   # must be missing
+ls /usr/share/pam-configs/biome-localguard 2>/dev/null  # must be missing
 
-# 4. Functional test — local user
-sudo -u ladmin passwd                              # must NOT segfault
-# 5. Functional test — AD user (uid ≥ 10000)
-su - some.ad.user -c id                            # must resolve via winbind/sss
+# 4. Nothing past the end-marker in common-* (hand-edits purged)
+for f in /etc/pam.d/common-{account,auth,password,session,session-noninteractive}; do
+    awk '/^# end of pam-auth-update config/{f=1;next} f && NF && !/^[[:space:]]*#/ {print FILENAME": leftover: "$0}' "$f"
+done   # must print nothing
+
+# 5. AD provider still present in common-auth
+grep -E 'pam_(sss|winbind)\.so' /etc/pam.d/common-auth   # must match
+
+# 6. Functional test — local user (this is what we originally broke)
+sudo -u ladmin passwd       # normal prompt, completes with "password updated successfully"
+
+# 7. Functional test — sudo still works (common-account integrity)
+sudo -u ladmin sudo -n true 2>&1 | head       # no "Module is unknown"
+
+# 8. Functional test — AD user
+su - some.ad.user -c id                       # must resolve via winbind/sss
+```
+
+### Emergency recovery (already-broken node)
+
+If `passwd ladmin` fails with "Authentication token manipulation error" or
+segfaults, run **one** of the following from inside the repo checkout:
+
+```bash
+# Full retrofit (preferred):
+sudo ./scripts/fix_pam_segfault_inplace.sh
+
+# Diagnose first (no changes):
+sudo ./scripts/fix_pam_segfault_inplace.sh --check
+
+# Or, if the repo is not available, the equivalent hand-fix:
+sudo rm -f /usr/share/pam-configs/biome-localguard /usr/share/pam-configs/krb5
+for f in /etc/pam.d/common-{account,auth,password,session,session-noninteractive}; do
+    [ -f "$f" ] || continue
+    sudo sed -i -E '/^[^#]*pam_krb5\.so/d' "$f"
+    sudo sed -i -E '/pam_succeed_if\.so.*uid[[:space:]]*(>=|<)[[:space:]]*10000/d' "$f"
+    sudo awk '/^# end of pam-auth-update config/{print; seen=1; next} seen{next} {print}' "$f" \
+        | sudo tee "$f.new" >/dev/null && sudo mv "$f.new" "$f" && sudo chmod 0644 "$f"
+done
+sudo DEBIAN_FRONTEND=noninteractive pam-auth-update --force --package
+sudo passwd ladmin   # smoke test
 ```
 
 ### Rollback
 
+Both scripts leave timestamped backups in `/root/pam-backup-<ts>/` and the
+retrofit also publishes the symlink `/root/pam-backup-latest`. Restore:
+
 ```bash
-sudo rm /usr/share/pam-configs/biome-localguard
-sudo pam-auth-update --package
-# restore backups from /etc/pam.d/common-*.bak.<timestamp>
+sudo ./scripts/fix_pam_segfault_inplace.sh --rollback
+# …or manually:
+sudo cp -a /root/pam-backup-latest/common-* /etc/pam.d/
 ```
 
 **Do NOT reinstall `libpam-krb5` without also removing

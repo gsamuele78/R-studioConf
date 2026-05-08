@@ -2,25 +2,29 @@
 # scripts/fix_pam_segfault_inplace.sh
 #
 # ONE-SHOT RETROFIT for nodes already deployed with an older R-studioConf
-# release that shipped libpam-krb5 and the 'krb5' pam-config profile.
+# release that shipped libpam-krb5 and/or the now-obsolete `biome-localguard`
+# pam-config profile.
 #
 # This script:
 #   1. Detects the current PAM configuration (krb5 profile, pam_krb5.so lines,
-#      installed pam modules, winbind vs sss provider).
+#      biome-localguard guard lines, hand-edits, AD provider).
 #   2. Prints a dry-run diagnosis (use --check to stop after this step).
-#   3. Applies the minimal set of changes to eliminate the SIGSEGV on `passwd`
-#      for local users (uid < 10000) WITHOUT re-running the realm join, the
-#      full 10_/11_ scripts, or re-installing anything that might disturb AD
-#      operation.
+#   3. Applies the minimal set of changes to eliminate the SIGSEGV on
+#      `passwd` for local users (uid < 10000) AND to remove the bogus
+#      biome-localguard that breaks `passwd` on Ubuntu 24.04.
 #
 # Changes applied (all idempotent, all reversible):
-#   a. Backup /etc/pam.d/common-* and /etc/krb5.conf to /root/pam-backup-<ts>/
+#   a. Backup /etc/pam.d/common-* + /etc/krb5.conf to /root/pam-backup-<ts>/
 #   b. Uninstall libpam-krb5 (apt-get purge, only if installed).
-#   c. Remove /usr/share/pam-configs/krb5 if it lingers after purge.
-#   d. Install /usr/share/pam-configs/biome-localguard from the repo template.
-#   e. Run `pam-auth-update --package` to regenerate common-auth/password/session.
-#   f. Post-check: pam_krb5.so absent from every common-* file, guard present
-#      in common-password, AD provider (winbind or sss) still in the stack.
+#   c. Remove /usr/share/pam-configs/krb5 and /usr/share/pam-configs/biome-localguard
+#      if they linger.
+#   d. Strip any dangling `pam_krb5.so` lines from every common-*.
+#   e. Strip any legacy `pam_succeed_if uid >= 10000` guard lines.
+#   f. Truncate hand-edits AFTER `# end of pam-auth-update config` in every
+#      common-* (this is where the rogue `pam_deny requisite` tends to hide).
+#   g. `pam-auth-update --force --package` to regenerate the managed block.
+#   h. Post-check: pam_krb5.so absent from every common-*, AD provider still
+#      present in common-auth, no legacy guard lines remain.
 #
 # Nothing else is touched: krb5.conf, sssd.conf, smb.conf, realm membership,
 # keytabs, NSS, home-mount scripts — all left exactly as they are.
@@ -53,19 +57,13 @@ log_error() { printf "${C_RED}[FAIL]${C_RESET} %s\n" "$*" >&2; }
 log_head()  { printf "\n${C_BOLD}== %s ==${C_RESET}\n" "$*"; }
 
 # --- Paths -------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-readonly SCRIPT_DIR
-readonly REPO_ROOT="$(cd "$SCRIPT_DIR/.." &>/dev/null && pwd)"
-readonly TEMPLATE_SRC="${REPO_ROOT}/templates/pam-configs/biome-localguard.template"
-readonly PAM_CONFIG_DST="/usr/share/pam-configs/biome-localguard"
+readonly LEGACY_LOCALGUARD="/usr/share/pam-configs/biome-localguard"
 readonly KRB5_PAM_CONFIG="/usr/share/pam-configs/krb5"
 readonly BACKUP_ROOT="/root"
 readonly LAST_BACKUP_LINK="${BACKUP_ROOT}/pam-backup-latest"
 # NOTE: common-account is CRITICAL — it is included by /etc/pam.d/sudo, login,
-# su, sshd, etc. If a dangling pam_krb5.so reference survives there after we
-# purge libpam-krb5, every sudo call fails with:
-#   "sudo: PAM account management error: Module is unknown"
-# So we must back it up, scan it, and regenerate it like any other common-*.
+# su, sshd, etc. A dangling pam_krb5.so reference there breaks sudo with
+# "sudo: PAM account management error: Module is unknown".
 readonly PAM_FILES=(common-account common-auth common-password common-session common-session-noninteractive)
 
 MODE="apply"     # apply | check | rollback
@@ -76,7 +74,7 @@ for arg in "$@"; do
         --check)    MODE="check" ;;
         --rollback) MODE="rollback" ;;
         -h|--help)
-            sed -n '2,40p' "$0"
+            sed -n '2,44p' "$0"
             exit 0
             ;;
         *)
@@ -107,12 +105,8 @@ if [[ "$MODE" == "rollback" ]]; then
             log_ok "Restored /etc/pam.d/$f"
         fi
     done
-    if [[ -f "$PAM_CONFIG_DST" ]]; then
-        rm -f "$PAM_CONFIG_DST"
-        log_ok "Removed $PAM_CONFIG_DST"
-    fi
-    log_warn "Note: libpam-krb5 package itself is NOT reinstalled by rollback."
-    log_warn "If you truly need it back, run: apt-get install libpam-krb5 && pam-auth-update --package"
+    log_warn "Note: libpam-krb5 package is NOT reinstalled by rollback."
+    log_warn "If you truly need it back, run: apt-get install libpam-krb5"
     log_ok   "Rollback complete."
     exit 0
 fi
@@ -138,12 +132,11 @@ has_krb5_profile="no"
 [[ -f "$KRB5_PAM_CONFIG" ]] && has_krb5_profile="yes"
 log_info "Profile $KRB5_PAM_CONFIG present: $has_krb5_profile"
 
-has_localguard="no"
-[[ -f "$PAM_CONFIG_DST" ]] && has_localguard="yes"
-log_info "biome-localguard profile present: $has_localguard"
+has_legacy_guard_profile="no"
+[[ -f "$LEGACY_LOCALGUARD" ]] && has_legacy_guard_profile="yes"
+log_info "Legacy biome-localguard profile present: $has_legacy_guard_profile"
 
 pam_krb5_hits=0
-dangling_pam_krb5="no"
 for f in "${PAM_FILES[@]}"; do
     if [[ -f "/etc/pam.d/$f" ]] && grep -Eq '^[^#]*pam_krb5\.so' "/etc/pam.d/$f"; then
         pam_krb5_hits=$((pam_krb5_hits + 1))
@@ -152,17 +145,28 @@ for f in "${PAM_FILES[@]}"; do
 done
 log_info "Active pam_krb5.so lines: $pam_krb5_hits"
 
-# Detect CRITICAL dangling reference: pam_krb5.so cited but the .so is gone.
-# This breaks sudo/login/su instantly.
-if [[ $pam_krb5_hits -gt 0 ]] && \
-   ! [[ -f /lib/x86_64-linux-gnu/security/pam_krb5.so || \
-        -f /usr/lib/x86_64-linux-gnu/security/pam_krb5.so || \
-        -f /lib/security/pam_krb5.so ]]; then
-    dangling_pam_krb5="yes"
-    log_warn "CRITICAL: pam_krb5.so is REFERENCED but the .so file is MISSING."
-    log_warn "sudo/login/su will fail with 'Module is unknown' until fixed."
-fi
-log_info "Dangling pam_krb5.so references: $dangling_pam_krb5"
+legacy_guard_hits=0
+for f in "${PAM_FILES[@]}"; do
+    if [[ -f "/etc/pam.d/$f" ]] && grep -Eq 'pam_succeed_if\.so.*uid[[:space:]]*(>=|<)[[:space:]]*10000' "/etc/pam.d/$f"; then
+        legacy_guard_hits=$((legacy_guard_hits + 1))
+        log_warn "Legacy biome-localguard line in /etc/pam.d/$f"
+    fi
+done
+log_info "Legacy guard (pam_succeed_if uid>=10000) lines: $legacy_guard_hits"
+
+handedit_hits=0
+for f in "${PAM_FILES[@]}"; do
+    fp="/etc/pam.d/$f"
+    if [[ -f "$fp" ]] && grep -q '^# end of pam-auth-update config' "$fp"; then
+        # count non-blank, non-comment lines AFTER the end-marker
+        after=$(awk '/^# end of pam-auth-update config/{flag=1; next} flag && $0 !~ /^[[:space:]]*(#|$)/ {c++} END{print c+0}' "$fp")
+        if [[ "$after" -gt 0 ]]; then
+            handedit_hits=$((handedit_hits + 1))
+            log_warn "Hand-edits found after end-marker in $fp ($after active lines)"
+        fi
+    fi
+done
+log_info "Common-* files with hand-edits after end-marker: $handedit_hits"
 
 ad_provider="none"
 if dpkg -s libpam-winbind &>/dev/null; then
@@ -172,29 +176,6 @@ elif dpkg -s libpam-sss &>/dev/null; then
 fi
 log_info "AD PAM provider detected: $ad_provider"
 
-guard_present="no"
-if [[ -f /etc/pam.d/common-password ]] && \
-   grep -Eq 'pam_succeed_if\.so.*uid[[:space:]]*>=[[:space:]]*10000' /etc/pam.d/common-password; then
-    guard_present="yes"
-fi
-log_info "uid>=10000 guard in common-password: $guard_present"
-
-# Detect if common-* carry hand-edits (pam-auth-update will refuse otherwise).
-# pam-auth-update stores reference copies under /var/lib/pam/seen; if the live
-# file differs AND the file lacks the canonical auto-generated header, we flag
-# it. We use the simpler heuristic: presence of the canonical marker line
-# "# here are the per-package modules (the "Primary" block)" OR similar.
-local_mods="unknown"
-if [[ -f /etc/pam.d/common-password ]]; then
-    if grep -q 'pam-auth-update' /etc/pam.d/common-password && \
-       grep -q 'Primary' /etc/pam.d/common-password; then
-        local_mods="no (pam-auth-update managed)"
-    else
-        local_mods="yes (hand-edited — pam-auth-update will require --force)"
-    fi
-fi
-log_info "common-* hand-edits: $local_mods"
-
 # --- Diagnosis ---------------------------------------------------------------
 log_head "Diagnosis"
 needs_fix="no"
@@ -202,27 +183,21 @@ if [[ "$has_libpam_krb5" == "yes" || "$has_krb5_profile" == "yes" || "$pam_krb5_
     log_warn "Node IS affected by the pam_krb5 segfault risk."
     needs_fix="yes"
 fi
-if [[ "$dangling_pam_krb5" == "yes" ]]; then
-    log_warn "Node has DANGLING pam_krb5.so references — sudo is broken RIGHT NOW."
+if [[ "$has_legacy_guard_profile" == "yes" || "$legacy_guard_hits" -gt 0 ]]; then
+    log_warn "Node has the obsolete biome-localguard — will cause 'passwd' failures."
     needs_fix="yes"
 fi
-if [[ "$guard_present" == "no" ]]; then
-    log_warn "biome-localguard not in effect on common-password."
+if [[ "$handedit_hits" -gt 0 ]]; then
+    log_warn "Node has hand-edits after pam-auth-update end-marker — must be pruned."
     needs_fix="yes"
 fi
 if [[ "$ad_provider" == "none" ]]; then
     log_warn "No AD PAM provider found — is this node actually joined?"
-    log_warn "Proceeding anyway; guard is still safe on a pure-local box."
+    log_warn "Proceeding anyway; cleanup is safe on a pure-local box."
 fi
 if [[ "$needs_fix" == "no" ]]; then
-    log_ok "Node already hardened. Nothing to do."
+    log_ok "Node already clean. Nothing to do."
     exit 0
-fi
-
-if ! [[ -f "$TEMPLATE_SRC" ]]; then
-    log_error "Template not found: $TEMPLATE_SRC"
-    log_error "Run this from inside the R-studioConf repo checkout."
-    exit 1
 fi
 
 if ! command -v pam-auth-update &>/dev/null; then
@@ -259,73 +234,70 @@ if [[ "$has_libpam_krb5" == "yes" ]]; then
     log_ok "libpam-krb5 purged."
 fi
 
-# (c) Remove leftover krb5 pam-config
+# (c) Remove leftover pam-config profiles
 if [[ -f "$KRB5_PAM_CONFIG" ]]; then
     rm -f "$KRB5_PAM_CONFIG"
     log_ok "Removed leftover $KRB5_PAM_CONFIG"
 fi
+if [[ -f "$LEGACY_LOCALGUARD" ]]; then
+    rm -f "$LEGACY_LOCALGUARD"
+    log_ok "Removed obsolete $LEGACY_LOCALGUARD"
+fi
 
-# (c.2) Surgically strip any DANGLING pam_krb5.so lines from common-*.
-# This is pre-emptive: if libpam-krb5 was purged earlier but the hand-edited
-# common-* still reference pam_krb5.so, sudo/login/su break immediately with
-# "Module is unknown". We fix that before calling pam-auth-update (which might
-# refuse due to local modifications anyway).
-stripped_any="no"
+# (d) Strip dangling pam_krb5.so lines from common-*.
 for f in "${PAM_FILES[@]}"; do
     fp="/etc/pam.d/$f"
     if [[ -f "$fp" ]] && grep -Eq '^[^#]*pam_krb5\.so' "$fp"; then
         sed -i -E '/^[^#]*pam_krb5\.so/d' "$fp"
         log_ok "Stripped pam_krb5.so line(s) from $fp"
-        stripped_any="yes"
     fi
 done
-[[ "$stripped_any" == "yes" ]] && log_warn "Dangling pam_krb5.so references removed."
 
-# (d) Install biome-localguard profile
-install -m 0644 -o root -g root "$TEMPLATE_SRC" "$PAM_CONFIG_DST"
-log_ok "Installed $PAM_CONFIG_DST"
+# (e) Strip legacy biome-localguard lines (pam_succeed_if uid>=10000)
+for f in "${PAM_FILES[@]}"; do
+    fp="/etc/pam.d/$f"
+    if [[ -f "$fp" ]] && grep -Eq 'pam_succeed_if\.so.*uid[[:space:]]*(>=|<)[[:space:]]*10000' "$fp"; then
+        sed -i -E '/pam_succeed_if\.so.*uid[[:space:]]*(>=|<)[[:space:]]*10000/d' "$fp"
+        log_ok "Stripped legacy biome-localguard line(s) from $fp"
+    fi
+done
 
-# (e) Regenerate PAM stack
-# pam-auth-update refuses to overwrite /etc/pam.d/common-* if they carry
-# manual edits. We capture stderr and retry with --force on refusal. --force
-# is safe here because the biome-localguard profile is now installed, so the
-# regenerated files will contain the guard (and will not contain pam_krb5).
-PAU_ERR="$(mktemp)"
-trap 'rm -f "$PAU_ERR"' EXIT
-log_info "Running pam-auth-update --package ..."
-if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --package 2> >(tee "$PAU_ERR" >&2); then
-    log_error "pam-auth-update --package failed."
+# (f) Truncate hand-edits after `# end of pam-auth-update config`.
+# pam-auth-update only manages the region between "# here are the per-package
+# modules" and "# end of pam-auth-update config". Anything after the end-marker
+# survives pam-auth-update runs — including rogue `pam_deny requisite` lines
+# that reject local users. Drop everything past the end-marker.
+for f in "${PAM_FILES[@]}"; do
+    fp="/etc/pam.d/$f"
+    if [[ -f "$fp" ]] && grep -q '^# end of pam-auth-update config' "$fp"; then
+        awk '/^# end of pam-auth-update config/{print; found=1; next} found{next} {print}' "$fp" > "${fp}.tmp"
+        if ! cmp -s "${fp}.tmp" "$fp"; then
+            mv "${fp}.tmp" "$fp"
+            chmod 0644 "$fp"
+            log_ok "Truncated hand-edits after end-marker in $fp"
+        else
+            rm -f "${fp}.tmp"
+        fi
+    fi
+done
+
+# (g) Regenerate PAM stack
+# We always use --force because the strip+truncate steps above created diffs
+# vs /var/lib/pam/seen, which pam-auth-update would otherwise refuse on with
+# "Local modifications to /etc/pam.d/common-*, not updating.".
+log_info "Running pam-auth-update --force --package ..."
+if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --force --package; then
+    log_error "pam-auth-update --force --package failed."
     log_warn  "Restore from $BACKUP_DIR if /etc/pam.d/common-* is broken."
     exit 1
 fi
-
-if grep -q 'Local modifications' "$PAU_ERR"; then
-    log_warn "pam-auth-update refused: manual edits detected in /etc/pam.d/common-*."
-    log_warn "Hand-edits will be OVERWRITTEN by the canonical generated stack"
-    log_warn "(biome-localguard @900 + winbind/sss + unix). Backup: $BACKUP_DIR"
-    if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --force --package; then
-        log_error "pam-auth-update --force --package failed."
-        log_warn  "Restore from $BACKUP_DIR if /etc/pam.d/common-* is broken."
-        exit 1
-    fi
-    log_ok "PAM stack regenerated with --force."
-else
-    log_ok "PAM stack regenerated."
-fi
+log_ok "PAM stack regenerated with --force."
 
 # --- Post-check --------------------------------------------------------------
 log_head "Post-check"
 fail=0
 
-# Guard present
-if grep -Eq 'pam_succeed_if\.so.*uid[[:space:]]*>=[[:space:]]*10000' /etc/pam.d/common-password; then
-    log_ok "common-password contains 'pam_succeed_if uid >= 10000' guard."
-else
-    log_error "Guard NOT present in /etc/pam.d/common-password."
-    fail=1
-fi
-
-# pam_krb5 absent everywhere (including common-account — sudo depends on it)
+# pam_krb5 absent everywhere
 for f in "${PAM_FILES[@]}"; do
     if [[ -f "/etc/pam.d/$f" ]] && grep -Eq '^[^#]*pam_krb5\.so' "/etc/pam.d/$f"; then
         log_error "pam_krb5.so still active in /etc/pam.d/$f"
@@ -334,13 +306,19 @@ for f in "${PAM_FILES[@]}"; do
 done
 [[ $fail -eq 0 ]] && log_ok "pam_krb5.so absent from all common-* files (incl. common-account)."
 
+# Legacy guard gone
+for f in "${PAM_FILES[@]}"; do
+    if [[ -f "/etc/pam.d/$f" ]] && grep -Eq 'pam_succeed_if\.so.*uid[[:space:]]*(>=|<)[[:space:]]*10000' "/etc/pam.d/$f"; then
+        log_error "Legacy biome-localguard line still in /etc/pam.d/$f"
+        fail=1
+    fi
+done
+
 # Sanity: sudo must still work (it loads common-account).
 if command -v sudo &>/dev/null; then
     if sudo -n true 2>/dev/null || [[ $EUID -eq 0 ]]; then
         log_ok "sudo/common-account loads cleanly."
     else
-        # Non-root: only check whether the PAM stack parses. A password prompt
-        # is fine; a 'Module is unknown' error is not.
         sudo_err="$(sudo -n true 2>&1 || true)"
         if grep -q 'Module is unknown\|PAM.*error' <<<"$sudo_err"; then
             log_error "sudo PAM broken: $sudo_err"
@@ -378,8 +356,9 @@ if [[ $fail -ne 0 ]]; then
 fi
 
 log_head "Done"
-log_ok  "PAM password stack hardened in-place. Local-user 'passwd' is safe now."
-log_info "Smoke test:   sudo -u ladmin passwd     (expect normal prompt, no segfault)"
+log_ok  "PAM stack cleaned in-place. Local-user 'passwd' is safe now."
+log_info "Smoke test:   passwd ladmin               (expect normal prompt, no segfault)"
+log_info "Smoke test:   sudo -u ladmin -i           (expect no 'Module is unknown')"
 log_info "Rollback:     $0 --rollback"
 log_info "Backup dir:   $BACKUP_DIR"
 exit 0

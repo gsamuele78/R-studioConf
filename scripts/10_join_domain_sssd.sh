@@ -322,9 +322,10 @@ configure_pam() {
         log "Warning: pam-auth-update not found. Manual PAM configuration required."
     fi
 
-    # Harden common-password: install biome-localguard (uid<10000 -> local-only)
-    # and regenerate the stack so local users cannot hit pam_sss/pam_winbind
-    # in the password phase.
+    # Harden PAM: purge any leftover libpam-krb5 / obsolete biome-localguard
+    # guard lines and regenerate common-* via pam-auth-update --force --package.
+    # The default pam_unix + pam_sss success-branching already routes local
+    # users (uid<10000) to pam_unix — no custom guard is needed.
     local harden_script="${SCRIPT_DIR}/13_harden_pam_password.sh"
     if [[ -x "$harden_script" ]]; then
         log "Hardening PAM password stack via $harden_script ..."
