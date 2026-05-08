@@ -29,12 +29,37 @@ TMP=/Rtmp
 TEMP=/Rtmp
 R_TEMPDIR=/Rtmp
 
-# ── BLAS Threading ──
+# ══════════════════════════════════════════════════════════════════════════════
+# FORK-SAFETY GUARD-RAILS (PSE — Pessimistic System Engineering)
+# ══════════════════════════════════════════════════════════════════════════════
+# These variables are read by native libraries (OpenBLAS, MKL, OpenMP, GDAL,
+# PROJ) at dlopen() time — BEFORE R executes Rprofile.site. Setting them here
+# guarantees that by the time any R code runs, every native thread-pool is
+# capped at 1 worker. This is the only reliable way to prevent
+# "fork-after-threading" deadlocks when user code calls parallel::mclapply()
+# or forking future::plan(multicore).
+#
+# Rationale: POSIX specifies that fork() on a multi-threaded process yields
+# undefined behaviour (children inherit locked pthread mutexes from threads
+# that no longer exist → eternal futex_wait_queue). Libraries like GDAL and
+# OpenMP keep persistent worker pools; once instantiated, mclapply() becomes
+# unsafe. Capping to 1 thread at env-var time prevents the pool from ever
+# spawning, so fork() stays safe.
+#
+# Users who explicitly want intra-process parallelism must opt-in AT RUNTIME
+# (e.g. RhpcBLASctl::blas_set_num_threads(N), arrow::set_cpu_count(N),
+# terra::gdalCache()) AFTER confirming they will not subsequently fork.
+# The preferred parallel pattern on this cluster is future::plan(multisession)
+# or biome_make_cluster() — both use PSOCK (no fork, no inherited state).
+# ══════════════════════════════════════════════════════════════════════════════
 OPENBLAS_NUM_THREADS=1
 MKL_NUM_THREADS=1
+OMP_NUM_THREADS=1
+OMP_THREAD_LIMIT=1
+OMP_NESTED=FALSE
+GOTO_NUM_THREADS=1
+BLIS_NUM_THREADS=1
 
-# ── OpenMP Threading ──
-OMP_NUM_THREADS=8
 
 # ── Python ──
 RETICULATE_PYTHON=/opt/biome-py/bin/python
@@ -60,11 +85,28 @@ TF_XLA_FLAGS=--tf_xla_cpu_global_jit
 KERAS_BACKEND=tensorflow
 
 # ── Spatial Libraries ──
-# GDAL: bounded threads (cgroup will throttle later regardless)
-GDAL_NUM_THREADS=4
+# GDAL / PROJ: HARD-CAPPED to 1 thread (fork-safety — see guard-rail block above).
+# Users who need multi-threaded warp/rasterize must call terra::setGDALconfig()
+# or Sys.setenv(GDAL_NUM_THREADS=N) AFTER loading terra and BEFORE any
+# mclapply / forking future plan. For typical prioritizr / AOH pipelines
+# the bottleneck is I/O, not GDAL compute, so 1 thread is also the right
+# choice on merit.
+GDAL_NUM_THREADS=1
+PROJ_NUM_THREADS=1
+
+# GDAL block cache: 256 MB per process (keeps per-worker RSS bounded under
+# heavy mclapply fan-out; default 5% of RAM = many GB × N workers = OOM).
+GDAL_CACHEMAX=256
+
+# VSI cache: small, process-local (prevents VSI file descriptors from leaking
+# across forks while keeping repeated reads of small metadata fast).
+VSI_CACHE=TRUE
+VSI_CACHE_SIZE=134217728
+CPL_VSIL_CURL_CACHE_SIZE=134217728
 
 # CPL_TMPDIR: local /Rtmp (GDAL scratch on rasterize/warp ops — keeps off NFS)
 CPL_TMPDIR=/Rtmp
+
 
 # PROJ network grid downloads: ON.
 # Cache is in $HOME/.local/share/proj (NFS) — shared across all 4 servers,

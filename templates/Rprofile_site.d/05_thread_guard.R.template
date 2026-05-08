@@ -1,0 +1,133 @@
+# templates/Rprofile_site.d/05_thread_guard.R.template
+# ──────────────────────────────────────────────────────────────────────────────
+# FORK-SAFETY THREAD GUARD  (belt-and-suspenders to Renviron.site)
+# ──────────────────────────────────────────────────────────────────────────────
+# Purpose: re-assert the native-library thread caps AT R PROFILE LOAD TIME,
+# so that even if /etc/R/Renviron.site is mis-deployed, edited, or shadowed by
+# a user ~/.Renviron, the cluster's fork-safety invariant still holds.
+#
+# Why this matters
+# ────────────────
+# POSIX fork() on a multi-threaded process is undefined behaviour: the child
+# inherits a copy of every pthread mutex, but NOT the threads that held them.
+# Libraries such as OpenMP (libgomp), OpenBLAS-pthread, GDAL, PROJ keep
+# persistent worker pools initialised at first use. Once such a pool exists
+# in the master R process, any subsequent call to parallel::mclapply() or
+# future::plan(multicore) spawns children that immediately deadlock on those
+# inherited locked mutexes (observable as `State=S, wchan=futex_wait_queue`,
+# zero progress, zero I/O, forever).
+#
+# The correct, simple fix is to ensure the native thread pools are size-1
+# from the start. Users who explicitly want intra-session parallelism must
+# opt in AT RUNTIME (after having decided they will not fork).
+#
+# Load order
+# ──────────
+# This fragment is numbered 05 so it is the FIRST fragment the dispatcher
+# sources (before 20_cgroup_reader.R, 30_psock_factory.R, 50_pkg_hooks.R,
+# etc.). Setting these variables here is redundant if Renviron.site is
+# correctly deployed — that is by design. The cost is ~0 ms and the benefit
+# is that a single mis-step in /etc/R configuration cannot destroy every
+# mclapply() pipeline in the cluster silently.
+#
+# This fragment is LOADED by the dispatcher via source(file, local=TRUE)
+# inside its top-level local({...}). It has no dependencies on the
+# dispatcher's closure (no sys_log, no .biome_env) because it must work even
+# if the dispatcher itself has been partially broken.
+# ──────────────────────────────────────────────────────────────────────────────
+
+local({
+  # Hard-capped native thread pools. Key = env var, Value = string.
+  # Rationale for each:
+  #   OMP_NUM_THREADS / OMP_THREAD_LIMIT / OMP_NESTED
+  #       libgomp + libomp (used by terra, nimble, Eigen-linked packages).
+  #       OMP_THREAD_LIMIT is the hard ceiling; OMP_NUM_THREADS the default;
+  #       OMP_NESTED=FALSE forbids nested parallel regions (worst offender
+  #       for runaway thread counts when packages fork-within-fork).
+  #   OPENBLAS_NUM_THREADS
+  #       libopenblas-pthread ONLY (no effect on libopenblas-serial, but the
+  #       cluster may migrate images). Harmless to set.
+  #   MKL_NUM_THREADS / GOTO_NUM_THREADS / BLIS_NUM_THREADS
+  #       alternative BLAS backends a package may pull in transitively.
+  #   GDAL_NUM_THREADS / PROJ_NUM_THREADS
+  #       geospatial thread pools — the primary offender seen on biome-calc03.
+  .guards <- c(
+    OMP_NUM_THREADS       = "1",
+    OMP_THREAD_LIMIT      = "1",
+    OMP_NESTED            = "FALSE",
+    OPENBLAS_NUM_THREADS  = "1",
+    MKL_NUM_THREADS       = "1",
+    GOTO_NUM_THREADS      = "1",
+    BLIS_NUM_THREADS      = "1",
+    GDAL_NUM_THREADS      = "1",
+    PROJ_NUM_THREADS      = "1"
+  )
+
+  # Only set variables that are currently MISSING. We do not override the
+  # user's explicit settings — a researcher who has deliberately exported
+  # OMP_NUM_THREADS=8 in their shell before launching Rscript is opting out
+  # of the guard, and we honour that (they are responsible for NOT forking).
+  current <- Sys.getenv(names(.guards), unset = NA_character_)
+  missing_idx <- which(is.na(current) | !nzchar(current))
+
+  if (length(missing_idx) > 0L) {
+    to_set <- as.list(.guards[missing_idx])
+    do.call(Sys.setenv, to_set)
+
+    # Log to a small audit trail on /Rtmp so we can forensically confirm
+    # which cluster node had to rely on the belt-and-suspenders path.
+    tryCatch({
+      log_dir <- "/Rtmp/biome_thread_guard"
+      if (!dir.exists(log_dir))
+        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0777")
+      log_file <- file.path(log_dir, paste0("guard_", Sys.info()[["nodename"]], ".log"))
+      cat(sprintf("[%s] pid=%d user=%s missing=%s\n",
+                  format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
+                  Sys.getpid(),
+                  Sys.info()[["user"]],
+                  paste(names(.guards)[missing_idx], collapse = ",")),
+          file = log_file, append = TRUE)
+    }, error = function(e) invisible(NULL))
+  }
+
+  # Expose a public opt-out helper so advanced users can raise the caps
+  # DELIBERATELY for a scoped block of non-forking computation:
+  #
+  #   biome_unleash_threads(n = 8L)   # widens OMP/BLAS to 8
+  #   # ... heavy non-forking compute ...
+  #   biome_restore_threads()         # back to 1
+  #
+  # This gives us a single, reviewable call site instead of researchers
+  # sprinkling Sys.setenv() and later wondering why mclapply froze.
+  if (!exists("biome_unleash_threads", envir = globalenv(), inherits = FALSE)) {
+    assign("biome_unleash_threads", function(n = 4L, gdal = FALSE) {
+      n <- max(1L, as.integer(n))
+      Sys.setenv(OMP_NUM_THREADS      = as.character(n),
+                 OMP_THREAD_LIMIT     = as.character(n),
+                 OPENBLAS_NUM_THREADS = as.character(n),
+                 MKL_NUM_THREADS      = as.character(n))
+      if (isTRUE(gdal)) Sys.setenv(GDAL_NUM_THREADS = as.character(n),
+                                   PROJ_NUM_THREADS = as.character(n))
+      message(sprintf(
+        "BIOME-CALC: native thread caps raised to %d%s. ",
+        n, if (isTRUE(gdal)) " (incl. GDAL/PROJ)" else ""),
+        "DO NOT call parallel::mclapply() or future::plan(multicore) while raised; ",
+        "call biome_restore_threads() first.")
+      invisible(n)
+    }, envir = globalenv())
+  }
+
+  if (!exists("biome_restore_threads", envir = globalenv(), inherits = FALSE)) {
+    assign("biome_restore_threads", function() {
+      Sys.setenv(OMP_NUM_THREADS      = "1",
+                 OMP_THREAD_LIMIT     = "1",
+                 OMP_NESTED           = "FALSE",
+                 OPENBLAS_NUM_THREADS = "1",
+                 MKL_NUM_THREADS      = "1",
+                 GDAL_NUM_THREADS     = "1",
+                 PROJ_NUM_THREADS     = "1")
+      message("BIOME-CALC: native thread caps restored to 1 (fork-safe).")
+      invisible(1L)
+    }, envir = globalenv())
+  }
+})

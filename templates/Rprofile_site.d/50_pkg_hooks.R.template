@@ -23,16 +23,23 @@
     }
 
     # ── terra ──
+    # FORK-SAFETY: GDAL_NUM_THREADS is NOT set here. The value in
+    # /etc/R/Renviron.site (=1) wins and stays in effect so that mclapply()
+    # callers never inherit a live GDAL thread-pool (→ futex deadlock).
+    # GDAL_CACHEMAX is also managed centrally via Renviron.site (=256 MB).
+    # Users who deliberately want multi-threaded GDAL for intra-session
+    # (non-forking) work can raise both values AFTER library(terra) and
+    # BEFORE any parallel::mclapply / future::plan(multicore) call.
     if (ENABLE_TERRA_OPT && isNamespaceLoaded("terra") &&
         .biome_env$shared_env$terra_threads == 0L) tryCatch({
-      tt <- min(fc, 8L); gc_mb <- as.integer(floor(qr * 0.2 * 1024))
-      Sys.setenv(GDAL_NUM_THREADS = as.character(tt), GDAL_CACHEMAX = as.character(gc_mb))
+      tt <- 1L   # hard-pinned for fork-safety (see Renviron.site guard-rails)
       td <- file.path(user_tmp_root, "terra")
       if (!dir.exists(td)) dir.create(td, recursive = TRUE, showWarnings = FALSE)
       terra::terraOptions(memfrac = 0.6, tempdir = td, verbose = FALSE)
       .biome_env$shared_env$terra_threads <- tt
-      msg_parts <- c(msg_parts, "Terra [LocalDisk]")
+      msg_parts <- c(msg_parts, "Terra [LocalDisk/fork-safe]")
     }, error = .biome_swerr("Line_1373"))
+
 
     # ── raster ──
     if (ENABLE_SMART_ROUTING && isNamespaceLoaded("raster") &&
