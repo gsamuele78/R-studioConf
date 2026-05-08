@@ -1,34 +1,3 @@
-# /usr/share/pam-configs/biome-localguard
-# Deployed by R-studioConf / scripts/13_harden_pam_password.sh
-#
-# Purpose:
-#   Prevent SIGSEGV / EPERM on `passwd` for LOCAL users by skipping the
-#   AD-backed (winbind/sss) password-change modules when uid < 10000.
-#
-# Rationale:
-#   The idmap ranges in this project are:
-#     * (tdb default)        : 10000 - 999999
-#     * PERSONALE (rid)      : 163600000 - 263600000
-#     * Local system accounts: uid < 1000
-#     * Local sysadmin (ladmin, etc.): 1000 - 9999
-#   Everything with uid >= 10000 is AD/trust-mapped.
-#   Everything with uid <  10000 is strictly local and MUST use pam_unix only.
-#
-#   pam_krb5 (libpam-krb5) has a long-standing SIGSEGV in the password stage
-#   with multi-realm krb5.conf (DIR/PERSONALE/STUDENTI.DIR.UNIBO.IT) when the
-#   principal does not exist. libpam-krb5 is therefore NOT installed; this
-#   profile additionally guards the winbind/sss password path against local
-#   users so `passwd` and `chpasswd` behave deterministically.
-#
-# Priority 900 places this profile BEFORE winbind (~704) and sss (~252) in
-# the Primary Password-Type block, so the guard runs first.
-#
-# Logic (password stack only):
-#   pam_succeed_if uid >= 10000
-#     success -> ignore (continue through winbind/sss/unix as normal AD path)
-#     failure -> default=2 (skip next 2 modules: winbind Primary + its pam_deny)
-#                => falls through to pam_unix Primary (local password change)
-#
 Name: BIOME local-user guard (skip AD password stack for uid<10000)
 Default: yes
 Priority: 900

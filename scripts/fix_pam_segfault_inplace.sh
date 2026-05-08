@@ -161,6 +161,22 @@ if [[ -f /etc/pam.d/common-password ]] && \
 fi
 log_info "uid>=10000 guard in common-password: $guard_present"
 
+# Detect if common-* carry hand-edits (pam-auth-update will refuse otherwise).
+# pam-auth-update stores reference copies under /var/lib/pam/seen; if the live
+# file differs AND the file lacks the canonical auto-generated header, we flag
+# it. We use the simpler heuristic: presence of the canonical marker line
+# "# here are the per-package modules (the "Primary" block)" OR similar.
+local_mods="unknown"
+if [[ -f /etc/pam.d/common-password ]]; then
+    if grep -q 'pam-auth-update' /etc/pam.d/common-password && \
+       grep -q 'Primary' /etc/pam.d/common-password; then
+        local_mods="no (pam-auth-update managed)"
+    else
+        local_mods="yes (hand-edited — pam-auth-update will require --force)"
+    fi
+fi
+log_info "common-* hand-edits: $local_mods"
+
 # --- Diagnosis ---------------------------------------------------------------
 log_head "Diagnosis"
 needs_fix="no"
@@ -232,13 +248,32 @@ install -m 0644 -o root -g root "$TEMPLATE_SRC" "$PAM_CONFIG_DST"
 log_ok "Installed $PAM_CONFIG_DST"
 
 # (e) Regenerate PAM stack
+# pam-auth-update refuses to overwrite /etc/pam.d/common-* if they carry
+# manual edits. We capture stderr and retry with --force on refusal. --force
+# is safe here because the biome-localguard profile is now installed, so the
+# regenerated files will contain the guard (and will not contain pam_krb5).
+PAU_ERR="$(mktemp)"
+trap 'rm -f "$PAU_ERR"' EXIT
 log_info "Running pam-auth-update --package ..."
-if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --package; then
+if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --package 2> >(tee "$PAU_ERR" >&2); then
     log_error "pam-auth-update --package failed."
     log_warn  "Restore from $BACKUP_DIR if /etc/pam.d/common-* is broken."
     exit 1
 fi
-log_ok "PAM stack regenerated."
+
+if grep -q 'Local modifications' "$PAU_ERR"; then
+    log_warn "pam-auth-update refused: manual edits detected in /etc/pam.d/common-*."
+    log_warn "Hand-edits will be OVERWRITTEN by the canonical generated stack"
+    log_warn "(biome-localguard @900 + winbind/sss + unix). Backup: $BACKUP_DIR"
+    if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --force --package; then
+        log_error "pam-auth-update --force --package failed."
+        log_warn  "Restore from $BACKUP_DIR if /etc/pam.d/common-* is broken."
+        exit 1
+    fi
+    log_ok "PAM stack regenerated with --force."
+else
+    log_ok "PAM stack regenerated."
+fi
 
 # --- Post-check --------------------------------------------------------------
 log_head "Post-check"

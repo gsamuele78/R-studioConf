@@ -88,13 +88,33 @@ fi
 #   Priority 704: winbind  (if installed)
 #   Priority 252: sss      (if installed)
 #   Priority 256: unix     (always)
+#
+# pam-auth-update REFUSES to regenerate /etc/pam.d/common-* if it detects
+# manual edits ("Local modifications to /etc/pam.d/common-*, not updating.").
+# We capture stderr and, if we see that refusal, retry with --force after an
+# extra backup. --force is safe here because we just installed the
+# biome-localguard profile; the regenerated files will contain it.
+PAU_ERR="$(mktemp)"
+trap 'rm -f "$PAU_ERR"' EXIT
 log_info "Regenerating PAM stack via pam-auth-update --package ..."
-if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --package; then
+if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --package 2> >(tee "$PAU_ERR" >&2); then
     log_error "pam-auth-update --package failed."
     log_warn  "Restore from $BACKUP_DIR if /etc/pam.d/common-* is broken."
     exit 1
 fi
-log_ok "PAM stack regenerated."
+
+if grep -q 'Local modifications' "$PAU_ERR"; then
+    log_warn "pam-auth-update refused: manual edits detected in /etc/pam.d/common-*."
+    log_warn "Retrying with --force (extra backup already in $BACKUP_DIR)."
+    if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --force --package; then
+        log_error "pam-auth-update --force --package failed."
+        log_warn  "Restore from $BACKUP_DIR if /etc/pam.d/common-* is broken."
+        exit 1
+    fi
+    log_ok "PAM stack regenerated with --force."
+else
+    log_ok "PAM stack regenerated."
+fi
 
 # --- 5. Sanity check ----------------------------------------------------------
 # Verify the guard line was injected into common-password
