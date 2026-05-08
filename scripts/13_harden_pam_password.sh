@@ -54,14 +54,31 @@ if [[ ! -f "$TEMPLATE_SRC" ]]; then
 fi
 
 # --- 1. Backup current PAM files ---------------------------------------------
+# NOTE: common-account MUST be included. It is referenced by /etc/pam.d/sudo,
+# login, su, sshd — a dangling pam_krb5.so line there breaks sudo instantly
+# ("PAM account management error: Module is unknown").
+readonly PAM_FILES=(common-account common-auth common-password common-session common-session-noninteractive)
 BACKUP_DIR="/root/pam-backup-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
-for f in common-auth common-password common-session common-session-noninteractive; do
+for f in "${PAM_FILES[@]}"; do
     if [[ -f "/etc/pam.d/$f" ]]; then
         cp -a "/etc/pam.d/$f" "$BACKUP_DIR/"
     fi
 done
 log_info "Backed up /etc/pam.d/common-* to $BACKUP_DIR"
+
+# --- 1b. Pre-emptively strip dangling pam_krb5.so references -----------------
+# libpam-krb5 is uninstalled by 12_lib_kerberos_setup.sh, but if hand-edits
+# or an older deployment left a pam_krb5.so line in any common-*, the module
+# load now fails ("Module is unknown"), breaking sudo/login/su before we even
+# get to pam-auth-update. Strip such lines first.
+for f in "${PAM_FILES[@]}"; do
+    fp="/etc/pam.d/$f"
+    if [[ -f "$fp" ]] && grep -Eq '^[^#]*pam_krb5\.so' "$fp"; then
+        sed -i -E '/^[^#]*pam_krb5\.so/d' "$fp"
+        log_warn "Stripped dangling pam_krb5.so from $fp"
+    fi
+done
 
 # --- 2. Install biome-localguard profile --------------------------------------
 log_info "Installing biome-localguard pam-config profile..."
@@ -126,13 +143,15 @@ else
     exit 1
 fi
 
-# Verify pam_krb5 is NOT in common-password (the crash site)
-if grep -Eq '^[^#]*pam_krb5\.so' /etc/pam.d/common-password; then
-    log_error "pam_krb5.so is STILL active in common-password — segfault risk remains."
-    log_warn  "Was libpam-krb5 re-installed after 12_lib_kerberos_setup.sh?"
-    exit 1
-fi
-log_ok "pam_krb5.so is absent from common-password."
+# Verify pam_krb5 is NOT in ANY common-* (crash risk + sudo breakage risk)
+for f in "${PAM_FILES[@]}"; do
+    if [[ -f "/etc/pam.d/$f" ]] && grep -Eq '^[^#]*pam_krb5\.so' "/etc/pam.d/$f"; then
+        log_error "pam_krb5.so is STILL active in /etc/pam.d/$f"
+        log_warn  "Was libpam-krb5 re-installed after 12_lib_kerberos_setup.sh?"
+        exit 1
+    fi
+done
+log_ok "pam_krb5.so is absent from all common-* files (incl. common-account)."
 
 log_ok "PAM password stack hardened successfully."
 log_info "Backup of previous stack: $BACKUP_DIR"

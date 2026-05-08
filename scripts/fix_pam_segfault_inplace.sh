@@ -61,7 +61,12 @@ readonly PAM_CONFIG_DST="/usr/share/pam-configs/biome-localguard"
 readonly KRB5_PAM_CONFIG="/usr/share/pam-configs/krb5"
 readonly BACKUP_ROOT="/root"
 readonly LAST_BACKUP_LINK="${BACKUP_ROOT}/pam-backup-latest"
-readonly PAM_FILES=(common-auth common-password common-session common-session-noninteractive)
+# NOTE: common-account is CRITICAL — it is included by /etc/pam.d/sudo, login,
+# su, sshd, etc. If a dangling pam_krb5.so reference survives there after we
+# purge libpam-krb5, every sudo call fails with:
+#   "sudo: PAM account management error: Module is unknown"
+# So we must back it up, scan it, and regenerate it like any other common-*.
+readonly PAM_FILES=(common-account common-auth common-password common-session common-session-noninteractive)
 
 MODE="apply"     # apply | check | rollback
 
@@ -138,6 +143,7 @@ has_localguard="no"
 log_info "biome-localguard profile present: $has_localguard"
 
 pam_krb5_hits=0
+dangling_pam_krb5="no"
 for f in "${PAM_FILES[@]}"; do
     if [[ -f "/etc/pam.d/$f" ]] && grep -Eq '^[^#]*pam_krb5\.so' "/etc/pam.d/$f"; then
         pam_krb5_hits=$((pam_krb5_hits + 1))
@@ -145,6 +151,18 @@ for f in "${PAM_FILES[@]}"; do
     fi
 done
 log_info "Active pam_krb5.so lines: $pam_krb5_hits"
+
+# Detect CRITICAL dangling reference: pam_krb5.so cited but the .so is gone.
+# This breaks sudo/login/su instantly.
+if [[ $pam_krb5_hits -gt 0 ]] && \
+   ! [[ -f /lib/x86_64-linux-gnu/security/pam_krb5.so || \
+        -f /usr/lib/x86_64-linux-gnu/security/pam_krb5.so || \
+        -f /lib/security/pam_krb5.so ]]; then
+    dangling_pam_krb5="yes"
+    log_warn "CRITICAL: pam_krb5.so is REFERENCED but the .so file is MISSING."
+    log_warn "sudo/login/su will fail with 'Module is unknown' until fixed."
+fi
+log_info "Dangling pam_krb5.so references: $dangling_pam_krb5"
 
 ad_provider="none"
 if dpkg -s libpam-winbind &>/dev/null; then
@@ -182,6 +200,10 @@ log_head "Diagnosis"
 needs_fix="no"
 if [[ "$has_libpam_krb5" == "yes" || "$has_krb5_profile" == "yes" || "$pam_krb5_hits" -gt 0 ]]; then
     log_warn "Node IS affected by the pam_krb5 segfault risk."
+    needs_fix="yes"
+fi
+if [[ "$dangling_pam_krb5" == "yes" ]]; then
+    log_warn "Node has DANGLING pam_krb5.so references — sudo is broken RIGHT NOW."
     needs_fix="yes"
 fi
 if [[ "$guard_present" == "no" ]]; then
@@ -243,6 +265,22 @@ if [[ -f "$KRB5_PAM_CONFIG" ]]; then
     log_ok "Removed leftover $KRB5_PAM_CONFIG"
 fi
 
+# (c.2) Surgically strip any DANGLING pam_krb5.so lines from common-*.
+# This is pre-emptive: if libpam-krb5 was purged earlier but the hand-edited
+# common-* still reference pam_krb5.so, sudo/login/su break immediately with
+# "Module is unknown". We fix that before calling pam-auth-update (which might
+# refuse due to local modifications anyway).
+stripped_any="no"
+for f in "${PAM_FILES[@]}"; do
+    fp="/etc/pam.d/$f"
+    if [[ -f "$fp" ]] && grep -Eq '^[^#]*pam_krb5\.so' "$fp"; then
+        sed -i -E '/^[^#]*pam_krb5\.so/d' "$fp"
+        log_ok "Stripped pam_krb5.so line(s) from $fp"
+        stripped_any="yes"
+    fi
+done
+[[ "$stripped_any" == "yes" ]] && log_warn "Dangling pam_krb5.so references removed."
+
 # (d) Install biome-localguard profile
 install -m 0644 -o root -g root "$TEMPLATE_SRC" "$PAM_CONFIG_DST"
 log_ok "Installed $PAM_CONFIG_DST"
@@ -287,14 +325,29 @@ else
     fail=1
 fi
 
-# pam_krb5 absent everywhere
+# pam_krb5 absent everywhere (including common-account — sudo depends on it)
 for f in "${PAM_FILES[@]}"; do
     if [[ -f "/etc/pam.d/$f" ]] && grep -Eq '^[^#]*pam_krb5\.so' "/etc/pam.d/$f"; then
         log_error "pam_krb5.so still active in /etc/pam.d/$f"
         fail=1
     fi
 done
-[[ $fail -eq 0 ]] && log_ok "pam_krb5.so absent from all common-* files."
+[[ $fail -eq 0 ]] && log_ok "pam_krb5.so absent from all common-* files (incl. common-account)."
+
+# Sanity: sudo must still work (it loads common-account).
+if command -v sudo &>/dev/null; then
+    if sudo -n true 2>/dev/null || [[ $EUID -eq 0 ]]; then
+        log_ok "sudo/common-account loads cleanly."
+    else
+        # Non-root: only check whether the PAM stack parses. A password prompt
+        # is fine; a 'Module is unknown' error is not.
+        sudo_err="$(sudo -n true 2>&1 || true)"
+        if grep -q 'Module is unknown\|PAM.*error' <<<"$sudo_err"; then
+            log_error "sudo PAM broken: $sudo_err"
+            fail=1
+        fi
+    fi
+fi
 
 # AD provider still present in auth stack
 case "$ad_provider" in
