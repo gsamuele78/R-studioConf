@@ -423,7 +423,9 @@ _fix_ipv6_and_finish_install() {
 setup_auth_backend_sssd() {
   log INFO "Setting up SSSD + Kerberos authentication backend..."
   
-  local packages_sssd="sssd-ad sssd-tools krb5-user libpam-sss libpam-krb5 libnss-sss"
+  # libpam-krb5 intentionally REMOVED — see scripts/12_lib_kerberos_setup.sh
+  # (segfault risk in common-password with multi-realm krb5.conf).
+  local packages_sssd="sssd-ad sssd-tools krb5-user libpam-sss libnss-sss"
   log INFO "Installing SSSD packages: $packages_sssd"
   run_command "Install SSSD packages" "apt-get -y install $packages_sssd"
   

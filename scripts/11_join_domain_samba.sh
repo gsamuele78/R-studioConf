@@ -739,19 +739,35 @@ IDMAPD
 configure_pam() {
     log "Checking and configuring PAM for Samba/Winbind..."
     
-    # Configure PAM using pam-auth-update if available
+    # Configure PAM using pam-auth-update if available.
+    # NOTE: --disable krb5 is defensive. libpam-krb5 is intentionally not installed
+    # (see scripts/12_lib_kerberos_setup.sh): pam_krb5.so in common-password causes
+    # SIGSEGV on `passwd` with our multi-realm krb5.conf. pam_winbind already
+    # provides Kerberos SSO via 'krb5_auth' + 'krb5_ccache_type=FILE'.
     if command -v pam-auth-update &>/dev/null; then
         log "Running pam-auth-update to ensure winbind and mkhomedir modules are enabled..."
         # We need both winbind (for auth) and mkhomedir (for home dir creation)
-        if ! run_command "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable winbind --enable mkhomedir"; then
+        if ! run_command "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable winbind --enable mkhomedir --disable krb5"; then
             log "Warning: pam-auth-update failed. Manual PAM configuration might be required."
         else
-            log "PAM modules 'winbind' and 'mkhomedir' enabled."
+            log "PAM modules 'winbind' and 'mkhomedir' enabled; 'krb5' disabled."
         fi
     else
         log "Warning: pam-auth-update not found. Manual PAM configuration required for auto-homedir creation."
     fi
-    
+
+    # Harden common-password: install biome-localguard (uid<10000 -> pam_unix only)
+    # to prevent any residual SIGSEGV / EPERM on passwd for local users.
+    local harden_script="${SCRIPT_DIR}/13_harden_pam_password.sh"
+    if [[ -x "$harden_script" ]]; then
+        log "Hardening PAM password stack via $harden_script ..."
+        if ! run_command "$harden_script"; then
+            log "Warning: 13_harden_pam_password.sh failed; inspect /etc/pam.d/common-password manually."
+        fi
+    else
+        log "Warning: $harden_script not found or not executable; skipping password-stack hardening."
+    fi
+
     return 0
 }
 

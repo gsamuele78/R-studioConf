@@ -1,0 +1,119 @@
+#!/bin/bash
+# scripts/13_harden_pam_password.sh
+#
+# Hardens /etc/pam.d/common-password to prevent SIGSEGV on `passwd` for
+# local users and removes pam_krb5 from the PAM stack.
+#
+# Actions (all idempotent):
+#   1. Install biome-localguard pam-config (guards AD password stack for uid<10000)
+#   2. Disable the 'krb5' pam-config profile if present (shipped by libpam-krb5)
+#   3. Disable the 'ccreds' profile (optional; keeps libpam-ccreds installed for
+#      'action=store' use via other profiles if any). Kept ENABLED by default
+#      since ccreds non-primary modules do not crash.
+#   4. Re-run `pam-auth-update --package` to regenerate common-auth/password/session
+#
+# This script is safe to re-run and is invoked automatically after
+# 10_join_domain_sssd.sh or 11_join_domain_samba.sh. It must run AFTER the
+# realm join so that libpam-sss / libpam-winbind are already installed.
+
+set -euo pipefail
+
+# --- Colors (project standard) ------------------------------------------------
+readonly C_RED='\033[0;31m'
+readonly C_GREEN='\033[0;32m'
+readonly C_YELLOW='\033[0;33m'
+readonly C_BLUE='\033[0;34m'
+readonly C_RESET='\033[0m'
+
+log_info()  { printf "${C_BLUE}[INFO]${C_RESET} %s\n" "$*"; }
+log_ok()    { printf "${C_GREEN}[ OK ]${C_RESET} %s\n" "$*"; }
+log_warn()  { printf "${C_YELLOW}[WARN]${C_RESET} %s\n" "$*" >&2; }
+log_error() { printf "${C_RED}[FAIL]${C_RESET} %s\n" "$*" >&2; }
+
+# --- Paths --------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+readonly SCRIPT_DIR
+readonly TEMPLATE_SRC="${SCRIPT_DIR}/../templates/pam-configs/biome-localguard.template"
+readonly PAM_CONFIG_DST="/usr/share/pam-configs/biome-localguard"
+readonly KRB5_PAM_CONFIG="/usr/share/pam-configs/krb5"
+
+# --- Preflight ----------------------------------------------------------------
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    log_error "This script must be run as root."
+    exit 1
+fi
+
+if ! command -v pam-auth-update &>/dev/null; then
+    log_error "pam-auth-update not found (package libpam-runtime missing?)."
+    exit 1
+fi
+
+if [[ ! -f "$TEMPLATE_SRC" ]]; then
+    log_error "Template not found: $TEMPLATE_SRC"
+    exit 1
+fi
+
+# --- 1. Backup current PAM files ---------------------------------------------
+BACKUP_DIR="/root/pam-backup-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+for f in common-auth common-password common-session common-session-noninteractive; do
+    if [[ -f "/etc/pam.d/$f" ]]; then
+        cp -a "/etc/pam.d/$f" "$BACKUP_DIR/"
+    fi
+done
+log_info "Backed up /etc/pam.d/common-* to $BACKUP_DIR"
+
+# --- 2. Install biome-localguard profile --------------------------------------
+log_info "Installing biome-localguard pam-config profile..."
+install -m 0644 -o root -g root "$TEMPLATE_SRC" "$PAM_CONFIG_DST" || {
+    log_error "Failed to install $PAM_CONFIG_DST"
+    exit 1
+}
+log_ok "Installed $PAM_CONFIG_DST"
+
+# --- 3. Remove pam_krb5 profile if present (segfault risk) --------------------
+# libpam-krb5 should already be uninstalled by 12_lib_kerberos_setup.sh, but
+# the /usr/share/pam-configs/krb5 file can linger. Remove it defensively.
+if [[ -f "$KRB5_PAM_CONFIG" ]]; then
+    log_warn "Found leftover $KRB5_PAM_CONFIG (libpam-krb5 pam-config)."
+    log_info "Removing to prevent re-enable on pam-auth-update runs."
+    rm -f "$KRB5_PAM_CONFIG"
+    log_ok  "Removed $KRB5_PAM_CONFIG"
+fi
+
+# --- 4. Regenerate the PAM stack ---------------------------------------------
+# --package: non-interactive default-profile refresh
+# The ordering in the Primary block will become:
+#   Priority 900: biome-localguard (uid>=10000 guard)
+#   Priority 704: winbind  (if installed)
+#   Priority 252: sss      (if installed)
+#   Priority 256: unix     (always)
+log_info "Regenerating PAM stack via pam-auth-update --package ..."
+if ! DEBIAN_FRONTEND=noninteractive pam-auth-update --package; then
+    log_error "pam-auth-update --package failed."
+    log_warn  "Restore from $BACKUP_DIR if /etc/pam.d/common-* is broken."
+    exit 1
+fi
+log_ok "PAM stack regenerated."
+
+# --- 5. Sanity check ----------------------------------------------------------
+# Verify the guard line was injected into common-password
+if grep -Eq 'pam_succeed_if\.so.*uid[[:space:]]*>=[[:space:]]*10000' /etc/pam.d/common-password; then
+    log_ok "common-password contains 'pam_succeed_if uid >= 10000' guard."
+else
+    log_error "Guard NOT present in /etc/pam.d/common-password after pam-auth-update."
+    log_warn  "Check /usr/share/pam-configs/ for conflicting profiles."
+    exit 1
+fi
+
+# Verify pam_krb5 is NOT in common-password (the crash site)
+if grep -Eq '^[^#]*pam_krb5\.so' /etc/pam.d/common-password; then
+    log_error "pam_krb5.so is STILL active in common-password — segfault risk remains."
+    log_warn  "Was libpam-krb5 re-installed after 12_lib_kerberos_setup.sh?"
+    exit 1
+fi
+log_ok "pam_krb5.so is absent from common-password."
+
+log_ok "PAM password stack hardened successfully."
+log_info "Backup of previous stack: $BACKUP_DIR"
+exit 0

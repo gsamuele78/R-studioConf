@@ -308,14 +308,31 @@ configure_nsswitch() {
 configure_pam() {
     log "Checking and configuring PAM for SSSD..."
     
-    # Configure PAM using pam-auth-update if available
+    # Configure PAM using pam-auth-update if available.
+    # NOTE: --disable krb5 is defensive; libpam-krb5 should not be installed
+    # (removed from 12_lib_kerberos_setup.sh and 30_install_nginx.sh) because
+    # pam_krb5.so in common-password SIGSEGVs on `passwd` with multi-realm
+    # krb5.conf. pam_sss already provides full Kerberos SSO.
     if command -v pam-auth-update &>/dev/null; then
         log "Running pam-auth-update to ensure SSS and mkhomedir modules are enabled..."
-        if ! run_command "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable sss --enable mkhomedir"; then
+        if ! run_command "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable sss --enable mkhomedir --disable krb5"; then
             log "Warning: pam-auth-update failed."
         fi
     else
         log "Warning: pam-auth-update not found. Manual PAM configuration required."
+    fi
+
+    # Harden common-password: install biome-localguard (uid<10000 -> local-only)
+    # and regenerate the stack so local users cannot hit pam_sss/pam_winbind
+    # in the password phase.
+    local harden_script="${SCRIPT_DIR}/13_harden_pam_password.sh"
+    if [[ -x "$harden_script" ]]; then
+        log "Hardening PAM password stack via $harden_script ..."
+        if ! run_command "$harden_script"; then
+            log "Warning: 13_harden_pam_password.sh failed; review /etc/pam.d/common-password manually."
+        fi
+    else
+        log "Warning: $harden_script not found or not executable; skipping password-stack hardening."
     fi
     
     # Check RStudio PAM configuration

@@ -33,7 +33,15 @@ install_kerberos_packages() {
     log "Installing Kerberos client packages..."
     # 'auth-client-config' is obsolete/missing on newer Ubuntu releases (noble+).
     # Exclude it to avoid apt errors; keep essential Kerberos client packages.
-    local -a pkgs=(krb5-user libpam-krb5 libpam-ccreds)
+    #
+    # NOTE (pessimistic): libpam-krb5 REMOVED from the install list.
+    # libpam-krb5's pam-config profile enables pam_krb5.so in common-password
+    # which SIGSEGVs on `passwd` against our multi-realm krb5.conf
+    # (DIR/PERSONALE/STUDENTI.DIR.UNIBO.IT) when the principal doesn't exist.
+    # Kerberos SSO is already provided by libpam-winbind (krb5_auth) or
+    # libpam-sss (krb5_auth_provider), so pam_krb5 is redundant.
+    # kinit/klist/kdestroy remain available via krb5-user.
+    local -a pkgs=(krb5-user libpam-ccreds)
     
     # Check if packages are already installed to avoid unnecessary apt calls
     local missing_pkgs=()

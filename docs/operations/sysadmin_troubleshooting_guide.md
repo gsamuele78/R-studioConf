@@ -1027,3 +1027,111 @@ sudo bash scripts/99_troubleshoot_env.sh --all --collect
 | Dynamic threads over static | Hardcode `OMP_NUM_THREADS=8` | Static is unfair: 1 user wastes unused threads; 10 users contend. Dynamic adapts |
 | Function interception (guards) over `ulimit` | System-level `ulimit -v` | `ulimit` kills the process hard; guards warn the user and REDUCE work, keeping the session alive |
 | Orphan cleanup via cron over systemd scope | `systemd-run --scope` per session | RStudio OSS doesn't support custom session wrappers; cron is reliable and auditable |
+
+---
+
+## PAM `passwd` SIGSEGV on AD-joined nodes (local users)
+
+### Symptom
+
+A local system administrator account (e.g. `ladmin`, uid in the 1000–9999 range) runs
+`passwd` on an AD-joined node and the process dies:
+
+```
+$ passwd
+Changing password for ladmin.
+Current password:
+Segmentation fault (core dumped)
+```
+
+`dmesg` / `journalctl -k` shows a segfault in `pam_krb5.so`:
+
+```
+passwd[12345]: segfault at 0 ip 00007f... in pam_krb5.so[...]
+```
+
+### Root cause
+
+Ubuntu's `libpam-krb5` package installs a `pam-auth-update` profile named **krb5**
+that inserts `pam_krb5.so` into `/etc/pam.d/common-password`. With our multi-realm
+`/etc/krb5.conf` (`DIR.UNIBO.IT` default + `PERSONALE.DIR.UNIBO.IT` +
+`STUDENTI.DIR.UNIBO.IT` sub-realms and the capaths matrix), `pam_krb5.so` dereferences
+a NULL realm pointer when the target principal does not exist in the default realm —
+which is **always** the case for local accounts (uid < 10000 per
+`config/join_domain_samba.vars.conf` idmap ranges).
+
+The segfault is triggered by `passwd`, by `su`, and by any PAM consumer that runs
+the `password` stack for a local user.
+
+### Fix (repo-level, permanent)
+
+1. **`libpam-krb5` is no longer installed.** Removed from:
+   - `scripts/12_lib_kerberos_setup.sh`
+   - `scripts/30_install_nginx.sh`
+   - `next_gen/ansible/roles/kerberos/tasks/main.yml`
+
+2. **`scripts/13_harden_pam_password.sh`** installs a `pam-auth-update` profile
+   `/usr/share/pam-configs/biome-localguard` (Priority 900, runs **before**
+   winbind@704 / sss) that short-circuits the AD primary blocks for local users:
+
+   ```
+   Password-Type: Primary
+   Password:
+       [success=ignore default=2] pam_succeed_if.so quiet uid >= 10000
+   ```
+
+   For uid < 10000 this skips both the AD primary module and its follow-up
+   `pam_deny`, dropping control to `pam_unix.so` in the Additional block.
+   For uid ≥ 10000 (all AD users) the guard is a no-op.
+
+3. The script then removes any leftover `/usr/share/pam-configs/krb5` and runs
+   `pam-auth-update --package` to regenerate `/etc/pam.d/common-*`.
+
+4. `scripts/10_join_domain_sssd.sh` and `scripts/11_join_domain_samba.sh` now call
+   `pam-auth-update` with `--disable krb5` and invoke
+   `scripts/13_harden_pam_password.sh` at the end of `configure_pam()`.
+
+### What is lost (and why it's acceptable)
+
+Only one feature is sacrificed: **`pam_ccreds action=validate` offline Kerberos
+TGT validation** during login. This is compensated by `pam_winbind`'s
+`cached_login = yes` / `pam_sss`'s `cache_credentials = True`, which already
+provide offline auth for AD users via the SSSD/winbind cache. Local users
+(uid < 10000) never used Kerberos in the first place.
+
+Nothing else changes: AD login, kinit-on-login (via `pam_sss`/`pam_winbind`
+internals), NSS resolution, Samba home shares, GSSAPI to NFS — all unaffected.
+
+### Verification
+
+On any AD-joined node, after running `scripts/10_join_domain_sssd.sh` or
+`scripts/11_join_domain_samba.sh`:
+
+```bash
+# 1. pam_krb5.so must be absent from common-password
+sudo grep -n pam_krb5 /etc/pam.d/common-*          # must print nothing
+
+# 2. biome-localguard must be active
+sudo grep -n 'uid >= 10000' /etc/pam.d/common-password
+# → pam_succeed_if.so quiet uid >= 10000
+
+# 3. krb5 pam-config must be gone
+ls /usr/share/pam-configs/krb5 2>/dev/null          # must be missing
+ls /usr/share/pam-configs/biome-localguard          # must exist
+
+# 4. Functional test — local user
+sudo -u ladmin passwd                              # must NOT segfault
+# 5. Functional test — AD user (uid ≥ 10000)
+su - some.ad.user -c id                            # must resolve via winbind/sss
+```
+
+### Rollback
+
+```bash
+sudo rm /usr/share/pam-configs/biome-localguard
+sudo pam-auth-update --package
+# restore backups from /etc/pam.d/common-*.bak.<timestamp>
+```
+
+**Do NOT reinstall `libpam-krb5` without also removing
+`/usr/share/pam-configs/krb5`** — the segfault will return immediately.

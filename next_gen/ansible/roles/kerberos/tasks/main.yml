@@ -2,8 +2,12 @@
 - name: Install Kerberos Client Packages
   apt:
     name:
+      # NOTE: libpam-krb5 intentionally omitted. Its pam_krb5.so module
+      # SIGSEGVs in common-password against our multi-realm krb5.conf
+      # (DIR / PERSONALE / STUDENTI.DIR.UNIBO.IT). Password auth is handled
+      # by pam_winbind (cached_login) or pam_sss. See scripts/13_harden_pam_password.sh
+      # and docs/operations/sysadmin_troubleshooting_guide.md (PAM segfault section).
       - krb5-user
-      - libpam-krb5
       - libpam-ccreds
     state: present
 
@@ -13,4 +17,4 @@
     dest: /etc/krb5.conf
     owner: root
     group: root
-    mode: '0644'
+    mode: "0644"
