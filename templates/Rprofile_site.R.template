@@ -7,8 +7,8 @@
 # OpenMP:  libgomp, capped by OMP_NUM_THREADS (cgroup-aware)
 # Contact: %%BIOME_CONTACT%%
 #
-# ARCHITECTURE (v12.2 — Hybrid-C thin dispatcher + fragments):
-#   This file is now a THIN DISPATCHER. It owns ONLY the critical bootstrap:
+# ARCHITECTURE (v12.3 — Hybrid-C thin dispatcher + byte-compiled fragment bundle):
+#   This file is a THIN DISPATCHER. It owns ONLY the critical bootstrap:
 #   integrity self-check, .biome_early_err, OpenBLAS coretype detection,
 #   user-tmp-root setup, BLAS serial/pthread safety, PSOCK worker fast-path,
 #   bspm pre-load, .biome_skip_main idempotency guard, main local({...})
@@ -24,6 +24,16 @@
 #   are isolated — error logged to /tmp/biome_frag_errors_<pid>.log,
 #   next fragment still runs, session NEVER aborts (PSE fail-safe).
 #
+#   v12.3 Fragment BUNDLE fast-path:
+#     Deploy (scripts/50_setup_nodes.sh) builds a single byte-compiled
+#     /etc/R/Rprofile_site.d/.compiled/bundle.Rc plus an md5 manifest.txt
+#     covering all N fragments. At boot the dispatcher validates manifest
+#     md5s against on-disk fragments via tools::md5sum() and, on match,
+#     loads the entire bundle with ONE compiler::loadcmp() call, skipping
+#     N individual parse passes. Any mismatch / missing file / load error
+#     silently falls back to the legacy per-fragment sys.source() loop —
+#     which remains the ground-truth code path (PSE fail-safe invariant).
+#
 #   Fragment inventory (see ../templates/Rprofile_site.d/*.R.template):
 #     20_cgroup_reader / 30_psock_factory / 35_compile_routing /
 #     40_wrapper_installer / 45_memory_guards / 50_pkg_hooks /
@@ -31,6 +41,55 @@
 #
 #   /Rtmp = dedicated 400GB local ext4 disk per VM (NOT tmpfs, NOT NFS).
 #   NFS   = user homes (final results, RData, R libraries).
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# PSE FLAG DISCIPLINE (v12.3):
+#   Every runtime knob belongs in exactly ONE of four categories — mixing
+#   them is a maintainability bug. When adding a new knob, pick a column.
+#
+#   1. CONFIG VALUES (paths, sizes, counts, hostnames):
+#      → defined in config/setup_nodes.vars.conf
+#      → substituted at deploy via %%PLACEHOLDER%%
+#      → examples: %%MAX_BLAS_THREADS%%, %%VM_RAM_GB%%, %%RSESSION_CONF_PATH%%,
+#        %%RPROFILE_VERSION%%, %%BIOME_HOST%%, %%BIOME_CONTACT%%, %%LOG_FILE%%
+#      → NEVER a boolean ENABLE_ flag.
+#
+#   2. COMPILE-TIME FEATURE FLAGS (boolean behavior toggles, baked at deploy):
+#      → declared in the ENABLE_* block of this file
+#      → PSE default is always the safe production value
+#      → examples: ENABLE_SMART_IO, ENABLE_CGROUP_AWARE, ENABLE_FRAG_BUNDLE,
+#        ENABLE_DEBUG_MODE, ENABLE_WORKER_DEBUG
+#      → never read from env var directly — see category 3.
+#
+#   3. RUNTIME ENV-VAR OVERRIDES (operator emergency override of cat.2 flag):
+#      → declared alongside the ENABLE_* flag it overrides, same block
+#      → pattern: `flag_effective <- isTRUE(ENABLE_X) && !nzchar(Sys.getenv("BIOME_DISABLE_X",""))`
+#        or      `flag_effective <- isTRUE(ENABLE_X) || nzchar(Sys.getenv("BIOME_FORCE_X",""))`
+#      → operator sets the env var in the shell BEFORE starting R; no rebuild
+#      → declared env vars for v12.3:
+#          BIOME_DISABLE_BUNDLE=1    → force OFF ENABLE_FRAG_BUNDLE (use legacy per-fragment loop)
+#          BIOME_DEBUG=1             → force ON  ENABLE_DEBUG_MODE  (verbose sys_log)
+#          BIOME_WORKER_DEBUG=1      → force ON  ENABLE_WORKER_DEBUG (per-PSOCK-worker /tmp log)
+#          BIOME_DISABLE_FRAGMENTS   → comma/space list of prefixes or basename substrings to
+#                                      skip, e.g. "20,45_memory_guards" (operator debug, no
+#                                      corresponding ENABLE_ flag — per-fragment skip is a
+#                                      diagnostic operation, not a feature)
+#
+#   4. RUNTIME IPC / PATH EXPORTS (inter-process communication, NOT toggles):
+#      → plain Sys.setenv()/Sys.getenv() — these are process-to-process channels,
+#        must NEVER become ENABLE_ flags (would break PSOCK worker coordination)
+#      → declared env vars:
+#          BIOME_USER_TMP            → parent→worker: /Rtmp/biome_<user>
+#          BIOME_STAN_DIR            → parent→worker: cmdstanr scratch root
+#          BIOME_RCPP_CACHE          → parent→worker: Rcpp cache root
+#          BIOME_WORKER_MODE=1       → parent→worker: "take the fast path"
+#          BIOME_WORKER_THREADS      → parent→worker: per-worker BLAS/OMP cap
+#          BIOME_RUN_ID              → per-session id (set by 35_compile_routing)
+#          BIOME_RUN_TIMESTAMP       → per-session start time
+#          BIOME_TMP_DISK_GB         → operator override of /Rtmp size hint (int)
+#          OPENBLAS_CORETYPE         → OpenBLAS instruction-set pin (set by systemd
+#                                      wrapper, Section -2, or inherited)
+# ──────────────────────────────────────────────────────────────────────────────
 #
 # FULL CHANGELOG: docs/reference/Rprofile_site.CHANGELOG.md
 # HARD RULES:    .clinerules (12 PSE invariants)
@@ -212,6 +271,15 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", "")) || .biome_is_psock_worker) {
   # and exit BEFORE running the -e body, killing the worker at handshake.
   # ════════════════════════════════════════════════════════════════════════════
   local({
+    # ── Compile-time feature flag (PSE cat. 2) + runtime override (cat. 3) ──
+    # ENABLE_WORKER_DEBUG: write per-PSOCK-worker handshake log to
+    #   /tmp/biome_worker_<pid>.log. Off in production; operators can force
+    #   ON for a single session with `BIOME_WORKER_DEBUG=1` in the shell
+    #   before launching the parent R process (inherited by workers).
+    ENABLE_WORKER_DEBUG <- FALSE
+    .worker_debug_on    <- isTRUE(ENABLE_WORKER_DEBUG) ||
+                           nzchar(Sys.getenv("BIOME_WORKER_DEBUG", ""))
+
     wt <- Sys.getenv("BIOME_WORKER_THREADS", "1")
     Sys.setenv(
       OMP_NUM_THREADS        = wt,
@@ -267,11 +335,12 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", "")) || .biome_is_psock_worker) {
       }
     }
 
-    # ── v11.2 [H14]: optional diagnostic log for troubleshooting ────────────
-    # Enable by setting BIOME_WORKER_DEBUG=1 in the parent session before
-    # biome_make_cluster(). Writes one log line per worker to
-    # /tmp/biome_worker_<pid>.log so we can confirm the fast-path ran.
-    if (nzchar(Sys.getenv("BIOME_WORKER_DEBUG", ""))) {
+    # ── v11.2 [H14] / v12.3: optional diagnostic log for troubleshooting ────
+    # Controlled by the ENABLE_WORKER_DEBUG feature flag (PSE cat. 2) with
+    # BIOME_WORKER_DEBUG=1 runtime override (PSE cat. 3). See top of this
+    # local({}) block for .worker_debug_on definition. Writes one log line
+    # per worker to /tmp/biome_worker_<pid>.log to confirm fast-path ran.
+    if (.worker_debug_on) {
       tryCatch({
         log_path <- file.path("/tmp", paste0("biome_worker_", Sys.getpid(), ".log"))
         detected_by <- if (nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) "BIOME_WORKER_MODE" else "commandArgs(MASTER=)"
@@ -365,6 +434,11 @@ local({
   ENABLE_GGPLOT_OPT    <- TRUE
   ENABLE_STAN_OPT      <- TRUE   # v11.0 [N7]
   ENABLE_PARALLEL_GUARD <- TRUE  # v11.0 [N4] safeguard makeCluster/doSNOW
+  # v12.3 feature flags (PSE cat. 2 — compile-time toggles, see header flag discipline)
+  ENABLE_FRAG_BUNDLE   <- TRUE   # v12.3: use byte-compiled fragment bundle fast-path
+                                 #        runtime override: BIOME_DISABLE_BUNDLE=1 forces legacy per-fragment loop
+  ENABLE_DEBUG_MODE    <- FALSE  # v12.3: verbose sys_log mirroring (stderr + /tmp/biome_debug_*.log)
+                                 #        runtime override: BIOME_DEBUG=1 forces ON
 
   # /Rtmp usage advisory threshold
   TMP_WARN_PCT     <- %%TMP_WARN_THRESHOLD_PCT%%L
@@ -391,12 +465,14 @@ local({
   r_ver_short  <- paste0(R.version$major, ".", substr(R.version$minor, 1, 1))
   personal_lib <- file.path(Sys.getenv("HOME"), "R", "x86_64-pc-linux-gnu-library", r_ver_short)
 
-  # ── Global Debug Mode ──
-  # Set BIOME_DEBUG=1 in the shell BEFORE starting R to enable verbose logging.
-  # All sys_log() calls will also print to stderr (visible in terminal/console)
-  # and to /tmp/biome_debug_<user>_<pid>.log for post-mortem inspection.
+  # ── Global Debug Mode (v12.3: ENABLE_DEBUG_MODE flag + BIOME_DEBUG override) ──
+  # Compile-time default is FALSE (production). Operators can force ON for a
+  # single session by setting BIOME_DEBUG=1 in the shell BEFORE starting R.
+  # When active, every sys_log() call mirrors to stderr and to
+  # /tmp/biome_debug_<user>_<pid>.log for post-mortem inspection.
   # Use biome_debug_dump() inside R to tail/inspect the log at any time.
-  BIOME_GLOBAL_DEBUG <- nzchar(Sys.getenv("BIOME_DEBUG", ""))
+  BIOME_GLOBAL_DEBUG <- isTRUE(ENABLE_DEBUG_MODE) ||
+                        nzchar(Sys.getenv("BIOME_DEBUG", ""))
   BIOME_DEBUG_LOG    <- if (BIOME_GLOBAL_DEBUG)
     file.path("/tmp", sprintf("biome_debug_%s_%d.log", curr_user, Sys.getpid()))
   else ""
@@ -604,7 +680,7 @@ local({
   .biome_mark_time("cgroups_init")
 
   # ══════════════════════════════════════════════════════════════════════════
-  # FRAGMENT LOADER (v12.2 — Hybrid-C, late-pass, inside main local)
+  # FRAGMENT LOADER (v12.3 — Hybrid-C + byte-compiled bundle fast-path)
   # ══════════════════════════════════════════════════════════════════════════
   # Sources /etc/R/Rprofile_site.d/[0-9]{2}_*.R in lexical order.
   # Each fragment is eval'd with source(..., local=TRUE) so it INHERITS the
@@ -695,15 +771,18 @@ local({
       # silently falls through to the legacy per-fragment sys.source() loop.
       # PSE invariant: fast-path is an OPTIONAL optimization; the legacy
       # loop remains the ground-truth code path and is always safe.
-      # Emergency opt-out: set BIOME_DISABLE_BUNDLE=1 to force legacy loop.
+      # Gated by ENABLE_FRAG_BUNDLE (PSE cat. 2 compile-time flag) with
+      # BIOME_DISABLE_BUNDLE=1 as operator runtime override (PSE cat. 3).
       # ────────────────────────────────────────────────────────────────────
       .biome_bundle_dir  <- file.path(.biome_frag_dir, ".compiled")
       .biome_bundle_rc   <- file.path(.biome_bundle_dir, "bundle.Rc")
       .biome_bundle_mfs  <- file.path(.biome_bundle_dir, "manifest.txt")
       .biome_bundle_ok   <- FALSE
       .biome_bundle_done <- FALSE
+      .biome_bundle_on   <- isTRUE(ENABLE_FRAG_BUNDLE) &&
+                            !nzchar(Sys.getenv("BIOME_DISABLE_BUNDLE", ""))
 
-      if (!nzchar(Sys.getenv("BIOME_DISABLE_BUNDLE", "")) &&
+      if (.biome_bundle_on &&
           file.exists(.biome_bundle_rc) &&
           file.exists(.biome_bundle_mfs)) {
         .biome_bundle_ok <- tryCatch({
@@ -782,7 +861,7 @@ local({
       }
       rm(.biome_frag_err_log, .biome_frags,
          .biome_bundle_dir, .biome_bundle_rc, .biome_bundle_mfs,
-         .biome_bundle_ok, .biome_bundle_done)
+         .biome_bundle_ok, .biome_bundle_done, .biome_bundle_on)
     }
   }
   rm(.biome_frag_dir, .biome_frag_env)
