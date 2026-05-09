@@ -14,7 +14,7 @@ Persistenza per 48 ore: Se chiudete il browser, la vostra sessione rimarrà atti
 
 La Best Practice: Usate SEMPRE il comando saveRDS(miei_risultati, "file.rds") alla fine dei vostri script per salvare solo ciò che vi serve realmente.
 
-2. La Regola d'Oro del Calcolo Parallelo ("Il Cuoco e il Forno")
+1. La Regola d'Oro del Calcolo Parallelo ("Il Cuoco e il Forno")
 Molti di voi usano funzioni come parLapply o foreach per parallelizzare i calcoli. A volte questo causa un crash immediato del processo (es. l'errore unserialize(node$con) o Segmentation Fault).
 
 Questo accade con pacchetti come nimble, terra, rstan, TMB, o keras, perché sotto il cofano creano oggetti in linguaggio C++ (che sono puntatori alla memoria fisica, non semplici dati).
@@ -35,7 +35,7 @@ Una rete parallela non può trasportare "torte già cotte" (puntatori C++ attivi
 
 Per aiutarvi, il server ha una funzione speciale pre-caricata chiamata biome_make_cluster(). Sostituisce la classica makeCluster() e ottimizza in automatico l'uso del disco ultra-veloce (NVMe) e della CPU, prevenendo blocchi di sistema.
 
-3. Template Pratici per Pacchetto
+1. Template Pratici per Pacchetto
 Ecco come applicare la "Regola d'Oro" ai pacchetti più usati nel nostro dipartimento. Copiate questi template!
 
 A. Modelli MCMC (pacchetto nimble)
@@ -66,6 +66,7 @@ risultati <- parLapply(cl = N_cluster, X = 1:4, fun = run_mcmc_worker,
                        dati_grezzi = miei_dati, codice_testo = mio_codice, inits = lista_inits)
 stopCluster(N_cluster)
 ```
+
 B. Dati Spaziali (pacchetto terra)
 I raster sono puntatori C++. Non passate l'oggetto SpatRaster via rete!
 
@@ -78,6 +79,7 @@ worker_spaziale <- function(percorso_file) {
   return(global(mio_raster, "mean", na.rm=TRUE))
 }
 ```
+
 Soluzione 2: Usare wrap() se il raster è in RAM.
 
 ```
@@ -139,6 +141,7 @@ train_keras_worker <- function(learning_rate, dati_x, dati_y) {
   return(nome_file)
 }
 ```
+
 4. Grafici in Background (La sindrome del "Pittore Bendato")
 Quando lanciate un calcolo parallelo o un lavoro in background, quei processi non hanno uno schermo (sono "headless"). Se il vostro script finisce con plot(dati) o print(mio_ggplot), il server ignorerà il comando o andrà in errore, e il grafico andrà perduto.
 
@@ -149,14 +152,16 @@ Se usate ggplot2:
 mio_grafico <- ggplot(dati, aes(x, y)) + geom_point()
 ggsave(filename = "risultato.png", plot = mio_grafico, width = 8, height = 6)
 ```
+
 Se usate Base R:
+
 ```
 png("risultato.png", width = 800, height = 600)
 plot(dati)
 dev.off() # IMPORTANTE: chiude e salva il file!
 ```
 
-5. Come lanciare analisi lunghe senza bloccare il PC
+1. Come lanciare analisi lunghe senza bloccare il PC
 Se il vostro script impiega 10 ore a girare, NON eseguitelo premendo "Run" nella console. Se il vostro PC va in standby o scende il Wi-Fi, il processo potrebbe morire.
 
 Metodo A: RStudio Background Jobs (Consigliato per tutti)
@@ -195,14 +200,14 @@ Manuale Ufficiale di terra: La documentazione di terra (il pacchetto spaziale st
 
 Manuale Ufficiale di nimble: Nel capitolo sulla parallelizzazione, il manuale indica che per usare parLapply, la funzione nimbleModel() e compileNimble() devono essere eseguite in ogni singolo nodo del cluster, non nell'ambiente principale.
 
-2. Perché il Server uccide i processi invece di usare lo Swap?
+1. Perché il Server uccide i processi invece di usare lo Swap?
 Sui vecchi sistemi, un calcolo che superava la RAM disponibile causava il congelamento del server per giorni (a causa dello Swap Thrashing). BIOME-CALC utilizza il nuovo standard enterprise per l'High-Performance Computing.
 
 Ubuntu 24.04 LTS e systemd-oomd: A partire dalle recenti versioni LTS, Canonical (l'azienda sviluppatrice di Ubuntu) ha attivato di default il demone systemd-oomd. Questo sistema monitora il PSI (Pressure Stall Information) del Kernel Linux (versione 6+).
 
 La Policy Ufficiale: Se un processo genera una pressione tale da rischiare il congelamento del disco e della CPU (saturando lo Swap), l'OOM-killer interviene e termina il processo prima che il server si blocchi. Questo garantisce che un singolo script errato non distrugga il lavoro di tutti gli altri utenti connessi.
 
-3. Perché l'aggiornamento a Ubuntu 24.04 era obbligatorio?
+1. Perché l'aggiornamento a Ubuntu 24.04 era obbligatorio?
 Il passaggio a un sistema operativo che usa OOM-killer aggressivi era inevitabile per poter utilizzare le ultime tecnologie statistiche.
 
 R 4.4 / 4.5 e C++ Moderno: Le nuove versioni di R e dei pacchetti spaziali/machine learning richiedono compilatori C++17/C++20 e versioni aggiornate della libreria di sistema glibc (versione 2.35+). Queste librerie non sono supportate sui vecchi sistemi (come Ubuntu 18.04 o 20.04).
@@ -219,7 +224,7 @@ Verifica in RStudio: Digitate nella console il comando ?serialize
 
 Cosa dice il manuale: Nella sezione Details, la documentazione ufficiale del motore R specifica che gli oggetti di riferimento non di sistema, tra cui esplicitamente "all external pointers and weak references" (tutti i puntatori esterni e le reference deboli), non vengono preservati durante il trasferimento di memoria. Se provate a spedirli a un cluster, il worker riceverà un puntatore vuoto e andrà in Segmentation Fault.
 
-2. Pacchetto terra (Raster): Regola per il Parallelo (?wrap)
+1. Pacchetto terra (Raster): Regola per il Parallelo (?wrap)
 Il creatore del pacchetto terra ha implementato funzioni specifiche proprio perché i file spaziali soffrono di questo limite.
 
 Verifica in RStudio: Digitate nella console ?wrap
@@ -228,13 +233,111 @@ Citazione Testuale del manuale: "SpatRaster and SpatVector objects are pointers 
 
 Traduzione: Gli oggetti SpatRaster e SpatVector sono puntatori a oggetti C++. Non potete passarli direttamente ai nodi di un cluster... dovete usare la funzione wrap prima di inviarli.
 
-3. Pacchetto nimble: Modelli MCMC in Cluster
+1. Pacchetto nimble: Modelli MCMC in Cluster
 Il team di sviluppo di nimble (UC Berkeley) ha una pagina web ufficiale dedicata esclusivamente agli errori nel calcolo parallelo.
 
 Fonte Web: r-nimble.org/examples/parallelizing_NIMBLE.html
 
 Citazione Testuale: "The key consideration is to ensure that all NIMBLE execution, including model building, is conducted inside the parallelized code." * Traduzione: La considerazione chiave è assicurarsi che tutta l'esecuzione di NIMBLE, inclusa la costruzione del modello, avvenga all'interno del codice parallelizzato (i nostri worker).
 
-4. Il Sistema Operativo e l'OOM-Killer
+1. Il Sistema Operativo e l'OOM-Killer
 Se sul vecchio server i calcoli errati non venivano bloccati istantaneamente, è perché il vecchio sistema operativo andava in Swap Thrashing (congelando le risorse per giorni senza risolvere il calcolo).
 BIOME-CALC usa Ubuntu 24.04 LTS che integra il demone di sicurezza systemd-oomd. Se un processo cerca di leggere RAM non sua (C++ pointer fallito) o satura la memoria rischiando di bloccare il server per gli altri utenti, il Kernel Linux ora applica gli standard di sicurezza cloud e lo termina preventivamente per autodifesa.
+
+---
+
+## 6. Accesso al Server: Portale Web e Single Sign-On (SSO)
+
+Non esiste più il vecchio login `ssh utente@server`. L'accesso passa **interamente da un portale web** protetto da SSO aziendale (OIDC).
+
+### Flusso di login (cosa vedete dal browser)
+
+1. Aprite `https://<host-del-laboratorio>/` — nome esatto fornito dall'admin.
+2. Il portale vi reindirizza all'**Identity Provider** (la stessa pagina che usate per email / Teams). Inserite credenziali aziendali una sola volta.
+3. Tornate al portale e vedete tre tessere:
+   - **RStudio Server** — la vostra IDE R abituale.
+   - **TTYD Terminal** — un terminale Linux nel browser (per `tmux`, `Rscript`, `git`).
+   - **Nextcloud** *(se abilitato)* — sincronizzazione file con il vostro PC.
+4. Cliccate su RStudio. Non vi viene richiesta una seconda password: l'auto-login passa il vostro token SSO al server.
+5. La sessione RStudio rimane viva per 48 h anche se chiudete il browser (vedi § 1).
+
+### Cose che NON dovete più fare
+
+- ❌ Non serve VPN.
+- ❌ Non serve client SSH locale.
+- ❌ Non condividete password con colleghi: ogni utente deve avere il proprio account aziendale.
+- ❌ Non aprite più di una sessione RStudio attiva per utente: viene riusata quella esistente.
+
+### Logout
+
+Logout dal portale → invalida il token. La sessione R sul server **non muore subito**: viene mantenuta per 48 h così che possiate riconnettervi da un altro PC.
+
+---
+
+## 7. Variabili d'ambiente: cosa potete (e cosa NON dovete) impostare
+
+| Variabile                  | Effetto                                          | Quando usarla                                         |
+|----------------------------|--------------------------------------------------|-------------------------------------------------------|
+| `BIOME_DISABLE_USER_LIBS=1`| Ignora `~/R/x86_64-pc-linux-gnu-library/...`     | Test di riproducibilità con sole librerie di sistema  |
+| `BIOME_VERBOSE_BOOT=1`     | Stampa quale modulo `Rprofile_site.d/` carica    | Quando la sessione R parte in modo anomalo            |
+| `OMP_NUM_THREADS=N`        | (sconsigliato) sovrascrive il cap a 1 thread     | **Solo** dopo aver chiesto all'admin                  |
+
+> ⚠️ **Variabili LEGACY da NON usare** (non hanno effetto, le trovate in vecchi script sul wiki):
+> `BIOME_FORCE_NFS_TMP`, `BIOME_FORCE_TMP=/tmp`, `R_DISABLE_QUOTA`. Ignoratele.
+
+Per impostare una variabile **solo per uno script**:
+
+```bash
+# nel terminale TTYD
+BIOME_DISABLE_USER_LIBS=1 Rscript mio_test.R
+```
+
+**NON** scrivetele dentro il vostro `.R` — perdete portabilità verso il vostro laptop.
+
+---
+
+## 8. Galateo del Server (HPC Etiquette)
+
+Siete in 10–30 ricercatori sulla stessa macchina. Poche regole evitano il 99 % dei problemi:
+
+1. **Un job pesante alla volta**, salvo accordo con i colleghi.
+2. **Avvisate il canale lab** prima di lanciare un calcolo > 12 h o > 200 GB RAM.
+3. **Non scrivete in `/tmp`** (vedi § 3 della Cheatsheet) — usate `tempfile()`.
+4. **Non hardcodate `mc.cores = 64`** — usate `parallel::detectCores() - 1` (il sistema ritaglia da solo la fair-share).
+5. **Salvate solo `.rds`** che vi servono davvero. NFS non è infinito.
+6. **Non lasciate sessioni R aperte se andate in vacanza** — chiudetele esplicitamente.
+7. **Mai installare pacchetti come `root`** — non funziona, e se funzionasse rompereste tutti.
+
+---
+
+## 9. Come Segnalare un Bug (cosa raccogliere)
+
+Quando qualcosa non va, **non scrivete "non funziona"**. Allegate sempre:
+
+1. **`sessionInfo()`** dalla console R (riga BLAS inclusa).
+2. **`traceback()`** subito dopo l'errore.
+3. **L'errore esatto** copiato dalla console (testo, non screenshot).
+4. **Il PID** della sessione: `Sys.getpid()`.
+5. **Orario approssimativo** (così l'admin può recuperare i log di sistema).
+6. Eventuale **boot-log di emergenza**: `/tmp/biome_boot_errors_<PID>.log`.
+
+Mandate queste 6 cose a `%%BIOME_CONTACT%%` (oppure aprite ticket al sistema indicato dal vostro responsabile lab). L'admin farà il resto:
+
+- Per crash misteriosi: ladder L0..L5 di `99_diagnose_user_script.sh`.
+- Per blocchi su `mclapply` con `terra`: vedi `docs/operations/LUSSU_HANG_BISECTION.md`.
+
+> 🛡️ **Cosa l'admin NON farà mai:** modificare il vostro script. La filosofia del server è
+> "adatta il sistema, non lo script utente" (HC-13). Se il vostro codice gira sul vostro
+> laptop deve girare anche qui — eventuali patch finiscono in `Rprofile_site.d/`, non nel
+> vostro `.R`.
+
+---
+
+## 10. Cross-Reference (per chi vuole approfondire)
+
+- 🌿 **`BOTANIST_CHEATSHEET.md`** — versione 1-pagina di queste regole.
+- 🧬 **`large_spatial_matrices.md`** — workflow `terra` / `sf` per dataset > 50 GB.
+- 🎯 **`NIMBLE_User_Guide.md`** — MCMC paralleli su BIOME-CALC.
+- 🔧 **`SERVER_NATIVE_API.md`** — helper `biome_*()` (solo power-user / admin).
+- 📜 **`understanding_the_new_server.md`** — perché il server si comporta così.
+- 📐 **`docs/architecture/USER_CONTRACT.md`** — versione formale del contratto utente-sistema.

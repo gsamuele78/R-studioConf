@@ -163,6 +163,61 @@ power users only. A normal research script should never need them.**
 
 ---
 
+## 🆘 Built-in help — try these first, in R
+
+The system profile pre-loads two helpers. They are the **only**
+server-specific commands you should remember:
+
+```r
+biome_help()        # one-screen reminder of the 10 rules above
+biome_tutorial()    # step-by-step interactive walk-through (5 min)
+```
+
+If a command is not recognised, your session loaded a **stale** profile —
+restart RStudio (Session → Restart R) and try again. If it still fails,
+file a bug (next section).
+
+---
+
+## 🐞 Bug-report path — what to attach
+
+Don't write "it crashed". Paste these **six items** into the ticket:
+
+1. `sessionInfo()` — output of the R console line (BLAS row matters).
+2. `traceback()` — run **immediately** after the error.
+3. The exact error text (copy/paste, not a screenshot).
+4. `Sys.getpid()` — the PID of your R session.
+5. Approximate wall-clock time (admin matches against system logs).
+6. Emergency boot log if the session won't even start:
+   `cat /tmp/biome_boot_errors_<PID>.log`.
+
+Send to `%%BIOME_CONTACT%%`. The admin will run the L0–L5 diagnostic
+ladder (`scripts/99_diagnose_user_script.sh`) — **no edits to your code**.
+
+> The server contract (HC-13): the admin adapts the *system* to your
+> portable R, never the other way round. If a fix is needed, it lands
+> in `Rprofile_site.d/`, not in your `.R`.
+
+---
+
+## ⚠️ LEGACY env vars — ignore them
+
+You may find these in old scripts, mailing-list threads, or copy-pasted
+snippets. They are **no-ops** on the current server and should be deleted
+from any script you maintain:
+
+| Variable                | What it used to do        | Status now                           |
+|-------------------------|---------------------------|--------------------------------------|
+| `BIOME_FORCE_NFS_TMP`   | route tempdir to NFS      | **no-op** since v12.0 — uses `/Rtmp` |
+| `BIOME_FORCE_TMP=/tmp`  | force tempdir to tmpfs    | **no-op** — would OOM-kill anyway    |
+| `R_DISABLE_QUOTA`       | bypass `rlimit_as`        | **no-op** — cgroup still applies     |
+| `BIOME_LEGACY_BLAS`     | re-enable pthread BLAS    | **no-op** — pthread BLAS = SIGSEGV   |
+
+If you genuinely need to lift a limit, email the admin (§ above). Do not
+sprinkle environment hacks across your code.
+
+---
+
 ## 📫 Help
 
 - **Contact:** %%BIOME_CONTACT%%
