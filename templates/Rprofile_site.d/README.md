@@ -10,6 +10,22 @@ the dispatcher's `local({...})` closure (`.biome_env`, `sys_log`,
 `.biome_mark_time`, `ENABLE_*`, `.C_*` colors, `VERSION`, `curr_user`,
 `USER_TMP_ROOT`, `MAX_THREADS`, …) without any further wiring.
 
+> **Role under HC-13 (Adapt System, Not User Script).** This directory is
+> the primary place where system-side fixes for user-script incidents
+> land. When the triage harness `scripts/99_diagnose_user_script.sh`
+> reports *"L3 FAILED but L2 (fragments-off) PASSED"*, the offending
+> fragment here is patched and redeployed via `scripts/50_setup_nodes.sh`;
+> the researcher then re-runs their **unchanged** `.R`. User scripts are
+> never modified. See `docs/operations/OPERATOR_QUICKSTART.md`,
+> `docs/operations/USER_SCRIPT_TROUBLESHOOTING.md`, and `.ai/agents.md`
+> §6.6.
+>
+> The parallel **minimal** profile at `templates/Rprofile_site.minimal.R.template`
+> (deployed as `/etc/R/Rprofile_minimal.R`, launched via `r_minimal` /
+> `r_minimal_rscript`) intentionally **does NOT load these fragments** —
+> it is the L0/L1 isolation surface used by the harness to prove whether
+> a failure is in the system, the dispatcher, or this fragment set.
+
 ## RStudio loading behavior
 
 There is **no behavioural difference** vs. the v12.1 monolith from
@@ -59,6 +75,14 @@ new fragments can be inserted between existing ones without renumbering.
 6. **Respect cross-fragment load order** — see inventory table below. If a
    fragment depends on symbols created by a later-numbered fragment, it is a
    design bug; fix the numbering.
+7. **Fragment authors are the front-line of HC-13.** When a user-script
+   incident's verdict points at a specific fragment (`L3 FAILED, L2
+   PASSED`), the fix lands here — never in the user's `.R`. Keep
+   fragments resilient to portable user code (cf. `safe_makeCluster`,
+   `safe_setwd`, memory guards) so the system absorbs the variability.
+   A user-script edit may be proposed only after the HC-13 ordering
+   invariant has been satisfied (system → config → unchecked, in order;
+   see `.ai/agents.md` §6.6).
 
 ## Current fragments (v12.2)
 
@@ -98,6 +122,12 @@ BIOME_DISABLE_FRAGMENTS="memory_guards" R
 
 Skipped fragments are logged as `FragLoader SKIP <file> (BIOME_DISABLE_FRAGMENTS=<token>)`.
 This mechanism never touches the filesystem and is safe for end users.
+
+The HC-13 diagnostic harness `scripts/99_diagnose_user_script.sh` drives
+this variable automatically at **L2** (all fragments off) and emits the
+verdict to `/tmp/user_diag_<ts>/report.md`. When triaging by hand, use
+`BIOME_DISABLE_FRAGMENTS="45,50"` (etc.) to binary-bisect a guilty
+fragment between L2 (all-off, PASS) and L3 (full profile, FAIL).
 
 ### 2. Per-component feature flags
 
@@ -140,3 +170,21 @@ sudo bash scripts/50_setup_nodes.sh
 
 The byte-identical v12.1 monolith is preserved at
 `templates/Rprofile_site.R.template.legacy_v12.1_rollback`.
+
+## See also
+
+* `templates/Rprofile_site.minimal.R.template` — bare-bones HC-13 forensic
+  profile used at L0/L1 (deployed as `/etc/R/Rprofile_minimal.R`,
+  launched via `r_minimal` / `r_minimal_rscript`). Does **not** load
+  these fragments, by design.
+* `scripts/99_diagnose_user_script.sh` — generic L0..L3 triage harness
+  that drives `BIOME_DISABLE_FRAGMENTS` at L2.
+* `scripts/99_diagnose_lussu_hang.sh` — pattern overlay (mclapply +
+  terra + NFS); probe E (PSOCK swap), probe F (terra todisk).
+* `docs/operations/OPERATOR_QUICKSTART.md` — three-mode sysadmin runbook.
+* `docs/operations/USER_SCRIPT_TROUBLESHOOTING.md` — verdict → action
+  mapping; explicit cross-link from "L3 FAILED but L2 PASSED" back to
+  this directory.
+* `docs/operations/LUSSU_HANG_BISECTION.md` — worked example.
+* `docs/operations/CLEAN_VM_BASELINE.md` — L4 reference VM SOP.
+* `.ai/agents.md` §6.6 — HC-13 architectural rule + ordering invariant.
