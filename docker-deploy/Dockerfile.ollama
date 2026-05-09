@@ -1,6 +1,6 @@
 # Dockerfile for BIOME-CALC AI Assist Module
 # Hardened, pre-baked Sysadmin approach for RStudio Coder
-FROM ollama/ollama:latest
+FROM ollama/ollama:0.5.4
 
 LABEL maintainer="docker-deploy-ollama"
 

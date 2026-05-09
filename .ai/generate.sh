@@ -188,9 +188,19 @@ while IFS= read -r line; do
     fi
 done < "$PROJ_YML"
 
+# Extract ethos one-liner and tier headline (best-effort grep; project.yml is yaml)
+ETHOS_LINE=$(grep -m1 'one_liner:' "$PROJ_YML" | sed 's/.*one_liner:\s*"\(.*\)"/\1/' || true)
+[ -z "$ETHOS_LINE" ] && ETHOS_LINE="ETHOS: Honest > optimistic. Pessimistic defaults. T1 (host) authoritative & continuously fixed; T2/T3 mirror T1."
+
+TIERS_LINE="TIERS: T1=host AUTHORITATIVE_CONTINUOUSLY_FIXED | T2=docker MIGRATION_IN_PROGRESS (mirror T1) | T3=k8s SKELETON_NOT_READY (defer until T2 stable). Rule: fix in T1 first, port forward T1→T2→T3."
+
 COMPACT_RULES="PROJECT: R-studioConf (RStudio Server + Nginx Portal + OIDC/SSSD/Samba)
 PARADIGM: Pessimistic System Engineering — assume failure, bound resources, fail fast.
 GENERATED: $(date +%Y-%m-%d) from project.yml + code scan
+
+${ETHOS_LINE}
+
+${TIERS_LINE}
 
 HARD RULES (violating ANY makes output unusable):
 ${RULES_BLOCK}
@@ -213,7 +223,17 @@ R RUNTIME RULES:
 - BLAS: ${R_BLAS_OK:-libopenblas0-serial} (NOT ${R_BLAS_BANNED:-libopenblas0-pthread} — causes SIGSEGV)
 - Large R temp: ${R_TMP_PATH:-/Rtmp} (${R_TMP_SIZE:-400}GB ext4) — NOT /tmp
 - Modular R config: ${R_CONFIG_DIR:-/etc/biome-calc/profile.d/}
-- Sandbox: KNOWN BROKEN — use user/researcher testing only"
+- Sandbox: KNOWN BROKEN — use user/researcher testing only
+
+REFERENCE FILES (read on demand, do not embed):
+- .ai/agents.md            full architecture, T1 script chain, R runtime
+- .ai/project.yml          deployment_tiers, engineering_ethos, tier_deltas
+- .agents/skills/          lazy-load skills:
+    host-install-audit     (T1 host scripts/lib/templates/configs)
+    compose-constraint-audit (T2 docker-compose.yml + Dockerfiles)
+    k8s-manifest-audit     (T3 kubernetes-deploy/*.yaml)
+    script-safety-review   (any *.sh)
+    sandbox-test           SKIP — sandbox BROKEN"
 
 # ──────────────────────────────────────────────────────────────
 # PHASE 5: Write output files

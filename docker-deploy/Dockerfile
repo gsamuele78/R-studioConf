@@ -1,21 +1,21 @@
 # Dockerfile for RStudio Botanical "Pet Container"
-FROM rocker/geospatial:latest
+FROM rocker/geospatial:4.4.1
 
 LABEL maintainer="docker-deploy-botanical"
 
 # 1. System Setup for BSPM and Auth (SSSD/Samba)
 # We install BOTH SSSD and Samba client libraries to support either mount strategy.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
-    python3-launchpadlib \
-    # Auth Packages (Pet Container Support)
-    samba winbind libpam-winbind libnss-winbind krb5-user \
-    sssd-client libpam-sss libnss-sss \
-    # Utilities
-    nano iputils-ping \
-    && add-apt-repository -y ppa:c2d4u.team/c2d4u4.0+ \
-    && apt-get update \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+  software-properties-common \
+  python3-launchpadlib \
+  # Auth Packages (Pet Container Support)
+  samba winbind libpam-winbind libnss-winbind krb5-user \
+  sssd-client libpam-sss libnss-sss \
+  # Utilities
+  nano iputils-ping \
+  && add-apt-repository -y ppa:c2d4u.team/c2d4u4.0+ \
+  && apt-get update \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 2. Configure BSPM & OpenBLAS CORETYPE Wrappers
 # Enable BSPM in R for faster installs
@@ -44,8 +44,8 @@ export OPENBLAS_CORETYPE="${CT}"
 EOF
 
 RUN chmod 755 /etc/profile.d/biome-coretype.sh && \
-    mkdir -p /etc/rstudio && \
-    cat <<'EOF' > /etc/rstudio/rsession-profile
+  mkdir -p /etc/rstudio && \
+  cat <<'EOF' > /etc/rstudio/rsession-profile
 #!/bin/sh
 # BIOME-CALC: Evaluate CPU capabilities before spawning rsession.
 if [ -f /etc/profile.d/biome-coretype.sh ]; then

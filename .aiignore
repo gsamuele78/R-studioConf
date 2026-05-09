@@ -1,0 +1,11 @@
+# .aiignore — emitted from .ai/project.yml → ignore_globs
+# Files/dirs the agent should NOT treat as canonical context.
+# Re-run .ai/generate.sh to regenerate (when generator is updated to emit).
+
+archive/**
+Infra-Iam-PKI.backup/**
+**/*_original
+**/* copy*
+**/*.legacy_v*_rollback
+**/legacy_*
+src/biome_core_rust/**

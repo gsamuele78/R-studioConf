@@ -1,4 +1,4 @@
-: # .ai/project.yml
+# .ai/project.yml
 # ══════════════════════════════════════════════════════════════
 # SINGLE SOURCE OF TRUTH for AI agent context generation.
 #
@@ -34,6 +34,133 @@ project:
     - "PNRR LifeWatch-Plus"
     - "PON LifeWatch-Plus"
     - "Life4Pollinators"
+
+# ──────────────────────────────────────────────────────────────
+# ENGINEERING ETHOS
+# Codified posture for every AI agent acting on this repo.
+# Rendered as a 1-line headline in every IDE rule file.
+# ──────────────────────────────────────────────────────────────
+engineering_ethos:
+  stance: "Honest, not optimistic. Production-grade system engineering."
+  one_liner: "ETHOS: Honest > optimistic. Pessimistic defaults. T1 (host) authoritative & continuously fixed; T2/T3 mirror T1. Smallest blast radius. Surface contradictions, never silently align."
+  principles:
+    - "State unknowns as unknowns; never invent confidence."
+    - "Pessimistic defaults: assume failure, bound resources, fail fast."
+    - "T1 (host) is authoritative and continuously fixed. Every fix originates or is mirrored in T1 first, then ported forward to T2 (docker) and T3 (k8s). T2/T3 must never silently diverge from T1 behavior; recorded deviations only (see tier_deltas)."
+    - "Prefer boring, battle-tested community-reputable tools over novelty."
+    - "Smallest blast radius: change the minimum that satisfies the requirement."
+    - "If a rule and the code disagree, surface the contradiction; do not silently align one to the other."
+
+# ──────────────────────────────────────────────────────────────
+# DEPLOYMENT TIERS (T1 → T2 → T3)
+# Three concurrent deployment surfaces with different maturity.
+# Fix-promotion is unidirectional: T1 first, then forward.
+# ──────────────────────────────────────────────────────────────
+deployment_tiers:
+  - id: "T1_host"
+    status: "AUTHORITATIVE_CONTINUOUSLY_FIXED"
+    role: "Authoritative source of truth. Stability is achieved by continuous bug-fixing here, not by freezing. All host files (scripts, lib, templates including Rprofile_site.d/, configs) are in scope for fixes."
+    entry: "init.sh → r_env_manager.sh → scripts/NN_*.sh"
+    in_scope_for_fixes:
+      - "scripts/*.sh (numbered + 99_* diagnostics + tools/*)"
+      - "lib/common_utils.sh"
+      - "r_env_manager.sh, init.sh"
+      - "templates/** (incl. Rprofile_site.d/, Renviron, motd, audit)"
+      - "config/*.vars.conf"
+    invariants:
+      - "lib_common_utils.sh sourced by every numbered script"
+      - "numbered_script_order: 01..03 → 10/11 → 12 → 13 → 15 → 20/21 → 30..32 → 40 → 50"
+      - "modular Rprofile_site.d/ ordering preserved (05/45/50/55/60)"
+      - "BLAS = libopenblas0-serial (NOT pthread; SIGSEGV)"
+      - "Large R temp = /Rtmp (400GB ext4); never /tmp"
+      - "SSSD XOR Samba (10_join_domain_sssd.sh OR 11_join_domain_samba.sh, never both)"
+
+  - id: "T2_docker"
+    status: "MIGRATION_IN_PROGRESS"
+    role: "Containerize T1 incrementally. Must mirror T1 behavior; recorded deviations only."
+    entry: "docker-deploy/deploy.sh → docker compose"
+    derivation_rule: "Mirrors T1 behavior. Any deviation from T1 must be listed in tier_deltas with rationale."
+    inherits_constraints:
+      [
+        "HC-01",
+        "HC-02",
+        "HC-03",
+        "HC-04",
+        "HC-05",
+        "HC-06",
+        "HC-07",
+        "HC-08",
+        "HC-09",
+        "HC-10",
+        "HC-11",
+        "HC-12",
+        "HC-13",
+      ]
+    open_gaps:
+      - "deploy.sh used set -e only (HC-03 fix: set -euo pipefail) — fixed 2026-05-09"
+      - "missing scripts/validate_deployment.sh referenced by deploy.sh — added stub 2026-05-09"
+      - "Dockerfile bases unpinned (HC-07 external-image rule) — pinned to semver 2026-05-09"
+      - "oauth2-proxy and docker-socket-proxy lack healthcheck — deferred (needs runtime test)"
+
+  - id: "T3_k8s"
+    status: "SKELETON_NOT_READY"
+    role: "Future. Adopt only after T2 fully mirrors T1."
+    entry: "kubernetes-deploy/scripts/deploy_k8s.sh"
+    derivation_rule: "Mirrors T2 (which mirrors T1). Any deviation from T1/T2 must be listed in tier_deltas with rationale."
+    blockers:
+      - "missing kubernetes-deploy/env/.env.example (referenced by deploy_k8s.sh) — added stub 2026-05-09"
+      - "no NetworkPolicy / no PodDisruptionBudget / no HPA / no PSA labels"
+      - "no StorageClass for /Rtmp 400GB ext4 (NIMBLE workloads)"
+      - "no SSSD/Samba sidecar strategy (host AD integration)"
+      - "no PKI/secret rotation flow"
+      - "deploy.sh used set -e only — must mirror T2 fix"
+
+tier_promotion_rule: "A bug discovered in any tier is fixed in T1 first (or recorded as a T2/T3 deviation); then ported forward T1 → T2 → T3. Never patch T2/T3 in a way that masks a T1 defect."
+
+# Recorded deviations from T1 behavior (each must justify itself)
+tier_deltas: []
+
+# ──────────────────────────────────────────────────────────────
+# ROADMAP — evaluation_pending
+# Items on the radar but not adopted. Honest status only.
+# ──────────────────────────────────────────────────────────────
+roadmap:
+  evaluation_pending:
+    positron:
+      status: "EVALUATION_PENDING"
+      scope: "T2 (docker) and T3 (k8s) only"
+      trigger_condition: "Adopt only if it demonstrably resolves a known T1 host-tier issue (RStudio Server rsession crashes, NIMBLE workload memory pressure, BLAS thread collision, or session-restore Error code 4). Until then: do not propose, do not configure."
+      do_not: "Add Positron-specific files, dependencies, or rules until trigger_condition is met."
+
+# ──────────────────────────────────────────────────────────────
+# CANONICAL PATHS / IGNORE GLOBS
+# What the agent should treat as authoritative vs. orphan/legacy.
+# generate.sh emits .aiignore from ignore_globs.
+# ──────────────────────────────────────────────────────────────
+canonical_paths:
+  plan: "plan/implementation_plan_v9.6_final.md"
+  rprofile_site: "templates/Rprofile_site.R.template"
+  agents_doc: ".ai/agents.md"
+  project_yaml: ".ai/project.yml"
+
+ignore_globs:
+  - "archive/**"
+  - "Infra-Iam-PKI.backup/**"
+  - "**/*_original"
+  - "**/* copy*"
+  - "**/*.legacy_v*_rollback"
+  - "**/legacy_*"
+  - "src/biome_core_rust/**"
+
+# ──────────────────────────────────────────────────────────────
+# SUBMODULES — sibling repos referenced from this repo
+# Only listed if the agent must know they exist.
+# ──────────────────────────────────────────────────────────────
+submodules:
+  infra_iam_pki:
+    path: "Infra-Iam-PKI/"
+    role: "Sibling project (Keycloak IdP + step-ca PKI + Open OnDemand). Will later integrate this RStudio deployment into its docker and kubernetes flows."
+    rule: "Out of scope unless the task explicitly names it. Do NOT duplicate, edit, or cross-reference its files from R-studioConf code; route via its own README/CONFIGURATION.md."
 
 # ──────────────────────────────────────────────────────────────
 # HARD CONSTRAINTS

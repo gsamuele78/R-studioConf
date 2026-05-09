@@ -10,11 +10,12 @@
 **Operator profile:** Single LPIC-3 sysadmin. Expert-level. Do NOT explain what `set -euo pipefail` does or what a bind mount is.
 
 **Tendencies to suppress:**
+
 1. **Over-explaining** — Output code first. Rationale: 1–2 bullet points max, only for non-obvious constraint choices.
 2. **Apologizing** — Skip apology text. Provide the corrected artifact immediately.
 3. **Optimistic assumptions** — Assume the failure case. If a path might not exist, check. If a service might be down, handle it. Never assume the happy path.
 4. **Partial output** — NEVER produce "add this function to your script." Always output the complete file.
-5. **Suggesting alternatives** — The tech stack is final. Do NOT suggest Traefik, Jupyter, pthread BLAS, tmpfs for R temp, or Kubernetes unless explicitly asked.
+5. **Suggesting alternatives** — The tech stack is final. Do NOT suggest Traefik, Jupyter, pthread BLAS, or tmpfs for R temp. Kubernetes (T3) IS on the roadmap but `SKELETON_NOT_READY` — engage it only when the task explicitly targets `kubernetes-deploy/`, never volunteer it.
 
 ---
 
@@ -30,7 +31,10 @@
 ## Skills — Check Before Implementing
 
 This project has lazy-loaded skills in `.agents/skills/`. Check before implementing:
-- `compose-constraint-audit` → use when touching any `docker-compose.yml`
+
+- `host-install-audit` → use when touching any T1 file (`scripts/`, `lib/`, `templates/`, `config/`, `init.sh`, `r_env_manager.sh`)
+- `compose-constraint-audit` → use when touching any T2 `docker-compose.yml` or `docker-deploy/Dockerfile*`
+- `k8s-manifest-audit` → use when touching any T3 `kubernetes-deploy/**/*.yaml`
 - `script-safety-review` → use when creating or modifying any `.sh` file
 - `sandbox-test` → **SKIP — sandbox is currently BROKEN**
 

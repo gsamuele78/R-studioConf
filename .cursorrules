@@ -5,20 +5,28 @@ PROJECT: R-studioConf (RStudio Server + Nginx Portal + OIDC/SSSD/Samba)
 PARADIGM: Pessimistic System Engineering — assume failure, bound resources, fail fast.
 GENERATED: 2026-05-09 from project.yml + code scan
 
+ETHOS: Honest > optimistic. Pessimistic defaults. T1 (host) authoritative & continuously fixed; T2/T3 mirror T1. Smallest blast radius. Surface contradictions, never silently align.
+
+TIERS: T1=host AUTHORITATIVE_CONTINUOUSLY_FIXED | T2=docker MIGRATION_IN_PROGRESS (mirror T1) | T3=k8s SKELETON_NOT_READY (defer until T2 stable). Rule: fix in T1 first, port forward T1→T2→T3.
+
 HARD RULES (violating ANY makes output unusable):
-1. Every container MUST have deploy.resources.limits for both memory and cpus
-2. BIND MOUNTS only — zero named Docker volumes
-3. All scripts MUST begin with set -euo pipefail
-4. Passwords MUST be written to files — never passed as CLI arguments
-5. PostgreSQL ports are NEVER exposed to the host
-6. All Dockerfiles bake dependencies at build time — no runtime package installation
-7. Pin ALL upstream image versions — no :latest tag
-8. .env files are NEVER committed to git
-9. The renewer container NEVER mounts /var/run/docker.sock directly
-10. Deploy scripts MUST exit 1 if chown/permission setup fails
-11. No external CDN calls for fonts or CSS in UI themes
-12. Use jq for JSON manipulation — never sed/awk on JSON
-13. Adapt the system to portable user R code — never silently patch user scripts
+1. Mirrors T1 behavior. Any deviation from T1 must be listed in tier_deltas with rationale.
+2. Mirrors T2 (which mirrors T1). Any deviation from T1/T2 must be listed in tier_deltas with rationale.
+3. A bug discovered in any tier is fixed in T1 first (or recorded as a T2/T3 deviation); then ported forward T1 → T2 → T3. Never patch T2/T3 in a way that masks a T1 defect.
+4. Out of scope unless the task explicitly names it. Do NOT duplicate, edit, or cross-reference its files from R-studioConf code; route via its own README/CONFIGURATION.md.
+5. Every container MUST have deploy.resources.limits for both memory and cpus
+6. BIND MOUNTS only — zero named Docker volumes
+7. All scripts MUST begin with set -euo pipefail
+8. Passwords MUST be written to files — never passed as CLI arguments
+9. PostgreSQL ports are NEVER exposed to the host
+10. All Dockerfiles bake dependencies at build time — no runtime package installation
+11. Pin ALL upstream image versions — no :latest tag
+12. .env files are NEVER committed to git
+13. The renewer container NEVER mounts /var/run/docker.sock directly
+14. Deploy scripts MUST exit 1 if chown/permission setup fails
+15. No external CDN calls for fonts or CSS in UI themes
+16. Use jq for JSON manipulation — never sed/awk on JSON
+17. Adapt the system to portable user R code — never silently patch user scripts
 
 COMPOSE FORMAT:
 - Compose v2: NO "version:" key
@@ -46,3 +54,13 @@ R RUNTIME RULES:
 - Large R temp: /Rtmp (400GB ext4) — NOT /tmp
 - Modular R config: /etc/biome-calc/profile.d/
 - Sandbox: KNOWN BROKEN — use user/researcher testing only
+
+REFERENCE FILES (read on demand, do not embed):
+- .ai/agents.md            full architecture, T1 script chain, R runtime
+- .ai/project.yml          deployment_tiers, engineering_ethos, tier_deltas
+- .agents/skills/          lazy-load skills:
+    host-install-audit     (T1 host scripts/lib/templates/configs)
+    compose-constraint-audit (T2 docker-compose.yml + Dockerfiles)
+    k8s-manifest-audit     (T3 kubernetes-deploy/*.yaml)
+    script-safety-review   (any *.sh)
+    sandbox-test           SKIP — sandbox BROKEN

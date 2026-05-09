@@ -1,76 +1,69 @@
 # Future Roadmap & Migration
 
-## 1. Evolution Strategy
+> **Stance:** honest, not optimistic. Three concurrent deployment tiers are tracked in `.ai/project.yml → deployment_tiers`. T1 (host) is the **authoritative & continuously-fixed** tier; T2 (docker) and T3 (kubernetes) mirror T1.
 
-The current architecture ("Static Portal + Nginx Auth") is optimized for **Simplicity, Speed, and Low Maintenance** in a workgroup/lab environment (10-100 users).
-To scale to an Enterprise Environment (1000+ users, Zero Trust), we recommend the following migration path.
+## 1. Current state (no aspirational claims)
 
-## 2. Phase 1: Modernize Authentication (OIDC)
+| Tier | Status | What works today |
+|------|--------|------------------|
+| **T1 — host** | `AUTHORITATIVE_CONTINUOUSLY_FIXED` | Production. RStudio Server + nginx portal + OIDC (oauth2-proxy) + SSSD/Samba + Kerberos + Let's Encrypt + telemetry. Numbered scripts `01..50`, diagnostics `99_*`, modular `Rprofile_site.d/`, BLAS pin (`libopenblas0-serial`), `/Rtmp` 400GB. |
+| **T2 — docker** | `MIGRATION_IN_PROGRESS` | Compose v2, 6 services on `network_mode: host`, bind-mounts only, profiles (`sssd\|samba\|portal\|oidc\|ai`), docker-socket-proxy. **Open gaps:** see `.ai/project.yml → deployment_tiers.T2_docker.open_gaps`. |
+| **T3 — kubernetes** | `SKELETON_NOT_READY` | Kustomize manifests + `deploy_k8s.sh` + `validate_k8s.sh`. **Blockers:** no NetworkPolicy / PDB / HPA / PSA labels; no StorageClass for `/Rtmp`; no SSSD/Samba sidecar design; no PKI / secret rotation flow. See `.ai/project.yml → deployment_tiers.T3_k8s.blockers`. |
 
-**Goal**: Remove password handling from the Portal Frontend completely.
+The promotion contract is documented in `docs/deployment/TIER_PROMOTION.md`.
 
-### Current Limitation
+## 2. Phase 1 — T2 (docker) hardening (in progress)
 
-The Portal handles user passwords ephemerally in JS. While secure (HTTPS), it is not "Zero Trust".
+Goal: T2 fully mirrors T1, with no silent divergence.
 
-### Proposed Architecture
+Tasks (tracked in `.ai/project.yml → deployment_tiers.T2_docker.open_gaps`):
 
-**Keycloak / Authentik** as the Identity Provider (IdP).
+- [x] `deploy.sh` strict mode (HC-03) and HC-10 trap.
+- [x] `validate_deployment.sh` stub created (full surface still TODO).
+- [x] Dockerfile bases pinned to semver (`rocker/geospatial:4.4.1`, `nginx:1.27-alpine`, `ollama/ollama:0.5.4`).
+- [ ] `oauth2-proxy` and `docker-socket-proxy` healthchecks.
+- [ ] Full HC-01/02/04/05/06/10/11 checks inside `validate_deployment.sh`.
+- [ ] Each T2 entrypoint mirrors the equivalent T1 numbered script behavior with no observable difference.
 
-1. **Deploy IdP**: Connect Keycloak to AD.
-2. **Deploy `oauth2-proxy`**: Run this sidecar alongside Nginx.
-3. **Flow**:
-    - User visits Portal -> Redirected to Keycloak -> Log in.
-    - Keycloak redirects back with JWT/Cookie.
-    - Nginx verifies Cookie (via `auth_request` to `oauth2-proxy`).
-    - Nginx passes `X-Forwarded-User` (from JWT) to backend.
-4. **Impact**:
-    - Portal becomes purely navigational.
-    - "Secure Connect" modal removed.
-    - SSO is handled entirely by standard OIDC flows.
+## 3. Phase 2 — T3 (kubernetes) — gated
 
-## 3. Phase 2: Containerization (Kubernetes)
+Goal: containerize per-user RStudio with hard isolation. **Do not start until T2 phase 1 is green.**
 
-**Goal**: Resource isolation and scalability.
+Required design (none of these exist yet):
 
-### Current Limitation
+- StorageClass providing fast local 400GB ext4 for `/Rtmp` (NIMBLE workloads).
+- Strategy for AD integration (host-network pod + tolerations, OR external Keycloak via the `Infra-Iam-PKI/` sibling project).
+- NetworkPolicy default-deny + allow-list.
+- PodDisruptionBudget for `rstudio` and `portal`.
+- HorizontalPodAutoscaler once SLOs are defined (not before).
+- Pod Security admission `restricted` on `botanical` namespace.
+- Secret rotation flow (currently apply-time injection only).
 
-All users share the same RStudio Server process and system resources (RAM/CPU). One heavy job affects everyone.
+Until those exist, T3 manifests in `kubernetes-deploy/` are a starting skeleton, not a deployment target.
 
-### Proposed Architecture
+### Why not RStudio Connect / JupyterHub
 
-**JupyterHub / RStudio Connect on K8s**.
+Both were considered. They impose user/workflow changes that conflict with HC-13 (we adapt the system to portable user R code; we do not ask researchers to rewrite their scripts). We will revisit if a community-reputable, lower-friction alternative emerges.
 
-1. **Architecture**: The Portal becomes a "Spawner" interface.
-2. **Flow**: Login -> Spawn Personal Pod -> Proxy traffic to Pod IP.
-3. **Technology**:
-    - **Helm Charts**: Standard deployment.
-    - **Zero-to-JupyterHub**: Standard guide (works for RStudio too).
-4. **Benefit**:
-    - Hard limits per user (e.g., 4GB RAM).
-    - Custom images per user (Data Science vs. BioInformatics).
+## 4. Positron — evaluation_pending (NOT adopted)
 
-## 4. Phase 3: Infrastructure as Code (IaC)
+`.ai/project.yml → roadmap.evaluation_pending.positron` records the honest status:
 
-**Goal**: Reproducibility and Audit.
+- **Status:** `EVALUATION_PENDING`.
+- **Scope:** T2 and T3 only.
+- **Trigger condition:** adopt **only if** it demonstrably resolves a known T1 host-tier issue (rsession crash, NIMBLE memory pressure, BLAS thread collision, session-restore Error code 4).
+- **Until then:** do not propose, do not configure, do not add Positron-specific files.
 
-### Current Limitation
+There is no timeline. Adoption is conditional.
 
-Shell scripts (`scripts/`) are imperative.
+## 5. Phase 3 — Infrastructure as Code (Ansible / Terraform) — speculative
 
-### Proposed Migration
+Hypothetical, not committed. Would only happen after T3 is stable and the operator profile changes from "single LPIC-3 sysadmin" to a team. Recorded here so the agent does not invent it as a current goal.
 
-**Ansible / Terraform**.
+## 6. What this document is NOT
 
-1. **Ansible**: Convert `01_optimize_system.sh` -> System Roles. Convert `30_install_nginx.sh` -> Nginx Role.
-2. **Terraform**: Provision underlying VMs/Cloud logical resources.
-3. **CI/CD**: GitOps workflow. Push to `main` -> Ansible applies config.
+- Not a sales pitch.
+- Not a timeline.
+- Not a list of "best-practice" alternatives the agent should suggest unprompted.
 
-## 5. Summary
-
-| Feature | Current | Enterprise Target |
-| :--- | :--- | :--- |
-| **Auth** | PAM / Basic | OIDC / SAML (Keycloak) |
-| **Compute** | Shared Host | Container per User (K8s) |
-| **Deploy** | Bash Scripts | Ansible / FluxCD |
-| **Proxy** | Nginx | Traefik / Ingress |
+If you came here looking for a sentence that says "we plan to adopt X by Q3", it is not here on purpose. See `.ai/project.yml → engineering_ethos`.

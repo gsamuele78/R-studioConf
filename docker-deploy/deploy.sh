@@ -1,9 +1,14 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # docker-deploy/deploy.sh
-# Master Deployment Script for Botanical Docker Infrastructure
+# Master Deployment Script for Botanical Docker Infrastructure (Tier T2).
 # Handles .env validation, build, and verification.
+# HC-03: strict mode (set -euo pipefail).
+# HC-10: any chown/permission failure exits 1 via the trap below.
 
-set -e
+set -euo pipefail
+
+# HC-10: surface non-zero exits with the failing line number.
+trap 'echo -e "\033[0;31m[DEPLOY ABORT]\033[0m line $LINENO exited non-zero (HC-10).";' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"

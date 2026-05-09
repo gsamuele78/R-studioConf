@@ -1,12 +1,15 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # kubernetes-deploy/scripts/deploy_k8s.sh
 # ---------------------------------------------------------
-# Sysadmin Master Deployment Script for R-Studio RKE2
-# Handles environment variable injection, namespace creation, 
+# Sysadmin Master Deployment Script for R-Studio on Kubernetes (Tier T3).
+# Tier status: SKELETON_NOT_READY (.ai/project.yml).
+# Handles environment variable injection, namespace creation,
 # and Kustomize manifest application.
+# HC-03: strict mode. HC-10: kubectl failures abort.
 # ---------------------------------------------------------
 
-set -e
+set -euo pipefail
+trap 'echo -e "\033[0;31m[DEPLOY-K8S ABORT]\033[0m line $LINENO exited non-zero (HC-10).";' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 K8S_ROOT_DIR="$(dirname "$SCRIPT_DIR")"

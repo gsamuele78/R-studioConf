@@ -120,8 +120,10 @@ HC03_ERRORS_BEFORE=$ERRORS
 for f in $SCRIPTS; do
     CHECKS=$((CHECKS + 1))
     rel_path="${f#$PROJECT_ROOT/}"
-    # Check first 25 lines for set -euo pipefail or set -e (minimum)
-    head_content=$(head -25 "$f")
+    # Check first 50 lines for set -euo pipefail or set -e (minimum).
+    # Window is 50 (not 25) because several T1 host scripts carry a long
+    # license/usage header comment block before the set line.
+    head_content=$(head -50 "$f")
     if ! echo "$head_content" | grep -q 'set -e'; then
         fail "$rel_path → missing 'set -euo pipefail' (or at minimum 'set -e')"
         hint "Add 'set -euo pipefail' as the second line after shebang"
@@ -247,7 +249,14 @@ done
 # ──────────────────────────────────────────────────────────────
 section "HC-11: No external CDN calls in UI themes"
 HC11_ERRORS_BEFORE=$ERRORS
-THEME_FILES=$(find "$PROJECT_ROOT" \( -name '*.css' -o -name '*.ftl' -o -name '*.html' \) -not -path '*/.git/*' -not -path '*/node_modules/*' 2>/dev/null || true)
+# HC-11 scan excludes out-of-scope siblings (Infra-Iam-PKI submodule + .backup) and archive/.
+THEME_FILES=$(find "$PROJECT_ROOT" \( -name '*.css' -o -name '*.ftl' -o -name '*.html' \) \
+    -not -path '*/.git/*' \
+    -not -path '*/node_modules/*' \
+    -not -path '*/Infra-Iam-PKI/*' \
+    -not -path '*/Infra-Iam-PKI.backup/*' \
+    -not -path '*/archive/*' \
+    2>/dev/null || true)
 for f in $THEME_FILES; do
     CHECKS=$((CHECKS + 1))
     rel_path="${f#$PROJECT_ROOT/}"

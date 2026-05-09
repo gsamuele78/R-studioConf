@@ -1,5 +1,5 @@
 # Dockerfile.samba - RStudio with Samba/Winbind Passthrough
-FROM rocker/geospatial:latest
+FROM rocker/geospatial:4.4.1
 
 LABEL maintainer="docker-deploy-botanical-samba"
 

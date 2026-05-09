@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# scripts/tools/check_pkg_config.sh — diagnostic for OpenBLAS/OpenMP pkg-config vars
+set -euo pipefail
 
 # Function to check and print pkg-config variables
 check_pkg_config_vars() {
