@@ -27,6 +27,7 @@ HARD RULES (violating ANY makes output unusable):
 15. No external CDN calls for fonts or CSS in UI themes
 16. Use jq for JSON manipulation — never sed/awk on JSON
 17. Adapt the system to portable user R code — never silently patch user scripts
+18. RPROFILE_VERSION bumps MUST land with matching CHANGELOG section + cross-doc references in the same commit
 
 COMPOSE FORMAT:
 - Compose v2: NO "version:" key

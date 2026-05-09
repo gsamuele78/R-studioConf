@@ -94,11 +94,24 @@ sudo bash scripts/99_diagnose_lussu_hang.sh --user <username> --script /path/to/
 ```
 
 The harness reports which probe (E PSOCK swap / F terra todisk) makes
-the hang go away. The fix lands in
-`templates/Rprofile_site.d/30_psock_factory.R.template` or
-`35_compile_routing.R.template`, then re-deploy with `50_setup_nodes.sh`.
+the hang go away. **Since Rprofile v12.4 both probes are fixed by default**:
 
-→ Deep-dive: [`LUSSU_HANG_BISECTION.md`](LUSSU_HANG_BISECTION.md).
+* `templates/Rprofile_site.d/52_mclapply_guard.R.template` reroutes
+  `parallel::mclapply` to PSOCK whenever a heavy-thread package
+  (`terra`/`sf`/`raster`/`stars`/`torch`/`arrow`) is loaded.
+* `templates/Rprofile_site.d/50_pkg_hooks.R.template` enables
+  `terraOptions(memfrac=0.5, todisk=TRUE)` on first `library(terra)`.
+
+If a node still hangs, verify the v12.4 deploy on it
+(`sudo bash scripts/50_setup_nodes.sh --verify` → expect
+`Rprofile.site version: 12.4`) and re-run `50_setup_nodes.sh` (option `1`
+or surgical option `3` = config files only).
+
+Per-user emergency bypass: `BIOME_DISABLE_FORK_GUARD=1` /
+`BIOME_TERRA_NORAM=1`.
+
+→ Deep-dive: [`LUSSU_HANG_BISECTION.md`](LUSSU_HANG_BISECTION.md),
+  upgrade procedure: [`UPGRADE_TO_v12.4.md`](UPGRADE_TO_v12.4.md).
 
 ### 1.4 `cannot allocate vector of size …` / OOM kill
 

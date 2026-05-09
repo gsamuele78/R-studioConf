@@ -59,10 +59,13 @@ updating the others **will** break sessions.
 
 | Artefact | Owner script | Source template |
 |---|---|---|
-| `/etc/R/Rprofile.site` (thin v12.2 dispatcher) | `50_setup_nodes.sh` | `templates/Rprofile_site.R.template` |
-| `/etc/R/Rprofile_site.d/[0-9][0-9]_*.R` (modular fragments) | `50_setup_nodes.sh` | `templates/Rprofile_site.d/*.R.template` |
+| `/etc/R/Rprofile.site` (thin **v12.4** dispatcher) | `50_setup_nodes.sh` | `templates/Rprofile_site.R.template` |
+| `/etc/R/Rprofile_site.d/[0-9][0-9]_*.R` (modular fragments, incl. v12.4 `52_mclapply_guard.R`) | `50_setup_nodes.sh` | `templates/Rprofile_site.d/*.R.template` |
+| `/etc/R/Rprofile_site.d/.compiled/{bundle.Rc,manifest.txt}` (**v12.3** byte-compiled fragment bundle — derived cache, NEVER source) | `50_setup_nodes.sh` Step 8 | (regenerated atomically; manifest mismatch silently demotes to legacy `sys.source()` loop) |
+
 | `/etc/R/Rprofile_minimal.R` (L0/L1 forensic profile, NO `.d/`) | `50_setup_nodes.sh` | `templates/Rprofile_site.minimal.R.template` |
-| `/etc/R/Renviron.site` (BLAS + `/Rtmp` + libs) | `50_setup_nodes.sh` | `templates/Renviron.template` |
+| `/etc/R/Renviron.site` (BLAS + `/Rtmp` + double-path `R_LIBS_USER`) | `50_setup_nodes.sh` | `templates/Renviron.template` |
+| `/var/lib/biome-Rlibs/<user>/<R-ver>` (local R user-libs, sticky 1777) | `50_setup_nodes.sh` Step 7c | (created in-place; optional Mode B disk via `R_LIBS_LOCAL_DEVICE`) |
 
 Plus the shell-side companion:
 
@@ -85,9 +88,25 @@ Plus the shell-side companion:
    limits.
 4. **PSOCK over fork.** RStudio sessions must use PSOCK clusters
    (`Rprofile_site.d/30_psock_factory.R` + `40_wrapper_installer.R`).
+   Since v12.4, `Rprofile_site.d/52_mclapply_guard.R` additionally
+   reroutes `parallel::mclapply` to PSOCK whenever `terra`/`sf`/`raster`/
+   `stars`/`torch`/`arrow` is loaded — eliminates the Lussu hang without
+   editing user scripts (HC-13).
 5. **Forensic profile is sacred.** `/etc/R/Rprofile_minimal.R` does NOT
    load `.d/` fragments. It is the L0/L1 isolation surface for the
    HC-13 harness; treat it as test infrastructure.
+6. **Local-first `R_LIBS_USER` (v12.4).** `Renviron.site` ships
+   `R_LIBS_USER=/var/lib/biome-Rlibs/%u/%v:${HOME}/R/x86_64-pc-linux-gnu-library/%v`.
+   First entry is local (eliminates the NFS lookupcache storm); second
+   is the legacy NFS fallback so existing user libraries keep working.
+   New `install.packages()` lands locally. The `/var/lib/biome-Rlibs/`
+   root is created with sticky `1777` by `50_setup_nodes.sh` Step 7c —
+   optionally on a dedicated disk via `R_LIBS_LOCAL_DEVICE`.
+7. **NFS audit is read-only (v12.4).** `50_setup_nodes.sh` Step 7d
+   audits every NFS mount for `vers ≥ 4.1`, `nconnect ≥ 4`,
+   `lookupcache=positive`. It **never** remounts — surfaces gaps via
+   `[audit] WARN`. Fixes belong on TrueNAS / `/etc/fstab`, not in the
+   script (PSE: detect, never silently coerce).
 
 > **Legacy env-var.** `BIOME_FORCE_NFS_TMP` is a no-op since v12.2.
 > Do not document it to users; do not test on it.

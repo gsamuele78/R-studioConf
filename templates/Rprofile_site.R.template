@@ -449,6 +449,15 @@ local({
                                  #        runtime override: BIOME_DISABLE_BUNDLE=1 forces legacy per-fragment loop
   ENABLE_DEBUG_MODE    <- FALSE  # v12.3: verbose sys_log mirroring (stderr + /tmp/biome_debug_*.log)
                                  #        runtime override: BIOME_DEBUG=1 forces ON
+  # v12.4 feature flags (Lussu deadlock fix — system-side, HC-13 compliant)
+  ENABLE_FORK_TO_PSOCK <- TRUE   # v12.4: parallel::mclapply auto-reroutes to PSOCK when terra/sf/raster/torch/arrow loaded
+                                 #        runtime kill:  BIOME_DISABLE_FORK_GUARD=1 (fall back to fork)
+                                 #        runtime force: BIOME_FORCE_FORK_GUARD=1   (always reroute)
+                                 #        Implemented by fragment templates/Rprofile_site.d/52_mclapply_guard.R
+  ENABLE_TERRA_TODISK_DEFAULT <- TRUE  # v12.4: terra::terraOptions(todisk=TRUE) by default — raster spill to /Rtmp instead of RAM
+                                 #        runtime override: BIOME_TERRA_NORAM=1 disables (force in-RAM)
+                                 #        Read by fragment 50_pkg_hooks.R; reduces OOM under fork() pressure
+
 
   # /Rtmp usage advisory threshold
   TMP_WARN_PCT     <- %%TMP_WARN_THRESHOLD_PCT%%L

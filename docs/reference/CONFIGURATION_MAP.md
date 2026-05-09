@@ -167,6 +167,11 @@ are bash-style `KEY=VALUE` and are sourced — never `eval`'d.
 | `KILL_TIMEOUT` | Grace before SIGKILL on orphan cleanup. |
 | `ORPHAN_CRON_CLEANUP`, `ORPHAN_CRON_NOTIFY`, `ORPHAN_CRON_REPORT` | Cron schedules for the three orphan jobs. |
 | `ARCHIVE_STORAGE_ROOT`, `ARCHIVE_LOG_DIR`, `ARCHIVE_CONF_DIR`, `ARCHIVE_CSV_FILE` | Archive manager state. |
+| `RPROFILE_VERSION` | Currently `12.4`. Tag baked into `/etc/R/Rprofile.site` for `--verify`. |
+| `R_LIBS_LOCAL_ROOT` | Local R-libs root (default `/var/lib/biome-Rlibs`). Mode A uses rootfs; Mode B mounts a dedicated disk here. |
+| `R_LIBS_LOCAL_DEVICE` | Optional. e.g. `/dev/sdb`. If set, Step 7c (`setup_nodes_local_rlibs`) does `mkfs` + UUID-based `/etc/fstab` entry + mount. Empty = Mode A. |
+| `R_LIBS_LOCAL_FSTYPE`, `R_LIBS_LOCAL_SIZE_GB` | Filesystem type (default `ext4`) and minimum size gate for Mode B. |
+| `NFS_AUDIT_REQUIRE_VERS`, `NFS_AUDIT_REQUIRE_NCONNECT`, `NFS_AUDIT_REQUIRE_LOOKUPCACHE` | Read-only thresholds for Step 7d (`setup_nodes_audit_nfs`). The script reports `[audit] WARN` when a mount falls below them — **never** remounts. |
 
 ### `scopri_progetti_known.conf`
 
@@ -183,10 +188,13 @@ deployment chain and must stay coherent:
 
 | Path | Owner script | Notes |
 |---|---|---|
-| `/etc/R/Rprofile.site` | `50_setup_nodes.sh` (from `Rprofile_site.R.template`) | Thin v12.2 dispatcher. Sources `Rprofile_site.d/`. |
-| `/etc/R/Rprofile_site.d/*.R` | `50_setup_nodes.sh` (from `templates/Rprofile_site.d/`) | Modular feature fragments (thread guard, cgroup reader, PSOCK factory, compile routing, wrapper installer, memory guards, pkg hooks, options guard, safe setwd, persistent tools, tools ext). |
+| `/etc/R/Rprofile.site` | `50_setup_nodes.sh` (from `Rprofile_site.R.template`) | Thin v12.4 dispatcher. Sources `Rprofile_site.d/`. Adds flags `ENABLE_FORK_TO_PSOCK`, `ENABLE_TERRA_TODISK_DEFAULT`. |
+| `/etc/R/Rprofile_site.d/*.R` | `50_setup_nodes.sh` (from `templates/Rprofile_site.d/`) | Modular feature fragments (thread guard, cgroup reader, PSOCK factory, compile routing, wrapper installer, memory guards, pkg hooks, **`52_mclapply_guard.R` (v12.4)**, options guard, safe setwd, persistent tools, tools ext). |
+| `/etc/R/Rprofile_site.d/.compiled/{bundle.Rc,manifest.txt}` | `50_setup_nodes.sh` Step 8 (v12.3) | Byte-compiled fragment bundle fast-path. Manifest is md5sum + basename per fragment; mismatch → silent fall-back to legacy `sys.source()` loop. **Derived state** — safe to delete; rebuilt on next deploy. Bypass: `BIOME_DISABLE_BUNDLE=1`. |
+
 | `/etc/R/Rprofile_minimal.R` | `50_setup_nodes.sh` (from `Rprofile_site.minimal.R.template`) | L0/L1 forensic profile launched by `r_minimal`. Does **NOT** source the `.d/` fragments. |
-| `/etc/R/Renviron.site` | `50_setup_nodes.sh` (from `Renviron.template`) | `R_LIBS_*`, `TMPDIR=/Rtmp/$USER`, BLAS env, language locales. |
+| `/etc/R/Renviron.site` | `50_setup_nodes.sh` (from `Renviron.template`) | Since v12.4: `R_LIBS_USER=/var/lib/biome-Rlibs/%u/%v:${HOME}/R/x86_64-pc-linux-gnu-library/%v` (local-first, NFS fallback). Also `TMPDIR=/Rtmp/$USER`, BLAS env, language locales. |
+| `/var/lib/biome-Rlibs/<user>/<R-ver>/` | `50_setup_nodes.sh` Step 7c (`setup_nodes_local_rlibs`) | Local R user-library root with sticky `1777`. Mode A on rootfs, Mode B on dedicated disk via `R_LIBS_LOCAL_DEVICE` (UUID fstab). Eliminates NFS lookupcache storm. |
 | `/etc/biome-calc/profile.d/*.sh` | `50_setup_nodes.sh` | Modular shell-side runtime knobs (CORETYPE pin, OPENBLAS thread caps). Sourced by RStudio user login. |
 | `/etc/biome-calc/audit/00_audit_v28.R` | `99_audit_r_environment.sh` (from `00_audit_v28.R.template`) | Parameterized R-environment audit. |
 

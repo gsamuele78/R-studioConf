@@ -72,5 +72,85 @@ if [ -f "$GENERATOR" ]; then
     fi
 fi
 
+# ──────────────────────────────────────────────────────────────
+# HC-14: RPROFILE_VERSION bump must ship with matching CHANGELOG
+# section in the SAME commit. If a bump is staged but no
+# `## v<NEW>` heading is staged in
+# docs/reference/Rprofile_site.CHANGELOG.md, append a TBD stub
+# and abort so the operator cannot forget.
+# ──────────────────────────────────────────────────────────────
+VARS_FILE="config/setup_nodes.vars.conf"
+CHANGELOG_FILE="docs/reference/Rprofile_site.CHANGELOG.md"
+
+if echo "$STAGED_FILES" | grep -qx "$VARS_FILE"; then
+    # Extract the staged (new) RPROFILE_VERSION value
+    NEW_VER=$(git show ":$VARS_FILE" 2>/dev/null \
+        | grep -E '^RPROFILE_VERSION=' | head -1 \
+        | cut -d'"' -f2)
+
+    # Extract the previous (HEAD) value, if any
+    OLD_VER=$(git show "HEAD:$VARS_FILE" 2>/dev/null \
+        | grep -E '^RPROFILE_VERSION=' | head -1 \
+        | cut -d'"' -f2 || true)
+
+    if [ -n "$NEW_VER" ] && [ "$NEW_VER" != "$OLD_VER" ]; then
+        echo "═══ HC-14: RPROFILE_VERSION bump detected ($OLD_VER → $NEW_VER) ═══"
+
+        # Check the STAGED content of the CHANGELOG for the section
+        STAGED_CHANGELOG=$(git show ":$CHANGELOG_FILE" 2>/dev/null || true)
+        if ! echo "$STAGED_CHANGELOG" | grep -qE "^## v${NEW_VER} "; then
+            echo ""
+            echo "══════════════════════════════════════════════════"
+            echo "  COMMIT BLOCKED (HC-14): RPROFILE_VERSION=$NEW_VER"
+            echo "  has no matching '## v$NEW_VER ' section staged in"
+            echo "  $CHANGELOG_FILE"
+            echo "══════════════════════════════════════════════════"
+
+            # Auto-append a TBD stub on the WORKING TREE (not staged)
+            # so the operator finds a starting point and re-stages.
+            STUB_DATE=$(date +%Y-%m-%d)
+            if [ -f "$PROJECT_ROOT/$CHANGELOG_FILE" ] \
+               && ! grep -qE "^## v${NEW_VER} " "$PROJECT_ROOT/$CHANGELOG_FILE"; then
+                {
+                    echo ""
+                    echo "## v${NEW_VER} (TBD ${STUB_DATE}) — \"TODO: headline\""
+                    echo ""
+                    echo "CONTEXT. TODO."
+                    echo ""
+                    echo "ARCHITECTURE. TODO."
+                    echo ""
+                    echo "WHAT CHANGED:"
+                    echo ""
+                    echo "- [S1] TODO."
+                    echo ""
+                    echo "VERIFICATION:"
+                    echo ""
+                    echo "- TODO."
+                    echo ""
+                    echo "ROLLBACK PATH: TODO."
+                    echo ""
+                    echo "TIER DELTAS:"
+                    echo ""
+                    echo "- T2 (docker): pending."
+                    echo "- T3 (k8s):    pending."
+                    echo ""
+                    echo "---"
+                } >> "$PROJECT_ROOT/$CHANGELOG_FILE"
+                echo ""
+                echo "  Stub appended to $CHANGELOG_FILE — fill it in, then:"
+                echo "    git add $CHANGELOG_FILE"
+                echo "    git commit ..."
+            else
+                echo "  Add a '## v$NEW_VER (YYYY-MM-DD) — \"<headline>\"' section"
+                echo "  to $CHANGELOG_FILE and re-stage it."
+            fi
+            echo "  Bypass (emergency): git commit --no-verify"
+            echo "══════════════════════════════════════════════════"
+            exit 1
+        fi
+        echo "  ✓ '## v$NEW_VER ' section is staged. HC-14 OK."
+    fi
+fi
+
 echo "═══ Pre-commit: All checks passed ═══"
 exit 0

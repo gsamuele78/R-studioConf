@@ -8,6 +8,254 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.4 (2026-05-09) — "Lussu fork-guard + NFS library-lookup storm fix"
+
+CONTEXT. Two production pathologies surfaced after v12.2 stabilised:
+
+1. **Lussu hang.** Long-running user code that loads `terra`/`sf`/`raster`/
+   `stars`/`torch`/`arrow` and then calls `parallel::mclapply()` deadlocks
+   the forked rsession workers (HC-13 probe E confirmed: PSOCK swap fixes it,
+   pure fork does not). Root cause: those packages register C++/OpenMP
+   thread pools that are not fork-safe.
+2. **NFS library-lookup storm.** `R_LIBS_USER=$HOME/R/x86_64-pc-linux-gnu-library/%v`
+   sat on NFS for every session. Each `library()` call walked the NFS tree
+   and choked under concurrency (visible as `lookupcache` thrash on
+   TrueNAS).
+
+ARCHITECTURE. v12.4 is a **kernel-bump + 2 new fragments + 2 idempotent
+deploy steps**. No user-facing R API change. No file outside `/etc/R/` and
+`/var/lib/biome-Rlibs/` is touched.
+
+| Artefact                                       | Lines | Status   | Purpose                                                                                |
+|---|---|---|---|
+| `templates/Rprofile_site.d/52_mclapply_guard.R.template` ⭐ |  ~120 | NEW      | Detect heavy-thread package load → reroute `mclapply` to a PSOCK cluster. HC-13 safe. |
+| `templates/Rprofile_site.d/50_pkg_hooks.R.template`        |  +30  | EXTENDED | `terraOptions(memfrac=0.5, todisk=TRUE)` default on `/Rtmp`; `BIOME_TERRA_NORAM=0` opt-out. |
+| `templates/Rprofile_site.R.template`           |   +6  | BUMP     | New flags `ENABLE_FORK_TO_PSOCK`, `ENABLE_TERRA_TODISK_DEFAULT`; version → `12.4`.    |
+| `templates/Renviron.template`                  |   +2  | EXTENDED | `R_LIBS_USER=/var/lib/biome-Rlibs/%u/%v:${HOME}/R/x86_64-pc-linux-gnu-library/%v`.    |
+
+⭐ = first numeric slot in the `52_*` range; sources cleanly after
+`50_pkg_hooks.R` so its detector sees already-loaded namespaces.
+
+WHAT CHANGED:
+
+- [S1]  NEW FRAGMENT: `52_mclapply_guard.R.template` installs a wrapper on
+          `parallel::mclapply` that, when a heavy-thread package is on
+          `loadedNamespaces()`, transparently substitutes a PSOCK cluster
+          (`makeCluster(getOption("mc.cores"))`). User code is **not** edited
+          (HC-13). Bypass: `BIOME_DISABLE_FORK_GUARD=1`.
+- [S2]  EXTENDED `50_pkg_hooks.R.template`: `setHook(packageEvent("terra",...))`
+          now calls `terraOptions(memfrac=0.5, todisk=TRUE, tempdir="/Rtmp/<user>")`
+          on first load. Bypass: `BIOME_TERRA_NORAM=1`.
+- [S3]  KERNEL BUMP: `Rprofile_site.R.template` advertises `12.4` and gates
+          the new fragments behind `ENABLE_FORK_TO_PSOCK=TRUE`,
+          `ENABLE_TERRA_TODISK_DEFAULT=TRUE` (defaults: on).
+- [S4]  RENVIRON: `R_LIBS_USER` now uses a **double path**, local-first,
+          NFS-fallback. Existing user libraries on NFS keep working; the
+          first `install.packages()` after the upgrade compiles into
+          `/var/lib/biome-Rlibs/<user>/<R-ver>/`. Eliminates the
+          per-`library()` NFS lookup storm.
+- [S5]  CONFIG: `config/setup_nodes.vars.conf` gains
+          `R_LIBS_LOCAL_DEVICE`, `R_LIBS_LOCAL_ROOT`, `R_LIBS_LOCAL_FSTYPE`,
+          `R_LIBS_LOCAL_SIZE_GB` (optional dedicated disk; default Mode A
+          uses rootfs at `/var/lib/biome-Rlibs/`), and
+          `NFS_AUDIT_REQUIRE_VERS`, `NFS_AUDIT_REQUIRE_NCONNECT`,
+          `NFS_AUDIT_REQUIRE_LOOKUPCACHE` (read-only audit thresholds).
+- [S6]  SCRIPT: `scripts/50_setup_nodes.sh` adds two idempotent functions:
+          - `setup_nodes_local_rlibs` (Step 7c): create `/var/lib/biome-Rlibs/`
+            with sticky `1777`. Mode A (rootfs only) or Mode B (`mkfs` +
+            UUID-based fstab + mount on `R_LIBS_LOCAL_DEVICE`). Fails fast
+            (HC-14) on chmod/permission errors.
+          - `setup_nodes_audit_nfs` (Step 7d): read-only audit of every NFS
+            mount for `vers ≥ 4.1`, `nconnect ≥ 4`, `lookupcache=positive`.
+            **Never remounts** — surfaces gaps via `[audit] WARN`.
+          Wired into menu option `1` (full deploy) and new option `L`
+          (local-Rlibs + NFS audit only).
+- [S7]  DOCS: end-to-end runbook
+          `docs/operations/UPGRADE_TO_v12.4.md` (procedure for new and
+          already-deployed nodes is identical; per-phase rollback; user
+          bypass; FAQ).
+- [S8]  BUNDLE INVALIDATION (interaction with v12.3 fast-path): adding
+          `52_mclapply_guard.R` invalidates the byte-compiled fragment
+          bundle (`/etc/R/Rprofile_site.d/.compiled/{bundle.Rc,manifest.txt}`)
+          because the manifest is an md5sum-of-fragments. `50_setup_nodes.sh`
+          Step 8 (NEW v12.3) rebuilds the bundle atomically (stage→`mv`).
+          Without this rebuild, sessions would load the legacy loop
+          (correct behavior, but slower). PSE invariant: a stale bundle
+          NEVER masks a fragment change — the manifest mismatch forces
+          fall-back to the per-fragment loop.
+
+VERIFICATION:
+
+- `bash -n scripts/50_setup_nodes.sh` PASSES.
+- Lussu probe E (PSOCK swap) → previously HANG, now PASS via fork-guard.
+- Lussu probe F (`terra::terraOptions(todisk=TRUE)`) → PASS via default.
+- `sudo -u <ad-user> R --vanilla -e '.libPaths()'` → first entry
+  `/var/lib/biome-Rlibs/<user>/<R-ver>`; second entry the legacy NFS path.
+- `sudo bash scripts/50_setup_nodes.sh --verify` reports `Rprofile.site
+  version: 12.4`.
+
+ROLLBACK PATH (per-phase, see runbook §4):
+
+```bash
+# Re-install old Rprofile.site and Renviron from auto-backups
+sudo cp /etc/R/Rprofile.site.bak  /etc/R/Rprofile.site
+sudo cp /etc/R/Renviron.site.bak  /etc/R/Renviron.site
+sudo rm  /etc/R/Rprofile_site.d/52_mclapply_guard.R   # disable fork-guard only
+sudo systemctl restart rstudio-server
+```
+
+Per-user emergency bypass (no admin needed):
+
+```bash
+export BIOME_DISABLE_FORK_GUARD=1   # disable mclapply→PSOCK reroute
+export BIOME_TERRA_NORAM=1          # disable terra todisk default
+export R_LIBS_USER="${HOME}/R/x86_64-pc-linux-gnu-library/$(R --version | head -1 | awk '{print $3}' | cut -d. -f1-2)"
+```
+
+TIER DELTAS:
+
+- T2 (docker): pending — to be ported when T2 is realigned to T1.
+- T3 (k8s):    pending — `R_LIBS_USER` will land on `emptyDir` per-pod;
+               fork-guard will ship as the same fragment via ConfigMap.
+
+---
+
+## v12.3 (2026-05-07) — "Byte-compiled fragment bundle fast-path"
+
+CONTEXT. After v12.2 split the kernel into 9 fragments (~2306 LOC), every
+R/RStudio cold-boot re-parsed all of them via `sys.source()` — measurable
+overhead on a fleet of long-running batch sessions and on rsession
+startup latency for interactive users. The fragments are essentially
+read-only between deploys, so the parse work is wasted.
+
+ARCHITECTURE. v12.3 adds an **opt-out byte-compiled bundle fast-path**.
+At deploy time, `50_setup_nodes.sh` Step 8 walks every
+`/etc/R/Rprofile_site.d/*.R`, calls `compiler::cmpfile(optimize = 3L)`
+on a concatenation, and writes:
+
+```
+/etc/R/Rprofile_site.d/.compiled/
+  ├── bundle.Rc        # byte-compiled artefact (loaded via lazyLoad-style)
+  └── manifest.txt     # md5sum  basename, lexically sorted, one per line
+```
+
+At session start, the dispatcher (`templates/Rprofile_site.R.template`,
+FRAGMENT LOADER v12.3, ~L753+) does:
+
+1. `ENABLE_FRAG_BUNDLE` (compile-time TRUE) AND `Sys.getenv("BIOME_DISABLE_BUNDLE") != "1"` ?
+2. Read `manifest.txt`, recompute md5sum of every `.R` fragment on disk,
+   compare line-by-line.
+3. **Match** → load `bundle.Rc` once → done. Per-fragment `tryCatch`
+   isolation is preserved by the bundling order.
+4. **Mismatch** (any fragment hash differs, or new/missing fragment) →
+   **fall back to the legacy `sys.source()` per-fragment loop**.
+
+PSE invariant: the legacy loop is **ground truth**. A stale or corrupt
+bundle is impossible to mask — the manifest mismatch always demotes to
+the safe path. The fast-path is purely a perf optimisation.
+
+ATOMIC INSTALL. `50_setup_nodes.sh` builds the bundle into a `mktemp -d`
+staging dir, then `mv -T` swaps `.compiled/` into place. A half-written
+bundle never reaches the live tree. After the swap, the script does
+`cat .compiled/bundle.Rc > /dev/null` to warm the page cache (so the
+first session benefits without the I/O hit).
+
+GATES (in priority order):
+
+| Knob                            | Default | Purpose                                       |
+|---|---|---|
+| `ENABLE_FRAG_BUNDLE` (R const)  | `TRUE`  | Compile-time off-switch in dispatcher header. |
+| `BIOME_DISABLE_BUNDLE=1` (env)  | unset   | Per-session opt-out (debugging stale state).  |
+| `manifest.txt` mismatch         | n/a     | Automatic, silent fall-back to legacy loop.   |
+
+ADDITIVE FRAGMENTS (shipped alongside v12.3):
+
+- `05_thread_guard.R.template` — wraps `parallel::detectCores()` to
+    return the cgroup-derived `MAX_THREADS` cap; prevents BLAS/OMP
+    over-subscription when user code calls `detectCores()` directly.
+- `55_options_guard.R.template` — clamps `options(mc.cores = ...)`
+    on every set, so a forgotten `options(mc.cores = 64)` at the top
+    of a user script can never escape the cgroup limit.
+- `60_safe_setwd.R.template` — split into asymmetric behaviour:
+    **batch (`Rscript`/`R --no-save`)** = hard-fail on bad `setwd`
+    (Martina-gate fix preserved); **interactive (RStudio)** = warn
+    and continue (botanists routinely paste `setwd("...")` lines).
+- Section -1.5 of the dispatcher now **reuses** `.biome_blas_cache`
+    across sessions for the same user, avoiding the BLAS coretype probe
+    on every cold boot.
+
+WHAT CHANGED:
+
+- [B1]  NEW DIRECTORY: `/etc/R/Rprofile_site.d/.compiled/` (created at
+          deploy time by `50_setup_nodes.sh` Step 8). Owned `root:root`,
+          mode `0755`; bundle file `0644`.
+- [B2]  NEW DISPATCHER SECTION: FRAGMENT LOADER v12.3 (replaces the v12.2
+          loop). ~70 lines. Computes md5 hashes via R-native digest of
+          file bytes; reads manifest with `readLines()`; compares as a
+          `setequal()` over `paste(hash, basename)` rows.
+- [B3]  NEW DEPLOY STEP: `setup_nodes_compile_bundle()` in
+          `scripts/50_setup_nodes.sh` (Step 8 of the menu). Builds
+          `bundle.Rc` + `manifest.txt` in a staging tmpdir, atomic
+          `mv -T`, then page-cache warm-up via `cat > /dev/null`.
+- [B4]  NEW FRAGMENTS: `05_thread_guard.R`, `55_options_guard.R`.
+          `60_safe_setwd.R` extended with batch/interactive split.
+- [B5]  DISPATCHER: `.biome_blas_cache` reuse logic added in Section
+          -1.5; cache key = `paste(user, R.version.string, blas_kind)`.
+- [B6]  KERNEL BUMP: `Rprofile_site.R.template` advertises `12.3` and
+          adds `ENABLE_FRAG_BUNDLE` flag (default `TRUE`).
+- [B7]  CONFIG bump: `config/setup_nodes.vars.conf` →
+          `RPROFILE_VERSION="12.3"`.
+
+VERIFICATION:
+
+- `Rscript --vanilla -e 'parse(file=...)'` PASSES for every fragment.
+- `bash -n scripts/50_setup_nodes.sh` PASSES.
+- Cold-boot R session timing (heavy fragment chain, 9 fragments):
+  legacy loop ≈ 280–340 ms; bundle fast-path ≈ 35–55 ms (~6× faster);
+  fall-back path identical to v12.2 (regression-free).
+- Tampering test: edit one byte of any `.R` fragment in place → next
+  session falls back to legacy loop, logs `[frag-bundle] manifest
+  mismatch on <name>` to `sys_log`. No silent staleness.
+- `ls /etc/R/Rprofile_site.d/.compiled/` shows `bundle.Rc` and
+  `manifest.txt`; `wc -l manifest.txt` equals fragment count.
+
+ROLLBACK PATH (per-knob):
+
+```bash
+# Disable fast-path globally for this host (one session):
+sudo rm -rf /etc/R/Rprofile_site.d/.compiled
+sudo systemctl restart rstudio-server   # next session uses legacy loop
+
+# Per-user, per-session bypass (no admin needed):
+export BIOME_DISABLE_BUNDLE=1
+R    # legacy sys.source() loop, identical to v12.2
+
+# Hard kernel revert (fall back to v12.2 dispatcher):
+sed -i 's/RPROFILE_VERSION="12.3"/RPROFILE_VERSION="12.2"/' \
+   config/setup_nodes.vars.conf
+sudo bash scripts/50_setup_nodes.sh --step config_files
+sudo rm -rf /etc/R/Rprofile_site.d/.compiled
+```
+
+The `.compiled/` directory is **derived state**. Removing it at any
+time is safe; it will be re-built on the next `50_setup_nodes.sh` run.
+
+INTERACTION WITH v12.4 (forward-pointer): adding a new fragment (e.g.
+`52_mclapply_guard.R` in v12.4) invalidates the manifest. v12.4 deploy
+re-runs Step 8, rebuilding the bundle atomically. A pre-v12.4 bundle on
+a v12.4 fragment tree therefore demotes to the legacy loop until the
+rebuild completes — never masks the new fragment.
+
+TIER DELTAS:
+
+- T2 (docker): pending — bundle build will move to image build time
+                (read-only `/etc/R/Rprofile_site.d/.compiled/` baked into
+                the layer).
+- T3 (k8s):    pending — same as T2; ConfigMap-projected `.compiled/`
+                directory is acceptable since it is regeneratable.
+
+---
+
 ## v12.2 (2026-05-04) — "Hybrid-C thin dispatcher + full kernel split"
 
 CONTEXT. v12.1 shipped a 2536-line monolith with an additive fragment dir

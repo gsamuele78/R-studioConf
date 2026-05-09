@@ -1,0 +1,168 @@
+# templates/Rprofile_site.d/52_mclapply_guard.R.template
+# Fragment 52 — FORK GUARD: parallel::mclapply -> PSOCK auto-reroute (v12.4)
+# ──────────────────────────────────────────────────────────────────────────────
+# HC-13 (Adapt System, Not User Script):
+#   `99_diagnose_lussu_hang.sh` Probe E (PSOCK swap) consistently passes when
+#   user code that mixes parallel::mclapply with terra/sf/raster/GDAL/openblas
+#   would otherwise deadlock under fork() on a multi-threaded R process.
+#   POSIX specifies that fork() on a multi-threaded process yields undefined
+#   behaviour: children inherit locked pthread mutexes belonging to threads
+#   that no longer exist → eternal futex_wait_queue.  Rather than asking
+#   researchers to rewrite their `.R`, this fragment intercepts mclapply()
+#   and reroutes the call through a PSOCK cluster (no fork, no inherited
+#   thread state) when fork-unsafe namespaces are loaded.
+#
+# Loaded by dispatcher via: source(file, local=TRUE) inside main local({...})
+# Inherits closure: .biome_env, sys_log, .biome_swerr, .biome_install_wrapper
+#                   (from fragment 40), biome_make_cluster (from fragment 30),
+#                   ENABLE_* flags, MAX_THREADS, USER_TMP_ROOT, …
+#
+# PSE FLAG DISCIPLINE:
+#   Compile-time:  ENABLE_FORK_TO_PSOCK    (default TRUE)
+#   Runtime kill:  BIOME_DISABLE_FORK_GUARD=1   (operator escape hatch)
+#   Runtime force: BIOME_FORCE_FORK_GUARD=1     (opt-in even with flag off)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Local feature flag (declared here, not in the dispatcher, so the fragment
+# remains independently disable-able by removing this single file).
+if (!exists("ENABLE_FORK_TO_PSOCK", inherits = FALSE)) {
+  ENABLE_FORK_TO_PSOCK <- TRUE
+}
+
+.biome_fork_guard_on <-
+  (isTRUE(ENABLE_FORK_TO_PSOCK) &&
+     !nzchar(Sys.getenv("BIOME_DISABLE_FORK_GUARD", ""))) ||
+  nzchar(Sys.getenv("BIOME_FORCE_FORK_GUARD", ""))
+
+# Namespaces whose presence makes fork() unsafe (open native pthread pools,
+# mmap'd raster blocks, GDAL handles, BLAS-pthread workers, …).
+.biome_fork_unsafe_pkgs <- c(
+  "terra", "sf", "raster", "stars",
+  "rgee", "gdalUtilities", "gdalcubes",
+  "torch", "tensorflow", "keras",
+  "arrow"
+)
+
+# Heuristic: should the current call to mclapply be rerouted?
+#   1. fork-guard globally enabled
+#   2. at least one fork-unsafe namespace loaded in the master OR the user
+#      explicitly requested it via BIOME_FORCE_FORK_GUARD.
+#   3. caller did NOT pass mc.cores=1 (single-process, no fork actually happens).
+.biome_should_reroute_mclapply <- function(mc.cores) {
+  if (!isTRUE(.biome_fork_guard_on)) return(FALSE)
+  if (is.numeric(mc.cores) && length(mc.cores) == 1L && mc.cores <= 1L) return(FALSE)
+  if (nzchar(Sys.getenv("BIOME_FORCE_FORK_GUARD", ""))) return(TRUE)
+  any(vapply(.biome_fork_unsafe_pkgs, isNamespaceLoaded, logical(1)))
+}
+
+# Build a mclapply-compatible wrapper. Order/types of arguments mirror
+# parallel::mclapply for drop-in compatibility with user code.
+.biome_mclapply_safe <- function(X, FUN, ...,
+                                  mc.preschedule = TRUE,
+                                  mc.set.seed    = TRUE,
+                                  mc.silent      = FALSE,
+                                  mc.cores       = getOption("mc.cores", 2L),
+                                  mc.cleanup     = TRUE,
+                                  mc.allow.recursive = TRUE,
+                                  affinity.list  = NULL) {
+
+  # Resolve original implementation (saved by .biome_install_wrapper into .biome_env)
+  orig <- tryCatch(.biome_env$.biome_orig_mclapply,
+                   error = function(e) NULL)
+  if (is.null(orig)) {
+    orig <- parallel::mclapply  # last-resort fallback
+  }
+
+  # Decide path
+  if (!.biome_should_reroute_mclapply(mc.cores)) {
+    # Original fork path — environment unchanged, behaviour identical
+    return(orig(X = X, FUN = FUN, ...,
+                mc.preschedule = mc.preschedule,
+                mc.set.seed    = mc.set.seed,
+                mc.silent      = mc.silent,
+                mc.cores       = mc.cores,
+                mc.cleanup     = mc.cleanup,
+                mc.allow.recursive = mc.allow.recursive,
+                affinity.list  = affinity.list))
+  }
+
+  # ── PSOCK reroute path ────────────────────────────────────────────────────
+  reason <- {
+    loaded <- .biome_fork_unsafe_pkgs[
+      vapply(.biome_fork_unsafe_pkgs, isNamespaceLoaded, logical(1))]
+    if (length(loaded)) paste(loaded, collapse = ",") else "BIOME_FORCE_FORK_GUARD"
+  }
+  tryCatch(sys_log("ForkGuard", "REROUTE",
+    sprintf("mclapply(mc.cores=%s) -> PSOCK (unsafe loaded: %s)",
+            as.character(mc.cores), reason)),
+    error = function(e) NULL)
+
+  # Build a PSOCK cluster via biome_make_cluster() (fragment 30) when available,
+  # otherwise fall back to parallel::makeCluster.
+  n <- max(1L, as.integer(mc.cores))
+  cl <- tryCatch({
+    mk <- tryCatch(.biome_env$.biome_make_cluster_impl, error = function(e) NULL)
+    if (is.function(mk)) {
+      mk(workers = n, worker_threads = 1L)
+    } else {
+      parallel::makeCluster(n, type = "PSOCK")
+    }
+  }, error = function(e) {
+    tryCatch(sys_log("ForkGuard", "FAIL",
+      sprintf("PSOCK cluster create failed (%s); falling back to original mclapply",
+              conditionMessage(e))),
+      error = function(e2) NULL)
+    NULL
+  })
+
+  if (is.null(cl)) {
+    # Could not build PSOCK — degrade gracefully to the original fork path
+    return(orig(X = X, FUN = FUN, ...,
+                mc.preschedule = mc.preschedule,
+                mc.set.seed    = mc.set.seed,
+                mc.silent      = mc.silent,
+                mc.cores       = mc.cores,
+                mc.cleanup     = mc.cleanup,
+                mc.allow.recursive = mc.allow.recursive,
+                affinity.list  = affinity.list))
+  }
+  on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+
+  # Honour mc.set.seed=TRUE by setting an L'Ecuyer-CMRG stream on the cluster
+  if (isTRUE(mc.set.seed)) {
+    tryCatch(parallel::clusterSetRNGStream(cl), error = function(e) NULL)
+  }
+
+  # Execute. parLapply preserves the (X, FUN, ...) contract of mclapply for
+  # the lapply-flavoured 90% of real use; mc.preschedule / affinity.list
+  # are silently ignored (PSOCK has no equivalent — log it once for clarity).
+  if (!isTRUE(mc.preschedule)) {
+    tryCatch(sys_log("ForkGuard", "INFO",
+      "mc.preschedule=FALSE ignored under PSOCK reroute (no equivalent)"),
+      error = function(e) NULL)
+  }
+  parallel::parLapply(cl, X, FUN, ...)
+}
+
+# Install the wrapper. .biome_install_wrapper (fragment 40):
+#   - skips cleanly if `parallel::mclapply` is missing (older R, stripped install)
+#   - saves the original to .biome_env$.biome_orig_mclapply (used above)
+#   - preserves binding-lock state, logs the install via sys_log
+if (isTRUE(.biome_fork_guard_on) && exists(".biome_install_wrapper",
+                                            inherits = FALSE)) {
+  tryCatch({
+    ns <- asNamespace("parallel")
+    .biome_install_wrapper(.biome_mclapply_safe, "mclapply", ns,
+                           save_original_to = ".biome_orig_mclapply")
+    sys_log("ForkGuard", "ARMED",
+            sprintf("ENABLE_FORK_TO_PSOCK=%s, unsafe-pkgs=%d",
+                    isTRUE(ENABLE_FORK_TO_PSOCK),
+                    length(.biome_fork_unsafe_pkgs)))
+  }, error = .biome_swerr("Line_fork_guard_install"))
+} else {
+  tryCatch(sys_log("ForkGuard", "OFF",
+    sprintf("disabled (flag=%s, env=%s)",
+            isTRUE(ENABLE_FORK_TO_PSOCK),
+            Sys.getenv("BIOME_DISABLE_FORK_GUARD", ""))),
+    error = function(e) NULL)
+}

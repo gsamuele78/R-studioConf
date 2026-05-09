@@ -68,7 +68,24 @@ After the bump:
   `/etc/R/Rprofile_site.d/*` against the new R.
 * Smoke-test with `bash scripts/test_rstudio_login.sh`.
 
-### 3.2 Re-render templates (after editing under `templates/`)
+### 3.2 Apply Rprofile v12.4 (Lussu fork-guard + NFS lookup-storm fix)
+
+For the procedure on new and already-deployed nodes, plus rollback and
+per-user bypass, see the dedicated runbook:
+[`UPGRADE_TO_v12.4.md`](UPGRADE_TO_v12.4.md).
+
+Quick reference:
+
+```bash
+sudo bash scripts/50_setup_nodes.sh   # menu option L = local R-libs + NFS audit only
+sudo bash scripts/50_setup_nodes.sh --verify   # expect: Rprofile.site version: 12.4
+```
+
+Optional: pre-create a dedicated `/var/lib/biome-Rlibs/` disk by
+setting `R_LIBS_LOCAL_DEVICE=/dev/sdX` in `setup_nodes.vars.conf` before
+running the script (Mode B; idempotent fstab via UUID).
+
+### 3.3 Re-render templates (after editing under `templates/`)
 
 ```bash
 # Nginx
@@ -82,7 +99,7 @@ sudo bash scripts/50_setup_nodes.sh   # idempotent
 sudo bash scripts/20_configure_rstudio.sh
 ```
 
-### 3.3 Backup / restore config
+### 3.4 Backup / restore config
 
 `r_env_manager.sh` rotates each managed config to
 `/var/backups/r_env_manager/files/<full-path>.<timestamp>` before
@@ -100,7 +117,7 @@ Rotate `/var/backups/r_env_manager/files/` per your retention policy
 (no automatic prune is shipped, by design — destructive default would
 violate pessimistic engineering).
 
-### 3.4 Domain machine-account refresh
+### 3.5 Domain machine-account refresh
 
 Active Directory rotates the computer-object password periodically.
 After ~30 days, refresh:

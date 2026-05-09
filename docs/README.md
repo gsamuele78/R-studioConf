@@ -55,6 +55,7 @@ authoritative deployment of the *botanical big-data calculus* platform.
 - [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed runbook (RStudio, PAM, identity, storage, nginx, telemetry, ttyd, escalation).
 - [`DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md) — every `99_*.sh` / `fix_*.sh` (When / Mutates / Output / NextStep) + decision tree.
 - [`MAINTENANCE.md`](operations/MAINTENANCE.md) — daily / weekly / monthly / quarterly tasks, R-version bump, AD rotation, rollback.
+- [`UPGRADE_TO_v12.4.md`](operations/UPGRADE_TO_v12.4.md) — Rprofile v12.4 upgrade runbook (Lussu fork-guard + NFS lookup-storm fix).
 - [`USER_QUOTAS_AND_RESOURCES.md`](operations/USER_QUOTAS_AND_RESOURCES.md) — RAM/CPU/scratch quotas, `unix::rlimit_as`, cgroups, `systemd-oomd`.
 - [`USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) — debugging user R scripts without editing them.
 - [`LUSSU_HANG_BISECTION.md`](operations/LUSSU_HANG_BISECTION.md) — `mclapply`-on-`terra::rast` hang bisection.

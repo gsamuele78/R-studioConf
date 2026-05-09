@@ -726,6 +726,201 @@ setup_nodes_rust_compile() {
 }
 
 # ==============================================================================
+# STEP 7C: PER-USER LOCAL R LIBRARY DISK (v12.4)
+# ==============================================================================
+# Creates ${R_LIBS_LOCAL_ROOT} (default /var/lib/biome-Rlibs) on each node and
+# sticky-bits it 1777 so every AD user can populate their own subtree without
+# crossing NFS during library() fan-out.
+#
+# Mode A — shared with rootfs (R_LIBS_LOCAL_DEVICE empty):
+#   Just mkdir + chmod 1777. Cheap, but counts against rootfs free space.
+#
+# Mode B — dedicated block device (R_LIBS_LOCAL_DEVICE=/dev/sdX):
+#   Idempotent: if device unformatted → mkfs.${R_LIBS_LOCAL_FSTYPE}; ensure
+#   /etc/fstab entry by UUID; mount; mkdir + chmod 1777.
+#   Safe to re-run on already-deployed nodes after attaching disk in Proxmox.
+#
+# HC-14: any chmod / mkdir / mount failure aborts deploy (exit 1).
+# ==============================================================================
+setup_nodes_local_rlibs() {
+  log_step "Step 7c: Per-user local R library disk (v12.4)"
+
+  # Allow opt-out
+  if [[ "${ENABLE_R_LIBS_LOCAL:-true}" != "true" ]]; then
+    log_info "ENABLE_R_LIBS_LOCAL=false — skipping local R library disk setup"
+    return 0
+  fi
+
+  local rlibs_root="${R_LIBS_LOCAL_ROOT:-/var/lib/biome-Rlibs}"
+  local rlibs_dev="${R_LIBS_LOCAL_DEVICE:-}"
+  local rlibs_fs="${R_LIBS_LOCAL_FSTYPE:-ext4}"
+
+  # ── Mode B: dedicated block device ───────────────────────────────────
+  if [[ -n "${rlibs_dev}" ]]; then
+    log_info "Dedicated R libs disk requested: ${rlibs_dev} (${rlibs_fs})"
+
+    if [[ ! -b "${rlibs_dev}" ]]; then
+      log_error "R_LIBS_LOCAL_DEVICE=${rlibs_dev} is not a block device"
+      log_error "  → After attaching the disk in Proxmox, verify with: lsblk"
+      log_error "  → Then re-run this step. Aborting (HC-14)."
+      exit 1
+    fi
+
+    # Detect existing filesystem (no clobber)
+    local existing_fs
+    existing_fs=$(blkid -s TYPE -o value "${rlibs_dev}" 2>/dev/null || true)
+    if [[ -z "${existing_fs}" ]]; then
+      log_info "  ${rlibs_dev} is unformatted → creating ${rlibs_fs}"
+      run_cmd "mkfs.${rlibs_fs}" -F -L biome-Rlibs "${rlibs_dev}"
+    elif [[ "${existing_fs}" != "${rlibs_fs}" ]]; then
+      log_warn "  ${rlibs_dev} already has filesystem '${existing_fs}' (config wants '${rlibs_fs}')"
+      log_warn "  → Refusing to reformat. Continuing with existing fs."
+    else
+      log_info "  ${rlibs_dev} already formatted as ${existing_fs}"
+    fi
+
+    # Ensure mount point exists
+    run_cmd mkdir -p "${rlibs_root}"
+
+    # Ensure /etc/fstab entry (by UUID — survives /dev/sdX renumbering)
+    local rlibs_uuid
+    rlibs_uuid=$(blkid -s UUID -o value "${rlibs_dev}" 2>/dev/null || true)
+    if [[ -z "${rlibs_uuid}" ]]; then
+      log_error "Could not read UUID of ${rlibs_dev} (HC-14)"
+      exit 1
+    fi
+    if ! grep -qE "^UUID=${rlibs_uuid}\b" /etc/fstab 2>/dev/null; then
+      log_info "  Adding fstab entry: UUID=${rlibs_uuid}  ${rlibs_root}  ${rlibs_fs}  defaults,nofail  0  2"
+      if [[ "${DRY_RUN}" != "true" ]]; then
+        printf 'UUID=%s  %s  %s  defaults,nofail  0  2  # managed-by: 50_setup_nodes.sh local-Rlibs\n' \
+          "${rlibs_uuid}" "${rlibs_root}" "${rlibs_fs}" >> /etc/fstab
+      fi
+    else
+      log_info "  fstab entry already present for UUID=${rlibs_uuid}"
+    fi
+
+    # Mount if not already mounted
+    if ! mountpoint -q "${rlibs_root}" 2>/dev/null; then
+      log_info "  Mounting ${rlibs_root}"
+      run_cmd mount "${rlibs_root}"
+    else
+      log_info "  ${rlibs_root} already mounted"
+    fi
+  else
+    log_info "No R_LIBS_LOCAL_DEVICE configured — using shared rootfs path: ${rlibs_root}"
+    run_cmd mkdir -p "${rlibs_root}"
+  fi
+
+  # ── Sticky-bit + ownership (HC-14: abort on failure) ─────────────────
+  if [[ "${DRY_RUN}" != "true" ]]; then
+    chown root:root "${rlibs_root}" || { log_error "chown root:root ${rlibs_root} failed (HC-14)"; exit 1; }
+    chmod 1777 "${rlibs_root}"      || { log_error "chmod 1777 ${rlibs_root} failed (HC-14)"; exit 1; }
+  fi
+
+  # ── Sanity probe: write/read by an unprivileged identity (best-effort) ─
+  if [[ "${DRY_RUN}" != "true" ]]; then
+    local probe="${rlibs_root}/.deploy_probe.$$"
+    if ( umask 022 && touch "${probe}" 2>/dev/null && rm -f "${probe}" ); then
+      log_success "Local R libs root: ${rlibs_root} (sticky 1777, writable)"
+    else
+      log_error "Local R libs root: ${rlibs_root} not writable — HC-14 abort"
+      exit 1
+    fi
+  else
+    log_success "[DRY-RUN] Would prepare ${rlibs_root}"
+  fi
+
+  log_info "Renviron.site will resolve R_LIBS_USER to ${rlibs_root}/<user>/<R version>"
+  log_info "Existing user packages on NFS remain reachable as fallback."
+}
+
+# ==============================================================================
+# STEP 7D: NFS MOUNT AUDIT (v12.4)
+# ==============================================================================
+# Read-only audit. Never remounts. Surfaces drift between deployed mount
+# options and the values configured in setup_nodes.vars.conf so the sysadmin
+# can act on TrueNAS / fstab side. PSE: detect, never silently coerce.
+# ==============================================================================
+setup_nodes_audit_nfs() {
+  log_step "Step 7d: NFS mount audit (read-only)"
+
+  local req_nconn="${NFS_AUDIT_REQUIRE_NCONNECT_MIN:-4}"
+  local req_vers="${NFS_AUDIT_REQUIRE_VERS_MIN:-4.1}"
+  local hint_lookupcache="${NFS_AUDIT_HINT_LOOKUPCACHE_ALL:-true}"
+
+  local found=0 issues=0
+  while IFS= read -r line; do
+    # /proc/mounts: <dev> <mp> <fstype> <opts> <freq> <passno>
+    local fstype mp opts
+    fstype=$(awk '{print $3}' <<< "${line}")
+    mp=$(awk     '{print $2}' <<< "${line}")
+    opts=$(awk   '{print $4}' <<< "${line}")
+    [[ "${fstype}" =~ ^nfs ]] || continue
+    found=$((found+1))
+
+    log_info "  NFS mount: ${mp}  (fstype=${fstype})"
+
+    # vers
+    local vers
+    vers=$(grep -oE 'vers=[0-9.]+' <<< "${opts}" | head -1 | cut -d= -f2 || true)
+    if [[ -z "${vers}" ]]; then
+      log_warn "    [audit] no 'vers=' option in mount opts — kernel may default unsafely"
+      issues=$((issues+1))
+    else
+      # numeric compare: split on dot
+      if awk -v a="${vers}" -v b="${req_vers}" 'BEGIN{
+            split(a,A,"."); split(b,B,".");
+            for(i=1;i<=length(B);i++){
+              ai=(A[i]==""?0:A[i]+0); bi=B[i]+0;
+              if(ai<bi){exit 1} else if(ai>bi){exit 0}
+            }
+            exit 0
+          }'; then
+        log_info  "    [audit] vers=${vers} ≥ required ${req_vers} (OK)"
+      else
+        log_warn "    [audit] vers=${vers} < required ${req_vers} (FIX on TrueNAS / fstab)"
+        issues=$((issues+1))
+      fi
+    fi
+
+    # nconnect
+    local nconn
+    nconn=$(grep -oE 'nconnect=[0-9]+' <<< "${opts}" | head -1 | cut -d= -f2 || true)
+    if [[ -z "${nconn}" ]]; then
+      log_warn "    [audit] nconnect= not set — single TCP connection bottleneck under load"
+      log_warn "             FIX: add 'nconnect=${req_nconn}' to fstab and remount"
+      issues=$((issues+1))
+    elif (( nconn < req_nconn )); then
+      log_warn "    [audit] nconnect=${nconn} < required ${req_nconn}"
+      issues=$((issues+1))
+    else
+      log_info  "    [audit] nconnect=${nconn} ≥ ${req_nconn} (OK)"
+    fi
+
+    # lookupcache
+    if [[ "${hint_lookupcache}" == "true" ]]; then
+      if grep -qE 'lookupcache=positive' <<< "${opts}"; then
+        log_info "    [audit] lookupcache=positive (HINT: 'all' may help library() fan-out)"
+      elif grep -qE 'lookupcache=' <<< "${opts}"; then
+        log_info "    [audit] lookupcache present"
+      else
+        log_info "    [audit] lookupcache not pinned — kernel default in effect"
+      fi
+    fi
+  done < /proc/mounts
+
+  if (( found == 0 )); then
+    log_info "No NFS mounts present on this host — audit skipped."
+    return 0
+  fi
+  if (( issues > 0 )); then
+    log_warn "NFS audit: ${issues} issue(s) flagged across ${found} mount(s) — fix on storage / fstab side"
+  else
+    log_success "NFS audit: ${found} mount(s) compliant with audit thresholds"
+  fi
+}
+
+# ==============================================================================
 # STEP 8: DEPLOY SYSTEM CONFIGURATION FILES
 # ==============================================================================
 setup_nodes_config_files() {
@@ -746,6 +941,12 @@ setup_nodes_config_files() {
 
 # R Library Paths
 R_LIBS_SITE=/usr/local/lib/R/site-library/:\${R_LIBS_SITE}:/usr/lib/R/library
+
+# Per-user local R library (v12.4) — eliminates NFS lookupcache storm during
+# library() fan-out from PSOCK workers. Created by setup_nodes_local_rlibs()
+# (sticky 1777). Fallback to NFS \$HOME path keeps pre-v12.4 packages reachable.
+# Bypass for one debug session: R_LIBS_USER=\${HOME}/R/x86_64-pc-linux-gnu-library/%V R
+R_LIBS_USER=${R_LIBS_LOCAL_ROOT:-/var/lib/biome-Rlibs}/%u/%v:\${HOME}/R/x86_64-pc-linux-gnu-library/%v
 
 # OpenBLAS CORETYPE — NOT set here (migration-safe design).
 # Detected dynamically by OS-level wrappers BEFORE R starts:
@@ -2078,6 +2279,7 @@ echo "  8) Setup CGroups only (Step 11a)"
 echo "  9) Setup Orphan Process Cleanup (Step 11b)"
 echo "  10) Setup BIOME Precision Archiver (Step 11c)"
 echo "  T) Setup BIOME Admin Tools (Step 11d)"
+echo "  L) Setup local R libs disk + NFS audit (Step 7c+7d, v12.4)"
 echo "  H) Deploy HC-13 triage tooling (Step 11f: minimal Rprofile + r_minimal + harnesses)"
 echo "  R) Master Diagnostic Report (Step 11e)"
 echo "  O) Deploy Optimized Rprofile (Rust plugin + Template)"
@@ -2101,6 +2303,8 @@ case "${choice}" in
     setup_nodes_swap
     setup_nodes_python
     setup_nodes_r_packages
+    setup_nodes_local_rlibs
+    setup_nodes_audit_nfs
     setup_nodes_config_files
     setup_nodes_migrate_users
     setup_nodes_logging
@@ -2152,6 +2356,11 @@ case "${choice}" in
   T)
     setup_nodes_preflight
     setup_nodes_admin_tools
+    ;;
+  L)
+    setup_nodes_preflight
+    setup_nodes_local_rlibs
+    setup_nodes_audit_nfs
     ;;
   H)
     setup_nodes_preflight

@@ -129,7 +129,7 @@ doing). Each script is idempotent and re-runnable.
 ### Phase 4 — Telemetry & node R runtime
 
 1. `40_install_telemetry.sh`
-2. `50_setup_nodes.sh` *(deploys `/etc/R/Rprofile.site` dispatcher + `/etc/R/Rprofile_site.d/*` fragments + `/etc/R/Renviron.site` + `/Rtmp` wiring + `r_minimal` launcher + optional Ollama AI; supports `--dry-run` and `--skip-ollama`)*
+2. `50_setup_nodes.sh` *(deploys `/etc/R/Rprofile.site` dispatcher + `/etc/R/Rprofile_site.d/*` fragments + `/etc/R/Renviron.site` + `/Rtmp` wiring + `r_minimal` launcher + (since v12.4) `/var/lib/biome-Rlibs/` local R-libs root + read-only NFS mount audit + optional Ollama AI; supports `--dry-run`, `--skip-ollama`, `--verify`; menu option `L` runs only the v12.4 R-libs + NFS-audit steps)*
 
 ### Phase 5 — Verification
 
@@ -166,7 +166,8 @@ SIGSEGV, OOM-kill, or silent wrong-answer regressions.
 | `passwd` SIGSEGV on AD-joined Ubuntu 24.04 (uid<10000) | `13_harden_pam_password.sh` (new install) / `fix_pam_segfault_inplace.sh` (retrofit) | [`PAM_HARDENING.md`](PAM_HARDENING.md) |
 | OpenBLAS-pthread SIGSEGV in RStudio fork | `50_setup_nodes.sh` pins `libopenblas0-serial` | rule above |
 | `/tmp` overflow under spatial/MCMC | `/Rtmp` 400GB disk + `Renviron.template` | rule above |
-| Lussu-style hang in `mclapply` over `terra::rast` | `99_diagnose_lussu_hang.sh` + `Rprofile_site.d/30_psock_factory.R.template` | [`../operations/LUSSU_HANG_BISECTION.md`](../operations/LUSSU_HANG_BISECTION.md) |
+| Lussu-style hang in `mclapply` over `terra::rast` | `99_diagnose_lussu_hang.sh` + `Rprofile_site.d/30_psock_factory.R.template` + (since v12.4) `Rprofile_site.d/52_mclapply_guard.R.template` | [`../operations/LUSSU_HANG_BISECTION.md`](../operations/LUSSU_HANG_BISECTION.md), [`../operations/UPGRADE_TO_v12.4.md`](../operations/UPGRADE_TO_v12.4.md) |
+| NFS library-lookup storm on `library()` | (since v12.4) `R_LIBS_USER` defaults to local `/var/lib/biome-Rlibs/<user>/<R-ver>` with NFS fallback; deployed by `50_setup_nodes.sh` Step 7c | [`../operations/UPGRADE_TO_v12.4.md`](../operations/UPGRADE_TO_v12.4.md) |
 | Silent CRAN drift between nodes | `99_check_pkg_drift.sh` + cron schedule from `setup_nodes.vars.conf` | [`../operations/MAINTENANCE.md`](../operations/MAINTENANCE.md) |
 | Nginx temp dir bloat | `15_setup_nginx_cleanup.sh` daily cron | — |
 | chrony pool newline edge case (Debian 12) | `02_configure_time_sync.sh` (FIXED) | — |

@@ -82,8 +82,11 @@ a supplementary-materials reader, and to yourself in 5 years.
 - ✅ `r <- terra::rast("big.tif")`
 - ❌ `terra::terraOptions(memfrac = 0.95, threads = 32)`
 
-> The profile already sets `memfrac=0.6`, `threads=1`, and points
-> `terra`'s tempdir to `/Rtmp`. Leave it alone.
+> Since v12.4 the profile sets `memfrac=0.5`, `todisk=TRUE`,
+> `threads=1`, and points `terra`'s tempdir to `/Rtmp`. Leave it alone.
+> If you ever need to keep rasters in RAM for a one-off measurement,
+> `Sys.setenv(BIOME_TERRA_NORAM=1)` before `library(terra)` reverts to
+> the upstream defaults — but only for that session.
 
 ---
 
@@ -143,7 +146,7 @@ a supplementary-materials reader, and to yourself in 5 years.
 | Session crashes during `solve()` / `lm()` / `brm()` | `sessionInfo()` — BLAS line — paste to admin |
 | `cannot allocate vector of size …` | `gc()`, then email admin with size |
 | `No space left on device` during Stan compile | `df -h /Rtmp` |
-| Parallel job uses 0% CPU | Re-check: you used `makeCluster()` not `mclapply()` after loading terra? |
+| Parallel job uses 0% CPU | Since v12.4 `mclapply()` after `library(terra)` is auto-rerouted to PSOCK — no action needed. If still stuck, send `sessionInfo()` + `Sys.getpid()` to the admin. |
 | Script runs 10× slower than yesterday | Did you write files to `~/...` instead of `tempfile()`? |
 | R won't start at all | `cat /tmp/biome_boot_errors_*.log` — paste to admin |
 
@@ -212,6 +215,13 @@ from any script you maintain:
 | `BIOME_FORCE_TMP=/tmp`  | force tempdir to tmpfs    | **no-op** — would OOM-kill anyway    |
 | `R_DISABLE_QUOTA`       | bypass `rlimit_as`        | **no-op** — cgroup still applies     |
 | `BIOME_LEGACY_BLAS`     | re-enable pthread BLAS    | **no-op** — pthread BLAS = SIGSEGV   |
+
+**Troubleshooting bypasses (v12.4)** — single-session only, never put in `.Renviron`:
+
+| Variable                    | Effect                                                       |
+|-----------------------------|--------------------------------------------------------------|
+| `BIOME_DISABLE_FORK_GUARD=1`| Disable `mclapply→PSOCK` reroute (you accept fork-deadlock risk) |
+| `BIOME_TERRA_NORAM=1`       | Disable `terra` `todisk=TRUE` default (rasters back in RAM)   |
 
 If you genuinely need to lift a limit, email the admin (§ above). Do not
 sprinkle environment hacks across your code.

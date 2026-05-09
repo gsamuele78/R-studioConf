@@ -35,9 +35,20 @@
       tt <- 1L   # hard-pinned for fork-safety (see Renviron.site guard-rails)
       td <- file.path(user_tmp_root, "terra")
       if (!dir.exists(td)) dir.create(td, recursive = TRUE, showWarnings = FALSE)
-      terra::terraOptions(memfrac = 0.6, tempdir = td, verbose = FALSE)
+      # v12.4: todisk=TRUE by default (Lussu probe F resolution).
+      # Forces raster spill to local /Rtmp instead of holding pages in RAM,
+      # which under fork()+mclapply could trigger OOM-induced deadlocks.
+      # Operator override: BIOME_TERRA_NORAM=1 (force off) or set
+      # ENABLE_TERRA_TODISK_DEFAULT <- FALSE in dispatcher feature-flag block.
+      .terra_todisk <- isTRUE(get0("ENABLE_TERRA_TODISK_DEFAULT",
+                                    inherits = FALSE, ifnotfound = TRUE)) &&
+                       !nzchar(Sys.getenv("BIOME_TERRA_NORAM", ""))
+      terra::terraOptions(memfrac = 0.5, tempdir = td, verbose = FALSE,
+                          todisk = .terra_todisk)
       .biome_env$shared_env$terra_threads <- tt
-      msg_parts <- c(msg_parts, "Terra [LocalDisk/fork-safe]")
+      msg_parts <- c(msg_parts,
+        sprintf("Terra [LocalDisk/fork-safe%s]",
+                if (.terra_todisk) "/todisk" else ""))
     }, error = .biome_swerr("Line_1373"))
 
 

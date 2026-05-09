@@ -95,7 +95,9 @@ deployment_tiers:
         "HC-11",
         "HC-12",
         "HC-13",
+        "HC-14",
       ]
+
     open_gaps:
       - "deploy.sh used set -e only (HC-03 fix: set -euo pipefail) — fixed 2026-05-09"
       - "missing scripts/validate_deployment.sh referenced by deploy.sh — added stub 2026-05-09"
@@ -258,8 +260,47 @@ constraints:
       triage harness is the auditable proof that the ordering was followed.
     validate: "docs_have_responsibility_boundaries"
 
+  - id: "HC-14"
+    rule: "RPROFILE_VERSION bumps MUST land with matching CHANGELOG section + cross-doc references in the same commit"
+    rationale: |
+      The Rprofile_site dispatcher and its fragments are the highest-blast-radius
+      surface in the project: a silent kernel bump (e.g. v12.2 → v12.4 skipping
+      v12.3) leaves the byte-compiled bundle path, new fragments, and new
+      env-var bypasses undocumented — operators discover features only by
+      reading the source. v12.3 ("byte-compiled fragment bundle fast-path")
+      shipped without a CHANGELOG entry and was found only when documenting
+      v12.4 — exactly the failure mode this rule prevents.
+
+      RULE (enforced by Makefile + pre-commit hook):
+        1. Every change to `config/setup_nodes.vars.conf :: RPROFILE_VERSION`
+           MUST be accompanied, in the same commit, by a `## v<N> (YYYY-MM-DD) — "<headline>"`
+           section in `docs/reference/Rprofile_site.CHANGELOG.md` covering
+           CONTEXT, ARCHITECTURE, WHAT CHANGED, VERIFICATION, ROLLBACK, TIER DELTAS.
+        2. New deploy artefacts (e.g. `.compiled/`, `.bundle.Rc`, new fragments
+           in `templates/Rprofile_site.d/`) MUST be cross-referenced from
+           `docs/reference/CONFIGURATION_MAP.md §3`,
+           `docs/deployment/CONFIGURATION_REFERENCE.md §3`, and
+           `docs/reference/SCRIPT_CATALOG.md` row of the owning script.
+        3. T2/T3 status MUST be recorded in the new CHANGELOG entry's
+           "TIER DELTAS" section, even if "pending — to be ported".
+
+      ENFORCEMENT:
+        - `make audit` extracts `RPROFILE_VERSION` from `config/setup_nodes.vars.conf`
+          and greps for `^## v${VER}` in `docs/reference/Rprofile_site.CHANGELOG.md`.
+          Mismatch → exit 1.
+        - `.ai/hooks/pre-commit` detects an `RPROFILE_VERSION=` line change in
+          the staged diff; if no matching CHANGELOG section is staged, it
+          appends a stub `## v<N> (TBD) — "TODO"` block and aborts the commit
+          so the operator cannot forget.
+
+      EXCLUSIONS: documentation-only patch releases (e.g. `12.4.1` typo fix in
+      a comment) MAY skip the runbook in `docs/operations/UPGRADE_TO_*.md` but
+      still require a `### v12.4.1` sub-section in the CHANGELOG.
+    validate: "rprofile_version_has_changelog_entry"
+
 # ──────────────────────────────────────────────────────────────
 # COMPOSE FORMAT RULES
+
 # ──────────────────────────────────────────────────────────────
 compose_rules:
   syntax: "Docker Compose v2 — NO version: key"

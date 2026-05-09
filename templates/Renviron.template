@@ -9,6 +9,16 @@
 # R Library Paths
 R_LIBS_SITE=/usr/local/lib/R/site-library/:${R_LIBS_SITE}:/usr/lib/R/library
 
+# ── Per-user local R library (v12.4) ──
+# Resolves to %%R_LIBS_LOCAL_ROOT%%/<user>/<R version>/ on the LOCAL disk of
+# each RStudio node. Fallback path on $HOME (NFS) is preserved to keep
+# pre-v12.4 user-installed packages reachable until they are reinstalled local.
+# Created by 50_setup_nodes.sh::setup_local_rlibs() (sticky 1777). Eliminates
+# the NFS lookupcache storm during library() fan-out from PSOCK workers.
+# Bypass for one debug session: export BIOME_DISABLE_LOCAL_RLIBS=1 before R.
+# (When the env-var is set, .biome_env logic in 10_paths.R drops the prefix.)
+R_LIBS_USER=%%R_LIBS_LOCAL_ROOT%%/%u/%v:${HOME}/R/x86_64-pc-linux-gnu-library/%v
+
 # OpenBLAS CORETYPE — NOT set here (migration-safe design).
 # Detected dynamically by OS-level wrappers BEFORE R starts:
 #   1. /etc/profile.d/biome-coretype.sh (for terminal R sessions)
