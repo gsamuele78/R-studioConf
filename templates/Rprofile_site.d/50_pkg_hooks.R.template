@@ -411,6 +411,135 @@
       msg_parts <- c(msg_parts, "Rcpp [LocalDisk]")
     }, error = .biome_swerr("Line_1743"))
 
+    # ══════════════════════════════════════════════════════════════════════
+    # v12.3: MODERN-STACK THREAD CAPS
+    # ─────────────────────────────────────────────────────────────────────
+    # polars / duckdb / collapse / torch / RcppParallel all ship their OWN
+    # thread pools that are INDEPENDENT of OpenMP / OpenBLAS / the env vars
+    # set by fragment 05. Left alone they probe /proc/cpuinfo or libc
+    # sysconf(_SC_NPROCESSORS) — both of which return the BARE-HOST core
+    # count, not the cgroup cap.
+    #
+    # Consequences observed in staging:
+    #   - polars: LazyFrame.collect() spawns 128 Rayon workers in an
+    #     8-CPU cgroup → 100x context switching, 10x slowdown vs serial.
+    #   - collapse: fgroup_by / fsum on large data.table fans out to 128
+    #     OMP threads OUTSIDE our OPENBLAS_NUM_THREADS cap (separate lib).
+    #   - torch: torch_tensor(x)$to(device="cpu") uses MKL-DNN which reads
+    #     MKL_NUM_THREADS (already capped by fragment 05, but torch ALSO
+    #     has an independent intra-op pool set via torch_set_num_threads).
+    #   - RcppParallel: every package using RcppParallel::parallelFor
+    #     (e.g. RStan gradient eval, recent brms versions) gets all host
+    #     cores unless setThreadOptions() is called first.
+    #
+    # Design:
+    #   - Each hook is a separate tryCatch so a broken one never cascades.
+    #   - Use the cgroup-resolved cap (via fragment 05's resolver).
+    #   - Flags are PER-PACKAGE so late-loaded packages still get capped.
+    #   - Fall back to last_cores from the dispatcher if the resolver
+    #     isn't available yet.
+    # ══════════════════════════════════════════════════════════════════════
+
+    # Resolve thread cap once per hook pass — cheap, and may change if the
+    # user expanded their cgroup via `biome_unleash_threads()`.
+    .modern_cap <- tryCatch({
+      if (exists(".biome_resolve_cpu_cap", envir = globalenv(), inherits = FALSE)) {
+        v <- get(".biome_resolve_cpu_cap", envir = globalenv())()
+        if (!is.na(v) && is.finite(v) && v > 0) as.integer(v) else as.integer(fc)
+      } else as.integer(fc)
+    }, error = function(e) as.integer(fc))
+    if (!is.finite(.modern_cap) || .modern_cap < 1L) .modern_cap <- 1L
+
+    # ── polars (Rust Rayon thread pool) ──
+    # polars reads POLARS_MAX_THREADS at FIRST use of the Rust pool, which
+    # happens when the user calls pl$DataFrame or pl$scan_parquet. Setting
+    # the env var AFTER namespace load is still in time for the first pool
+    # instantiation. Also call pl$set_global_rpool_cap() as belt-and-
+    # suspenders — some polars versions initialise the pool at attach.
+    if (isNamespaceLoaded("polars") &&
+        !isTRUE(.biome_env$shared_env$.polars_hook_done)) tryCatch({
+      Sys.setenv(POLARS_MAX_THREADS = as.character(.modern_cap))
+      ns <- asNamespace("polars")
+      if (exists("pl", envir = ns, inherits = FALSE)) {
+        pl_obj <- get("pl", envir = ns, inherits = FALSE)
+        # pl$set_global_rpool_cap exists in polars >= 0.16; older versions
+        # expose pl$thread_pool_size as a getter only. tryCatch both.
+        tryCatch(pl_obj$set_global_rpool_cap(.modern_cap),
+                 error = function(e) NULL)
+      }
+      .biome_env$shared_env$.polars_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("polars [threads=%d]", .modern_cap))
+    }, error = .biome_swerr("polars_hook"))
+
+    # ── duckdb (intra-query parallelism) ──
+    # duckdb thread count is CONNECTION-scoped, not global — there is no
+    # process-wide setter. Best we can do is publish the cap via an
+    # option users can pick up (and document in the cheat sheet):
+    #   DBI::dbExecute(con, sprintf("PRAGMA threads=%d", getOption("biome.duckdb_threads")))
+    # Packages like dbplyr/duckplyr that auto-create connections read
+    # duckdb.threads from options() as of duckdb 0.9.x.
+    if (isNamespaceLoaded("duckdb") &&
+        !isTRUE(.biome_env$shared_env$.duckdb_hook_done)) tryCatch({
+      options(duckdb.threads   = .modern_cap,
+              biome.duckdb_threads = .modern_cap)
+      .biome_env$shared_env$.duckdb_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("duckdb [threads=%d]", .modern_cap))
+    }, error = .biome_swerr("duckdb_hook"))
+
+    # ── collapse (standalone OMP pool, NOT governed by OPENBLAS_NUM_THREADS) ──
+    # collapse 2.0+ reads options(collapse_nthreads) at function entry, so
+    # setting it once here covers every subsequent fgroup_by / fsum / etc.
+    # set_collapse() also exists (post-attach) for belt-and-suspenders.
+    if (isNamespaceLoaded("collapse") &&
+        !isTRUE(.biome_env$shared_env$.collapse_hook_done)) tryCatch({
+      options(collapse_nthreads = .modern_cap)
+      ns <- asNamespace("collapse")
+      if (exists("set_collapse", envir = ns, inherits = FALSE)) {
+        tryCatch(get("set_collapse", envir = ns)(nthreads = .modern_cap),
+                 error = function(e) NULL)
+      }
+      .biome_env$shared_env$.collapse_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("collapse [threads=%d]", .modern_cap))
+    }, error = .biome_swerr("collapse_hook"))
+
+    # ── torch (LibTorch intra-op + inter-op pools) ──
+    # torch has TWO independent thread pools:
+    #   intra-op : parallelism inside a single op (matmul, conv, etc.)
+    #   inter-op : parallelism across ops in a graph
+    # Both default to host core count. Cap both to .modern_cap; this is
+    # safe and mirrors what PyTorch users set in Python.
+    if (isNamespaceLoaded("torch") &&
+        !isTRUE(.biome_env$shared_env$.torch_hook_done)) tryCatch({
+      ns <- asNamespace("torch")
+      if (exists("torch_set_num_threads", envir = ns, inherits = FALSE)) {
+        tryCatch(get("torch_set_num_threads", envir = ns)(.modern_cap),
+                 error = function(e) NULL)
+      }
+      if (exists("torch_set_num_interop_threads", envir = ns, inherits = FALSE)) {
+        # interop can only be set ONCE per process; tryCatch silently.
+        tryCatch(get("torch_set_num_interop_threads", envir = ns)(.modern_cap),
+                 error = function(e) NULL)
+      }
+      .biome_env$shared_env$.torch_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("torch [threads=%d]", .modern_cap))
+    }, error = .biome_swerr("torch_hook"))
+
+    # ── RcppParallel (TBB or tinythread backend) ──
+    # Many downstream packages call parallelFor / parallelReduce without
+    # ever calling setThreadOptions(), so the default of -1 (= all host
+    # cores) bites users of RStan, brms >= 2.22, Stan-based models, etc.
+    # Setting a default cap here once covers every parallelFor hereafter.
+    if (isNamespaceLoaded("RcppParallel") &&
+        !isTRUE(.biome_env$shared_env$.rcppparallel_hook_done)) tryCatch({
+      ns <- asNamespace("RcppParallel")
+      if (exists("setThreadOptions", envir = ns, inherits = FALSE)) {
+        tryCatch(get("setThreadOptions", envir = ns)(numThreads = .modern_cap),
+                 error = function(e) NULL)
+      }
+      .biome_env$shared_env$.rcppparallel_hook_done <- TRUE
+      msg_parts <- c(msg_parts, sprintf("RcppParallel [threads=%d]", .modern_cap))
+    }, error = .biome_swerr("rcppparallel_hook"))
+
     if (length(msg_parts) > 0 && interactive()) {
       message(paste0(.C_GREEN, "   \U0001F680 BIOME-CALC: Engines Initialized: ",
                      paste(msg_parts, collapse=", "), .C_RESET))

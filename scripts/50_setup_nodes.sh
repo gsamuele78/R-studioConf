@@ -45,6 +45,7 @@ source "${VARS_CONF}"
 # ── Template paths ──
 RPROFILE_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site.R.template"
 AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v28.R.template"
+RPROFILE_MIN_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site.minimal.R.template"
 
 # ── Args ──
 SKIP_OLLAMA="${SKIP_OLLAMA:-false}"
@@ -1785,6 +1786,102 @@ setup_nodes_admin_tools() {
 }
 
 # ==============================================================================
+# STEP 11F: HC-13 TRIAGE TOOLING (minimal Rprofile + r_minimal + harnesses)
+# ==============================================================================
+# Per HC-13 ("Adapt System, Not User Script") we deploy the minimal-profile
+# fail-safe Rprofile and the user-script triage harnesses to /usr/local/bin/.
+# These are SYSTEM-SIDE tools — they never modify user .R files.
+#
+# Pessimistic invariants:
+#   * Templates parse-checked before install (PSE: fail-fast).
+#   * chmod failures abort with exit 1 (HC-10).
+#   * Idempotent: re-run safe (overwrites with current versions).
+#   * Atomic: stage in tmp, verify, then mv into place.
+# ==============================================================================
+setup_nodes_hc13_tools() {
+  log_step "Step 11f: HC-13 user-script triage tooling"
+
+  # ── 1. Render & deploy minimal Rprofile ───────────────────────────────
+  if [[ ! -f "${RPROFILE_MIN_TEMPLATE}" ]]; then
+    log_warn "Minimal Rprofile template not found: ${RPROFILE_MIN_TEMPLATE} — skipping HC-13 tools"
+    return 0
+  fi
+
+  local min_dst="/etc/R/Rprofile_minimal.R"
+  local min_tmp
+  min_tmp=$(mktemp /tmp/Rprofile_minimal.XXXXXX.R)
+
+  local generated_min
+  process_template "${RPROFILE_MIN_TEMPLATE}" generated_min \
+    BIOME_HOST="${BIOME_HOST}" \
+    RPROFILE_VERSION="${RPROFILE_VERSION}" \
+    BIOME_CONF="${BIOME_CONF}" \
+    LOG_FILE="${LOG_FILE}"
+  printf "%s" "${generated_min}" > "${min_tmp}"
+
+  # Parse-check before install (PSE)
+  local min_pr
+  min_pr=$(Rscript --vanilla -e "
+tryCatch({parse(file='${min_tmp}');cat('PARSE_OK')},
+  error=function(e) cat(sprintf('PARSE_FAIL: %s',e\$message)))" 2>&1)
+
+  if ! echo "${min_pr}" | grep -q "PARSE_OK"; then
+    log_error "Minimal Rprofile parse-fail: ${min_pr}"
+    rm -f "${min_tmp}"
+    exit 1
+  fi
+
+  if [[ "${DRY_RUN}" != "true" ]]; then
+    cp "${min_tmp}" "${min_dst}"
+    chmod 644 "${min_dst}" || { log_error "chmod 644 ${min_dst} failed"; exit 1; }
+    chown root:root "${min_dst}" 2>/dev/null || true
+  fi
+  rm -f "${min_tmp}"
+  log_success "Minimal Rprofile deployed: ${min_dst}"
+
+  # ── 2. Deploy r_minimal launcher + Rscript symlink ────────────────────
+  local rmin_src="${WORKSPACE_ROOT}/scripts/r_minimal.sh"
+  local rmin_dst="/usr/local/bin/r_minimal"
+  local rmin_rscript="/usr/local/bin/r_minimal_rscript"
+
+  if [[ -f "${rmin_src}" ]]; then
+    if [[ "${DRY_RUN}" != "true" ]]; then
+      cp "${rmin_src}" "${rmin_dst}"
+      chmod 0755 "${rmin_dst}" || { log_error "chmod 0755 ${rmin_dst} failed (HC-10)"; exit 1; }
+      chown root:root "${rmin_dst}" 2>/dev/null || true
+      ln -sf "${rmin_dst}" "${rmin_rscript}" || { log_error "ln -sf ${rmin_rscript} failed (HC-10)"; exit 1; }
+    fi
+    log_success "Deployed: ${rmin_dst} (+ symlink ${rmin_rscript})"
+  else
+    log_warn "r_minimal source missing: ${rmin_src}"
+  fi
+
+  # ── 3. Deploy diagnostic harnesses ────────────────────────────────────
+  local harnesses=(
+    "scripts/99_diagnose_user_script.sh:/usr/local/bin/99_diagnose_user_script.sh"
+    "scripts/99_diagnose_lussu_hang.sh:/usr/local/bin/99_diagnose_lussu_hang.sh"
+  )
+  for pair in "${harnesses[@]}"; do
+    local src="${WORKSPACE_ROOT}/${pair%%:*}"
+    local dst="${pair##*:}"
+    if [[ ! -f "${src}" ]]; then
+      log_warn "Harness source missing: ${src}"
+      continue
+    fi
+    if [[ "${DRY_RUN}" != "true" ]]; then
+      cp "${src}" "${dst}"
+      chmod 0755 "${dst}" || { log_error "chmod 0755 ${dst} failed (HC-10)"; exit 1; }
+      chown root:root "${dst}" 2>/dev/null || true
+    fi
+    log_success "Deployed: ${dst}"
+  done
+
+  log_success "HC-13 tooling deployed. Quick test:"
+  log_info "  /usr/local/bin/r_minimal -e 'biome_diag()'"
+  log_info "  /usr/local/bin/99_diagnose_user_script.sh /path/to/user_script.R"
+}
+
+# ==============================================================================
 # STEP 12: BLAS SMOKE TEST
 # ==============================================================================
 setup_nodes_blas_test() {
@@ -1981,6 +2078,7 @@ echo "  8) Setup CGroups only (Step 11a)"
 echo "  9) Setup Orphan Process Cleanup (Step 11b)"
 echo "  10) Setup BIOME Precision Archiver (Step 11c)"
 echo "  T) Setup BIOME Admin Tools (Step 11d)"
+echo "  H) Deploy HC-13 triage tooling (Step 11f: minimal Rprofile + r_minimal + harnesses)"
 echo "  R) Master Diagnostic Report (Step 11e)"
 echo "  O) Deploy Optimized Rprofile (Rust plugin + Template)"
 echo "  V) Verify deployment (cgroups + Rprofile version)"
@@ -2011,6 +2109,7 @@ case "${choice}" in
     setup_nodes_orphan_cleanup
     setup_nodes_project_archiver
     setup_nodes_admin_tools
+    setup_nodes_hc13_tools
     setup_nodes_blas_test
     setup_nodes_summary
     setup_nodes_master_report
@@ -2053,6 +2152,10 @@ case "${choice}" in
   T)
     setup_nodes_preflight
     setup_nodes_admin_tools
+    ;;
+  H)
+    setup_nodes_preflight
+    setup_nodes_hc13_tools
     ;;
   R)
     setup_nodes_preflight

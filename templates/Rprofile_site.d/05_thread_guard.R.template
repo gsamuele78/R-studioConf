@@ -130,4 +130,157 @@ local({
       invisible(1L)
     }, envir = globalenv())
   }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # parallel::detectCores() WRAPPER — PORTABLE-USER CONTRACT (v12.3)
+  # ────────────────────────────────────────────────────────────────────────
+  # Why wrap detectCores()
+  # ──────────────────────
+  # The single most common user-misuse pattern on this cluster is:
+  #
+  #     cl <- parallel::makeCluster(parallel::detectCores() - 1)
+  #
+  # On the bare host, detectCores() returns 128 (or whatever the node has).
+  # Inside our cgroup-constrained RStudio session the user actually has ~8
+  # CPUs; spawning 127 PSOCK workers then instantly OOMs the session and
+  # incidentally starves every other user on the node.
+  #
+  # The makeCluster call itself is already auto-routed to biome_make_cluster
+  # by fragment 45, so the worst case is bounded — but we also want the
+  # NUMBER the user typed into their script to be correct in the first
+  # place, so that their own logs, their own sizing decisions (e.g. chunk
+  # sizes passed to furrr::future_map), and their own progress bars all
+  # reflect the cgroup reality, not the host reality.
+  #
+  # Wrapping detectCores() is therefore the highest-leverage invisible
+  # correction we can make: one function, zero API surface change, and it
+  # silently keeps the "write portable R" contract intact.
+  #
+  # Resolution order (lazy, at CALL time)
+  # ─────────────────────────────────────
+  # The cgroup reader (fragment 20) has not run yet at install time, so the
+  # wrapper must resolve the cap lazily. Cascading sources, fail-open:
+  #   1. .biome_env$shared_env$cgroup_cpus  (populated by fragment 20)
+  #   2. /sys/fs/cgroup/cpu.max             (cgroup v2 direct read)
+  #   3. /sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us + cpu.cfs_period_us (v1)
+  #   4. OMP_THREAD_LIMIT env var           (set by Renviron.site / fragment 05)
+  #   5. host count (original_detectCores)  (no cap available — fail open)
+  # The wrapper returns min(host_count, cap).
+  #
+  # Opt-out: options(biome.strict_detectCores = FALSE) returns raw host count
+  #          (for users who KNOW they are not resource-constrained).
+  # ────────────────────────────────────────────────────────────────────────
+  tryCatch({
+    if (requireNamespace("parallel", quietly = TRUE)) {
+      parallel_ns <- asNamespace("parallel")
+      current_fn  <- get("detectCores", envir = parallel_ns, inherits = FALSE)
+
+      # Idempotent — if we've already wrapped, do nothing.
+      if (!isTRUE(attr(current_fn, "biome_guard"))) {
+        .biome_original_detectCores <- current_fn
+
+        # Helper: resolve the cgroup CPU cap at CALL time. Never throws.
+        .biome_resolve_cpu_cap <- function() {
+          # (1) dispatcher-provided value (fragment 20 populates this)
+          v <- tryCatch(
+            get(".biome_env", envir = globalenv(), inherits = FALSE)$shared_env$cgroup_cpus,
+            error = function(e) NULL)
+          if (!is.null(v) && is.finite(v) && v > 0) return(as.integer(v))
+
+          # (2) cgroup v2 — /sys/fs/cgroup/cpu.max  ("max 100000" | "200000 100000")
+          v <- tryCatch({
+              if (file.exists("/sys/fs/cgroup/cpu.max")) {
+                  parts <- strsplit(readLines("/sys/fs/cgroup/cpu.max", n = 1,
+                                              warn = FALSE), "\\s+")[[1]]
+                  if (length(parts) == 2L && parts[1] != "max") {
+                      q <- suppressWarnings(as.numeric(parts[1]))
+                      p <- suppressWarnings(as.numeric(parts[2]))
+                      if (is.finite(q) && is.finite(p) && p > 0 && q > 0)
+                          max(1L, as.integer(ceiling(q / p)))
+                      else NULL
+                  } else NULL
+              } else NULL
+          }, error = function(e) NULL)
+          if (!is.null(v)) return(v)
+
+          # (3) cgroup v1
+          v <- tryCatch({
+              qf <- "/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us"
+              pf <- "/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_period_us"
+              if (file.exists(qf) && file.exists(pf)) {
+                  q <- suppressWarnings(as.numeric(readLines(qf, n = 1, warn = FALSE)))
+                  p <- suppressWarnings(as.numeric(readLines(pf, n = 1, warn = FALSE)))
+                  if (is.finite(q) && is.finite(p) && q > 0 && p > 0)
+                      max(1L, as.integer(ceiling(q / p)))
+                  else NULL
+              } else NULL
+          }, error = function(e) NULL)
+          if (!is.null(v)) return(v)
+
+          # (4) env var (set by Renviron.site / this fragment's own guards)
+          v <- suppressWarnings(as.integer(Sys.getenv("OMP_THREAD_LIMIT", "")))
+          if (!is.na(v) && v > 1L) return(v)  # >1 only, since we force =1 for fork-safety
+
+          # (5) fail open
+          NA_integer_
+        }
+
+        safe_detectCores <- function(all.tests = FALSE, logical = TRUE) {
+          host <- .biome_original_detectCores(all.tests = all.tests,
+                                               logical = logical)
+          if (!isTRUE(getOption("biome.strict_detectCores", TRUE))) return(host)
+          cap <- .biome_resolve_cpu_cap()
+          if (is.na(cap) || !is.finite(cap) || cap <= 0) return(host)
+          if (is.na(host) || !is.finite(host)) return(as.integer(cap))
+          as.integer(min(host, cap))
+        }
+        attr(safe_detectCores, "biome_guard") <- TRUE
+
+        # Self-contained install (don't require dispatcher's
+        # .biome_install_wrapper — fragment 05 is belt-and-suspenders).
+        was_locked <- tryCatch(bindingIsLocked("detectCores", parallel_ns),
+                                error = function(e) FALSE)
+        if (was_locked) unlockBinding("detectCores", parallel_ns)
+        assign("detectCores", safe_detectCores, envir = parallel_ns)
+        if (was_locked) lockBinding("detectCores", parallel_ns)
+
+        # Expose the original + resolver for forensics / advanced users who
+        # explicitly want the raw host count WITHOUT flipping the option.
+        assign(".biome_original_detectCores",
+               .biome_original_detectCores, envir = globalenv())
+        assign(".biome_resolve_cpu_cap",
+               .biome_resolve_cpu_cap, envir = globalenv())
+
+        # Audit trail — mirrors the thread-guard log format.
+        tryCatch({
+          log_dir <- "/Rtmp/biome_thread_guard"
+          if (!dir.exists(log_dir))
+            dir.create(log_dir, recursive = TRUE, showWarnings = FALSE,
+                       mode = "0777")
+          log_file <- file.path(log_dir,
+                                paste0("guard_", Sys.info()[["nodename"]], ".log"))
+          cat(sprintf("[%s] pid=%d user=%s detectCores_wrapped=1\n",
+                      format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
+                      Sys.getpid(), Sys.info()[["user"]]),
+              file = log_file, append = TRUE)
+        }, error = function(e) invisible(NULL))
+      }
+    }
+  }, error = function(e) {
+    # Fail open: if for any reason we can't install the wrapper, the user
+    # gets raw host count — still fork-safe because thread caps above
+    # already enforce OMP_NUM_THREADS=1. The makeCluster auto-route in
+    # fragment 45 remains the last line of defence.
+    tryCatch({
+      log_dir <- "/Rtmp/biome_thread_guard"
+      if (!dir.exists(log_dir))
+        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0777")
+      log_file <- file.path(log_dir,
+                            paste0("guard_", Sys.info()[["nodename"]], ".log"))
+      cat(sprintf("[%s] pid=%d user=%s detectCores_wrap_FAILED=%s\n",
+                  format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
+                  Sys.getpid(), Sys.info()[["user"]], e$message),
+          file = log_file, append = TRUE)
+    }, error = function(e2) invisible(NULL))
+  })
 })

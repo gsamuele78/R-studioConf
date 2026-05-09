@@ -33,18 +33,45 @@ local({
 
   safe_setwd <- function(dir) {
     if (isTRUE(getOption("biome.strict_setwd", TRUE))) {
-      if (missing(dir) || is.null(dir) || !is.character(dir) || length(dir) != 1L ||
-          !nzchar(dir)) {
-        stop("BIOME-CALC safe_setwd: `dir` must be a single non-empty string, got: ",
-             deparse(dir), call. = FALSE)
-      }
-      if (!dir.exists(dir)) {
-        stop(sprintf(
-          paste0("BIOME-CALC safe_setwd: target directory does not exist: '%s'\n",
-                 "  cwd was:    %s\n",
-                 "  This guard prevents the 'unserialize(node$con)' class of bug.\n",
-                 "  To override (not recommended): options(biome.strict_setwd = FALSE)"),
-          dir, getwd()), call. = FALSE)
+      # ── v12.3: asymmetric error semantics ──────────────────────────────
+      # Non-interactive (Rscript, parLapply workers, knitr render, CI):
+      #   HARD FAIL. A bad setwd() in a batch pipeline must crash
+      #   immediately — this is the Martina-gate invariant. Downstream
+      #   parLapply serialize() failures are 5 frames removed from the
+      #   real cause and nearly impossible to forensically reconstruct.
+      # Interactive (RStudio console, plain R REPL):
+      #   WARN LOUDLY but DO NOT CHANGE cwd. A typo at the console
+      #   shouldn't require restarting the session or crashing the
+      #   execution context the user is iterating in. The cwd stays
+      #   where it was; the user sees a clear warning and retries.
+      # Opt-out (both modes): options(biome.strict_setwd = FALSE)
+      # ───────────────────────────────────────────────────────────────────
+      bad_type <- missing(dir) || is.null(dir) || !is.character(dir) ||
+                  length(dir) != 1L || !nzchar(dir)
+      bad_missing <- !bad_type && !dir.exists(dir)
+
+      if (bad_type || bad_missing) {
+        reason <- if (bad_type) {
+          paste0("`dir` must be a single non-empty string, got: ", deparse(dir))
+        } else {
+          sprintf(paste0("target directory does not exist: '%s'\n",
+                          "  cwd remains: %s\n",
+                          "  This guard prevents the 'unserialize(node$con)' ",
+                          "class of bug.\n",
+                          "  To override (not recommended): ",
+                          "options(biome.strict_setwd = FALSE)"),
+                   dir, getwd())
+        }
+
+        if (!interactive()) {
+          # Batch / worker / Rscript — hard fail (Martina-gate invariant).
+          stop("BIOME-CALC safe_setwd: ", reason, call. = FALSE)
+        } else {
+          # Interactive — warn and return current cwd unchanged.
+          warning("BIOME-CALC safe_setwd: ", reason,
+                  call. = FALSE, immediate. = TRUE)
+          return(invisible(getwd()))
+        }
       }
     }
     .biome_original_setwd(dir)

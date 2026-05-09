@@ -754,6 +754,9 @@ local({
   # NEVER aborts the session. This preserves PSE fail-safe invariant.
   #
   # Fragment ordering (lexical by 2-digit prefix):
+  #   05_thread_guard       — belt-and-suspenders OMP/BLAS/GDAL caps +
+  #                           biome_unleash_threads/biome_restore_threads +
+  #                           parallel::detectCores() wrapper (v12.3 additive)
   #   20_cgroup_reader      — cgroup v1/v2 limit detection + setup_adaptive_callback
   #   30_psock_factory      — .biome_make_cluster_impl + biome_make_cluster
   #                           (stashes impl into .biome_env for 45_safe_makeCluster)
@@ -762,9 +765,14 @@ local({
   #   40_wrapper_installer  — .biome_install_wrapper (lexical-scope-preserving)
   #   45_memory_guards      — solve/dist/outer/expand.grid/safe_makeCluster
   #                           (requires 40_ and 30_ loaded first)
-  #   50_pkg_hooks          — DEFERRED PACKAGE HOOKS (terra/raster/sf/nimble/stan/...)
+  #   50_pkg_hooks          — DEFERRED PACKAGE HOOKS (terra/raster/sf/nimble/stan/
+  #                           polars/duckdb/collapse/torch/RcppParallel/...)
   #                           (uses addTaskCallback, fires as packages load)
-  #   60_safe_setwd         — base::setwd hard-fail guard (additive v12.1)
+  #   55_options_guard      — base::options clamp for mc.cores (v12.3 additive)
+  #                           (closes gap between detectCores-wrap and literal N)
+  #   60_safe_setwd         — base::setwd hard-fail guard (additive v12.1;
+  #                           v12.3: asymmetric semantics — hard-fail in batch,
+  #                           warn-and-stay in interactive)
   #   70_persistent_tools   — biome_cluster_test, biome_worker_diagnostics,
   #                           biome_plot_budget, finalize + diag dump
   #   80_tools_ext          — biome_tmb_compile, biome_run_diagnostics (additive v12.1)

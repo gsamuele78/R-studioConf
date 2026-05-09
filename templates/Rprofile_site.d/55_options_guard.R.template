@@ -1,0 +1,198 @@
+# templates/Rprofile_site.d/55_options_guard.R.template
+# ──────────────────────────────────────────────────────────────────────────────
+# FRAGMENT 55 — options(mc.cores) CLAMP  (v12.3)
+# ──────────────────────────────────────────────────────────────────────────────
+# Purpose: silently clamp `options(mc.cores = N)` to the cgroup CPU cap so that
+# portable user code which asks for more cores than the session actually has
+# is corrected at the API boundary — without surfacing a warning, without
+# mutating the user's script, and without requiring the user to learn any
+# biome-specific helper.
+#
+# Why this is needed (in addition to fragment 05's detectCores wrapper)
+# ─────────────────────────────────────────────────────────────────────
+# Fragment 05 wraps parallel::detectCores() so that
+#     options(mc.cores = parallel::detectCores())
+# already returns the cgroup-safe number.
+#
+# This fragment closes the remaining gap: LITERAL values. Many tutorials,
+# vignettes and package examples contain lines such as
+#     options(mc.cores = 64)          # CRAN vignette default
+#     options(mc.cores = 16L)         # brms example
+#     options(mc.cores = future::availableCores() - 1)   # not wrapped
+# Copy-pasted into a 8-CPU cgroup session these silently over-commit the
+# scheduler, causing the same OOM / thrash / starve-everyone-else failure
+# mode that makeCluster(N) auto-routing already protects against.
+#
+# Strategy
+# ────────
+# Wrap base::options() with a thin shim that:
+#   1. Introspects the arguments for a `mc.cores` key (named `...` OR inside
+#      a single list() positional argument — both forms are R-idiomatic).
+#   2. If present AND > cgroup cap, REPLACES the value with the cap BEFORE
+#      delegating to the real options(). The user's call still returns the
+#      correct old-value list so assignment patterns like
+#         old <- options(mc.cores = 64); on.exit(options(old))
+#      continue to round-trip the ORIGINAL value the user set (the cap is
+#      only what other R code will SEE — which is what we want).
+#   3. Every other key is passed through unchanged.
+#
+# Fail-safe design
+# ────────────────
+# options() is called deep in R internals (print methods, par(), readline()...).
+# A broken wrapper would brick R. Therefore:
+#   * The wrapper NEVER throws — all logic is inside tryCatch, worst case it
+#     delegates untouched.
+#   * The clamp is ONLY applied when BOTH (a) cgroup cap is known AND finite,
+#     (b) user-supplied value exceeds it. Otherwise pass-through.
+#   * Installing the wrapper itself is inside tryCatch — if it fails, the
+#     belt-and-suspenders fragment 05 has already set OMP_NUM_THREADS=1 and
+#     the fragment 45 makeCluster auto-route is the last line of defence.
+#
+# Opt-out: options(biome.strict_mc_cores = FALSE)  — returns pass-through.
+#          This option is checked inside the wrapper at CALL time, so users
+#          can flip it mid-session.
+#
+# Load order
+# ──────────
+# Numbered 55 to run AFTER 45 (memory guards define .biome_env helpers) but
+# BEFORE 60 (safe_setwd) so that by the time user code begins running every
+# core guard is in place.
+# ──────────────────────────────────────────────────────────────────────────────
+
+local({
+  # Idempotent — if already wrapped, no-op.
+  current_options <- get("options", envir = baseenv(), inherits = FALSE)
+  if (isTRUE(attr(current_options, "biome_guard"))) return(invisible())
+
+  # Resolve cap at CALL time (not install time). Reuse the resolver installed
+  # by fragment 05 if present, else inline the same cascade.
+  .resolve_cap <- function() {
+    # Fast path: fragment 05 exposed the resolver
+    v <- tryCatch(
+      get(".biome_resolve_cpu_cap", envir = globalenv(), inherits = FALSE)(),
+      error = function(e) NULL)
+    if (!is.null(v) && !is.na(v) && is.finite(v) && v > 0) return(as.integer(v))
+
+    # Fallback path: dispatcher's shared_env (fragment 20 populated it)
+    v <- tryCatch(
+      get(".biome_env", envir = globalenv(), inherits = FALSE)$shared_env$cgroup_cpus,
+      error = function(e) NULL)
+    if (!is.null(v) && is.finite(v) && v > 0) return(as.integer(v))
+
+    # Fallback path: env var (set by Renviron.site)
+    v <- suppressWarnings(as.integer(Sys.getenv("OMP_THREAD_LIMIT", "")))
+    if (!is.na(v) && v > 1L) return(v)
+
+    NA_integer_
+  }
+
+  .original_options <- current_options
+
+  safe_options <- function(...) {
+    # Fast exit: zero args is a valid call (returns ALL options). Nothing to clamp.
+    nargs <- ...length()
+    if (nargs == 0L) return(.original_options())
+
+    # Never throw — fall through to .original_options(...) on any error.
+    new_args <- tryCatch({
+      if (!isTRUE(getOption("biome.strict_mc_cores", TRUE))) {
+        NULL  # opt-out: pass through
+      } else {
+        cap <- .resolve_cap()
+        if (is.na(cap) || !is.finite(cap) || cap <= 0) {
+          NULL  # no cap available: pass through
+        } else {
+          # Collect args WITHOUT evaluating promises twice. R idiom:
+          #   options(mc.cores = 64)           -> dots has named element mc.cores
+          #   options(list(mc.cores = 64))     -> dots has a single unnamed list
+          #   options(pairlist(mc.cores = 64)) -> same, pairlist form
+          dots  <- list(...)
+          dnms  <- names(dots)
+          if (is.null(dnms)) dnms <- rep("", length(dots))
+          touched <- FALSE
+
+          # Form A: named `mc.cores` directly in ...
+          idx <- which(dnms == "mc.cores")
+          if (length(idx) == 1L) {
+            v <- suppressWarnings(as.integer(dots[[idx]]))
+            if (length(v) == 1L && !is.na(v) && is.finite(v) && v > cap) {
+              dots[[idx]] <- as.integer(cap)
+              touched <- TRUE
+            }
+          }
+
+          # Form B: single positional list/pairlist argument
+          if (nargs == 1L && (dnms[1L] == "" || is.na(dnms[1L])) &&
+              (is.list(dots[[1L]]) || is.pairlist(dots[[1L]]))) {
+            payload <- dots[[1L]]
+            pnms <- names(payload)
+            if (!is.null(pnms) && "mc.cores" %in% pnms) {
+              pi <- which(pnms == "mc.cores")[1L]
+              v  <- suppressWarnings(as.integer(payload[[pi]]))
+              if (length(v) == 1L && !is.na(v) && is.finite(v) && v > cap) {
+                payload[[pi]] <- as.integer(cap)
+                dots[[1L]] <- payload
+                touched <- TRUE
+              }
+            }
+          }
+
+          if (touched) dots else NULL
+        }
+      }
+    }, error = function(e) NULL)
+
+    if (is.null(new_args)) return(.original_options(...))
+    do.call(.original_options, new_args)
+  }
+  attr(safe_options, "biome_guard") <- TRUE
+
+  # Install — base::options is typically UNlocked but guard anyway.
+  tryCatch({
+    base_ns <- baseenv()
+    was_locked <- tryCatch(bindingIsLocked("options", base_ns),
+                            error = function(e) FALSE)
+    if (was_locked) unlockBinding("options", base_ns)
+    assign("options", safe_options, envir = base_ns)
+    if (was_locked) lockBinding("options", base_ns)
+
+    # Audit trail — mirrors fragment 05's format.
+    tryCatch({
+      log_dir <- "/Rtmp/biome_thread_guard"
+      if (!dir.exists(log_dir))
+        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0777")
+      log_file <- file.path(log_dir,
+                            paste0("guard_", Sys.info()[["nodename"]], ".log"))
+      cat(sprintf("[%s] pid=%d user=%s options_mc_cores_wrapped=1\n",
+                  format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
+                  Sys.getpid(), Sys.info()[["user"]]),
+          file = log_file, append = TRUE)
+    }, error = function(e) invisible(NULL))
+
+    # Expose original for forensic recovery.
+    assign(".biome_original_options", .original_options, envir = globalenv())
+
+    # If dispatcher sys_log is available, log through it too.
+    if (exists("sys_log", inherits = TRUE)) {
+      tryCatch(sys_log("OptionsGuard", "OK",
+                        "base::options wrapped (mc.cores clamp)"),
+               error = function(e) NULL)
+    }
+  }, error = function(e) {
+    # Install failed: do NOT leave a half-installed state. Try to restore
+    # the original if we mutated the binding.
+    tryCatch(assign("options", .original_options, envir = baseenv()),
+             error = function(e2) NULL)
+    tryCatch({
+      log_dir <- "/Rtmp/biome_thread_guard"
+      if (!dir.exists(log_dir))
+        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0777")
+      log_file <- file.path(log_dir,
+                            paste0("guard_", Sys.info()[["nodename"]], ".log"))
+      cat(sprintf("[%s] pid=%d user=%s options_wrap_FAILED=%s\n",
+                  format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
+                  Sys.getpid(), Sys.info()[["user"]], e$message),
+          file = log_file, append = TRUE)
+    }, error = function(e2) invisible(NULL))
+  })
+})

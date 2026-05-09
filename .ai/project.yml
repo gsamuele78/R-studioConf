@@ -1,4 +1,4 @@
-# .ai/project.yml
+: # .ai/project.yml
 # ══════════════════════════════════════════════════════════════
 # SINGLE SOURCE OF TRUTH for AI agent context generation.
 #
@@ -102,6 +102,35 @@ constraints:
     rationale: "sed breaks on special chars, no schema validation."
     validate: "no_sed_on_json"
 
+  - id: "HC-13"
+    rule: "Adapt the system to portable user R code — never silently patch user scripts"
+    rationale: |
+      The system (Renviron.site, Rprofile_site fragments, dispatcher options,
+      cgroup, BLAS/OMP/GDAL caps, NFS mount options, clean-VM baseline) MUST
+      be adjusted to keep portable user R code working. Sysadmins exhaust
+      this L0..L4 ladder before proposing any user-script edit; AI-generated
+      output that rewrites a user-supplied .R file without explicit consent
+      in the same prompt is INVALID. Triage scripts MUST emit a verdict line
+      naming the responsible layer (L0 OS, L1 pure-R, L2 fragment, L3 full
+      profile, L4 clean-VM, L5 user-script-or-upstream) so reports remain
+      defensible when handed back to the user.
+
+      ORDERING INVARIANT (added 2026-05-09):
+      A user-script modification suggestion is admissible ONLY AFTER triage
+      has positively excluded ALL of the following surfaces, IN ORDER:
+        1. SYSTEM bug   — L0 OS/NFS/fork/cgroup/kernel/BLAS infrastructure
+        2. CONFIG bug   — L1 Renviron, L2 Rprofile fragment, L3 dispatcher
+        3. UNCHECKED case — L4 clean-VM baseline reproduces (no NFS, no
+                            domain, no profile), AND a ≤30-line minimal
+                            reproducer with sessionInfo() + kernel-stack
+                            evidence has been captured.
+      Skipping any of (1), (2), (3) before suggesting that the user edit
+      their .R file is a HC-13 violation. AI output that proposes a user
+      patch without citing the layer it cleared (e.g. "L4 PASS, evidence
+      at <path>") MUST be rejected on review. The verdict line of the
+      triage harness is the auditable proof that the ordering was followed.
+    validate: "docs_have_responsibility_boundaries"
+
 # ──────────────────────────────────────────────────────────────
 # COMPOSE FORMAT RULES
 # ──────────────────────────────────────────────────────────────
@@ -187,7 +216,7 @@ branding:
 r_runtime:
   blas:
     package: "libopenblas0-serial"
-    banned: "libopenblas0-pthread"  # causes SIGSEGV with rsession pthread collision
+    banned: "libopenblas0-pthread" # causes SIGSEGV with rsession pthread collision
     detection_script: "/etc/profile.d/biome-coretype.sh"
     rationale: "Serial BLAS has no internal thread pool. Eliminates thread contention with RStudio rsession."
   tmp_storage:
@@ -198,7 +227,7 @@ r_runtime:
     validated_by: "50_setup_nodes.sh Step 5"
   config:
     modular_dir: "/etc/biome-calc/profile.d/"
-    loader: "/etc/R/Rprofile.site"  # thin loader that sources profile.d/*.R
+    loader: "/etc/R/Rprofile.site" # thin loader that sources profile.d/*.R
     template: "templates/Rprofile_site.R.template"
     deployed_by: "50_setup_nodes.sh"
     audit_template: "templates/00_audit_v27.R.template"

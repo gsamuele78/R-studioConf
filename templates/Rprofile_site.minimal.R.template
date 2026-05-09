@@ -1,0 +1,311 @@
+# /etc/R/Rprofile_minimal.R — BIOME-CALC FORENSIC FAIL-SAFE PROFILE v1.0
+# ==============================================================================
+# Generated from: templates/Rprofile_site.minimal.R.template
+# Deployed by:    scripts/50_setup_nodes.sh
+# Activated via:  /usr/local/bin/r_minimal  (sets R_PROFILE_USER=this file)
+#
+# PURPOSE (HC-13 — Adapt System, Not User Script):
+#   Bare-bones Rprofile for sysadmin triage. ZERO wrappers, ZERO package hooks,
+#   ZERO dispatcher, ZERO bspm. Sets only the irreducible safety env-vars and
+#   exposes 7 forensic helpers for diagnosing why a user script hangs/crashes.
+#
+# WHEN TO USE:
+#   * L0 / L1 layer of the HC-13 troubleshooting ladder
+#     (see docs/operations/USER_SCRIPT_TROUBLESHOOTING.md).
+#   * To prove that a hang reproduces under PURE R (no profile fragments) —
+#     in which case the bug is in the user script or in the OS/NFS/terra
+#     stack, NOT in our profile dispatcher.
+#
+# WHAT IT INTENTIONALLY DOES NOT DO:
+#   * No fragment loader. No /etc/R/Rprofile_site.d/ sourcing.
+#   * No detectCores wrapper, no options() guard, no setwd guard.
+#   * No bspm, no Ollama, no telemetry, no callbacks.
+#   * No package hooks (terra/sf/raster/nimble/stan/...).
+#   * No /Rtmp pre-creation beyond BIOME_USER_TMP.
+#
+# CONTACT: %%BIOME_CONTACT%%
+# ==============================================================================
+
+# ── Banner (always on — point of this profile is troubleshooting) ──────────
+local({
+  cat(
+    "\n",
+    "\033[1;33m========================================================\033[0m\n",
+    "\033[1;33m  BIOME-CALC MINIMAL FORENSIC PROFILE v1.0  (HC-13 L0/L1)\033[0m\n",
+    "\033[1;33m========================================================\033[0m\n",
+    "  Pure R + safe env vars + forensic helpers ONLY.\n",
+    "  No fragments, no wrappers, no package hooks.\n",
+    "  Type \033[1mbiome_help()\033[0m for the command list.\n",
+    "  Type \033[1mbiome_diag()\033[0m for a one-page system summary.\n",
+    "\n", sep = ""
+  )
+})
+
+# ── Section 1: irreducible safety env vars (mirrors Renviron.site) ─────────
+# Single-thread everything — defensive default. User code is free to raise
+# these AFTER load if they know what they are doing.
+local({
+  for (v in c("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+              "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS",
+              "GOTO_NUM_THREADS", "BLIS_NUM_THREADS", "GDAL_NUM_THREADS")) {
+    if (!nzchar(Sys.getenv(v, ""))) Sys.setenv(setNames(list("1"), v))
+  }
+})
+
+# ── Section 2: OPENBLAS_CORETYPE auto-detect (QEMU SIGILL guard) ───────────
+if (!nzchar(Sys.getenv("OPENBLAS_CORETYPE", ""))) {
+  tryCatch({
+    ci <- readLines("/proc/cpuinfo", n = 25, warn = FALSE)
+    vendor <- trimws(sub(".*:\\s*", "", grep("^vendor_id", ci, value = TRUE)[1]))
+    flags  <- trimws(sub(".*:\\s*", "", grep("^flags",     ci, value = TRUE)[1]))
+    coretype <- if (grepl("AMD",   vendor, ignore.case = TRUE))
+                  if (grepl("\\bavx2\\b",    flags)) "ZEN"      else "BARCELONA"
+                else if (grepl("Intel", vendor, ignore.case = TRUE))
+                  if (grepl("\\bavx512f\\b", flags)) "SKYLAKEX" else "HASWELL"
+                else NULL
+    if (!is.null(coretype)) Sys.setenv(OPENBLAS_CORETYPE = coretype)
+  }, error = function(e) NULL)
+}
+
+# ── Section 3: TMPDIR / BIOME_USER_TMP (only if /Rtmp exists) ──────────────
+local({
+  curr_user <- tryCatch(Sys.info()[["user"]], error = function(e) "unknown")
+  if (dir.exists("/Rtmp")) {
+    user_tmp <- file.path("/Rtmp", paste0("biome_", curr_user))
+    tryCatch({
+      if (!dir.exists(user_tmp))
+        dir.create(user_tmp, recursive = TRUE, showWarnings = FALSE, mode = "0700")
+      Sys.setenv(BIOME_USER_TMP = user_tmp, TMPDIR = user_tmp)
+    }, error = function(e) NULL)
+  }
+})
+
+# ══════════════════════════════════════════════════════════════════════════
+# FORENSIC HELPERS (exported to .GlobalEnv)
+# ══════════════════════════════════════════════════════════════════════════
+
+biome_help <- function() {
+  cat(
+    "\n\033[1mBIOME-MINIMAL forensic helpers\033[0m (pure R, no deps)\n",
+    "  biome_diag()                    → one-page system summary\n",
+    "  biome_nfs_check()               → list NFS mounts + critical mount opts\n",
+    "  biome_fork_probe(n=10)          → baseline mclapply fork health (30s)\n",
+    "  biome_terra_probe(path)         → open+read first tile of a raster (timing)\n",
+    "  biome_hang_diag(pids)           → /proc/<pid>/{status,wchan,stack}, ps\n",
+    "  biome_worker_tail(pids, n=40)   → tail per-worker /tmp/biome_worker_*.log\n",
+    "  biome_help()                    → this message\n\n",
+    "Workflow: r_minimal Rscript user.R   →  if hangs, attach to PID and call\n",
+    "          biome_hang_diag(<pid>) from another R session.\n\n",
+    sep = ""
+  )
+  invisible(NULL)
+}
+
+biome_diag <- function() {
+  hr <- function() cat(rep("─", 60), "\n", sep = "")
+  hr()
+  cat("BIOME-MINIMAL DIAG  ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n", sep = "")
+  hr()
+  cat("R:           ", R.version.string, "\n", sep = "")
+  cat("PID:         ", Sys.getpid(), "\n", sep = "")
+  cat("User:        ", Sys.info()[["user"]], "  UID=",
+      tryCatch(suppressWarnings(as.integer(system2("id", "-u", stdout = TRUE,
+              stderr = FALSE))), error = function(e) NA), "\n", sep = "")
+  cat("Hostname:    ", Sys.info()[["nodename"]], "\n", sep = "")
+  cat("Working dir: ", getwd(), "\n", sep = "")
+  cat("tempdir():   ", tempdir(), "\n", sep = "")
+  hr()
+  si <- tryCatch(sessionInfo(), error = function(e) NULL)
+  cat("BLAS:        ", if (!is.null(si)) si$BLAS   else "?", "\n", sep = "")
+  cat("LAPACK:      ", if (!is.null(si)) si$LAPACK else "?", "\n", sep = "")
+  hr()
+  for (v in c("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+              "GDAL_NUM_THREADS", "OPENBLAS_CORETYPE", "BIOME_USER_TMP",
+              "TMPDIR", "R_LIBS_USER", "R_PROFILE_USER", "R_HOME"))
+    cat(sprintf("%-22s = %s\n", v, Sys.getenv(v, "")))
+  hr()
+  # Memory + cgroup
+  tryCatch({
+    mi <- readLines("/proc/meminfo", n = 5, warn = FALSE)
+    cat(paste(mi, collapse = "\n"), "\n", sep = "")
+  }, error = function(e) cat("(/proc/meminfo unreadable)\n"))
+  hr()
+  for (cg in c("/sys/fs/cgroup/memory.max",
+               "/sys/fs/cgroup/memory.current",
+               "/sys/fs/cgroup/cpu.max")) {
+    if (file.exists(cg))
+      cat(sprintf("%-32s = %s\n", cg,
+                  tryCatch(readLines(cg, n = 1, warn = FALSE),
+                           error = function(e) "?")))
+  }
+  hr()
+  # /Rtmp free
+  if (dir.exists("/Rtmp")) {
+    df <- tryCatch(system2("df", c("-h", "/Rtmp"), stdout = TRUE, stderr = FALSE),
+                   error = function(e) "(df unavailable)")
+    cat(paste(df, collapse = "\n"), "\n", sep = "")
+  } else {
+    cat("/Rtmp NOT MOUNTED\n")
+  }
+  hr()
+  invisible(NULL)
+}
+
+biome_nfs_check <- function() {
+  hr <- function() cat(rep("─", 60), "\n", sep = "")
+  hr(); cat("BIOME-MINIMAL NFS CHECK\n"); hr()
+  mounts <- tryCatch(readLines("/proc/mounts", warn = FALSE),
+                     error = function(e) character(0))
+  nfs <- grep("\\bnfs[34]?\\b", mounts, value = TRUE)
+  if (!length(nfs)) { cat("(no NFS mounts found)\n"); return(invisible(NULL)) }
+  for (line in nfs) {
+    parts <- strsplit(line, "\\s+")[[1]]
+    cat("MOUNT: ", parts[2], "  (", parts[1], ")\n", sep = "")
+    opts <- strsplit(parts[4], ",")[[1]]
+    crit <- c("hard", "soft", "intr", "nointr", "actimeo", "rsize", "wsize",
+              "nolock", "lock", "vers", "tcp", "udp", "timeo", "retrans")
+    flagged <- opts[vapply(opts, function(o)
+                  any(startsWith(o, crit)), logical(1))]
+    cat("  flagged opts: ", paste(flagged, collapse = ","), "\n", sep = "")
+    # Risk assessment
+    if (any(startsWith(opts, "soft")))  cat("  \033[1;33m  WARN: soft mount → reads can return EIO under load\033[0m\n")
+    if (any(opts == "actimeo=0"))       cat("  \033[1;31m  RISK: actimeo=0 → metadata cache disabled, kills terra perf\033[0m\n")
+    if (any(startsWith(opts, "rsize="))) {
+      rs <- as.integer(sub("rsize=", "", grep("^rsize=", opts, value = TRUE)[1]))
+      if (!is.na(rs) && rs < 65536) cat("  \033[1;33m  WARN: rsize<64K → many round-trips for terra rasters\033[0m\n")
+    }
+  }
+  hr()
+  # nfsstat -m if available
+  ns <- tryCatch(system2("nfsstat", "-m", stdout = TRUE, stderr = FALSE),
+                 error = function(e) NULL)
+  if (length(ns)) { cat(paste(ns, collapse = "\n"), "\n", sep = ""); hr() }
+  invisible(nfs)
+}
+
+biome_fork_probe <- function(n = 10, timeout_s = 30) {
+  hr <- function() cat(rep("─", 60), "\n", sep = "")
+  hr(); cat("BIOME-MINIMAL FORK PROBE  n=", n, "  timeout=", timeout_s, "s\n", sep = "")
+  hr()
+  if (.Platform$OS.type != "unix") { cat("not unix — skipping\n"); return(invisible(FALSE)) }
+  if (!requireNamespace("parallel", quietly = TRUE)) {
+    cat("parallel pkg missing\n"); return(invisible(FALSE))
+  }
+  t0 <- Sys.time()
+  res <- tryCatch(
+    parallel::mclapply(seq_len(n), function(i) {
+      Sys.sleep(0.1); list(pid = Sys.getpid(), i = i)
+    }, mc.cores = n, mc.preschedule = FALSE),
+    error = function(e) e
+  )
+  dt <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+  if (inherits(res, "error")) {
+    cat("\033[1;31mFORK PROBE FAILED:\033[0m ", res$message, "\n", sep = "")
+    return(invisible(FALSE))
+  }
+  pids <- vapply(res, function(x) if (is.list(x)) x$pid else NA_integer_, integer(1))
+  cat("Elapsed: ", round(dt, 2), "s   unique PIDs: ", length(unique(pids)), "/", n, "\n", sep = "")
+  cat("PIDs:    ", paste(pids, collapse = " "), "\n", sep = "")
+  if (dt > timeout_s) cat("\033[1;33mWARN: probe exceeded timeout\033[0m\n")
+  hr()
+  invisible(length(unique(pids)) == n)
+}
+
+biome_terra_probe <- function(raster_path) {
+  hr <- function() cat(rep("─", 60), "\n", sep = "")
+  hr(); cat("BIOME-MINIMAL TERRA PROBE  ", raster_path, "\n", sep = ""); hr()
+  if (!file.exists(raster_path)) { cat("\033[1;31mfile not found\033[0m\n"); return(invisible(FALSE)) }
+  if (!requireNamespace("terra", quietly = TRUE)) {
+    cat("terra pkg missing\n"); return(invisible(FALSE))
+  }
+  t1 <- Sys.time()
+  r <- tryCatch(terra::rast(raster_path), error = function(e) e)
+  if (inherits(r, "error")) { cat("\033[1;31mrast() failed:\033[0m ", r$message, "\n", sep = ""); return(invisible(FALSE)) }
+  cat("rast() open:    ", round(as.numeric(difftime(Sys.time(), t1, units = "secs")), 3), "s\n", sep = "")
+  cat("dims:           ", paste(dim(r), collapse = " x "), "\n", sep = "")
+  cat("crs:            ", terra::crs(r, describe = TRUE)$name %||% "?", "\n", sep = "")
+  t2 <- Sys.time()
+  v <- tryCatch(terra::values(r, mat = FALSE, dataframe = FALSE,
+                              row = 1, nrow = min(50L, nrow(r))),
+                error = function(e) e)
+  if (inherits(v, "error")) { cat("\033[1;31mread first tile failed:\033[0m ", v$message, "\n", sep = ""); return(invisible(FALSE)) }
+  cat("read 50 rows:   ", round(as.numeric(difftime(Sys.time(), t2, units = "secs")), 3), "s\n", sep = "")
+  cat("non-NA values:  ", sum(!is.na(v)), " / ", length(v), "\n", sep = "")
+  hr()
+  invisible(TRUE)
+}
+
+# tiny default-coalescing operator so terra_probe runs without rlang
+`%||%` <- function(a, b) if (is.null(a) || (is.character(a) && !nzchar(a))) b else a
+
+biome_hang_diag <- function(pids) {
+  hr <- function() cat(rep("─", 60), "\n", sep = "")
+  if (missing(pids) || !length(pids)) {
+    cat("Usage: biome_hang_diag(pids)  e.g. biome_hang_diag(c(12345, 12346))\n")
+    return(invisible(NULL))
+  }
+  hr(); cat("BIOME-MINIMAL HANG DIAG  pids=", paste(pids, collapse = ","), "\n", sep = ""); hr()
+  for (pid in pids) {
+    cat("\n=== PID ", pid, " ===\n", sep = "")
+    if (!dir.exists(file.path("/proc", pid))) {
+      cat("(not running)\n"); next
+    }
+    for (probe in c("status", "wchan", "stack", "syscall", "cmdline")) {
+      p <- file.path("/proc", pid, probe)
+      if (!file.exists(p)) next
+      v <- tryCatch(readLines(p, n = if (probe == "status") 12 else 30,
+                              warn = FALSE),
+                    error = function(e) sprintf("(unreadable: %s)", e$message))
+      if (probe == "cmdline" && length(v))
+        v <- gsub(rawToChar(as.raw(0L)), " ", v, fixed = TRUE)
+      cat("[", probe, "]\n", paste(v, collapse = "\n"), "\n", sep = "")
+    }
+    # ps -o
+    ps <- tryCatch(system2("ps", c("-o", "pid,ppid,stat,wchan:25,pcpu,rss,comm",
+                                   "-p", as.character(pid)),
+                           stdout = TRUE, stderr = FALSE),
+                   error = function(e) NULL)
+    if (length(ps)) cat("[ps]\n", paste(ps, collapse = "\n"), "\n", sep = "")
+  }
+  hr()
+  invisible(pids)
+}
+
+biome_worker_tail <- function(pids = NULL, n = 40) {
+  hr <- function() cat(rep("─", 60), "\n", sep = "")
+  hr(); cat("BIOME-MINIMAL WORKER TAIL  n=", n, " lines/worker\n", sep = ""); hr()
+  files <- if (is.null(pids)) {
+    list.files("/tmp", pattern = "^biome_worker_.*\\.log$", full.names = TRUE)
+  } else {
+    fs <- file.path("/tmp", sprintf("biome_worker_%d.log", as.integer(pids)))
+    fs[file.exists(fs)]
+  }
+  if (!length(files)) { cat("(no /tmp/biome_worker_*.log files found)\n"); return(invisible(character(0))) }
+  for (f in files) {
+    cat("\n=== ", f, " ===\n", sep = "")
+    v <- tryCatch(readLines(f, warn = FALSE), error = function(e) character(0))
+    cat(paste(tail(v, n), collapse = "\n"), "\n", sep = "")
+  }
+  hr()
+  invisible(files)
+}
+
+# Export to .GlobalEnv so they survive after profile load.
+# R_PROFILE_USER files are sourced in a sandbox env (not necessarily .GlobalEnv),
+# so we explicitly copy each helper across via base::assign().
+local({
+  src <- environment()
+  # Functions are defined at top level of this file → they live in the same
+  # frame from which this local({}) was called, i.e. parent.env(src).
+  parent_env <- parent.env(src)
+  for (fn in c("biome_help", "biome_diag", "biome_nfs_check",
+               "biome_fork_probe", "biome_terra_probe",
+               "biome_hang_diag", "biome_worker_tail", "%||%")) {
+    if (exists(fn, envir = parent_env, inherits = FALSE)) {
+      assign(fn, get(fn, envir = parent_env, inherits = FALSE),
+             envir = globalenv())
+    }
+  }
+})
+
+# === END ===

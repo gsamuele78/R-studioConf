@@ -13,6 +13,7 @@
 **What:** Production-grade Infrastructure-as-Code (IaC) system providing a secure, high-performance RStudio data science portal for ecological research.
 
 **Stack (all Dockerized, single-host Compose):**
+
 - `rstudio-sssd` / `rstudio-samba` — RStudio Server integrated with Active Directory via SSSD or Samba/Winbind.
 - `nginx-portal` — Frontend reverse proxy + custom glassmorphism landing page.
 - `oauth2-proxy` — OIDC sidecar (central university IdP).
@@ -24,6 +25,7 @@
 End users: researchers doing NIMBLE MCMC, geospatial analysis, large-scale matrix statistics.
 
 **Operator context:**
+
 - Single sysadmin (LPIC-3). No babysitting capacity.
 - Network: constrained university uplink. RFC-1918 private inter-host network.
 - AD domain: `*.personale.dir.unibo.it`.
@@ -78,6 +80,7 @@ End users: researchers doing NIMBLE MCMC, geospatial analysis, large-scale matri
 These 12 hard constraints are the non-negotiable engineering rules.
 
 ### 3.1 Pessimistic System Engineering
+
 - **HC-01:** Every container MUST have `deploy.resources.limits` for both `memory` and `cpus`. Prevents OOM cascades on shared hosts.
 - **HC-03:** All scripts MUST begin with `set -euo pipefail`. Fail-fast on undefined vars, pipe failures, any error.
 - **HC-10:** Deploy scripts MUST `exit 1` if `chown`/permission setup fails. Prevents cryptic Permission Denied errors buried in container logs.
@@ -85,17 +88,20 @@ These 12 hard constraints are the non-negotiable engineering rules.
 - **HC-12:** Use `jq` for JSON manipulation — never `sed`/`awk` on JSON. `sed` breaks on special chars; no schema validation.
 
 ### 3.2 Storage
+
 - **HC-02:** BIND MOUNTS only — zero named Docker volumes. Named volumes are opaque, hard to backup, impossible to inspect or rsync.
 - **Tmpfs:** RStudio requires tmpfs for `/tmp` (e.g., `size=16G`). Rapidly churning temp files must not fill host root.
 - **`/Rtmp` disk:** 400GB ext4 local disk at `/Rtmp` (validated by `50_setup_nodes.sh` step 5). Replaced old tmpfs for NIMBLE MCMC and big-data matrix workloads. Do NOT reference `/tmp` for large R temp storage — use `/Rtmp`.
 
 ### 3.3 Secrets & Dependencies
+
 - **HC-04:** Passwords MUST be written to files — never passed as CLI arguments. Prevents leakage in `ps aux`, `/proc/*/cmdline`, `docker inspect`, shell history.
 - **HC-06:** All Dockerfiles bake dependencies at build time — no runtime package installation. Eliminates failures if package mirrors are offline.
 - **HC-07:** Pin ALL external upstream image versions — no `:latest` tag for registry-sourced images.
 - **HC-08:** `.env` files are NEVER committed to git. Contains passwords, tokens, fingerprints.
 
 ### 3.4 Networking & Security
+
 - **HC-09:** The Telemetry/Renewer container NEVER mounts `/var/run/docker.sock` directly. Full host control = container escape vector. Use `docker-socket-proxy`.
 - **HC-05:** PostgreSQL ports are NEVER exposed to the host. DB is internal-only.
 - Containers operate in `network_mode: "host"` to interface with host-level SSSD/Samba pipes, while dropping bounding capabilities (`SYS_CHROOT`).
@@ -186,6 +192,7 @@ configure_rstudio.sh → .env → docker-deploy/docker-compose.yml → RStudio C
 These architectural decisions are not obvious from code alone. Agents MUST respect them.
 
 ### 6.1 BLAS: OpenBLAS Serial (not pthread)
+
 - **Installed:** `libopenblas0-serial` (enforced by `50_setup_nodes.sh`).
 - **Removed:** `libopenblas0-pthread` (causes `SIGSEGV` crashes when RStudio's rsession threads + OpenBLAS pthread threads collide).
 - **BLAS/LAPACK alternatives** set to serial variant via `update-alternatives`.
@@ -193,6 +200,7 @@ These architectural decisions are not obvious from code alone. Agents MUST respe
 - **Do NOT suggest** re-installing pthread variant or changing BLAS backend.
 
 ### 6.2 Storage: `/Rtmp` Local Disk (not tmpfs)
+
 - **Mount:** `/Rtmp` — 400GB ext4 local disk, high-performance mount options.
 - **Purpose:** NIMBLE MCMC compilation artifacts, large matrix temp files, R `tempdir()` override.
 - **Replaces:** the old `/tmp` tmpfs approach (16G RAM-based), which caused OOM on heavy workloads.
@@ -200,18 +208,64 @@ These architectural decisions are not obvious from code alone. Agents MUST respe
 - **Config templates** must reference `/Rtmp`, NOT `/tmp`, for large R temp storage.
 
 ### 6.3 Modular R Configuration (`profile.d/`)
+
 - **Location:** `/etc/biome-calc/profile.d/` on target nodes.
 - **Pattern:** A thin `Rprofile.site` loader sources all `.R` files in `profile.d/` with error isolation.
 - **Deployed by:** `50_setup_nodes.sh` via `templates/Rprofile_site.R.template`.
 - **Audit coverage:** `templates/00_audit_v28.R.template` validates the full modular structure.
 
 ### 6.4 Session Resilience (NGINX)
+
 - NGINX configured with extended `proxy_read_timeout`, `client_max_body_size`, and `proxy_buffer_size` to handle large RStudio session payloads (sessions can be 100MB+ for NIMBLE workloads).
 - Error code 4 (browser OOM) is a known failure mode for massive workspace payloads — see forensics script `99_postmortem_forensics.sh`.
 
 ### 6.5 Memory Guards
+
 - R session memory guards set pessimistically: `options(future.globals.maxSize = ...)` capped, garbage collection triggered proactively.
 - NIMBLE parallelism uses explicit core count from `parallel::detectCores(logical=FALSE)`.
+
+### 6.6 HC-13 — Adapt System, Not User Script (Architectural Principle)
+
+**Rule:** *We adapt system → profile → fragments → env so that portable user R code keeps working. We do not patch user scripts. When the system has been exhausted and the hang persists, the clean-VM baseline proves whether the residual issue is in the user's code or upstream.*
+
+**Triage ladder (operator perspective — sysadmin runs these in order):**
+
+| Layer | Test | If PASS | If FAIL |
+|-------|------|---------|---------|
+| **L0** OS / NFS / fork health | `r_minimal` + `biome_diag()` / `biome_nfs_check()` / `biome_fork_probe()` | infra healthy → continue | fix infra (NFS mount opts, kernel, cgroup); user blameless |
+| **L1** User script under pure R (no profile) | `r_minimal Rscript user.R` | profile is the cause → L2 | infra-vs-script — continue to L4 |
+| **L2** Selective fragment disable | `BIOME_DISABLE_FRAGMENTS="…" Rscript user.R` (binary bisection) | pinpoints the failing fragment → patch it | not a fragment problem |
+| **L3** Full profile baseline | normal `Rscript user.R` | reference for regression | reference for regression |
+| **L4** Clean-VM baseline (1 disk, no NFS, no domain) | run on reference VM | production-VM-specific (NFS / fragment / cgroup) | L5 |
+| **L5** User-script or upstream package bug | report to user with kernel-stack evidence | n/a | document, do not silently patch |
+
+**Triage tooling (admin-facing, not user-facing):**
+
+- `scripts/99_diagnose_user_script.sh <user.R>` — generic 4-layer harness with 20-min timeouts; emits `/tmp/user_diag_<ts>/report.md` with a verdict line `LAYER X FAILED: <reason>`.
+- `scripts/99_diagnose_lussu_hang.sh` — Lussu-specific overlay (adds runs E: PSOCK swap, F: terra todisk).
+- `templates/Rprofile_site.minimal.R.template` → `/etc/R/Rprofile_minimal.R` + `/usr/local/bin/r_minimal` wrapper for layer-0/1 isolation.
+
+**Responsibility boundaries (encoded in every troubleshooting doc):**
+
+- **System may be changed:** Renviron.site, Rprofile_site fragments, dispatcher options, BLAS/OMP/GDAL caps, NFS mount options, cgroup, profile bundle.
+- **User script may NOT be changed** without explicit user consent in the same prompt. AI-generated output that silently rewrites a user-supplied `.R` is INVALID per HC-13.
+
+**Ordering invariant (added 2026-05-09) — when a user-script edit *may* be suggested:**
+
+A patch to the user's `.R` is admissible **only after** triage has positively excluded **all three** of the following surfaces, **in order**:
+
+1. **System bug** — L0 cleared (OS / NFS / fork / cgroup / kernel / BLAS).
+2. **Configuration bug** — L1 + L2 + L3 cleared (Renviron, fragments, dispatcher).
+3. **Unchecked case** — L4 clean-VM reproduces the failure with no NFS / no domain / no profile, AND a ≤30-line minimal reproducer with `sessionInfo()` + kernel-stack evidence has been captured.
+
+Skipping any of (1), (2), (3) before suggesting a user-script change is an HC-13 violation. AI output that proposes a user patch **must cite** the layer it cleared (e.g. `"L4 PASS, evidence at /tmp/L4_clean_vm_<TS>/"`); proposals without that citation MUST be rejected on review. The verdict line emitted by `99_diagnose_user_script.sh` is the auditable proof that the ordering was followed.
+
+**Reference docs (operator perspective, mandatory section "Responsibility Boundaries" at top):**
+
+- `docs/operations/USER_SCRIPT_TROUBLESHOOTING.md` — generic decision tree (any user script).
+- `docs/operations/LUSSU_HANG_BISECTION.md` — worked example (mclapply + terra + NFS).
+- `docs/operations/CLEAN_VM_BASELINE.md` — L4 reference VM SOP.
+- `docs/architecture/USER_CONTRACT.md` — what "portable R" means at the input boundary.
 
 ---
 
@@ -231,6 +285,7 @@ These architectural decisions are not obvious from code alone. Agents MUST respe
 > but is currently non-operational. Do NOT reference sandbox steps as a validation path.
 
 **Active testing protocol:**
+
 1. **User testing** — sysadmin validates changes directly against the staging/production host.
 2. **Researcher testing** — BIOME researchers validate R session stability, NIMBLE MCMC runs, and geospatial workflows after deployment.
 3. **Script:** `99_health_check.sh` — validates stack operational status.

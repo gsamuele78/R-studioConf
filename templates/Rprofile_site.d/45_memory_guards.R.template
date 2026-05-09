@@ -196,7 +196,16 @@
         want_route <- (!strict) && is.numeric(spec) && length(spec) == 1 &&
                       (missing(type) || identical(type, "PSOCK"))
         if (want_route && exists(".biome_make_cluster_impl", envir = .biome_env, inherits = FALSE)) {
-          if (interactive()) {
+          # v12.3: INVISIBLE-SYSTEM CONTRACT
+          # The auto-route is the whole point of the safeguard — the user
+          # wrote portable R (parallel::makeCluster(N)) and we silently
+          # corrected it. Surfacing a yellow warning every single time
+          # breaks the "invisible system, portable user" contract and
+          # trains users to copy-paste opt-out options into their scripts
+          # (which then run unsafely elsewhere). Routing is always logged
+          # to the forensic sys_log; the interactive banner is now
+          # opt-in via options(biome.verbose = TRUE).
+          if (interactive() && isTRUE(getOption("biome.verbose", FALSE))) {
             message(sprintf(paste0(.C_YELLOW,
               "\U0001F6E1\ufe0f  BIOME-CALC: rerouting parallel::makeCluster(%d) -> biome_make_cluster()\n",
               "   (BLAS caps, cluster_logs outfile, BIOME_RUN_ID propagation).\n",
