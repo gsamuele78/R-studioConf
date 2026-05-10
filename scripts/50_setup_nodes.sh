@@ -1079,6 +1079,32 @@ setup_nodes_config_files() {
   local renviron="/etc/R/Renviron.site"
   [[ -f "${renviron}" ]] && run_cmd cp "${renviron}" "${renviron}.bak"
 
+  # ── R_LIBS_USER policy (v12.4 / single source of truth) ─────────────
+  # Renviron.site MUST mirror the actual on-disk state:
+  #   * ENABLE_R_LIBS_LOCAL=true  → emit R_LIBS_USER pointing to the
+  #       local disk first, NFS \$HOME path as fallback. The local root
+  #       MUST already exist (sticky 1777) — guaranteed by Step 7c.
+  #   * ENABLE_R_LIBS_LOCAL=false → DO NOT emit R_LIBS_USER. R falls
+  #       back to its built-in default (~/R/x86_64-pc-linux-gnu-library/<v>),
+  #       which is the pre-v12.4 NFS-only behavior. Setting an explicit
+  #       value here that points to a non-existent /var/lib/biome-Rlibs
+  #       would break library() on every node where Step 7c was skipped.
+  # PSE: the system file reflects what Step 7c actually deployed.
+  local rlibs_user_line=""
+  if [[ "${ENABLE_R_LIBS_LOCAL:-true}" == "true" ]]; then
+    local _rlibs_root="${R_LIBS_LOCAL_ROOT:-/var/lib/biome-Rlibs}"
+    rlibs_user_line="# Per-user local R library (v12.4) — eliminates NFS lookupcache storm during
+# library() fan-out from PSOCK workers. Created by setup_nodes_local_rlibs()
+# (sticky 1777). Fallback to NFS \$HOME path keeps pre-v12.4 packages reachable.
+# Bypass for one debug session: R_LIBS_USER=\${HOME}/R/x86_64-pc-linux-gnu-library/%V R
+R_LIBS_USER=${_rlibs_root}/%u/%v:\${HOME}/R/x86_64-pc-linux-gnu-library/%v"
+  else
+    rlibs_user_line="# Per-user local R library DISABLED (ENABLE_R_LIBS_LOCAL=false in setup_nodes.vars.conf).
+# R_LIBS_USER intentionally NOT set here — R falls back to its built-in default
+# (~/R/x86_64-pc-linux-gnu-library/<R-version>), i.e. NFS-only legacy behavior.
+# To re-enable local-disk libraries: set ENABLE_R_LIBS_LOCAL=true and re-run Step 7c+8."
+  fi
+
   cat > "${renviron}" <<RENVEOF
 # ${BIOME_HOST} Renviron.site — Generated: $(date -Iseconds)
 # Deployed by 50_setup_nodes.sh
@@ -1086,11 +1112,7 @@ setup_nodes_config_files() {
 # R Library Paths
 R_LIBS_SITE=/usr/local/lib/R/site-library/:\${R_LIBS_SITE}:/usr/lib/R/library
 
-# Per-user local R library (v12.4) — eliminates NFS lookupcache storm during
-# library() fan-out from PSOCK workers. Created by setup_nodes_local_rlibs()
-# (sticky 1777). Fallback to NFS \$HOME path keeps pre-v12.4 packages reachable.
-# Bypass for one debug session: R_LIBS_USER=\${HOME}/R/x86_64-pc-linux-gnu-library/%V R
-R_LIBS_USER=${R_LIBS_LOCAL_ROOT:-/var/lib/biome-Rlibs}/%u/%v:\${HOME}/R/x86_64-pc-linux-gnu-library/%v
+${rlibs_user_line}
 
 # OpenBLAS CORETYPE — NOT set here (migration-safe design).
 # Detected dynamically by OS-level wrappers BEFORE R starts:
@@ -1433,15 +1455,41 @@ setup_nodes_migrate_users() {
       sed -i '/^MKL_NUM_THREADS=/d' "${re_file}"
       sed -i '/^MC_CORES=/d' "${re_file}"
       sed -i '/^OPENBLAS_CORETYPE=/d' "${re_file}"
+      # ── v12.4: Strip R_LIBS_* shadowing (CRITICAL) ───────────────────
+      # R loads ~/.Renviron AFTER /etc/R/Renviron.site, so any R_LIBS_USER /
+      # R_LIBS_SITE / R_LIBS in the user file SILENTLY OVERRIDES the
+      # system path deployed in Step 7c+8. A legacy hard-coded
+      # `R_LIBS_USER=${HOME}/R/x86_64-pc-linux-gnu-library/4.4` from the
+      # previous server keeps every library() call going through NFS,
+      # vanishing the local-disk fast path and re-creating the
+      # lookupcache storm. We strip them: the system file is now the
+      # single source of truth (Step 7c toggle decides local-vs-NFS).
+      # Backup line went into ${re_file}.bak above — recoverable.
+      sed -i '/^[[:space:]]*R_LIBS_USER[[:space:]]*=/d' "${re_file}"
+      sed -i '/^[[:space:]]*R_LIBS_SITE[[:space:]]*=/d' "${re_file}"
+      sed -i '/^[[:space:]]*R_LIBS[[:space:]]*=/d'      "${re_file}"
       # Add warning block if missing
       if ! grep -q "Threading Configuration" "${re_file}"; then
         cat >> "${re_file}" <<'WEOF'
 
 # =============================================================
-# IMPORTANT: Threading Configuration
+# IMPORTANT: Threading & R Library Path Configuration
 # =============================================================
-# Thread settings (OMP, BLAS, MC_CORES) are now managed
-# dynamically by the system Rprofile.site. Do NOT set them here.
+# Thread settings (OMP, BLAS, MC_CORES) are managed dynamically
+# by the system Rprofile.site. Do NOT set them here.
+#
+# R_LIBS_USER / R_LIBS_SITE / R_LIBS are managed by the system
+# /etc/R/Renviron.site:
+#   * If the node has the local-disk lib enabled (v12.4):
+#       /var/lib/biome-Rlibs/<user>/<Rver>  (local, fast)
+#       :${HOME}/R/x86_64-pc-linux-gnu-library/<Rver>  (NFS fallback)
+#   * Otherwise R falls back to its built-in default
+#     (~/R/x86_64-pc-linux-gnu-library/<Rver>) i.e. NFS-only.
+# Defining R_LIBS_USER here would SHADOW the system path and force
+# every library() call back through NFS — do NOT redefine.
+# Bypass for one debug session only:
+#   R_LIBS_USER=${HOME}/R/x86_64-pc-linux-gnu-library/%V R
+# Audit other users with: scripts/99_check_user_renviron_overrides.sh
 # =============================================================
 WEOF
       fi
