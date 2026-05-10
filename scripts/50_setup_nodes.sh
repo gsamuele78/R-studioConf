@@ -766,7 +766,39 @@ setup_nodes_local_rlibs() {
       exit 1
     fi
 
+    # ── Idempotency fast-path ─────────────────────────────────────────
+    # If the device is ALREADY mounted at the configured mount point with
+    # the configured filesystem, the disk has already been provisioned by
+    # a prior run. Skip all destructive pre-flight (wipefs/mkfs/fstab/mount)
+    # and proceed straight to permissions + warm-up. This makes Step 7c
+    # safely re-runnable on production nodes.
+    local already_mounted_at=""
+    already_mounted_at=$(awk -v dev="${rlibs_dev}" '$1==dev{print $2; exit}' /proc/mounts || true)
+    if [[ -n "${already_mounted_at}" && "${already_mounted_at}" == "${rlibs_root}" ]]; then
+      local mounted_fs
+      mounted_fs=$(awk -v dev="${rlibs_dev}" '$1==dev{print $3; exit}' /proc/mounts || true)
+      if [[ "${mounted_fs}" == "${rlibs_fs}" ]]; then
+        log_info "  ${rlibs_dev} already mounted at ${rlibs_root} as ${mounted_fs} — skipping format/fstab/mount"
+        # Best-effort: ensure fstab entry exists (don't fail if blkid/UUID lookup hiccups)
+        local _uuid
+        _uuid=$(blkid -s UUID -o value "${rlibs_dev}" 2>/dev/null || true)
+        if [[ -n "${_uuid}" ]] && ! grep -qE "^UUID=${_uuid}\b" /etc/fstab 2>/dev/null; then
+          log_warn "  fstab missing UUID=${_uuid} for ${rlibs_root} — adding (mount survived without it)"
+          if [[ "${DRY_RUN}" != "true" ]]; then
+            printf 'UUID=%s  %s  %s  defaults,nofail  0  2  # managed-by: 50_setup_nodes.sh local-Rlibs\n' \
+              "${_uuid}" "${rlibs_root}" "${rlibs_fs}" >> /etc/fstab
+          fi
+        fi
+        # Jump to the shared post-mount permission/probe/warm-up block below.
+        # We do this by setting a flag and short-circuiting the rest of Mode B.
+        local _rlibs_already_deployed=true
+      fi
+    fi
+
+    if [[ "${_rlibs_already_deployed:-false}" != "true" ]]; then
+
     # ── Pessimistic pre-flight: device must NOT be in use ──────────────
+
     # mkfs.ext4 -F refuses ("apparently in use by the system") whenever
     # the kernel has registered partitions on the device, OR a holder
     # (LVM/MD/crypt) sits on top, OR a partition is mounted/in swap.
@@ -883,10 +915,13 @@ setup_nodes_local_rlibs() {
     else
       log_info "  ${rlibs_root} already mounted"
     fi
+
+    fi  # end: if [[ "${_rlibs_already_deployed:-false}" != "true" ]] (idempotency fast-path guard)
   else
     log_info "No R_LIBS_LOCAL_DEVICE configured — using shared rootfs path: ${rlibs_root}"
     run_cmd mkdir -p "${rlibs_root}"
   fi
+
 
   # ── Sticky-bit + ownership (HC-14: abort on failure) ─────────────────
   if [[ "${DRY_RUN}" != "true" ]]; then

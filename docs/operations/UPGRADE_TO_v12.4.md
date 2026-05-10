@@ -600,21 +600,48 @@ sed -i 's/RPROFILE_VERSION="12.7"/RPROFILE_VERSION="12.6"/' \
 - **T3 (k8s)**: pending — stesso gap; serve un `ConfigMap` montato a
   `/etc/R/Rprofile_site.d/` + init container per il bundle rebuild.
 
-### 12.7 Track B — DEFERRED (harness verdict misclassification)
+### 12.7 Track B — IMPLEMENTED in `HARNESS_VERSION="1.2"`
 
 L1/L2 TIMEOUT 600s sui due script Lussu **non** sono bug del codice
 utente: il workload reale è ~6h (4103 chunk × ~1.5s/chunk). L'harness
-classifica come "TIMEOUT == FAIL" qualunque cosa duri più di
+v1.1 classificava come "TIMEOUT == FAIL" qualunque cosa duri più di
 `BIOME_DIAG_TIMEOUT_S`, anche un compute legittimo che sta progredendo.
+**v1.2 (2026-05-10)** corregge la misclassificazione (script-only,
+**non** bumpa `RPROFILE_VERSION`):
 
-Fix previsto (separato, **NON bumpa `RPROFILE_VERSION`** — solo
-`HARNESS_VERSION`):
+**Cosa cambia in `99_diagnose_user_script.sh` e `99_diagnose_lussu_hang.sh`:**
 
-- aggiungere flag `--timeout SECONDS` esplicito
-- aggiungere rilevamento PROGRESS_TIMEOUT (timestamp dell'ultimo log di
-  progresso negli ultimi 60 s) per distinguere "stallo vero" da
-  "compute lungo che avanza"
-- aggiornare la verdict matrix in `docs/operations/CLEAN_VM_BASELINE.md`
+- nuovi flag CLI **`--timeout SECONDS`** e **`--progress-window SECONDS`**
+  (sovrascrivono le env `BIOME_DIAG_TIMEOUT_S` /
+  `BIOME_DIAG_PROGRESS_WINDOW_S`); flag `-h|--help` aggiunto.
+- nuovo stato verdict **`PROGRESSING`**: alla scadenza del timeout (ec=124)
+  l'harness controlla l'mtime dei file di log; se sono stati scritti negli
+  ultimi `PROGRESS_WINDOW_S` secondi (default 60), lo script è **vivo**
+  (compute lungo legittimo) → **non** viene classificato come
+  TIMEOUT/FAIL e **nessun** layer viene incolpato.
+- nuovo **exit code 3** = "PROGRESSING-only" (inconclusive; rerun con
+  `--timeout` raddoppiato). Mappa: `0`=all-pass, `1`=genuine-fail,
+  `2`=invocation-error, `3`=progressing-only.
+- verdict matrix interna: la branch `INCONCLUSIVE: at least one layer
+  was PROGRESSING` precede il decision tree dei fallimenti, così un
+  workload Lussu/Martina di ore non viene mai mappato su "L3 FAILED".
 
-Da fare **dopo** la verifica su biome-calc03 di v12.7. Nessuna azione
-operativa richiesta in questo upgrade.
+**Validazione operatore (esempi):**
+
+```bash
+# Default 10 min/layer (~40 min totali) — adeguato a most workloads
+sudo -u <user> /usr/local/bin/99_diagnose_user_script.sh /path/script.R
+
+# Long compute (Lussu/Martina): 30 min/layer + finestra di progress 120s
+sudo -u <user> /usr/local/bin/99_diagnose_lussu_hang.sh \
+    --timeout 1800 --progress-window 120 /path/script.R
+
+# Atteso su workload progressing: stato PROGRESSING in console,
+# verdict "INCONCLUSIVE: ... PROGRESSING ...", exit code 3.
+```
+
+**Tier deltas:** T1 implementato. T2/T3: gli harness vivono solo nel
+tier host; nessun port forward necessario.
+
+**Da fare ancora (non-blocking):** aggiornare la verdict matrix in
+`docs/operations/CLEAN_VM_BASELINE.md` con la colonna `PROGRESSING`.
