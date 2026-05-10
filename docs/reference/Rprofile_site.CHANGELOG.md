@@ -8,6 +8,151 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.7 (2026-05-10) — "ForkGuard PSOCK pkg-replication (closes silent `could not find function` on mclapply reroute)"
+
+CONTEXT. Post-v12.6 triage on `biome-calc03` of two researcher scripts
+(`block1_aoh_to_rij.R`, `Mod7_sq_diff_original.R`) via
+`/usr/local/bin/99_diagnose_user_script.sh` produced verdicts
+`L0 PASS / L1 TIMEOUT 600s / L2 TIMEOUT 601s / L3 FAIL 82s` with the
+following error from layer L3 (full kernel + all fragments):
+
+```
+Error in checkForRemoteErrors(val):
+  10 nodes produced errors; first error:
+    could not find function "data.table"
+```
+
+The asymmetry is the smoking gun: L1 (minimal Rprofile, fragment 52
+absent) succeeded — the user's bare `mclapply()` ran on the fork path.
+L3 (full profile, fragment 52 active) failed in 82 s on every chunk —
+the reroute fired (user code does `library(terra)`), the cluster spawned,
+the FUN closure called `data.table(...)`, and every PSOCK worker died
+with "could not find function".
+
+ROOT CAUSE (fragment 52 design defect since v12.4).
+`52_mclapply_guard.R` reroutes a `mclapply()` call to a PSOCK cluster
+when any fork-unsafe namespace (terra, sf, raster, …) is loaded in the
+master. fork() inherits the master's full search path; PSOCK workers are
+**fresh** R processes that start with the default base set only. The
+fragment created the cluster, set RNG, and called `parLapply(cl, X, FUN, ...)`
+**without** replicating the master's attached packages. Any user FUN
+that called a non-base function via bare-name lookup (`data.table(...)`,
+`mutate(...)`, `vect(...)`) crashed instantly on every worker. This
+silently broke a swathe of portable user code — a direct HC-13 invariant
+violation by the very fragment whose name promises HC-13 compliance.
+
+FIX (T1). One block inserted in `.biome_mclapply_safe`, **after**
+`clusterSetRNGStream` and **before** `parLapply`:
+
+```r
+master_pkgs <- setdiff(rev(.packages()),
+                       c("base","methods","datasets","utils",
+                         "grDevices","graphics","stats","parallel"))
+if (length(master_pkgs)) {
+  parallel::clusterCall(cl, function(pkgs) {
+    for (p in pkgs) suppressPackageStartupMessages(
+      tryCatch(library(p, character.only = TRUE), error = function(e) NULL))
+  }, pkgs = master_pkgs)
+}
+```
+
+Wrapped in `tryCatch`; failure logs `ForkGuard WARN` via `sys_log` and
+falls through to `parLapply` (graceful degradation — fully-qualified
+`pkg::fun()` call sites still work). Success logs `ForkGuard PKG-SYNC`
+with the replicated pkg list and worker count.
+
+| Artefact                                                | Change                                                                                                       | Status |
+|---------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|--------|
+| `templates/Rprofile_site.d/52_mclapply_guard.R.template`| Insert `clusterCall` pkg-replication block before `parLapply`. ~30 LOC. No change to fork path or wrapper installer. | EDIT   |
+| `config/setup_nodes.vars.conf`                          | `RPROFILE_VERSION="12.6"` → `"12.7"`.                                                                        | BUMP   |
+| `docs/operations/UPGRADE_TO_v12.4.md` §12               | New section pointing to this entry; deploy = selezione 3 (Step 8 fragments + bundle rebuild).                | DOC    |
+
+DESIGN NOTES.
+
+- **Why `.packages()` not `loadedNamespaces()`**: we replicate only
+  packages on the *search path* (those the user did `library()`/
+  `require()` on). Loaded-but-not-attached namespaces are reachable via
+  `pkg::fun` and don't need attaching on workers; attaching them all
+  would balloon worker startup time and risk masking conflicts.
+- **Excluded set** (`base, methods, datasets, utils, grDevices,
+  graphics, stats, parallel`): always present on every R worker; calling
+  `library()` on them is a no-op but pollutes the log.
+- **Bundle invalidation**: editing fragment 52 changes its md5 → the
+  v12.3 byte-compiled bundle manifest mismatches → next session
+  demotes to the legacy per-fragment `sys.source` loop until Step 8
+  rebuilds. PSE-safe by construction (see v12.3 entry).
+
+KNOWN LIMITATIONS (deliberate, NOT fixed in v12.7).
+
+- Master-only `library()` calls made *between* the cluster creation and
+  `parLapply` are not propagated (we snapshot `.packages()` once). Edge
+  case; practical user code attaches before `mclapply`.
+- Worker library paths come from the worker's own `.libPaths()` —
+  identical to fork() semantics on a single host (workers see the same
+  `/var/lib/biome-Rlibs/<user>/<R-ver>` via `Renviron.site`). On a
+  multi-host PSOCK cluster (not supported by fragment 30) this would
+  need additional `clusterCall` to set `.libPaths`.
+
+DEPLOYMENT (per node, idempotent — same procedure as v12.5/v12.6 §3):
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: 3   (Step 8 — fragments redeploy + bundle rebuild)
+sudo systemctl restart rstudio-server
+```
+
+VALIDATION:
+
+```bash
+# (a) Reproduce the original crash on a v12.6 box (control)
+sudo -u <user> Rscript -e '
+  library(terra); library(data.table)
+  res <- parallel::mclapply(1:4, function(i) data.table(x=i)[, y := x*2], mc.cores=4)
+  str(res)'
+# v12.6 (broken): 4 errors "could not find function 'data.table'"
+# v12.7 (fixed):  list of 4 data.tables.
+
+# (b) Inspect ForkGuard PKG-SYNC log line in /var/log/biome-log/r_biome_system.log
+grep -E 'ForkGuard +(REROUTE|PKG-SYNC|WARN)' /var/log/biome-log/r_biome_system.log | tail
+# Expect: REROUTE then PKG-SYNC entries on every mclapply call with terra loaded.
+
+# (c) Re-run the offending harness layer — L3 must now FAIL on TIMEOUT (long
+#     compute) rather than FAIL on "could not find function". A separate
+#     follow-up (Track B, harness-only, no RPROFILE bump) fixes the
+#     verdict-misclassification of long compute as TIMEOUT.
+sudo /usr/local/bin/99_diagnose_user_script.sh /path/to/block1_aoh_to_rij.R
+```
+
+ROLLBACK. Three artefacts: (1) revert the inserted block in fragment 52
+(file-level via `*.bak`), (2) bump `RPROFILE_VERSION` back to `12.6`,
+(3) Step 8 rebuilds the bundle. No data migration. Per-user emergency
+bypass remains `BIOME_DISABLE_FORK_GUARD=1` (disables the whole
+fragment 52 reroute, not only the new pkg-sync block).
+
+TIER DELTAS.
+
+- **T1 (host)**: implemented (this entry).
+- **T2 (docker)**: pending — and worse, **the entire `Rprofile_site.d/`
+  directory is currently absent from `docker-deploy/templates/`**
+  (verified 2026-05-10: only `Rprofile_site.R.template` is shipped).
+  The T2 image therefore mirrors v12.0 monolith semantics, not v12.1+
+  fragments. Fork-guard, thread-guard, options-guard, user-lib
+  bootstrap, etc. are ALL missing in T2. This is a structural backlog
+  item, not a v12.7 regression — flagging here so the next T2 sync
+  surfaces it. To port v12.7 specifically, the entire `Rprofile_site.d/`
+  tree must be copied into `docker-deploy/templates/` AND the rstudio
+  Dockerfile must add the `COPY` + dispatcher-rendering step that
+  `50_setup_nodes.sh` currently performs at install time.
+- **T3 (k8s)**: pending — same gap. The fragments would ship as a
+  ConfigMap mounted at `/etc/R/Rprofile_site.d/`; bundle rebuild via
+  init container.
+
+CROSS-REF: `docs/operations/UPGRADE_TO_v12.4.md` §12 — "v12.7 ForkGuard
+pkg-sync (HC-13 closure)".
+
+---
+
 ## v12.6 (2026-05-10) — "User-lib auto-bootstrap (`/var/lib/biome-Rlibs/<user>/<R-ver>/`)"
 
 CONTEXT. Post-v12.5 validation on `biome-calc03` exposed a UX regression

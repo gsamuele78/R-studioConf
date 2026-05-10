@@ -133,6 +133,45 @@ if (!exists("ENABLE_FORK_TO_PSOCK", inherits = FALSE)) {
     tryCatch(parallel::clusterSetRNGStream(cl), error = function(e) NULL)
   }
 
+  # ── PSOCK PKG-REPLICATION (v12.7 fix) ──────────────────────────────────────
+  # mclapply's fork() inherits the master's full search path: every package
+  # the user library()'d in the parent is visible inside FUN. PSOCK workers
+  # are FRESH R processes — they start with the default base set only.
+  # Without this block, user code that calls e.g. data.table(...), terra(..),
+  # or any tidyverse verb inside FUN dies with
+  #   Error in checkForRemoteErrors(val): N nodes produced errors;
+  #     first error: could not find function "<fn>"
+  # which violates HC-13 (silently breaks portable user code on the reroute
+  # path). We therefore replicate the master's *attached* (search-path) pkgs
+  # to each worker before parLapply. Failures are logged but never fatal —
+  # the worker may still succeed if FUN uses pkg::fun() qualified calls.
+  master_pkgs <- tryCatch({
+    setdiff(rev(.packages()),
+            c("base", "methods", "datasets", "utils",
+              "grDevices", "graphics", "stats", "parallel"))
+  }, error = function(e) character(0))
+  if (length(master_pkgs)) {
+    tryCatch({
+      parallel::clusterCall(cl, function(pkgs) {
+        for (p in pkgs) {
+          suppressPackageStartupMessages(
+            tryCatch(library(p, character.only = TRUE),
+                     error = function(e) NULL))
+        }
+      }, pkgs = master_pkgs)
+      tryCatch(sys_log("ForkGuard", "PKG-SYNC",
+        sprintf("replicated %d pkg(s) to %d worker(s): %s",
+                length(master_pkgs), length(cl),
+                paste(master_pkgs, collapse = ","))),
+        error = function(e) NULL)
+    }, error = function(e) {
+      tryCatch(sys_log("ForkGuard", "WARN",
+        sprintf("clusterCall pkg-sync failed (%s); workers start with base only",
+                conditionMessage(e))),
+        error = function(e2) NULL)
+    })
+  }
+
   # Execute. parLapply preserves the (X, FUN, ...) contract of mclapply for
   # the lapply-flavoured 90% of real use; mc.preschedule / affinity.list
   # are silently ignored (PSOCK has no equivalent — log it once for clarity).

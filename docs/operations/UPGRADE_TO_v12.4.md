@@ -513,3 +513,108 @@ ls -ld /var/lib/biome-Rlibs/<ad-user>/*/
 
 Vedi `docs/reference/Rprofile_site.CHANGELOG.md` § v12.6 — sezioni
 *OVERRIDE*, *ROLLBACK*, *TIER DELTAS*.
+
+---
+
+## 12. ForkGuard PSOCK pkg-sync — HC-13 closure (v12.7)
+
+> **Status:** v12.7 (2026-05-10) — `RPROFILE_VERSION="12.7"`. Chiude un
+> bug strutturale del fragment `52_mclapply_guard.R` presente da v12.4.
+
+### 12.1 Cosa risolve
+
+Il harness `99_diagnose_user_script.sh` su `block1_aoh_to_rij.R` /
+`Mod7_sq_diff_original.R` (biome-calc03, 2026-05-10) ha prodotto:
+
+```
+L0 PASS  | L1 TIMEOUT 600s | L2 TIMEOUT 601s | L3 FAIL 82s
+  Error in checkForRemoteErrors(val):
+    10 nodes produced errors; first error:
+      could not find function "data.table"
+```
+
+Il fragment 52 reroutava correttamente `mclapply` su PSOCK (lo script
+carica `terra` → fork-unsafe), ma **non replicava** i pacchetti
+attached del master ai worker. I worker PSOCK partono *fresh* (solo
+base set), quindi qualsiasi `data.table(...)`, `mutate(...)`, `vect(...)`
+chiamato per nome bare nella FUN moriva istantaneamente. Violazione HC-13
+silenziosa nel frammento il cui nome promette HC-13.
+
+### 12.2 Fix
+
+In `templates/Rprofile_site.d/52_mclapply_guard.R.template`, dopo
+`clusterSetRNGStream` e prima di `parLapply`, viene inserito un
+`parallel::clusterCall` che chiama `library()` su ogni pacchetto in
+`.packages()` del master (escluso il base set + `parallel`). Failure
+loggate via `sys_log` come `ForkGuard WARN`; success come `ForkGuard
+PKG-SYNC`. Bypass invariato: `BIOME_DISABLE_FORK_GUARD=1`.
+
+Dettagli completi (root cause, design notes, known limits, validation):
+`docs/reference/Rprofile_site.CHANGELOG.md` § v12.7.
+
+### 12.3 Deploy
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: 3   (Step 8 — fragments redeploy + bundle rebuild atomico)
+sudo systemctl restart rstudio-server
+sudo bash scripts/50_setup_nodes.sh --verify
+# Atteso: Rprofile.site version: 12.7
+```
+
+### 12.4 Validazione
+
+```bash
+# (a) Smoke test — riproduce il pattern del bug
+sudo -u <user> Rscript -e '
+  library(terra); library(data.table)
+  res <- parallel::mclapply(1:4, function(i) data.table(x=i)[, y:=x*2], mc.cores=4)
+  str(res)'
+# v12.6: 4 errori "could not find function". v12.7: lista di 4 data.table.
+
+# (b) Log entries
+grep -E 'ForkGuard +(REROUTE|PKG-SYNC|WARN)' /var/log/biome-log/r_biome_system.log | tail
+```
+
+### 12.5 Rollback
+
+```bash
+sudo cp /etc/R/Rprofile_site.d/52_mclapply_guard.R.bak \
+        /etc/R/Rprofile_site.d/52_mclapply_guard.R
+sudo rm -rf /etc/R/Rprofile_site.d/.compiled   # forza rebuild legacy loop
+sudo systemctl restart rstudio-server
+sed -i 's/RPROFILE_VERSION="12.7"/RPROFILE_VERSION="12.6"/' \
+  /opt/R-studioConf/config/setup_nodes.vars.conf
+```
+
+### 12.6 Tier deltas
+
+- **T1 (host)**: implementato.
+- **T2 (docker)**: pending — **`docker-deploy/templates/` non contiene
+  affatto la directory `Rprofile_site.d/`** (verificato 2026-05-10:
+  c'è solo `Rprofile_site.R.template`). Il T2 è quindi indietro di
+  tutta la modularizzazione v12.1+ (fork-guard, thread-guard,
+  options-guard, user-lib bootstrap mancano tutti). Backlog
+  strutturale, non regressione v12.7.
+- **T3 (k8s)**: pending — stesso gap; serve un `ConfigMap` montato a
+  `/etc/R/Rprofile_site.d/` + init container per il bundle rebuild.
+
+### 12.7 Track B — DEFERRED (harness verdict misclassification)
+
+L1/L2 TIMEOUT 600s sui due script Lussu **non** sono bug del codice
+utente: il workload reale è ~6h (4103 chunk × ~1.5s/chunk). L'harness
+classifica come "TIMEOUT == FAIL" qualunque cosa duri più di
+`BIOME_DIAG_TIMEOUT_S`, anche un compute legittimo che sta progredendo.
+
+Fix previsto (separato, **NON bumpa `RPROFILE_VERSION`** — solo
+`HARNESS_VERSION`):
+
+- aggiungere flag `--timeout SECONDS` esplicito
+- aggiungere rilevamento PROGRESS_TIMEOUT (timestamp dell'ultimo log di
+  progresso negli ultimi 60 s) per distinguere "stallo vero" da
+  "compute lungo che avanza"
+- aggiornare la verdict matrix in `docs/operations/CLEAN_VM_BASELINE.md`
+
+Da fare **dopo** la verifica su biome-calc03 di v12.7. Nessuna azione
+operativa richiesta in questo upgrade.
