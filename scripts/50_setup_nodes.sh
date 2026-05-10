@@ -998,12 +998,22 @@ setup_nodes_local_rlibs() {
         [[ ${uid} -ge 1000 && ${uid} -ne 65534 ]] || { warmup_skipped=$((warmup_skipped+1)); continue; }
         [[ "${shell}" == */nologin || "${shell}" == */false ]] && { warmup_skipped=$((warmup_skipped+1)); continue; }
         [[ -d "${home}" ]] || { warmup_skipped=$((warmup_skipped+1)); continue; }
-        local user_lib="${rlibs_root}/${u}/${r_ver}"
-        if install -d -m 0755 -o "${u}" -g "${gid}" "${user_lib}" 2>/dev/null; then
+        local user_root="${rlibs_root}/${u}"
+        local user_lib="${user_root}/${r_ver}"
+        # v12.9 ownership fix: `install -d -m -o -g LEAF` only chowns the
+        # LEAF; the auto-created PARENT (<rlibs_root>/<u>/) keeps the
+        # root:root umask. That left every AD user unable to install
+        # packages into their own dir on first contact. We now do it
+        # explicitly: mkdir -p (idempotent), then chmod+chown both the
+        # parent AND the leaf. Re-running this loop also HEALS dirs
+        # left as root:root by earlier (broken) deploys.
+        if mkdir -p "${user_lib}" 2>/dev/null \
+             && chmod 0755 "${user_root}" "${user_lib}" 2>/dev/null \
+             && chown "${u}:${gid}" "${user_root}" "${user_lib}" 2>/dev/null; then
           warmup_count=$((warmup_count+1))
         else
           warmup_failed=$((warmup_failed+1))
-          log_warn "Warm-up: failed to create ${user_lib} (skipping)"
+          log_warn "Warm-up: failed to create/chown ${user_lib} (skipping)"
         fi
       done < <(
         {

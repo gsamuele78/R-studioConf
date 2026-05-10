@@ -8,7 +8,41 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
-## v12.9 (2026-05-10) — "User-lib bootstrap REAL fix: %u non-expansion + libPaths cache + AD enumeration"
+## v12.9 (2026-05-10) — "User-lib bootstrap REAL fix: %u non-expansion + libPaths cache + AD enumeration + parent-dir ownership"
+
+### v12.9.1 follow-up patch (same day, post-deploy on biome-calc03)
+
+Two regressions surfaced after the initial v12.9 deploy:
+
+1. **`scripts/50_setup_nodes.sh` line 39 forward-ref to `log_error`.**
+   The pre-flight `[[ ! -f "${VARS_CONF}" ]]` and root-check error paths
+   called the `log_error` wrapper which is defined ~60 lines later in
+   the same file. Bash parses but does not evaluate function bodies
+   until call-time, so the bug stayed dormant until a checkout was
+   missing `config/setup_nodes.vars.conf`. Fix: both pre-flight error
+   paths now call the base `log "ERROR" "..."` from `lib/common_utils.sh`
+   (already sourced at line ~34), which is guaranteed available.
+
+2. **Step 7c warmup created `/var/lib/biome-Rlibs/<u>/` parent dirs as
+   `root:root`.** GNU `install -d -m PERM -o U -g G LEAF` only applies
+   `-o/-g` to the LEAF (`<v>/`), not to the auto-created parent
+   (`<u>/`). On biome-calc03, every AD user except `michele.lussu`
+   (whose parent was created by his own R session via fragment 04
+   `dir.create(recursive=TRUE)`) ended up with a root-owned subtree —
+   meaning `install.packages()` from RStudio would fail with
+   "lib not writable" on first contact. Fix: warmup now uses explicit
+   `mkdir -p` + `chmod 0755` + `chown ${u}:${gid}` on **both** the
+   parent and the leaf. Re-running the loop also HEALS dirs left
+   root-owned by earlier (broken) deploys — no manual cleanup needed.
+
+Both fixes are tier-T1 patches (host scripts). Files touched:
+
++ `scripts/50_setup_nodes.sh` — lines ~39, ~71, and Step 7c warmup loop.
+
+No tier-T2/T3 deviation; T2 mirrors automatically once compose images
+rebuild from the patched scripts/.
+
+---
 
 CONTEXT. v12.8 shipped three fixes (UID gate widened to `>=1000 && !=65534`,
 fragment 04 reads RAW `R_LIBS_USER`, expand_one resolves `%u %v %V %p %o %a`
