@@ -112,8 +112,13 @@ sudo systemctl restart rstudio-server
 sudo bash scripts/50_setup_nodes.sh --verify
 
 # 2) R_LIBS_USER è quello locale?
-sudo -u <un_utente_AD_qualunque> R --vanilla -e '.libPaths()'
+#    NB v12.9: NON usare `R --vanilla` qui — `--vanilla` implica `--no-site-file
+#    --no-environ`, quindi salta Renviron.site E Rprofile.site (incluso
+#    fragment 04 v12.9 che prepende /var/lib/biome-Rlibs/<u>/<v> a .libPaths()).
+#    Validare con --no-save che RISPETTA tutto il sito.
+sudo -u <un_utente_AD_qualunque> -i R --no-save -e '.libPaths()'
 # Atteso: la prima entry deve essere /var/lib/biome-Rlibs/<user>/<R-version>
+
 
 # 3) Frammento fork-guard caricato? (kernel "normale", NON minimal)
 sudo -u <utente> R --vanilla -e 'list.files("/etc/R/Rprofile_site.d")' | grep 52_mclapply_guard
@@ -791,3 +796,178 @@ sudo systemctl restart rstudio-server
   indietro di tutta la modularizzazione v12.1+; il fix v12.8 verrà
   port-forward solo quando T2 verrà allineato.
 - **T3 (k8s)**: pending — vedi §12.6.
+
+---
+
+## 14. User-lib bootstrap REAL fix per AD/SSSD (v12.9)
+
+> **Status:** v12.9 (2026-05-10) — `RPROFILE_VERSION="12.9"`. Hotfix
+> chirurgico che chiude tre defect residui di v12.8 dimostrati su
+> `michele.lussu` (UID 164186128) e `gianfranco.samuele2` (UID 163718183).
+
+### 14.1 Cosa risolve
+
+Post-deploy v12.8 su biome-calc03 il sintomo del §13 **persiste**:
+`.libPaths()` mostrava ancora **solo** il fallback NFS, lo Step 7c
+loggava `warmed=1 skipped=40` (solo `ladmin`), e l'audit-log del
+fragment 04 confermava `dir.create()` riuscita ma `.libPaths()` non
+aggiornato.
+
+Tre bug indipendenti (non risolti da v12.8):
+
+1. **`.libPaths(.libPaths())` è un NO-OP.** v12.8 chiudeva il fragment
+   04 con `tryCatch({ .libPaths(.libPaths()) }, ...)` pensando di
+   forzare un re-scan post-creazione. Ma `.libPaths()` getter ritorna
+   la cache **già filtrata** (esistenza-checked); reimmetterla è
+   matematicamente idempotente. Per re-introdurre il path appena
+   creato bisogna passare un vector che lo **contenga esplicitamente**.
+2. **R non espande `%u` in `Renviron.site`.** Per `R-admin` §B.1 i token
+   riconosciuti sono solo `%V %v %p %o %a`. Il template ship
+   `R_LIBS_USER=/var/lib/biome-Rlibs/%u/%v:...` → R lo passa verbatim
+   → `/var/lib/biome-Rlibs/%u/4.5` non esiste come dir → R lo droppa
+   da `.libPaths()` allo startup. Il fragment 04 già espandeva `%u`
+   nel proprio parser e creava la dir corretta, ma il defect #1
+   impediva il recupero.
+3. **`getent passwd` bulk cieco agli utenti SSSD AD.** SSSD su Debian
+   default è `enumerate=false` → bulk `getent passwd` ritorna **solo**
+   `/etc/passwd`. Lookup per-nome (`getent passwd <name>`) **funziona**
+   perché NSS bypassa l'enumerazione. Lo Step 7c v12.8 manteneva
+   `< <(getent passwd)` come unica fonte → tutti gli AD invisibili.
+
+### 14.2 Fix
+
+**(a) Fragment 04 — prepend esplicito.** In
+`templates/Rprofile_site.d/04_user_lib_bootstrap.R.template`, dopo
+`dir.create()`, costruisce la lista delle entry che **ora esistono**
+sotto `/var/lib/biome-Rlibs/` e le prepende:
+
+```r
+existing_targets <- entries[
+  vapply(entries,
+         function(p) startsWith(p, "/var/lib/biome-Rlibs/") && dir.exists(p),
+         logical(1L))
+]
+if (length(existing_targets)) {
+  tryCatch({
+    cur <- .libPaths()
+    .libPaths(unique(c(existing_targets, cur)))
+  }, error = function(e) invisible(NULL))
+}
+```
+
+**(b) Step 7c — enumerazione ibrida.** In `scripts/50_setup_nodes.sh`
+la sorgente del while-loop diventa:
+
+```bash
+done < <(
+  {
+    getent -s files passwd
+    if [[ -d "${nfs_home_base}" ]]; then
+      while IFS= read -r ad_name; do
+        [[ -n "${ad_name}" ]] || continue
+        getent passwd -- "${ad_name}" 2>/dev/null || true
+      done < <(find "${nfs_home_base}" -mindepth 1 -maxdepth 1 \
+                    -type d -printf '%f\n' 2>/dev/null | sort -u)
+    fi
+  } | awk -F: '!seen[$1]++'
+)
+```
+
+`nfs_home_base` default `/nfs/home`, override via `NFS_HOME_BASE` in
+`config/setup_nodes.vars.conf` (knob commentato).
+
+**(c) Version bump + docs.** `RPROFILE_VERSION="12.9"`, knob
+`NFS_HOME_BASE` aggiunto a `config/setup_nodes.vars.conf`, CHANGELOG
+§ v12.9, questa §14, e §3.5 step 2 ripulito da `R --vanilla`
+(che — bypassando Renviron.site + Rprofile.site — è uno strumento di
+validazione **invalido** per qualunque feature deployata da questo
+runbook).
+
+> **Nota su `Renviron.template`.** NON rimuoviamo `%u` dal template:
+> R lo droppa silenziosamente, ma il fragment 04 v12.9 lo intercetta
+> ed esegue il prepend del path corretto. Mantenere `%u` documenta
+> l'intento per chi legge `/etc/R/Renviron.site`.
+
+### 14.3 Deploy
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: L   (Step 7c — warmup ibrido files+/nfs/home)
+# Selezione: 3   (Step 8  — fragment 04 redeploy + bundle rebuild)
+sudo systemctl restart rstudio-server
+sudo bash scripts/50_setup_nodes.sh --verify
+# Atteso: Rprofile.site version: 12.9
+```
+
+### 14.4 Remediation manuale (one-shot, nodi già v12.6/v12.7/v12.8)
+
+Sblocca **tutti** gli utenti AD esistenti senza aspettare il redeploy:
+
+```bash
+sudo bash -c '
+  while IFS= read -r u; do
+    pwline=$(getent passwd -- "$u") || continue
+    IFS=: read -r name _ uid gid _ home shell <<<"$pwline"
+    [[ ${uid} -ge 1000 && ${uid} -ne 65534 ]] || continue
+    [[ "${shell}" == */nologin || "${shell}" == */false ]] && continue
+    [[ -d "${home}" ]] || continue
+    install -d -m 0755 -o "${uid}" -g "${gid}" \
+      "/var/lib/biome-Rlibs/${name}/4.5"
+  done < <(find /nfs/home -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort -u)
+'
+```
+
+Adattare `4.5` se si è su una minor R diversa. Idempotente: ri-eseguire
+non rompe nulla. Coverage: ogni dir AD su `/nfs/home/<user>` con un
+account NSS valido.
+
+### 14.5 Validazione
+
+```bash
+# (a) Step 7c warmup raccoglie davvero gli AD
+sudo bash scripts/50_setup_nodes.sh   # selezione L
+grep -F 'Warm-up:' /var/log/biome-log/r_biome_system.log | tail -1
+# Atteso: warmed=N con N ≈ |/nfs/home/*| + |local accounts validi|
+
+# (b) Utente vede il path locale come [1] — usare --no-save, NON --vanilla
+sudo -u michele.lussu -i R --no-save -e '.libPaths()'
+# Atteso prima entry: /var/lib/biome-Rlibs/michele.lussu/4.5
+# DO NOT use --vanilla: salta Renviron.site + Rprofile.site = bypassa il fix.
+
+# (c) Self-heal a runtime per un utente nuovo
+sudo rm -rf /var/lib/biome-Rlibs/<test_user>
+sudo -u <test_user> R --no-save -e '.libPaths()[1L]'
+ls -ld /var/lib/biome-Rlibs/<test_user>/4.5
+# Atteso: prima entry = path locale; dir owner=<test_user> mode 0755.
+
+# (d) HC-13 invariato — nessun file utente toccato
+sudo find /nfs/home/<test_user> -newer /var/lib/biome-Rlibs/<test_user>/4.5
+# Atteso: output vuoto.
+```
+
+### 14.6 Rollback
+
+```bash
+# (a) Ripristina fragment v12.8
+sudo cp /etc/R/Rprofile_site.d/04_user_lib_bootstrap.R.bak \
+        /etc/R/Rprofile_site.d/04_user_lib_bootstrap.R
+sudo rm -rf /etc/R/Rprofile_site.d/.compiled
+
+# (b) Ripristina enumerazione single-source di Step 7c
+git -C /opt/R-studioConf checkout HEAD~1 -- scripts/50_setup_nodes.sh
+
+# (c) Version pin
+sed -i 's/RPROFILE_VERSION="12.9"/RPROFILE_VERSION="12.8"/' \
+  /opt/R-studioConf/config/setup_nodes.vars.conf
+
+sudo systemctl restart rstudio-server
+```
+
+### 14.7 Tier deltas
+
+- **T1 (host)**: implementato.
+- **T2 (docker)**: N/A — `docker-deploy/templates/` non contiene
+  `Rprofile_site.d/` (backlog v12.7, vedi §12.6); `setup_nodes.sh` è
+  host-only. Nessun mirror necessario finché il backlog T2 non si chiude.
+- **T3 (k8s)**: SKELETON_NOT_READY.

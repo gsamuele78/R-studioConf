@@ -1,6 +1,7 @@
 # templates/Rprofile_site.d/04_user_lib_bootstrap.R.template
 # ──────────────────────────────────────────────────────────────────────────────
-# USER LIB BOOTSTRAP  (v12.8 — auto-create /var/lib/biome-Rlibs/<u>/<v>)
+# USER LIB BOOTSTRAP  (v12.9 — auto-create + prepend /var/lib/biome-Rlibs/<u>/<v>)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Purpose: ensure that the per-user local-disk library declared by
 # /etc/R/Renviron.site (v12.4)
@@ -82,7 +83,46 @@
 # changes the gate to [[ uid -ge 1000 && uid -ne 65534 ]] so AD users
 # get pre-warmed at deploy time. This fragment is the runtime safety net
 # for users added between warmup runs.
+#
+# v12.9 STRUCTURAL FIX (vs v12.8)
+# ───────────────────────────────
+# v12.8 ended with .libPaths(.libPaths()) — that is a NO-OP. .libPaths()
+# returns the *already-cached, already-filtered* list R computed at
+# startup; passing it back does not re-read R_LIBS_USER. So even after
+# dir.create() succeeded, the running session kept showing the NFS
+# fallback as entry [1]. Confirmed on biome-calc03 (michele.lussu, uid
+# 164186128): audit log proved dir.create succeeded yet .libPaths()[1]
+# remained the NFS path.
+#
+# Compounding factor: /etc/R/Renviron.site uses literal `%u` in
+# R_LIBS_USER. R *does not expand* %u (per R-admin §B.1: only %V %v %p
+# %o %a are recognized). So the raw env contains a literal `%u`, R
+# treats the resulting `/var/lib/biome-Rlibs/%u/4.5` as a non-existent
+# path, drops it from .libPaths() at startup, and there is no path in
+# .libPaths() that even points to the per-user dir.
+#
+# v12.9 fix: after dir-create, build the list of entries that EXIST and
+# live under /var/lib/biome-Rlibs/ (whether we just created them or they
+# were pre-warmed by Step 7c v12.9 hybrid enumeration), then prepend
+# them to .libPaths() explicitly:
+#     .libPaths(unique(c(<existing_targets>, .libPaths())))
+# Idempotent: if all targets are already in .libPaths()[1..k], unique()
+# preserves order. Reversible: .libPaths() is per-session state.
+#
+# Companion fix (Fix 2, scripts/50_setup_nodes.sh, v12.9)
+# ───────────────────────────────────────────────────────
+# Step 7c warmup loop had `done < <(getent passwd)`. That is a BUG on
+# SSSD-joined hosts (Debian/RHEL default ships `enumerate=false`, so
+# bulk passwd enumeration returns zero AD entries — only per-name
+# `getent passwd <name>` resolves them). Symptom: warmup reported
+# "warmed=1 skipped=40" (only ladmin), AD users never got a pre-created
+# /var/lib/biome-Rlibs/<u>/4.5 dir. v12.9 replaces the source with a
+# hybrid: local /etc/passwd via `getent -s files passwd` UNION per-name
+# lookup of every directory found under ${NFS_HOME_BASE:-/nfs/home}/.
+# AD homes already exist for any user who has ever logged in, so this
+# discovers the full active user set without depending on enumerate=true.
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 local({
   if (nzchar(Sys.getenv("BIOME_DISABLE_USER_LIB_BOOTSTRAP", "")))
@@ -155,7 +195,7 @@ local({
                     if (nzchar(user_login)) user_login else "unknown"))
           old_umask <- Sys.umask("000")
           on.exit(Sys.umask(old_umask), add = TRUE)
-          cat(sprintf("[%s] 04_user_lib_bootstrap (v12.8): created %s\n",
+          cat(sprintf("[%s] 04_user_lib_bootstrap (v12.9): created %s\n",
                       format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"), target),
               file = log_file, append = TRUE)
         }
@@ -163,11 +203,27 @@ local({
     }
   }
 
-  # ── Force .libPaths() to re-scan so the current session sees the freshly
-  #    created dir as entry [1]. Without this, R keeps the filtered cache
-  #    it computed at startup and the user still sees only the NFS fallback
-  #    until next session.
-  if (created_any) {
-    tryCatch(.libPaths(.libPaths()), error = function(e) invisible(NULL))
+  # ── v12.9: Prepend EXISTING per-user entries to .libPaths() ─────────────────
+  # Why this is non-trivial:
+  #   - Renviron.site uses literal `%u` in R_LIBS_USER (R does NOT expand %u —
+  #     R-admin §B.1: only %V %v %p %o %a are recognized). So R drops the
+  #     `/var/lib/biome-Rlibs/%u/4.5` literal as non-existent at startup.
+  #   - The v12.8 tail .libPaths(.libPaths()) was a NO-OP (it only normalizes
+  #     the already-filtered list; it does not re-read R_LIBS_USER).
+  #   - Therefore we must explicitly prepend the (now-existing) per-user
+  #     directories that the user owns.
+  # Idempotent: unique(c(...)) preserves first-occurrence order, so re-runs
+  # within the same session are no-ops.
+  existing_targets <- entries[
+    vapply(entries,
+           function(p) startsWith(p, "/var/lib/biome-Rlibs/") && dir.exists(p),
+           logical(1L))
+  ]
+  if (length(existing_targets)) {
+    tryCatch({
+      cur <- .libPaths()
+      .libPaths(unique(c(existing_targets, cur)))
+    }, error = function(e) invisible(NULL))
   }
 })
+

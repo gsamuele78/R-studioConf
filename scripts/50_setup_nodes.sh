@@ -948,24 +948,48 @@ setup_nodes_local_rlibs() {
   # ── v12.6: Warm-up — pre-create per-user lib dirs ────────────────────
   # Idempotent: install -d is a no-op if dir already exists. We chown to
   # the user so the dir is writable by them on first install.packages().
+  #
   # v12.8 fix: gate is now [uid >= 1000 && uid != 65534]. The previous
   # ceiling of 65000 silently excluded SSSD/Samba AD users, whose UIDs
-  # are SID-mapped into the 100M+ range (e.g. 163718183). Symptom: AD
-  # users saw .libPaths()[1] = NFS fallback only, never the local-disk
-  # entry, on every fresh node. Companion runtime safety net:
-  # templates/Rprofile_site.d/04_user_lib_bootstrap.R (v12.8).
-  # Users added AFTER this run are covered by that runtime fragment at
-  # their first R startup.
+  # are SID-mapped into the 100M+ range (e.g. 163718183).
+  #
+  # v12.9 fix: ENUMERATION SOURCE was `getent passwd` (bulk). On
+  # SSSD-joined hosts the default is `enumerate=false` (Debian/RHEL),
+  # which means bulk passwd queries return ZERO AD entries — only
+  # per-name `getent passwd <name>` resolves them. Symptom on
+  # biome-calc03: warmup reported "warmed=1 skipped=40" (only ladmin),
+  # AD users never got a pre-created dir. v12.9 replaces the source
+  # with a hybrid:
+  #   1. local /etc/passwd (`getent -s files passwd`) — covers ladmin
+  #      and any local-only accounts.
+  #   2. AD discovery: every directory under ${NFS_HOME_BASE:-/nfs/home}
+  #      is treated as a candidate username; we resolve each via
+  #      per-name `getent passwd <name>` (SSSD answers individually
+  #      regardless of enumerate setting). Disabled accounts return
+  #      empty and are skipped.
+  # NFS_HOME_BASE existence is mandatory for AD discovery; if missing
+  # (single-node sandbox or NFS down), we fall back to local-only with
+  # a WARN. HC-13 honored: only /var/lib/biome-Rlibs/ is touched, never
+  # /nfs/home or any user file.
+  #
+  # Companion runtime safety net (still active for users added between
+  # warmup runs and to PREPEND the per-user path to .libPaths()):
+  # templates/Rprofile_site.d/04_user_lib_bootstrap.R (v12.9).
   if [[ "${ENABLE_R_LIBS_LOCAL_WARMUP:-true}" == "true" && "${DRY_RUN}" != "true" ]]; then
     local r_ver
     r_ver="$(R --version 2>/dev/null | awk '/^R version/ {print $3; exit}' | awk -F. '{print $1"."$2}')"
     if [[ -z "${r_ver}" ]]; then
       log_warn "Cannot detect R version — skipping per-user lib dir warm-up"
     else
+      local nfs_home_base="${NFS_HOME_BASE:-/nfs/home}"
       log_info "Warm-up: pre-creating ${rlibs_root}/<user>/${r_ver} for existing AD/local users"
-      local warmup_count=0 warmup_skipped=0 warmup_failed=0
+      log_info "  enumeration source: local /etc/passwd ∪ per-name lookup of dirs under ${nfs_home_base}/"
+      if [[ ! -d "${nfs_home_base}" ]]; then
+        log_warn "  ${nfs_home_base} not present — AD discovery skipped (local accounts only)"
+      fi
+      local warmup_count=0 warmup_skipped=0 warmup_failed=0 warmup_unresolved=0
       while IFS=: read -r u _ uid gid _ home shell; do
-        # v12.8: gate accepts AD/SSSD users (UIDs 100M+). Excludes system
+        # v12.8 gate: accepts AD/SSSD users (UIDs 100M+); excludes system
         # accounts (<1000) and the nobody sentinel (65534).
         [[ ${uid} -ge 1000 && ${uid} -ne 65534 ]] || { warmup_skipped=$((warmup_skipped+1)); continue; }
         [[ "${shell}" == */nologin || "${shell}" == */false ]] && { warmup_skipped=$((warmup_skipped+1)); continue; }
@@ -977,13 +1001,29 @@ setup_nodes_local_rlibs() {
           warmup_failed=$((warmup_failed+1))
           log_warn "Warm-up: failed to create ${user_lib} (skipping)"
         fi
-      done < <(getent passwd)
+      done < <(
+        {
+          # (1) Local accounts via NSS files backend
+          getent -s files passwd
+          # (2) AD users discovered via NFS home dir presence + per-name lookup
+          if [[ -d "${nfs_home_base}" ]]; then
+            local ad_name
+            while IFS= read -r ad_name; do
+              [[ -n "${ad_name}" ]] || continue
+              # Per-name lookup: SSSD answers even with enumerate=false
+              getent passwd -- "${ad_name}" 2>/dev/null || true
+            done < <(find "${nfs_home_base}" -mindepth 1 -maxdepth 1 \
+                          -type d -printf '%f\n' 2>/dev/null | sort -u)
+          fi
+        } | awk -F: '!seen[$1]++'
+      )
       log_success "Warm-up: ${warmup_count} per-user lib dir(s) ready (skipped=${warmup_skipped}, failed=${warmup_failed})"
     fi
   elif [[ "${ENABLE_R_LIBS_LOCAL_WARMUP:-true}" != "true" ]]; then
     log_info "ENABLE_R_LIBS_LOCAL_WARMUP=false — runtime fragment 04_user_lib_bootstrap.R will handle per-user dirs at R startup"
   fi
 }
+
 
 # ==============================================================================
 # STEP 7D: NFS MOUNT AUDIT (v12.4)
