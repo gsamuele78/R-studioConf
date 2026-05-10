@@ -8,6 +8,145 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.8 (2026-05-10) — "User-lib bootstrap fix for AD/SSSD high-UID users"
+
+CONTEXT. On `biome-calc03` AD-joined users authenticated via SSSD/Samba
+(example: `gianfranco.samuele2`, UID 163718183, gid 163600513
+`domain_users`) reported that `R -e '.libPaths()'` showed only the NFS
+fallback `/nfs/home/<user>/R/x86_64-pc-linux-gnu-library/4.5` — the
+local-disk first entry `/var/lib/biome-Rlibs/<user>/4.5` from the v12.4
+`Renviron.site` (`R_LIBS_USER=/var/lib/biome-Rlibs/%u/%v:${HOME}/R/...`)
+never appeared. Symptom on every fresh node, every AD user, every R
+session. `ls /var/lib/biome-Rlibs` only contained `ladmin` + `lost+found`,
+confirming neither the v12.6 deploy-time warmup nor the v12.6 runtime
+Rprofile fragment ever created the per-user dir.
+
+ROOT CAUSE — TWO INDEPENDENT DEFECTS, SAME VICTIM (high-UID AD users).
+
+1. **`scripts/50_setup_nodes.sh` Step 7c warmup UID gate.**
+   The loop in `setup_nodes_local_rlibs()` had:
+
+   ```bash
+   [[ ${uid} -ge 1000 && ${uid} -lt 65000 ]] || continue
+   ```
+
+   SSSD/Samba SID-map AD users into the 100M+ range (UID 163718183 in
+   our case), so every single AD user fell off the upper edge of the
+   gate and was silently `continue`-d. The "warmed=N" log line at the
+   end of Step 7c showed N = number of *local* accounts only, never AD.
+
+2. **`templates/Rprofile_site.d/04_user_lib_bootstrap.R` runtime fragment.**
+   The fragment read `target <- .libPaths()[1L]`. But R *silently filters
+   out non-existent directories* before populating `.libPaths()` — so
+   when `/var/lib/biome-Rlibs/<u>/<v>` does not yet exist (Defect 1
+   guaranteed it never did for AD users), `.libPaths()[1]` is *already*
+   the NFS fallback. The subsequent guard
+   `if (!startsWith(target, "/var/lib/biome-Rlibs/"))` returns FALSE
+   and the function exits without creating anything. The fragment could
+   not self-heal — by design, given the broken assumption.
+
+WHY THE BUGS HID. v12.6 was developed and verified against `ladmin`
+(local UID 1000), which sits comfortably inside `[1000, 65000)`. The
+warmup created `ladmin/4.5/` on every node, and (because the dir
+existed) `.libPaths()[1]` resolved to it correctly, so the runtime
+fragment never *needed* to create anything in the test environment —
+masking Defect 2 entirely.
+
+FIX (T1 first per HC-3, T2 mirror N/A per `tier_deltas`).
+
+**Fix 1 — `scripts/50_setup_nodes.sh` Step 7c warmup gate.**
+
+```bash
+# v12.8: gate accepts AD/SSSD users (UIDs 100M+). Excludes system
+# accounts (<1000) and the nobody sentinel (65534).
+[[ ${uid} -ge 1000 && ${uid} -ne 65534 ]] || { warmup_skipped=$((warmup_skipped+1)); continue; }
+```
+
+Drops the upper ceiling, keeps the explicit nobody guard.
+
+**Fix 2 — `templates/Rprofile_site.d/04_user_lib_bootstrap.R` (this fragment).**
+Read RAW `Sys.getenv("R_LIBS_USER")` instead of `.libPaths()[1L]`.
+Split on `:`, expand R Renviron tokens (`%u %v %V %p %o %a`) and
+shell-style `${HOME}/${USER}/$HOME/$USER/~`, then `dir.create()` every
+entry whose path `startsWith("/var/lib/biome-Rlibs/")` and does not yet
+exist. Force a re-scan via `.libPaths(.libPaths())` so the *current*
+session sees the freshly-created dir as `[1]` (otherwise R keeps the
+filtered cache it computed at startup and the user still gets NFS-only
+`.libPaths()` until next session). All operations wrapped in
+`tryCatch`; failures fall through silently to the NFS fallback as
+before. `BIOME_DISABLE_USER_LIB_BOOTSTRAP=1` escape hatch preserved.
+
+**Fix 3 — version + docs (HC-18).**
+
+- `RPROFILE_VERSION` 12.7 → **12.8** in `config/setup_nodes.vars.conf`.
+- This CHANGELOG entry.
+- Cross-reference appended to `docs/operations/UPGRADE_TO_v12.4.md`
+  §11 (v12.6 user-lib auto-bootstrap section).
+
+TIER DELTAS.
+
+- T2 (`docker-deploy/`): no `Rprofile_site.d/` directory exists in T2
+  templates yet (T2 still ships the v9-era monolithic
+  `Rprofile_site.R.template`). No mirror needed for Fix 2. Recorded
+  here as a known T2 lag — picked up when T2 adopts the fragment system.
+- T2 also has no `setup_nodes.sh` equivalent; the warmup is host-only.
+- T3 (`kubernetes-deploy/`): SKELETON_NOT_READY — N/A.
+
+OPERATOR REMEDIATION (apply *now* on already-deployed v12.6/v12.7 nodes).
+The code fix lands on next deploy. To unblock affected users immediately
+without waiting for redeploy:
+
+```bash
+# Per affected user (substitute login + gid + R short version):
+sudo install -d -m 0755 -o gianfranco.samuele2 -g domain_users \
+  /var/lib/biome-Rlibs/gianfranco.samuele2/4.5
+```
+
+After v12.8 deploy + Step 7c re-run, every existing AD user is
+warmed up, and any new AD user added later self-heals at first R
+startup via the rewritten fragment 04.
+
+ROLLBACK. Revert the three files; `RPROFILE_VERSION` back to 12.7.
+The v12.7 fragment 04 is structurally broken for AD/SSSD users but
+non-fatal (NFS fallback works), so reverting just re-introduces the
+original symptom.
+
+VERIFICATION.
+
+(a) Warmup ran for AD users
+
+```
+sudo bash scripts/50_setup_nodes.sh   # selection 1 or L
+grep -F 'Warm-up:' /var/log/biome-log/r_biome_system.log | tail -1
+# Expect warmed=N where N includes the AD users present in `getent passwd`.
+```
+
+(b) Affected user can now see the local lib without the manual chown
+
+```
+sudo -u gianfranco.samuele2 -i R --vanilla -e '.libPaths()'
+# Expect /var/lib/biome-Rlibs/gianfranco.samuele2/4.5 as [1].
+```
+
+(c) Runtime fragment self-heals on a fresh user (delete + relog)
+
+```
+sudo rm -rf /var/lib/biome-Rlibs/<some_test_user>
+sudo -u <some_test_user> R --vanilla -e '.libPaths()[1L]'
+# Expect /var/lib/biome-Rlibs/<some_test_user>/4.5 (recreated by fragment 04).
+ls -ld /var/lib/biome-Rlibs/<some_test_user>/4.5
+# Expect owner=<some_test_user>, mode 0755.
+```
+
+(d) HC-13 not violated — no user file touched
+
+```
+sudo find /nfs/home/<test_user> -newer /var/lib/biome-Rlibs/<test_user>/4.5
+# Expect zero entries (we only created /var/lib/biome-Rlibs/...).
+```
+
+---
+
 ## v12.7 (2026-05-10) — "ForkGuard PSOCK pkg-replication (closes silent `could not find function` on mclapply reroute)"
 
 CONTEXT. Post-v12.6 triage on `biome-calc03` of two researcher scripts

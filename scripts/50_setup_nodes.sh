@@ -948,9 +948,14 @@ setup_nodes_local_rlibs() {
   # ── v12.6: Warm-up — pre-create per-user lib dirs ────────────────────
   # Idempotent: install -d is a no-op if dir already exists. We chown to
   # the user so the dir is writable by them on first install.packages().
-  # Limited to UID 1000..64999 (skips system accounts and nobody=65534).
-  # Users added AFTER this run are covered by the runtime Rprofile
-  # fragment 04_user_lib_bootstrap.R at their first R startup.
+  # v12.8 fix: gate is now [uid >= 1000 && uid != 65534]. The previous
+  # ceiling of 65000 silently excluded SSSD/Samba AD users, whose UIDs
+  # are SID-mapped into the 100M+ range (e.g. 163718183). Symptom: AD
+  # users saw .libPaths()[1] = NFS fallback only, never the local-disk
+  # entry, on every fresh node. Companion runtime safety net:
+  # templates/Rprofile_site.d/04_user_lib_bootstrap.R (v12.8).
+  # Users added AFTER this run are covered by that runtime fragment at
+  # their first R startup.
   if [[ "${ENABLE_R_LIBS_LOCAL_WARMUP:-true}" == "true" && "${DRY_RUN}" != "true" ]]; then
     local r_ver
     r_ver="$(R --version 2>/dev/null | awk '/^R version/ {print $3; exit}' | awk -F. '{print $1"."$2}')"
@@ -960,7 +965,9 @@ setup_nodes_local_rlibs() {
       log_info "Warm-up: pre-creating ${rlibs_root}/<user>/${r_ver} for existing AD/local users"
       local warmup_count=0 warmup_skipped=0 warmup_failed=0
       while IFS=: read -r u _ uid gid _ home shell; do
-        [[ ${uid} -ge 1000 && ${uid} -lt 65000 ]] || { warmup_skipped=$((warmup_skipped+1)); continue; }
+        # v12.8: gate accepts AD/SSSD users (UIDs 100M+). Excludes system
+        # accounts (<1000) and the nobody sentinel (65534).
+        [[ ${uid} -ge 1000 && ${uid} -ne 65534 ]] || { warmup_skipped=$((warmup_skipped+1)); continue; }
         [[ "${shell}" == */nologin || "${shell}" == */false ]] && { warmup_skipped=$((warmup_skipped+1)); continue; }
         [[ -d "${home}" ]] || { warmup_skipped=$((warmup_skipped+1)); continue; }
         local user_lib="${rlibs_root}/${u}/${r_ver}"

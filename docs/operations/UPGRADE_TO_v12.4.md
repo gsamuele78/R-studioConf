@@ -514,6 +514,11 @@ ls -ld /var/lib/biome-Rlibs/<ad-user>/*/
 Vedi `docs/reference/Rprofile_site.CHANGELOG.md` § v12.6 — sezioni
 *OVERRIDE*, *ROLLBACK*, *TIER DELTAS*.
 
+> **Follow-up v12.8 (2026-05-10):** il warmup loop di Step 7c e il
+> fragment 04 avevano due bug indipendenti che insieme escludevano gli
+> utenti AD/SSSD ad alto UID (SID-mapped, ≥ 65000) dalla creazione
+> automatica di `/var/lib/biome-Rlibs/<u>/<R-ver>/`. Vedi §13.
+
 ---
 
 ## 12. ForkGuard PSOCK pkg-sync — HC-13 closure (v12.7)
@@ -645,3 +650,144 @@ tier host; nessun port forward necessario.
 
 **Da fare ancora (non-blocking):** aggiornare la verdict matrix in
 `docs/operations/CLEAN_VM_BASELINE.md` con la colonna `PROGRESSING`.
+
+---
+
+## 13. User-lib bootstrap fix per utenti AD/SSSD ad alto UID (v12.8)
+
+> **Status:** v12.8 (2026-05-10) — `RPROFILE_VERSION="12.8"`. Hotfix per
+> due bug indipendenti del flusso v12.6 che insieme escludevano gli
+> utenti AD/SSSD SID-mapped (UID ≥ 65000) dal bootstrap di
+> `/var/lib/biome-Rlibs/<u>/<R-ver>/`.
+
+### 13.1 Cosa risolve
+
+Sintomo (biome-calc03, 2026-05-10) per `gianfranco.samuele2`
+(UID 163718183, gid 163600513 `domain_users`):
+
+```bash
+$ ls /var/lib/biome-Rlibs/
+ladmin/  lost+found/        # ← nessuna dir per utenti AD
+$ R --vanilla -e '.libPaths()'
+[1] "/nfs/home/gianfranco.samuele2/R/x86_64-pc-linux-gnu-library/4.5"   # solo NFS
+[2] "/usr/lib/R/site-library"
+[3] "/usr/lib/R/library"
+```
+
+Due defect concorrenti:
+
+1. **Layer A — warmup gate troppo stretto.** In `scripts/50_setup_nodes.sh`
+   Step 7c il loop di warmup filtrava `[[ ${uid} -ge 1000 && ${uid} -lt 65000 ]]`.
+   Gli utenti AD SSSD/Samba hanno UID derivati dal SID nell'ordine dei
+   100M+ → **tutti** silenziosamente saltati. Solo `ladmin` (uid 1000)
+   passava il gate.
+2. **Layer D — fragment 04 leggeva `.libPaths()[1L]` già filtrato.** R
+   rimuove dalle `.libPaths()` le directory inesistenti **prima** che il
+   fragment giri, quindi il path candidato dell'utente
+   (`/var/lib/biome-Rlibs/<u>/<R-ver>`) sparisce dalla lista e il
+   fragment finiva per provare a creare un'altra entry (NFS o
+   site-library), fallendo il `startsWith("/var/lib/biome-Rlibs/")`
+   gate e uscendo silenzioso.
+
+### 13.2 Fix
+
+**(a) Step 7c warmup gate widened** — `scripts/50_setup_nodes.sh`:
+
+```bash
+# v12.7 (broken):  [[ ${uid} -ge 1000 && ${uid} -lt 65000 ]]
+# v12.8 (fixed):   [[ ${uid} -ge 1000 && ${uid} -ne 65534 ]]
+```
+
+Ora ammette qualsiasi UID ≥ 1000 escludendo solo `nobody` (65534). I
+filtri esistenti su shell (`nologin`/`false`) e home dir esistente
+restano invariati e bastano a evitare account di servizio.
+
+**(b) Fragment 04 rewrite** —
+`templates/Rprofile_site.d/04_user_lib_bootstrap.R.template`:
+
+- legge `Sys.getenv("R_LIBS_USER")` **raw** (NON `.libPaths()`),
+- splitta su `:` ed espande i token `%u %v %V %p %o %a` + `${HOME}`,
+  `${USER}`, `$HOME`, `$USER`, `~`,
+- per **ogni** entry che inizia con `/var/lib/biome-Rlibs/` esegue
+  `dir.create(..., recursive=TRUE, mode="0755")`,
+- chiama `.libPaths(.libPaths())` per forzare il re-scan post-creazione.
+
+Override invariato: `BIOME_DISABLE_USER_LIB_BOOTSTRAP=1`. Audit-log
+breadcrumb in `/var/log/biome-log/r_biome_system.log` come
+`UserLibBootstrap CREATED <path>`.
+
+**(c) Version bump** — `config/setup_nodes.vars.conf`:
+`RPROFILE_VERSION="12.7"` → `"12.8"`. CHANGELOG entry corrispondente:
+`docs/reference/Rprofile_site.CHANGELOG.md` § v12.8.
+
+### 13.3 Deploy
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: L   (Step 7c — re-run warmup loop, ora ammette UID alti)
+# Selezione: 3   (Step 8  — fragment 04 redeploy + bundle rebuild)
+sudo systemctl restart rstudio-server
+sudo bash scripts/50_setup_nodes.sh --verify
+# Atteso: Rprofile.site version: 12.8
+```
+
+### 13.4 Remediation manuale (nodi già deployati pre-v12.8)
+
+Se un utente AD/SSSD ha bisogno della propria dir **immediatamente**
+prima del prossimo full deploy, comando one-shot:
+
+```bash
+sudo install -d -m 0755 \
+  -o gianfranco.samuele2 -g domain_users \
+  /var/lib/biome-Rlibs/gianfranco.samuele2/4.5
+```
+
+Adattare username, gruppo primario (vedi `id <user>`) e versione R
+maggiore.minore (`R --version | head -1`). Nessun side effect: il fix
+v12.8 è idempotente sopra.
+
+### 13.5 Validazione
+
+```bash
+# (a) Warmup ora copre AD users
+sudo bash scripts/50_setup_nodes.sh   # selezione L
+# Atteso: "warmed=N skipped=M failed=0" con N che include gli utenti AD
+
+# (b) Fragment crea dir alla prima sessione utente
+sudo -u gianfranco.samuele2 R --vanilla -e '.libPaths()'
+# Atteso prima entry: /var/lib/biome-Rlibs/gianfranco.samuele2/4.5
+
+ls -ld /var/lib/biome-Rlibs/gianfranco.samuele2/4.5
+# Atteso: drwxr-xr-x gianfranco.samuele2 domain_users
+
+# (c) Audit log breadcrumb
+grep 'UserLibBootstrap' /var/log/biome-log/r_biome_system.log | tail
+```
+
+### 13.6 Rollback
+
+```bash
+# (a) Ripristina fragment v12.7
+sudo cp /etc/R/Rprofile_site.d/04_user_lib_bootstrap.R.bak \
+        /etc/R/Rprofile_site.d/04_user_lib_bootstrap.R
+sudo rm -rf /etc/R/Rprofile_site.d/.compiled
+
+# (b) Ripristina UID gate v12.7 in 50_setup_nodes.sh (solo se serve)
+sed -i 's/uid -ne 65534/uid -lt 65000/' /opt/R-studioConf/scripts/50_setup_nodes.sh
+
+# (c) Version pin
+sed -i 's/RPROFILE_VERSION="12.8"/RPROFILE_VERSION="12.7"/' \
+  /opt/R-studioConf/config/setup_nodes.vars.conf
+
+sudo systemctl restart rstudio-server
+```
+
+### 13.7 Tier deltas
+
+- **T1 (host)**: implementato.
+- **T2 (docker)**: not-applicable — `docker-deploy/templates/` non
+  contiene `Rprofile_site.d/` (vedi §12.6). T2 è strutturalmente
+  indietro di tutta la modularizzazione v12.1+; il fix v12.8 verrà
+  port-forward solo quando T2 verrà allineato.
+- **T3 (k8s)**: pending — vedi §12.6.
