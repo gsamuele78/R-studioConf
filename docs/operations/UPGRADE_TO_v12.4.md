@@ -286,3 +286,177 @@ grep -RIn 'R_PROFILE_USER\|BIOME_MINIMAL' /etc/profile* /etc/bash.bashrc \
 **Q. Posso lanciare l'harness come `sudo` con `BIOME_DIAG_ALLOW_ROOT=1`?**
 
 Tecnicamente sì, ma riproduce **l'env di root** (cgroup `system.slice`, niente `R_LIBS_USER` per-utente, `BIOME_USER_TMP=/Rtmp/biome_root`), quindi i risultati **non** sono rappresentativi del bug dell'utente. Usa solo per debug dell'harness stesso. Per debug del codice utente: `su - <username>`.
+
+---
+
+## 10. Pulizia override pre-v12.4 in `~/.Renviron` (utenti AD)
+
+**Scoperto su biome-calc03 il 2026-05-10.** Sintomo: `.libPaths()` di un
+utente non mostra `/var/lib/biome-Rlibs/<user>/<R-ver>` come **prima** voce,
+nonostante `/etc/R/Renviron.site` sia corretto e `/var/lib/biome-Rlibs/`
+sia presente con sticky-bit `1777`.
+
+### 10.1 Diagnosi
+
+```bash
+# 1) sistema (deve mostrare la riga R_LIBS_USER=/var/lib/biome-Rlibs/...)
+sudo grep -nE 'R_LIBS|TMPDIR' /etc/R/Renviron.site
+
+# 2) /var/lib/biome-Rlibs presente e sticky?
+sudo ls -lad /var/lib/biome-Rlibs/
+
+# 3) audit override utenti (read-only, NON modifica nulla):
+sudo /usr/local/bin/99_check_user_renviron_overrides.sh
+# oppure dal repo:
+sudo scripts/99_check_user_renviron_overrides.sh -o /tmp/renviron_audit.csv
+```
+
+Esempio output reale (biome-calc03, R 4.5.3):
+
+```
+| user                   |  ln | variable      | value                                                   | flags
+| gianfranco.samuele2    |   4 | R_LIBS_USER   | /nfs/home/gianfranco.samuele2/R/.../library/4.6         | OVERRIDES-SYSTEM;STALE-VERSION:4.6≠4.5
+| michele.lussu          |   3 | R_LIBS_USER   | /nfs/home/michele.lussu/R/.../library/4.6               | OVERRIDES-SYSTEM;STALE-VERSION:4.6≠4.5
+```
+
+### 10.2 Spiegazione tecnica
+
+R legge i file Renviron in quest'ordine, **last-wins**:
+
+1. `${R_HOME}/etc/Renviron`         (built-in)
+2. `/etc/R/Renviron.site`            (deployato da v12.4 — `R_LIBS_USER=/var/lib/biome-Rlibs/...`)
+3. `~/.Renviron`                     ← se contiene `R_LIBS_USER=...` **vince**
+
+Quindi un override pre-v12.4 nel file utente:
+
+- nasconde il path local-disk (perdita prestazioni I/O ~10-30×);
+- può puntare a una versione R obsoleta (es. `library/4.6` mentre il
+  sistema ha R 4.5.3) → R cade in fallback `${HOME}/R/.../<ver-corrente>`;
+- è invisibile al sysadmin senza un audit esplicito.
+
+### 10.3 Strategia di rimedio
+
+Due percorsi mutuamente esclusivi:
+
+**A) Email all'utente (preferito quando l'utente è attivo).**
+L'utente apre `nano ~/.Renviron`, cancella la riga, salva. Vedi §10.4.
+
+**B) Cleanup operatore-driven (preferito per file legacy `rsync` da OLD
+server, account dormienti, `OldUsers/*`).** Lo script di audit ha una
+modalità `--fix` che **commenta** (non cancella) le righe offendenti
+dopo aver scritto un backup `.bak.<timestamp>`:
+
+```bash
+# 1) anteprima senza modificare nulla
+sudo /usr/local/bin/99_check_user_renviron_overrides.sh --fix
+
+# 2) applicazione effettiva (chiede conferma; -y per skip)
+sudo /usr/local/bin/99_check_user_renviron_overrides.sh --fix --commit
+```
+
+Comportamento di `--fix --commit`:
+
+- Per ogni `~/.Renviron` con match, crea backup `~/.Renviron.bak.<UTC ts>`
+  preservando owner/group/permessi.
+- Sostituisce ogni riga `R_LIBS_USER=`/`R_LIBS_SITE=`/`R_LIBS=` con due righe:
+
+  ```
+  # [biome-cleanup YYYY-MM-DD] disabled (was: <riga originale>)
+  # <riga originale>
+  ```
+
+  Operazione **reversibile**: l'utente può togliere `#` davanti se vuole
+  ripristinare. Tutto il resto del file è intatto.
+- Niente cancellazione, niente delete, mai.
+
+**Perché questo NON viola HC-13**: l'invariante #17 vieta di patchare
+utenti **silenziosamente**. Qui (a) l'operatore dà consenso esplicito
+(`--commit`), (b) c'è un backup, (c) la modifica è un commento (non
+distrugge informazione), (d) il marker `[biome-cleanup …]` lascia traccia
+di chi/quando, (e) tutto è loggato e reversibile.
+
+**Single-source-of-truth**: NON aggiungiamo `R_LIBS_USER=` a `/etc/profile.d/`
+o a script di user-profile, perché (1) duplicherebbe `Renviron.site` e
+(2) R non legge `/etc/profile.d` comunque.
+
+#### Rollback
+
+Se serve ripristinare un singolo file dopo `--fix --commit`:
+
+```bash
+# Trova il backup più recente per quell'utente
+ls -lt /nfs/home/<user>/.Renviron.bak.* | head -1
+
+# Ripristina
+cp -p /nfs/home/<user>/.Renviron.bak.20260510T121630Z /nfs/home/<user>/.Renviron
+```
+
+### 10.4 Template email per gli utenti
+
+```text
+Oggetto: [BIOME-CALC] Pulizia ~/.Renviron — performance R su disco locale
+
+Ciao,
+
+durante un audit del cluster biome-calc abbiamo notato che il tuo file
+  /nfs/home/<TUO_USERNAME>/.Renviron
+contiene una riga del tipo:
+
+  R_LIBS_USER="/nfs/home/<TUO_USERNAME>/R/x86_64-pc-linux-gnu-library/4.6"
+
+Questa riga è stata aggiunta prima della migrazione v12.4 e oggi:
+
+  1. punta a una versione R che non esiste più sui nodi (R attuale = 4.5.3),
+  2. forza l'installazione/lookup dei pacchetti su NFS, annullando il
+     beneficio del nuovo path su disco locale (/var/lib/biome-Rlibs/...)
+     che abbiamo introdotto a v12.4 per ridurre la latenza I/O.
+
+Ti chiediamo di rimuoverla in autonomia (non possiamo modificare i tuoi
+file utente per policy):
+
+  1) Apri il file in un editor:
+       nano ~/.Renviron
+  2) Cancella SOLO la riga che inizia con  R_LIBS_USER=
+     (lascia intatte XDG_*, EARTHENGINE_*, etc.).
+  3) Salva (Ctrl+O, Enter, Ctrl+X).
+  4) Chiudi e riapri la sessione RStudio (oppure: Session → Restart R).
+
+Verifica che sia tutto a posto da una console R:
+
+  .libPaths()
+
+Devi vedere come PRIMA voce un path simile a:
+  /var/lib/biome-Rlibs/<TUO_USERNAME>/4.5
+
+I tuoi pacchetti già installati su NFS rimangono utilizzabili (sono in
+fondo a .libPaths()). Le NUOVE installazioni andranno automaticamente
+sul disco locale, più veloce.
+
+Per qualsiasi dubbio, rispondi a questa mail.
+
+Grazie,
+— sysadmin biome-calc
+```
+
+### 10.5 Verifica post-cleanup (lato sysadmin)
+
+```bash
+# Rilancio dell'audit: il conteggio override deve scendere a 0
+sudo /usr/local/bin/99_check_user_renviron_overrides.sh
+
+# Verifica per utente specifico:
+su - <username> -c 'R --no-init-file -e ".libPaths()"'
+# Atteso: prima voce = /var/lib/biome-Rlibs/<username>/4.5
+```
+
+### 10.6 Tier deltas
+
+- **T1 (host)**: implementato — `scripts/99_check_user_renviron_overrides.sh` + questo §10.
+- **T2 (docker)**: pending — l'override può vivere nel volume bind-mount `/nfs/home`; lo stesso script funziona dentro al container `botanical-rstudio` se invocato come root (read-only NFS mount).
+- **T3 (k8s)**: pending — su pod effimeri la home NFS è montata con la stessa semantica; nessuna modifica al manifest necessaria.
+
+### 10.7 Nessun version bump
+
+Audit-only + documentazione ⇒ **NON** si bumpano `RPROFILE_VERSION` né
+`HARNESS_VERSION`. Vedi `docs/reference/Rprofile_site.CHANGELOG.md` per
+l'elenco delle release.
