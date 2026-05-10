@@ -1,6 +1,6 @@
 # templates/Rprofile_site.d/04_user_lib_bootstrap.R.template
 # ──────────────────────────────────────────────────────────────────────────────
-# USER LIB BOOTSTRAP  (v12.9 — auto-create + prepend /var/lib/biome-Rlibs/<u>/<v>)
+# USER LIB BOOTSTRAP  (v12.9.2 — writer-agnostic canonical-path fallback)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Purpose: ensure that the per-user local-disk library declared by
@@ -203,6 +203,41 @@ local({
     }
   }
 
+  # ── v12.9.2: Canonical-path fallback (writer-agnostic) ──────────────────────
+  # CONTEXT. The v12.9 path above derives the prepend list from raw
+  # `R_LIBS_USER`. That breaks when ANY writer (legacy ~/.Renviron, a
+  # competing deploy step, a first-login PAM helper, an old user template
+  # rsync'd from a prior server) PINS R_LIBS_USER to NFS-only AFTER the
+  # site `Renviron.site` was loaded. R precedence is:
+  #   $R_HOME/etc/Renviron → /etc/R/Renviron.site → ~/.Renviron  (LAST WINS)
+  # so a single `R_LIBS_USER="..."` line in ~/.Renviron silently defeats
+  # the local-disk policy. Observed on biome-calc03 (2026-05-10) for AD
+  # users rocio.corteslobos2 / michele.dimusciano / arianna.ferrara4: a
+  # third writer in the deploy chain re-appended R_LIBS_USER=NFS at line
+  # 13 of each ~/.Renviron AFTER scripts/99_check_user_renviron_overrides.sh
+  # had already commented out the original override. Result:
+  # `entries[startsWith("/var/lib/biome-Rlibs/")]` was empty, prepend skipped.
+  #
+  # PHILOSOPHY (HC-13 + ethos #17). We MUST NOT touch user files. Instead
+  # we make fragment 04 robust to ANY writer: probe the canonical
+  # `/var/lib/biome-Rlibs/<user>/<R-major.minor>` path independently of
+  # `R_LIBS_USER`. If the dir exists AND the EUID has write access, add
+  # it to the prepend list. This is per-session state only — no files
+  # are written. Idempotent: `unique(c(...))` deduplicates.
+  #
+  # BENEFIT. Future writers (whoever / whatever they are) cannot regress
+  # `.libPaths()` correctness as long as Step 7c warmup created the leaf.
+  # The audit script `99_check_user_renviron_overrides.sh` v12.9.2+ adds
+  # a WRITER-CONFLICT flag to surface affected files for ops.
+  canonical_target <- file.path("/var/lib/biome-Rlibs",
+                                user_login, ver_short)
+  canonical_ok <- tryCatch(
+    nzchar(user_login) &&
+      dir.exists(canonical_target) &&
+      file.access(canonical_target, mode = 2L) == 0L,
+    error = function(e) FALSE
+  )
+
   # ── v12.9: Prepend EXISTING per-user entries to .libPaths() ─────────────────
   # Why this is non-trivial:
   #   - Renviron.site uses literal `%u` in R_LIBS_USER (R does NOT expand %u —
@@ -219,6 +254,11 @@ local({
            function(p) startsWith(p, "/var/lib/biome-Rlibs/") && dir.exists(p),
            logical(1L))
   ]
+  # v12.9.2: union with canonical_target so writer-pinned ~/.Renviron
+  # cannot defeat the local-disk policy.
+  if (isTRUE(canonical_ok)) {
+    existing_targets <- unique(c(existing_targets, canonical_target))
+  }
   if (length(existing_targets)) {
     tryCatch({
       cur <- .libPaths()

@@ -971,3 +971,158 @@ sudo systemctl restart rstudio-server
   `Rprofile_site.d/` (backlog v12.7, vedi §12.6); `setup_nodes.sh` è
   host-only. Nessun mirror necessario finché il backlog T2 non si chiude.
 - **T3 (k8s)**: SKELETON_NOT_READY.
+
+---
+
+## 15. Writer-agnostic canonical-path fallback (v12.9.2)
+
+> **Status:** v12.9.2 (2026-05-10) — `RPROFILE_VERSION="12.9.2"`. Hotfix
+> strutturale per chiudere una multi-writer race su `~/.Renviron`
+> dimostrata su biome-calc03 per tre utenti AD (rocio.corteslobos2,
+> michele.dimusciano, arianna.ferrara4).
+
+### 15.1 Cosa risolve
+
+Post-v12.9 deploy, la dir local-disk `/var/lib/biome-Rlibs/<u>/4.5/`
+esisteva con owner+mode corretti per i tre utenti, ma `.libPaths()[1]`
+mostrava ancora **solo** NFS. Forensica:
+
+- `~/.Renviron` cresceva da 741 B (`.bak.<ts>`) → 818 B (live)
+  **dopo** che `99_check_user_renviron_overrides.sh --fix --commit`
+  aveva commentato l'override originale.
+- A linea 13 ricompariva `R_LIBS_USER="/nfs/home/<u>/R/.../4.5"`
+  (riga aggiunta da un terzo writer non identificato nella catena di
+  deploy — probabile `50_setup_nodes.sh` step esistente o helper PAM
+  first-login residuo).
+- Conseguenza: la lista `entries` di fragment 04 v12.9 derivata da
+  `R_LIBS_USER` non conteneva path `/var/lib/biome-Rlibs/...`, quindi
+  il prepend era no-op.
+
+Decisione di design: **non** dare la caccia al terzo writer (rischio di
+regressione lunga sotto pressione operativa). Invece rendere fragment
+04 **writer-agnostic** via probe del path canonico indipendente da
+`R_LIBS_USER`.
+
+### 15.2 Fix
+
+**(a) Fragment 04** —
+`templates/Rprofile_site.d/04_user_lib_bootstrap.R.template`:
+dopo il loop `dir.create()` aggiunge:
+
+```r
+canonical_target <- file.path("/var/lib/biome-Rlibs",
+                              user_login, ver_short)
+canonical_ok <- tryCatch(
+  nzchar(user_login) &&
+    dir.exists(canonical_target) &&
+    file.access(canonical_target, mode = 2L) == 0L,
+  error = function(e) FALSE
+)
+# ...e nel calcolo di existing_targets:
+if (isTRUE(canonical_ok)) {
+  existing_targets <- unique(c(existing_targets, canonical_target))
+}
+```
+
+Effetto: anche se `R_LIBS_USER` viene re-pinnato a NFS-only da
+qualsiasi writer (legacy ~/.Renviron, deploy step, PAM helper, rsync
+da server precedenti), `.libPaths()[1]` resta il path locale finché
+Step 7c ha creato la leaf dir.
+
+**(b) `99_check_user_renviron_overrides.sh`** — nuovo flag di audit
+**`WRITER-CONFLICT:since-YYYY-MM-DD`**: si attiva quando un file
+`~/.Renviron` contiene CONTEMPORANEAMENTE un marker
+`# [biome-cleanup YYYY-MM-DD] disabled (was: R_LIBS_*)` e una riga
+`R_LIBS_*` ancora viva. Read-only — surfaces il conflitto, non lo
+risolve (il fragment 04 v12.9.2 lo rende benigno a runtime).
+
+**(c) Version bump** — `config/setup_nodes.vars.conf`:
+`RPROFILE_VERSION="12.9.2"`. CHANGELOG entry corrispondente in
+`docs/reference/Rprofile_site.CHANGELOG.md` § v12.9.2.
+
+### 15.3 Deploy
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: 3   (Step 8 — fragment 04 redeploy + bundle rebuild)
+sudo systemctl restart rstudio-server
+sudo bash scripts/50_setup_nodes.sh --verify
+# Atteso: Rprofile.site version: 12.9.2
+```
+
+### 15.4 Sweep nodi pre-v12.9.2 (biome-calc01/02/04)
+
+Dopo il pull+deploy, run l'audit cleanup per snapshot writer-conflict
+e commentare gli override residui:
+
+```bash
+sudo /usr/local/bin/99_check_user_renviron_overrides.sh \
+    --fix --commit -y -o /tmp/renviron_audit_$(hostname)_$(date -u +%Y%m%d).csv
+```
+
+Output atteso: nuova colonna `flags` può contenere
+`OVERRIDES-SYSTEM;WRITER-CONFLICT:since-YYYY-MM-DD`. Ciascun file
+modificato ottiene un backup `.bak.<UTC ts>`.
+
+### 15.5 Validazione
+
+```bash
+# (a) Versione
+sudo bash scripts/50_setup_nodes.sh --verify
+# Atteso: Rprofile.site version: 12.9.2
+
+# (b) .libPaths()[1] = path locale anche se ~/.Renviron pinna NFS
+sudo -u <utente_affetto> -i R --no-save -e '.libPaths()[1L]'
+# Atteso: "/var/lib/biome-Rlibs/<utente>/4.5"
+
+# (c) WRITER-CONFLICT surfaced (audit)
+sudo /usr/local/bin/99_check_user_renviron_overrides.sh \
+  | grep -E 'WRITER-CONFLICT' || echo "no conflicts"
+
+# (d) HC-13 invariato — nessun file utente toccato dal fragment
+sudo find /nfs/home/<utente> -newer /var/lib/biome-Rlibs/<utente>/4.5 \
+  -not -name '.Renviron.bak.*'
+# Atteso: vuoto (eccetto eventuali file scritti dall'utente stesso).
+```
+
+### 15.6 Rollback
+
+```bash
+sudo cp /etc/R/Rprofile_site.d/04_user_lib_bootstrap.R.bak \
+        /etc/R/Rprofile_site.d/04_user_lib_bootstrap.R
+sudo rm -rf /etc/R/Rprofile_site.d/.compiled
+sed -i 's/RPROFILE_VERSION="12.9.2"/RPROFILE_VERSION="12.9"/' \
+  /opt/R-studioConf/config/setup_nodes.vars.conf
+sudo systemctl restart rstudio-server
+```
+
+Ripristinare la versione precedente di `99_check_user_renviron_overrides.sh`
+non è necessario: il flag `WRITER-CONFLICT` è puramente additivo
+(read-only, nessun comportamento di scrittura modificato).
+
+### 15.7 Tier deltas
+
+- **T1 (host)**: implementato.
+- **T2 (docker)**: N/A — `docker-deploy/templates/` non contiene
+  `Rprofile_site.d/` (backlog v12.7, §12.6).
+- **T3 (k8s)**: SKELETON_NOT_READY.
+
+### 15.8 Open question (non-blocking)
+
+Identificare il terzo writer di `~/.Renviron` resta **TODO** ops-side.
+Il fix v12.9.2 rende il problema benigno a runtime, ma il file utente
+continuerà a crescere a ogni redeploy finché il writer non viene
+scoperto e bloccato. Strumenti diagnostici:
+
+```bash
+# Watch per modifiche a ~/.Renviron durante un deploy completo
+sudo inotifywait -mr -e modify,create,close_write \
+  --format '%T %w%f %e' --timefmt '%F %T' \
+  /nfs/home/*/.Renviron
+# Run in parallel:
+sudo bash scripts/50_setup_nodes.sh   # selezione 1 (full)
+```
+
+Comparare i PID/path scritti con la process tree del deploy per
+isolare il caller.

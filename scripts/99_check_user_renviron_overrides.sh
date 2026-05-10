@@ -210,6 +210,18 @@ for rfile in "${RFILES[@]}"; do
         flags=()
         [[ "$var" == "R_LIBS_USER" ]] && flags+=("OVERRIDES-SYSTEM")
 
+        # v12.9.2: WRITER-CONFLICT — file has BOTH a previous biome-cleanup
+        # comment-out marker AND a still-live R_LIBS_* line. This means a
+        # third writer in the deploy chain re-introduced the override after
+        # an earlier `--fix --commit` run. Fragment 04 v12.9.2 makes this
+        # benign at runtime via the canonical-path fallback, but ops should
+        # still know the file is under contention.
+        if grep -qE '^# \[biome-cleanup [0-9-]+\] disabled \(was: R_LIBS_(USER|SITE|LIBS)' "$rfile" 2>/dev/null; then
+            cleanup_date="$(grep -m1 -oE '\[biome-cleanup [0-9-]+\]' "$rfile" 2>/dev/null \
+                | sed -E 's/^\[biome-cleanup ([0-9-]+)\]$/\1/')"
+            flags+=("WRITER-CONFLICT:since-${cleanup_date:-?}")
+        fi
+
         stale_ver="$(printf '%s' "$val_clean" | sed -nE 's|.*/library/([0-9]+\.[0-9]+).*|\1|p' | head -n1)"
         [[ -z "$stale_ver" ]] && stale_ver="$(printf '%s' "$val_clean" | sed -nE 's|.*x86_64-pc-linux-gnu-library/([0-9]+\.[0-9]+).*|\1|p' | head -n1)"
         if [[ -n "$stale_ver" && "$R_VER_INSTALLED" != "?.?" && "$stale_ver" != "$R_VER_INSTALLED" ]]; then

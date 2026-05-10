@@ -8,6 +8,136 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.9.2 (2026-05-10) — "Writer-agnostic canonical-path fallback in fragment 04"
+
+### Symptom on biome-calc03
+
+After v12.9 + v12.9.1 deploy, three AD users still saw NFS-only `.libPaths()`
+even though their `/var/lib/biome-Rlibs/<u>/4.5` leaf existed with correct
+ownership:
+
+| user                | leaf exists | leaf writable | `.libPaths()[1]`        |
+|---------------------|-------------|---------------|-------------------------|
+| rocio.corteslobos2  | yes         | yes           | NFS ❌                  |
+| michele.dimusciano  | yes         | yes           | NFS ❌                  |
+| arianna.ferrara4    | yes         | yes           | NFS ❌                  |
+| gianfranco.samuele2 | yes         | yes           | local ✅                |
+| martina.livornese2  | yes         | yes           | local ✅                |
+
+### Root cause: `~/.Renviron` multi-writer race
+
+R reads files in order `$R_HOME/etc/Renviron → /etc/R/Renviron.site → ~/.Renviron`
+(LAST WINS). Diagnostic via `Rscript /tmp/probe.R` showed the broken users had
+`Sys.getenv("R_LIBS_USER")` equal to `/nfs/home/<u>/R/.../4.5` only — i.e.
+`~/.Renviron` had pinned `R_LIBS_USER` and silently overrode the site value
+`/var/lib/biome-Rlibs/%u/%v:/nfs/home/.../%v`.
+
+Three different writers compete on `~/.Renviron`:
+
+1. `scripts/50_setup_nodes.sh` per-user migration → backup `.Renviron.bak`
+   (no timestamp suffix) + `sed -i '/^...R_LIBS_USER.../d'` (DELETE).
+2. `scripts/99_check_user_renviron_overrides.sh --fix --commit` → backup
+   `.bak.${TS}` + awk **comment-out** with marker
+   `# [biome-cleanup YYYY-MM-DD] disabled (was: ...)`.
+3. **A third writer** (not located in active scripts/; possibly archived
+   provisioning code or a first-login PAM helper) re-appended a fresh live
+   `R_LIBS_USER="/nfs/home/<u>/R/x86_64-pc-linux-gnu-library/4.5"` line at
+   the end of the file AFTER the v99 cleanup ran. Forensic evidence:
+   `.Renviron.bak` was 741 B, current file 818 B (grew by 77 B = exactly one
+   `R_LIBS_USER=...` line). Comment markers from the v99 awk were present
+   on lines 4-5; the live override was on line 13.
+
+Since fragment 04 v12.9 derives its prepend list from the **raw**
+`R_LIBS_USER`, and the raw value contained no `/var/lib/biome-Rlibs/`
+entry for these users, `existing_targets` was empty and the prepend was
+correctly skipped (HC-13 — never invent paths the env var did not declare).
+
+### Fix philosophy: stop trying to be the only writer
+
+Per HC-13 (do not touch user files) and ethos #17 (adapt the system to
+portable user R code — never silently patch user scripts), the right
+solution is NOT to hunt the third writer and not to enforce a
+single-writer policy on `~/.Renviron`. Instead, make the runtime
+**robust to ANY writer** by probing the well-known canonical path
+independently of `R_LIBS_USER`.
+
+### Fix (`templates/Rprofile_site.d/04_user_lib_bootstrap.R.template`)
+
+After the v12.9 `existing_targets` derivation, add a writer-agnostic
+fallback:
+
+```r
+canonical_target <- file.path("/var/lib/biome-Rlibs", user_login, ver_short)
+canonical_ok <- tryCatch(
+  nzchar(user_login) &&
+    dir.exists(canonical_target) &&
+    file.access(canonical_target, mode = 2L) == 0L,
+  error = function(e) FALSE
+)
+if (isTRUE(canonical_ok)) {
+  existing_targets <- unique(c(existing_targets, canonical_target))
+}
+```
+
+This:
+
+- Touches NO user files (HC-13 honored — only in-session `.libPaths()`).
+- Idempotent (`unique(c(...))` preserves first-occurrence order).
+- Defense-in-depth: works even if a future writer breaks `R_LIBS_USER`.
+- Pessimistic: explicit `file.access(_, 2)` write check, not just
+  `dir.exists()`. If write-access is missing the prepend is skipped
+  (HC-13 — never set the user up to fail at `install.packages()`).
+
+### Audit script enhancement (`scripts/99_check_user_renviron_overrides.sh`)
+
+Added `WRITER-CONFLICT` flag: when a `~/.Renviron` contains BOTH a
+`# [biome-cleanup ...] disabled (was: R_LIBS_*` marker AND a later
+uncommented `R_LIBS_USER` / `R_LIBS_SITE` / `R_LIBS` line, the audit
+table prints a yellow `WRITER-CONFLICT` flag pointing at the original
+cleanup date. This surfaces the third-writer race for ops monitoring
+without blocking the existing override audit.
+
+### Immediate remediation (one-shot)
+
+Before the v12.9.2 fragment lands, the live appended override can be
+neutralized with the existing tool:
+
+```bash
+sudo /opt/R-studioConf/scripts/99_check_user_renviron_overrides.sh \
+  --fix --commit -y
+```
+
+Run on biome-calc03 (2026-05-10): patched 3 files (rocio.corteslobos2,
+michele.dimusciano, arianna.ferrara4); post-patch `.libPaths()[1]` is
+local-disk for all three. Recommend running the same on
+biome-calc01/02/04 as a sweep.
+
+### Files touched (T1 only)
+
+| File                                                                | Change |
+|---------------------------------------------------------------------|--------|
+| `templates/Rprofile_site.d/04_user_lib_bootstrap.R.template`        | +24 lines (canonical-path fallback block + comments); header `v12.9 → v12.9.2` |
+| `config/setup_nodes.vars.conf`                                      | `RPROFILE_VERSION="12.9" → "12.9.2"` (HC-18) |
+| `docs/reference/Rprofile_site.CHANGELOG.md`                         | This v12.9.2 section (HC-18) |
+| `scripts/99_check_user_renviron_overrides.sh`                       | +`WRITER-CONFLICT` flag detection |
+| `docs/operations/UPGRADE_TO_v12.4.md`                               | §14: v12.9.2 deploy step + sweep command |
+
+T2/T3: no deviation. Container images rebuilt from patched scripts/ pick
+up the fragment automatically.
+
+### Verification (post-deploy)
+
+```bash
+for u in rocio.corteslobos2 michele.dimusciano arianna.ferrara4; do
+  sudo -u "$u" -i Rscript -e '
+    cat(.libPaths()[1L], "\n")
+  '
+done
+# Expect: /var/lib/biome-Rlibs/<u>/4.5 for each.
+```
+
+---
+
 ## v12.9 (2026-05-10) — "User-lib bootstrap REAL fix: %u non-expansion + libPaths cache + AD enumeration + parent-dir ownership"
 
 ### v12.9.1 follow-up patch (same day, post-deploy on biome-calc03)
@@ -37,7 +167,7 @@ Two regressions surfaced after the initial v12.9 deploy:
 
 Both fixes are tier-T1 patches (host scripts). Files touched:
 
-+ `scripts/50_setup_nodes.sh` — lines ~39, ~71, and Step 7c warmup loop.
+- `scripts/50_setup_nodes.sh` — lines ~39, ~71, and Step 7c warmup loop.
 
 No tier-T2/T3 deviation; T2 mirrors automatically once compose images
 rebuild from the patched scripts/.
@@ -47,7 +177,7 @@ rebuild from the patched scripts/.
 CONTEXT. v12.8 shipped three fixes (UID gate widened to `>=1000 && !=65534`,
 fragment 04 reads RAW `R_LIBS_USER`, expand_one resolves `%u %v %V %p %o %a`
 
-+ shell-style `$HOME/$USER/~`). On `biome-calc03`, post-deploy reproduction
+- shell-style `$HOME/$USER/~`). On `biome-calc03`, post-deploy reproduction
 on `michele.lussu` (UID 164186128) and `gianfranco.samuele2` (UID 163718183)
 showed v12.8 **did not fix the symptom**: `.libPaths()` still returned only
 the NFS fallback. Step 7c warmup logged `warmed=1 skipped=40` — only
@@ -176,12 +306,12 @@ matching `/nfs/home/<u>` stub appears once. `nfs_home_base` defaults to
 
 **Fix 3 — version + docs (HC-18).**
 
-+ `RPROFILE_VERSION` 12.8 → **12.9** in `config/setup_nodes.vars.conf`.
-+ Commented `NFS_HOME_BASE="/nfs/home"` knob added next to RPROFILE_VERSION.
-+ This CHANGELOG entry.
-+ New §14 in `docs/operations/UPGRADE_TO_v12.4.md` (deploy + validate +
+- `RPROFILE_VERSION` 12.8 → **12.9** in `config/setup_nodes.vars.conf`.
+- Commented `NFS_HOME_BASE="/nfs/home"` knob added next to RPROFILE_VERSION.
+- This CHANGELOG entry.
+- New §14 in `docs/operations/UPGRADE_TO_v12.4.md` (deploy + validate +
   rollback + operator one-shot remediation).
-+ §3.5 step 2 of the runbook: removed `R --vanilla` (vanilla bypasses
+- §3.5 step 2 of the runbook: removed `R --vanilla` (vanilla bypasses
   `Rprofile.site`, `Renviron.site`, `R_LIBS_USER` — i.e. it bypasses
   EVERYTHING this fix deploys, making it useless as a validation
   vector). Replaced with `R --no-save -e ...`.
@@ -195,10 +325,10 @@ source of truth for the actual prepend.
 
 TIER DELTAS.
 
-+ T2 (`docker-deploy/`): `Rprofile_site.d/` still absent (v12.7 backlog).
+- T2 (`docker-deploy/`): `Rprofile_site.d/` still absent (v12.7 backlog).
   No mirror of fragment 04 needed until that backlog is closed.
   `setup_nodes.sh` is host-only.
-+ T3 (`kubernetes-deploy/`): SKELETON_NOT_READY — N/A.
+- T3 (`kubernetes-deploy/`): SKELETON_NOT_READY — N/A.
 
 OPERATOR ONE-SHOT REMEDIATION (apply NOW on already-deployed v12.6/v12.7/v12.8
 nodes; unblocks every existing AD user without waiting for redeploy):
@@ -334,19 +464,19 @@ before. `BIOME_DISABLE_USER_LIB_BOOTSTRAP=1` escape hatch preserved.
 
 **Fix 3 — version + docs (HC-18).**
 
-+ `RPROFILE_VERSION` 12.7 → **12.8** in `config/setup_nodes.vars.conf`.
-+ This CHANGELOG entry.
-+ Cross-reference appended to `docs/operations/UPGRADE_TO_v12.4.md`
+- `RPROFILE_VERSION` 12.7 → **12.8** in `config/setup_nodes.vars.conf`.
+- This CHANGELOG entry.
+- Cross-reference appended to `docs/operations/UPGRADE_TO_v12.4.md`
   §11 (v12.6 user-lib auto-bootstrap section).
 
 TIER DELTAS.
 
-+ T2 (`docker-deploy/`): no `Rprofile_site.d/` directory exists in T2
+- T2 (`docker-deploy/`): no `Rprofile_site.d/` directory exists in T2
   templates yet (T2 still ships the v9-era monolithic
   `Rprofile_site.R.template`). No mirror needed for Fix 2. Recorded
   here as a known T2 lag — picked up when T2 adopts the fragment system.
-+ T2 also has no `setup_nodes.sh` equivalent; the warmup is host-only.
-+ T3 (`kubernetes-deploy/`): SKELETON_NOT_READY — N/A.
+- T2 also has no `setup_nodes.sh` equivalent; the warmup is host-only.
+- T3 (`kubernetes-deploy/`): SKELETON_NOT_READY — N/A.
 
 OPERATOR REMEDIATION (apply *now* on already-deployed v12.6/v12.7 nodes).
 The code fix lands on next deploy. To unblock affected users immediately
@@ -464,25 +594,25 @@ with the replicated pkg list and worker count.
 
 DESIGN NOTES.
 
-+ **Why `.packages()` not `loadedNamespaces()`**: we replicate only
+- **Why `.packages()` not `loadedNamespaces()`**: we replicate only
   packages on the *search path* (those the user did `library()`/
   `require()` on). Loaded-but-not-attached namespaces are reachable via
   `pkg::fun` and don't need attaching on workers; attaching them all
   would balloon worker startup time and risk masking conflicts.
-+ **Excluded set** (`base, methods, datasets, utils, grDevices,
+- **Excluded set** (`base, methods, datasets, utils, grDevices,
   graphics, stats, parallel`): always present on every R worker; calling
   `library()` on them is a no-op but pollutes the log.
-+ **Bundle invalidation**: editing fragment 52 changes its md5 → the
+- **Bundle invalidation**: editing fragment 52 changes its md5 → the
   v12.3 byte-compiled bundle manifest mismatches → next session
   demotes to the legacy per-fragment `sys.source` loop until Step 8
   rebuilds. PSE-safe by construction (see v12.3 entry).
 
 KNOWN LIMITATIONS (deliberate, NOT fixed in v12.7).
 
-+ Master-only `library()` calls made *between* the cluster creation and
+- Master-only `library()` calls made *between* the cluster creation and
   `parLapply` are not propagated (we snapshot `.packages()` once). Edge
   case; practical user code attaches before `mclapply`.
-+ Worker library paths come from the worker's own `.libPaths()` —
+- Worker library paths come from the worker's own `.libPaths()` —
   identical to fork() semantics on a single host (workers see the same
   `/var/lib/biome-Rlibs/<user>/<R-ver>` via `Renviron.site`). On a
   multi-host PSOCK cluster (not supported by fragment 30) this would
@@ -527,8 +657,8 @@ fragment 52 reroute, not only the new pkg-sync block).
 
 TIER DELTAS.
 
-+ **T1 (host)**: implemented (this entry).
-+ **T2 (docker)**: pending — and worse, **the entire `Rprofile_site.d/`
+- **T1 (host)**: implemented (this entry).
+- **T2 (docker)**: pending — and worse, **the entire `Rprofile_site.d/`
   directory is currently absent from `docker-deploy/templates/`**
   (verified 2026-05-10: only `Rprofile_site.R.template` is shipped).
   The T2 image therefore mirrors v12.0 monolith semantics, not v12.1+
@@ -539,7 +669,7 @@ TIER DELTAS.
   tree must be copied into `docker-deploy/templates/` AND the rstudio
   Dockerfile must add the `COPY` + dispatcher-rendering step that
   `50_setup_nodes.sh` currently performs at install time.
-+ **T3 (k8s)**: pending — same gap. The fragments would ship as a
+- **T3 (k8s)**: pending — same gap. The fragments would ship as a
   ConfigMap mounted at `/etc/R/Rprofile_site.d/`; bundle rebuild via
   init container.
 
@@ -583,11 +713,11 @@ FIX (T1, **layered D+A strategy**, single source of truth, ports to T2/T3).
 
 DESIGN — D+A LAYERS (covers both new-deploy and runtime-discovery paths):
 
-+ **Layer A (deploy-time, eager):** `50_setup_nodes.sh` Step 7c warmup
+- **Layer A (deploy-time, eager):** `50_setup_nodes.sh` Step 7c warmup
   loop creates the dir for **every existing AD user** at the moment Step 7
   runs. Catches the "fresh node, fresh R minor bump, AD users already
   exist" case immediately; no first-login wait.
-+ **Layer D (runtime, lazy):** Fragment `04_user_lib_bootstrap.R`
+- **Layer D (runtime, lazy):** Fragment `04_user_lib_bootstrap.R`
   self-creates the dir on the **first R session** of a brand-new AD user
   who appeared *after* the last `50_setup_nodes.sh` run (or on a node
   where the operator skipped Step 7). EUID matches the user (since the
@@ -599,7 +729,7 @@ already exists with the right owner.
 
 SCOPE OF FRAGMENT (per user-approved choice "3 a tutti"):
 
-+ Runs in **all** R sessions: interactive **and** non-interactive
+- Runs in **all** R sessions: interactive **and** non-interactive
   (`Rscript`, batch jobs, `R CMD BATCH`, RStudio child processes).
   Rationale: an `Rscript` that calls `install.packages()` from cron must
   not fail just because no human ever opened an interactive session.
@@ -655,13 +785,13 @@ auto-created.
 
 TIER DELTAS.
 
-+ **T1**: implemented (this entry).
-+ **T2 (docker)**: pending. The fragment template is tier-agnostic and
+- **T1**: implemented (this entry).
+- **T2 (docker)**: pending. The fragment template is tier-agnostic and
   copies into the rstudio image unchanged; the warmup loop in
   `50_setup_nodes.sh` is host-specific and must be ported to the
   rstudio container's entrypoint (or its `init.d` boot hook) since
   Docker containers don't run `50_setup_nodes.sh`.
-+ **T3 (k8s)**: pending. Same as T2 plus: `/var/lib/biome-Rlibs/` is a
+- **T3 (k8s)**: pending. Same as T2 plus: `/var/lib/biome-Rlibs/` is a
   PVC bind mount; the per-pod init container should run the warmup
   loop against the mounted volume.
 
@@ -761,11 +891,11 @@ NOT bump `RPROFILE_VERSION`. Versioning is tracked via the inline
 
 TIER DELTAS.
 
-+ **T1**: implemented (this entry).
-+ **T2 (docker)**: pending. Same fragment templates apply; Dockerfile must
+- **T1**: implemented (this entry).
+- **T2 (docker)**: pending. Same fragment templates apply; Dockerfile must
   add `RUN install -d -m 1777 /Rtmp/biome_thread_guard` if the container
   pre-creates `/Rtmp`.
-+ **T3 (k8s)**: pending. `/Rtmp` is per-pod `emptyDir` — sticky-1777 must
+- **T3 (k8s)**: pending. `/Rtmp` is per-pod `emptyDir` — sticky-1777 must
   be set via `securityContext.fsGroup` + an init container, OR the
   fragment's `Sys.umask("000") + chmod 1777` fallback handles first-touch.
 
@@ -801,29 +931,29 @@ deploy steps**. No user-facing R API change. No file outside `/etc/R/` and
 
 WHAT CHANGED:
 
-+ [S1]  NEW FRAGMENT: `52_mclapply_guard.R.template` installs a wrapper on
+- [S1]  NEW FRAGMENT: `52_mclapply_guard.R.template` installs a wrapper on
           `parallel::mclapply` that, when a heavy-thread package is on
           `loadedNamespaces()`, transparently substitutes a PSOCK cluster
           (`makeCluster(getOption("mc.cores"))`). User code is **not** edited
           (HC-13). Bypass: `BIOME_DISABLE_FORK_GUARD=1`.
-+ [S2]  EXTENDED `50_pkg_hooks.R.template`: `setHook(packageEvent("terra",...))`
+- [S2]  EXTENDED `50_pkg_hooks.R.template`: `setHook(packageEvent("terra",...))`
           now calls `terraOptions(memfrac=0.5, todisk=TRUE, tempdir="/Rtmp/<user>")`
           on first load. Bypass: `BIOME_TERRA_NORAM=1`.
-+ [S3]  KERNEL BUMP: `Rprofile_site.R.template` advertises `12.4` and gates
+- [S3]  KERNEL BUMP: `Rprofile_site.R.template` advertises `12.4` and gates
           the new fragments behind `ENABLE_FORK_TO_PSOCK=TRUE`,
           `ENABLE_TERRA_TODISK_DEFAULT=TRUE` (defaults: on).
-+ [S4]  RENVIRON: `R_LIBS_USER` now uses a **double path**, local-first,
+- [S4]  RENVIRON: `R_LIBS_USER` now uses a **double path**, local-first,
           NFS-fallback. Existing user libraries on NFS keep working; the
           first `install.packages()` after the upgrade compiles into
           `/var/lib/biome-Rlibs/<user>/<R-ver>/`. Eliminates the
           per-`library()` NFS lookup storm.
-+ [S5]  CONFIG: `config/setup_nodes.vars.conf` gains
+- [S5]  CONFIG: `config/setup_nodes.vars.conf` gains
           `R_LIBS_LOCAL_DEVICE`, `R_LIBS_LOCAL_ROOT`, `R_LIBS_LOCAL_FSTYPE`,
           `R_LIBS_LOCAL_SIZE_GB` (optional dedicated disk; default Mode A
           uses rootfs at `/var/lib/biome-Rlibs/`), and
           `NFS_AUDIT_REQUIRE_VERS`, `NFS_AUDIT_REQUIRE_NCONNECT`,
           `NFS_AUDIT_REQUIRE_LOOKUPCACHE` (read-only audit thresholds).
-+ [S6]  SCRIPT: `scripts/50_setup_nodes.sh` adds two idempotent functions:
+- [S6]  SCRIPT: `scripts/50_setup_nodes.sh` adds two idempotent functions:
           - `setup_nodes_local_rlibs` (Step 7c): create `/var/lib/biome-Rlibs/`
             with sticky `1777`. Mode A (rootfs only) or Mode B (`mkfs` +
             UUID-based fstab + mount on `R_LIBS_LOCAL_DEVICE`). Fails fast
@@ -833,11 +963,11 @@ WHAT CHANGED:
             **Never remounts** — surfaces gaps via `[audit] WARN`.
           Wired into menu option `1` (full deploy) and new option `L`
           (local-Rlibs + NFS audit only).
-+ [S7]  DOCS: end-to-end runbook
+- [S7]  DOCS: end-to-end runbook
           `docs/operations/UPGRADE_TO_v12.4.md` (procedure for new and
           already-deployed nodes is identical; per-phase rollback; user
           bypass; FAQ).
-+ [S8]  BUNDLE INVALIDATION (interaction with v12.3 fast-path): adding
+- [S8]  BUNDLE INVALIDATION (interaction with v12.3 fast-path): adding
           `52_mclapply_guard.R` invalidates the byte-compiled fragment
           bundle (`/etc/R/Rprofile_site.d/.compiled/{bundle.Rc,manifest.txt}`)
           because the manifest is an md5sum-of-fragments. `50_setup_nodes.sh`
@@ -849,12 +979,12 @@ WHAT CHANGED:
 
 VERIFICATION:
 
-+ `bash -n scripts/50_setup_nodes.sh` PASSES.
-+ Lussu probe E (PSOCK swap) → previously HANG, now PASS via fork-guard.
-+ Lussu probe F (`terra::terraOptions(todisk=TRUE)`) → PASS via default.
-+ `sudo -u <ad-user> R --vanilla -e '.libPaths()'` → first entry
+- `bash -n scripts/50_setup_nodes.sh` PASSES.
+- Lussu probe E (PSOCK swap) → previously HANG, now PASS via fork-guard.
+- Lussu probe F (`terra::terraOptions(todisk=TRUE)`) → PASS via default.
+- `sudo -u <ad-user> R --vanilla -e '.libPaths()'` → first entry
   `/var/lib/biome-Rlibs/<user>/<R-ver>`; second entry the legacy NFS path.
-+ `sudo bash scripts/50_setup_nodes.sh --verify` reports `Rprofile.site
+- `sudo bash scripts/50_setup_nodes.sh --verify` reports `Rprofile.site
   version: 12.4`.
 
 ROLLBACK PATH (per-phase, see runbook §4):
@@ -877,8 +1007,8 @@ export R_LIBS_USER="${HOME}/R/x86_64-pc-linux-gnu-library/$(R --version | head -
 
 TIER DELTAS:
 
-+ T2 (docker): pending — to be ported when T2 is realigned to T1.
-+ T3 (k8s):    pending — `R_LIBS_USER` will land on `emptyDir` per-pod;
+- T2 (docker): pending — to be ported when T2 is realigned to T1.
+- T3 (k8s):    pending — `R_LIBS_USER` will land on `emptyDir` per-pod;
                fork-guard will ship as the same fragment via ConfigMap.
 
 ---
@@ -933,53 +1063,53 @@ GATES (in priority order):
 
 ADDITIVE FRAGMENTS (shipped alongside v12.3):
 
-+ `05_thread_guard.R.template` — wraps `parallel::detectCores()` to
+- `05_thread_guard.R.template` — wraps `parallel::detectCores()` to
     return the cgroup-derived `MAX_THREADS` cap; prevents BLAS/OMP
     over-subscription when user code calls `detectCores()` directly.
-+ `55_options_guard.R.template` — clamps `options(mc.cores = ...)`
+- `55_options_guard.R.template` — clamps `options(mc.cores = ...)`
     on every set, so a forgotten `options(mc.cores = 64)` at the top
     of a user script can never escape the cgroup limit.
-+ `60_safe_setwd.R.template` — split into asymmetric behaviour:
+- `60_safe_setwd.R.template` — split into asymmetric behaviour:
     **batch (`Rscript`/`R --no-save`)** = hard-fail on bad `setwd`
     (Martina-gate fix preserved); **interactive (RStudio)** = warn
     and continue (botanists routinely paste `setwd("...")` lines).
-+ Section -1.5 of the dispatcher now **reuses** `.biome_blas_cache`
+- Section -1.5 of the dispatcher now **reuses** `.biome_blas_cache`
     across sessions for the same user, avoiding the BLAS coretype probe
     on every cold boot.
 
 WHAT CHANGED:
 
-+ [B1]  NEW DIRECTORY: `/etc/R/Rprofile_site.d/.compiled/` (created at
+- [B1]  NEW DIRECTORY: `/etc/R/Rprofile_site.d/.compiled/` (created at
           deploy time by `50_setup_nodes.sh` Step 8). Owned `root:root`,
           mode `0755`; bundle file `0644`.
-+ [B2]  NEW DISPATCHER SECTION: FRAGMENT LOADER v12.3 (replaces the v12.2
+- [B2]  NEW DISPATCHER SECTION: FRAGMENT LOADER v12.3 (replaces the v12.2
           loop). ~70 lines. Computes md5 hashes via R-native digest of
           file bytes; reads manifest with `readLines()`; compares as a
           `setequal()` over `paste(hash, basename)` rows.
-+ [B3]  NEW DEPLOY STEP: `setup_nodes_compile_bundle()` in
+- [B3]  NEW DEPLOY STEP: `setup_nodes_compile_bundle()` in
           `scripts/50_setup_nodes.sh` (Step 8 of the menu). Builds
           `bundle.Rc` + `manifest.txt` in a staging tmpdir, atomic
           `mv -T`, then page-cache warm-up via `cat > /dev/null`.
-+ [B4]  NEW FRAGMENTS: `05_thread_guard.R`, `55_options_guard.R`.
+- [B4]  NEW FRAGMENTS: `05_thread_guard.R`, `55_options_guard.R`.
           `60_safe_setwd.R` extended with batch/interactive split.
-+ [B5]  DISPATCHER: `.biome_blas_cache` reuse logic added in Section
+- [B5]  DISPATCHER: `.biome_blas_cache` reuse logic added in Section
           -1.5; cache key = `paste(user, R.version.string, blas_kind)`.
-+ [B6]  KERNEL BUMP: `Rprofile_site.R.template` advertises `12.3` and
+- [B6]  KERNEL BUMP: `Rprofile_site.R.template` advertises `12.3` and
           adds `ENABLE_FRAG_BUNDLE` flag (default `TRUE`).
-+ [B7]  CONFIG bump: `config/setup_nodes.vars.conf` →
+- [B7]  CONFIG bump: `config/setup_nodes.vars.conf` →
           `RPROFILE_VERSION="12.3"`.
 
 VERIFICATION:
 
-+ `Rscript --vanilla -e 'parse(file=...)'` PASSES for every fragment.
-+ `bash -n scripts/50_setup_nodes.sh` PASSES.
-+ Cold-boot R session timing (heavy fragment chain, 9 fragments):
+- `Rscript --vanilla -e 'parse(file=...)'` PASSES for every fragment.
+- `bash -n scripts/50_setup_nodes.sh` PASSES.
+- Cold-boot R session timing (heavy fragment chain, 9 fragments):
   legacy loop ≈ 280–340 ms; bundle fast-path ≈ 35–55 ms (~6× faster);
   fall-back path identical to v12.2 (regression-free).
-+ Tampering test: edit one byte of any `.R` fragment in place → next
+- Tampering test: edit one byte of any `.R` fragment in place → next
   session falls back to legacy loop, logs `[frag-bundle] manifest
   mismatch on <name>` to `sys_log`. No silent staleness.
-+ `ls /etc/R/Rprofile_site.d/.compiled/` shows `bundle.Rc` and
+- `ls /etc/R/Rprofile_site.d/.compiled/` shows `bundle.Rc` and
   `manifest.txt`; `wc -l manifest.txt` equals fragment count.
 
 ROLLBACK PATH (per-knob):
@@ -1011,10 +1141,10 @@ rebuild completes — never masks the new fragment.
 
 TIER DELTAS:
 
-+ T2 (docker): pending — bundle build will move to image build time
+- T2 (docker): pending — bundle build will move to image build time
                 (read-only `/etc/R/Rprofile_site.d/.compiled/` baked into
                 the layer).
-+ T3 (k8s):    pending — same as T2; ConfigMap-projected `.compiled/`
+- T3 (k8s):    pending — same as T2; ConfigMap-projected `.compiled/`
                 directory is acceptable since it is regeneratable.
 
 ---
@@ -1031,7 +1161,7 @@ runtime semantics.
 ARCHITECTURE. The `Rprofile_site.R.template` monolith is split along PSE-safe
 lines:
 
-+ **Dispatcher** (`templates/Rprofile_site.R.template`, 693 lines) keeps only
+- **Dispatcher** (`templates/Rprofile_site.R.template`, 693 lines) keeps only
   the safety-critical bootstrap that cannot tolerate fragment-deletion:
   integrity self-check, `.biome_early_err`, OpenBLAS coretype detection,
   user-tmp-root setup, BLAS serial/pthread SIGSEGV guard, PSOCK worker
@@ -1040,7 +1170,7 @@ lines:
   through feature flags, `.biome_env` bootstrap, `sys_log`,
   `.biome_mark_time`, session timeout, library paths, and Smart Cleanup.
 
-+ **Fragments** (`templates/Rprofile_site.d/*.R.template`, 9 files, 2306
+- **Fragments** (`templates/Rprofile_site.d/*.R.template`, 9 files, 2306
   total LOC) are sourced via `sys.source(envir = environment())` inside the
   dispatcher's main `local({...})` frame — so they inherit the closure
   (`sys_log`, `.biome_env`, `ENABLE_*`, `.C_*`, `VERSION`, `curr_user`,
@@ -1049,11 +1179,11 @@ lines:
 
 STRATEGY. Three approaches were considered:
 
-+ (A) STRICT split — promote every shared local to `.biome_env$*` and
+- (A) STRICT split — promote every shared local to `.biome_env$*` and
         rewrite every reference. High risk, ~6-8h work.
-+ (B) PRAGMATIC — one `local({...})` wrapper, fragments sourced inside
+- (B) PRAGMATIC — one `local({...})` wrapper, fragments sourced inside
         with `local=TRUE`. Chosen for lexical inheritance.
-+ (C) HYBRID — chosen. Two-pass loader (early at global scope, late inside
+- (C) HYBRID — chosen. Two-pass loader (early at global scope, late inside
         `local`). In practice only the late pass was needed because every
         fragmentable region lives inside the main `local`. Worker fast-path
         and `bspm` stayed in the dispatcher per user request.
@@ -1083,53 +1213,53 @@ does not apply here — runtime fragment load is best-effort by design).
 
 WHAT CHANGED:
 
-+ [S1]  NEW FILE: `templates/Rprofile_site.R.template` rewritten as thin
+- [S1]  NEW FILE: `templates/Rprofile_site.R.template` rewritten as thin
           dispatcher (693 lines). Preserves every early-scope section 1:1
           from v12.1 (SECTION 0 / -2 / -1.8 / -1.5 / -1, bspm pre-load,
           `.biome_skip_main` guard, main `local` opener through
           `cgroups_init` timer mark). Replaces lines 592–2502 (~1910 lines
           of body) with a 75-line fragment loader.
-+ [S2]  NEW FILE: `templates/Rprofile_site.R.template.legacy_v12.1_rollback`
+- [S2]  NEW FILE: `templates/Rprofile_site.R.template.legacy_v12.1_rollback`
           — byte-identical copy of the v12.1 monolith. Rollback path:
           `cp legacy_v12.1_rollback Rprofile_site.R.template && rm
            templates/Rprofile_site.d/{20,30,40,45,50,70}_*.R.template`.
-+ [S3]  NEW FILES: 6 new fragments mechanically sliced from the monolith:
+- [S3]  NEW FILES: 6 new fragments mechanically sliced from the monolith:
           `20_cgroup_reader`, `30_psock_factory`, `40_wrapper_installer`,
           `45_memory_guards`, `50_pkg_hooks`, `70_persistent_tools`.
-+ [S4]  DISPATCHER loader uses `sys.source(envir = environment())`
+- [S4]  DISPATCHER loader uses `sys.source(envir = environment())`
           explicitly (NOT `source(..., local=TRUE)`) because the latter's
           `parent.frame()` resolution is fragile when called from inside
           a `for` loop inside a `tryCatch` — `sys.source` with an explicit
           env argument is deterministic.
-+ [S5]  CONFIG bump: `config/setup_nodes.vars.conf` → `RPROFILE_VERSION="12.2"`.
-+ [S6]  `scripts/50_setup_nodes.sh` required NO changes: the existing
+- [S5]  CONFIG bump: `config/setup_nodes.vars.conf` → `RPROFILE_VERSION="12.2"`.
+- [S6]  `scripts/50_setup_nodes.sh` required NO changes: the existing
           `setup_nodes_config_files()` already deploys every
           `templates/Rprofile_site.d/*.R.template` via glob and runs
           per-fragment `Rscript --vanilla -e 'parse(file=...)'` checks.
           Verified: `bash -n scripts/50_setup_nodes.sh` = OK.
-+ [S7]  HEADER comment block in dispatcher updated to describe v12.2
+- [S7]  HEADER comment block in dispatcher updated to describe v12.2
           Hybrid-C architecture and list the 9-fragment inventory.
 
 CROSS-FRAGMENT DEPENDENCIES (load order matters):
 
-+ `30_psock_factory` MUST load before `45_memory_guards` — the latter's
+- `30_psock_factory` MUST load before `45_memory_guards` — the latter's
     `safe_makeCluster` auto-route path reads `.biome_env$.biome_make_cluster_impl`
     stashed by the former.
-+ `40_wrapper_installer` MUST load before `45_memory_guards` and
+- `40_wrapper_installer` MUST load before `45_memory_guards` and
     `50_pkg_hooks` — both use `.biome_install_wrapper`.
-+ `35_compile_routing` MUST load before `50_pkg_hooks` — the latter's
+- `35_compile_routing` MUST load before `50_pkg_hooks` — the latter's
     NIMBLE hook expects `safe_compileNimble` to exist for monkey-patch install.
-+ `70_persistent_tools` MUST load before `80_tools_ext` — the latter
+- `70_persistent_tools` MUST load before `80_tools_ext` — the latter
     attaches helpers to `tools:biome_calc` which the former creates.
 
 Lexical `[0-9]{2}_` prefix ordering satisfies all of the above.
 
 VERIFICATION:
 
-+ `parse(file=...)` PASSES for dispatcher + all 9 fragments (after `%%VAR%%` → `0` substitution).
-+ `bash -n scripts/50_setup_nodes.sh` PASSES.
-+ Fragment total LOC (2306) + dispatcher (693) = 2999 lines vs v12.1 monolith (2536) + loader-stub (30) = 2566 lines. Δ +433 lines is per-fragment header comments (inventory banner, deploy path, inherited closure docs, source line-range provenance).
-+ Sandbox validation DEFERRED — sandbox marked KNOWN BROKEN in `.clinerules`; smoke-test against user/researcher env (Martina's `Mod7_sq_diff_DEBUG_test.R`) is the acceptance test.
+- `parse(file=...)` PASSES for dispatcher + all 9 fragments (after `%%VAR%%` → `0` substitution).
+- `bash -n scripts/50_setup_nodes.sh` PASSES.
+- Fragment total LOC (2306) + dispatcher (693) = 2999 lines vs v12.1 monolith (2536) + loader-stub (30) = 2566 lines. Δ +433 lines is per-fragment header comments (inventory banner, deploy path, inherited closure docs, source line-range provenance).
+- Sandbox validation DEFERRED — sandbox marked KNOWN BROKEN in `.clinerules`; smoke-test against user/researcher env (Martina's `Mod7_sq_diff_DEBUG_test.R`) is the acceptance test.
 
 ROLLBACK PATH (if v12.2 breaks production):
 
@@ -1161,27 +1291,27 @@ v12.0 CHANGES (from v11.4) — "cgroup fair-share enforcement: remove R-level us
 
   WHAT CHANGED:
 
-+ [C1]  REMOVED: get_active_users() — /proc-scanning to count R processes.
+- [C1]  REMOVED: get_active_users() — /proc-scanning to count R processes.
           The kernel's CPUWeight=100 on user-.slice enforces proportional CPU
           fair-share automatically. Counting pids was both unreliable
           (Rscript/future workers inflate count) and unnecessary.
-+ [C2]  REMOVED: per-user RAM division in update_resources().
+- [C2]  REMOVED: per-user RAM division in update_resources().
           quota = ram_gb / n_procs → now quota = ram_gb * 0.9.
           MemoryHigh/MemoryMax on user slice is the real enforcement boundary.
-+ [C3]  REMOVED: fair_cores = eff_vc / n_procs division.
+- [C3]  REMOVED: fair_cores = eff_vc / n_procs division.
           CPUWeight handles scheduler fairness. fair_cores now reflects the
           full cgroup-capped vcore count; bt = min(fair_cores, MAX_THREADS)
           still prevents BLAS livelock (CPUWeight != thread count cap).
-+ [C4]  REMOVED: BIOME-RESCALE notification box.
+- [C4]  REMOVED: BIOME-RESCALE notification box.
           Was triggered by n_procs change; kernel throttles silently now.
-+ [C5]  REMOVED: ENABLE_RESOURCE_MGMT flag — only gated removed logic.
+- [C5]  REMOVED: ENABLE_RESOURCE_MGMT flag — only gated removed logic.
           Thread management (OMP/BLAS/MKL) is now under ENABLE_BLAS_MGMT.
-+ [C6]  FIXED:  ENABLE_CGROUP_AWARE path bug — previous code read
+- [C6]  FIXED:  ENABLE_CGROUP_AWARE path bug — previous code read
           /sys/fs/cgroup/memory.max (root cgroup, always "max"). User slice
           limits live at user.slice/user-<uid>.slice/. MY_UID is resolved
           before this block runs (Section: Portable UID).
-+ [C7]  UPDATED: status() and startup banner reflect cgroup enforcement.
-+ [C8]  API_VERSION bumped 10↑11.
+- [C7]  UPDATED: status() and startup banner reflect cgroup enforcement.
+- [C8]  API_VERSION bumped 10↑11.
   NOTE: biome_cgroup_verify() and .biome_cgroup_read_limits() preserved from v11.4.
 
 v11.4 CHANGES (from v11.3) — "Lexical Scope Restoration":
@@ -1201,27 +1331,27 @@ v11.4 CHANGES (from v11.3) — "Lexical Scope Restoration":
 
   Fix strategy (different from v11.3):
 
-+ REVERT: .biome_install_wrapper NO LONGER writes environment(fn) <- ns_env.
+- REVERT: .biome_install_wrapper NO LONGER writes environment(fn) <- ns_env.
             Closures keep their original lexical scope (the local() frame).
-+ TARGETED: safe_makeCluster uses parallel:::getClusterOption("type") as
+- TARGETED: safe_makeCluster uses parallel:::getClusterOption("type") as
               explicit default — triple-colon bypasses scoping entirely, no
               namespace tricks needed.
-+ KEEP:     was_locked state preservation, install/fail logging, centralized
+- KEEP:     was_locked state preservation, install/fail logging, centralized
               helper structure — those were genuine improvements.
 
   CHANGES:
 
-+ [L1]  REVERTED: environment(fn) <- ns_env removed from
+- [L1]  REVERTED: environment(fn) <- ns_env removed from
                     .biome_install_wrapper (was v11.3 [W1] part 1).
-+ [L2]  FIXED:    safe_makeCluster default arg is now
+- [L2]  FIXED:    safe_makeCluster default arg is now
                     `type = parallel:::getClusterOption("type")` — triple-
                     colon resolves directly against parallel namespace, no
                     closure-env hacking needed.
-+ [L3]  KEPT:     All other v11.3 improvements survive (was_locked
+- [L3]  KEPT:     All other v11.3 improvements survive (was_locked
                     preservation, sys_log coverage, smart_io split with
                     captured .ref, parallelly requireNamespace guard,
                     safe_dist formals restore, phantom dir cleanup, etc.).
-+ [L4]  API_VERSION bumped 9→10 to signal the scope contract fix.
+- [L4]  API_VERSION bumped 9→10 to signal the scope contract fix.
 
 v11.3 CHANGES (from v11.2) — "Close the wrapper class-of-bug + PSE hardening":
   Discovery: production crash on biome-calc04 (2026-04-24) —
@@ -1235,57 +1365,57 @@ v11.3 CHANGES (from v11.2) — "Close the wrapper class-of-bug + PSE hardening":
 
   CHANGES:
 
-+ [W1]  ADDED:   .biome_install_wrapper() — single helper for installing
+- [W1]  ADDED:   .biome_install_wrapper() — single helper for installing
                    namespace-binding wrappers. Sets environment(fn) <- ns_env
                    so default args resolving to non-exported symbols work.
                    Preserves original binding lock state (was_locked save/restore)
                    — fixes silent "cannot change value of locked binding" errors
                    when other packages try to patch same bindings later.
                    Logs every install/skip/fail via sys_log for post-mortem.
-+ [W2]  FIXED:   safe_makeCluster — now uses .biome_install_wrapper; default
+- [W2]  FIXED:   safe_makeCluster — now uses .biome_install_wrapper; default
                    `getClusterOption("type")` resolves against parallel ns.
                    Observed in prod: makeCluster(4, outfile=...) now works.
-+ [W3]  FIXED:   safe_dist — restored full formal args (method, diag, upper, p)
+- [W3]  FIXED:   safe_dist — restored full formal args (method, diag, upper, p)
                    so tab completion, introspection, lintr, and positional
                    calls all work. Also delegates explicitly (no ... splat).
-+ [W4]  FIXED:   safe_distm — added `...` passthrough for forward compat
+- [W4]  FIXED:   safe_distm — added `...` passthrough for forward compat
                    with future geosphere releases.
-+ [W5]  FIXED:   All safe_* wrappers migrated to .biome_install_wrapper —
+- [W5]  FIXED:   All safe_* wrappers migrated to .biome_install_wrapper —
                    was_locked state preserved; no more unconditional lockBinding.
-+ [W6]  FIXED:   Smart I/O — split .biome_smart_io into two dedicated wrappers
+- [W6]  FIXED:   Smart I/O — split .biome_smart_io into two dedicated wrappers
                    (.biome_smart_read_csv for utils::read.csv,
                     .biome_smart_fread  for data.table::fread). Each captures
                    its original via closure (not namespace lookup) so infinite
                    recursion is impossible even if .biome_env is cleared.
                    fread wrapper now matches real signature (input,file,text,cmd).
-+ [W7]  FIXED:   .biome_make_cluster_impl — requireNamespace("parallelly")
+- [W7]  FIXED:   .biome_make_cluster_impl — requireNamespace("parallelly")
                    guard with explicit stop() message. No more silent fail in
                    minimal environments.
-+ [W8]  FIXED:   Section -1.8 — removed pre-creation of nimble_compile/
+- [W8]  FIXED:   Section -1.8 — removed pre-creation of nimble_compile/
                    tmb_compile subdirs (phantom per v11.2 H1-H8). Not exported
                    to worker env anymore. Renamed comment: escape hatch docs.
-+ [W9]  FIXED:   Stan hook — separate flags per package (.cmdstanr_hook_done,
+- [W9]  FIXED:   Stan hook — separate flags per package (.cmdstanr_hook_done,
                    .brms_hook_done, .rstan_hook_done). Enables late-loading
                    packages to still pick up their routing.
-+ [W10] FIXED:   addTaskCallback fallback now covers non-RStudio Rscript —
+- [W10] FIXED:   addTaskCallback fallback now covers non-RStudio Rscript —
                    if callback registration fails AND we're not in RStudio,
                    run init/hooks immediately so guards are still installed.
-+ [W11] FIXED:   get_active_users — counts Rscript and bare R too, not just
+- [W11] FIXED:   get_active_users — counts Rscript and bare R too, not just
                    rsession. Future::multisession and callr-spawned processes
                    now counted correctly in fair-share computation.
-+ [W12] DOCUMENTED: solve/dist/outer wrappers are bypassed by S4 dispatch
+- [W12] DOCUMENTED: solve/dist/outer wrappers are bypassed by S4 dispatch
                    (e.g., Matrix::solve on dgCMatrix). Added warning in header
                    of each guard so future maintainers know the scope.
-+ [W13] API_VERSION bumped 8→9 to signal contract change (new helper + fixes).
+- [W13] API_VERSION bumped 8→9 to signal contract change (new helper + fixes).
 
 Key design principles (v11.0):
 
-+ CORETYPE auto-detected from CPU vendor on EVERY session start (migration-safe)
-+ NO static CORETYPE, OMP, or BLAS thread counts in env files
-+ Boot-time detection: biome-detect-coretype.service (systemd oneshot)
-+ Per-session detection: this profile (handles live migration without reboot)
-+ Thread cap: %%MAX_BLAS_THREADS%% max to prevent QEMU livelock + BLAS oversubscription
-+ PESSIMISTIC SYSTEM ENGINEERING: assume failure at every layer, fail fast
+- CORETYPE auto-detected from CPU vendor on EVERY session start (migration-safe)
+- NO static CORETYPE, OMP, or BLAS thread counts in env files
+- Boot-time detection: biome-detect-coretype.service (systemd oneshot)
+- Per-session detection: this profile (handles live migration without reboot)
+- Thread cap: %%MAX_BLAS_THREADS%% max to prevent QEMU livelock + BLAS oversubscription
+- PESSIMISTIC SYSTEM ENGINEERING: assume failure at every layer, fail fast
 
 ARCHITECTURE (v11.0 — LOCAL-DISK FOR ALL SCRATCH):
   /Rtmp = dedicated 400GB local ext4 disk per VM (NOT tmpfs, NOT NFS, NOT OS /tmp)
@@ -1347,31 +1477,31 @@ v11.2 CHANGES (from v11.1) — "The honest cleanup" — REMOVE PHANTOM APIs:
 
   CHANGES:
 
-+ [H1]  REMOVED: options(nimble.dirName = ...) in worker fast-path (phantom)
-+ [H2]  REMOVED: setHook(packageEvent("nimble", "onLoad"), ...) (phantom target)
-+ [H3]  REMOVED: setHook(packageEvent("nimbleHMC", "onLoad"), ...) (phantom)
-+ [H4]  REMOVED: Sys.setenv(TMB_COMPILE_DIR = ...) in worker fast-path (phantom)
-+ [H5]  REMOVED: setHook for TMB/glmmTMB (phantom target)
-+ [H6]  REMOVED: options(rstan.auto_write = ...) (phantom)
-+ [H7]  REMOVED: Sys.setenv(STAN_TMPDIR = ...) (phantom)
-+ [H8]  REMOVED: Per-worker subdir creation in BIOME_NIMBLE_DIR / BIOME_TMB_DIR
+- [H1]  REMOVED: options(nimble.dirName = ...) in worker fast-path (phantom)
+- [H2]  REMOVED: setHook(packageEvent("nimble", "onLoad"), ...) (phantom target)
+- [H3]  REMOVED: setHook(packageEvent("nimbleHMC", "onLoad"), ...) (phantom)
+- [H4]  REMOVED: Sys.setenv(TMB_COMPILE_DIR = ...) in worker fast-path (phantom)
+- [H5]  REMOVED: setHook for TMB/glmmTMB (phantom target)
+- [H6]  REMOVED: options(rstan.auto_write = ...) (phantom)
+- [H7]  REMOVED: Sys.setenv(STAN_TMPDIR = ...) (phantom)
+- [H8]  REMOVED: Per-worker subdir creation in BIOME_NIMBLE_DIR / BIOME_TMB_DIR
                    (cargo cult — NIMBLE uses tempdir() per worker, not these dirs)
-+ [H9]  KEPT:    options(cmdstanr_output_dir = worker_sd) for Stan output
+- [H9]  KEPT:    options(cmdstanr_output_dir = worker_sd) for Stan output
                    routing — but only if BIOME_STAN_DIR is set (real API)
-+ [H10] KEPT:    options(brms.file_refit = "on_change") — real API
-+ [H11] KEPT:    BLAS thread capping via Sys.setenv (OMP_NUM_THREADS etc.) — real
-+ [H12] KEPT:    BIOME env var propagation via biome_make_cluster() — real
-+ [H13] KEPT:    cluster_logs outfile routing — real and useful
-+ [H14] ADDED:   Optional worker diagnostic log (BIOME_WORKER_DEBUG=1) writes
+- [H10] KEPT:    options(brms.file_refit = "on_change") — real API
+- [H11] KEPT:    BLAS thread capping via Sys.setenv (OMP_NUM_THREADS etc.) — real
+- [H12] KEPT:    BIOME env var propagation via biome_make_cluster() — real
+- [H13] KEPT:    cluster_logs outfile routing — real and useful
+- [H14] ADDED:   Optional worker diagnostic log (BIOME_WORKER_DEBUG=1) writes
                    /tmp/biome_worker_<pid>.log to trace fast-path execution.
                    For use if a future mystery arises; no-op by default.
-+ [H15] API_VERSION bumped 7→8 to signal contract change (phantom APIs removed).
+- [H15] API_VERSION bumped 7→8 to signal contract change (phantom APIs removed).
 
 v11.1 CHANGES (from v11.0) — SUPERSEDED BY v11.2: attempted setHook fix for
   phantom API options(nimble.dirName). Since the option itself doesn't exist,
   the setHook approach was academic. Kept here for historical record:
 
-+ [F1]  Root cause observed in production (biome-calc04, R 4.5.3, 2026-04-22):
+- [F1]  Root cause observed in production (biome-calc04, R 4.5.3, 2026-04-22):
           Worker fast-path at Rprofile load creates worker_<pid>/ dirs correctly
           and BLAS env vars propagate, BUT options(nimble.dirName = worker_nd)
           does NOT persist — getOption("nimble.dirName") returns NULL in
@@ -1381,56 +1511,56 @@ v11.1 CHANGES (from v11.0) — SUPERSEDED BY v11.2: attempted setHook fix for
           "biome.profile.loaded") survive; only package-dotted names are lost.
           Not fully understood; possibly related to the way Rscript handles
           the site profile vs the slave bootstrap expression.
-+ [F2]  FIX: register setHook(packageEvent("nimble", "onLoad"), ...) in the
+- [F2]  FIX: register setHook(packageEvent("nimble", "onLoad"), ...) in the
           worker fast-path. Hook fires at require(nimble) / library(nimble)
           time — exactly when options(nimble.dirName) actually matters for
           compileNimble() routing. Hook closure captures worker_nd; safe
           across worker lifetime. Applied symmetrically to nimbleHMC.
-+ [F3]  Same setHook pattern applied to TMB/glmmTMB (env var TMB_COMPILE_DIR)
+- [F3]  Same setHook pattern applied to TMB/glmmTMB (env var TMB_COMPILE_DIR)
           and rstan/cmdstanr/brms (mixed options + STAN_TMPDIR). Belt-and-
           suspenders: also keep the original options()/Sys.setenv() calls in
           case either persists — harmless if redundant, saves you if one path
           gets broken by future R or package changes.
-+ [F4]  API_VERSION bumped 6→7 to signal the contract change.
+- [F4]  API_VERSION bumped 6→7 to signal the contract change.
 
-+ [N1]  NIMBLE compilation moved NFS→/Rtmp local disk (per-PID worker subdirs)
+- [N1]  NIMBLE compilation moved NFS→/Rtmp local disk (per-PID worker subdirs)
           Reason: acregmin=60,acdirmin=60 on NFS causes directory-cache races
           during concurrent compileNimble() in multi-chain MCMC via parLapply.
           Symptom: unserialize(node$con) worker death mid-chain. See rstudio#7031.
-+ [N2]  PSOCK fast-path receives BIOME_NIMBLE_DIR + BIOME_TMB_DIR env vars
+- [N2]  PSOCK fast-path receives BIOME_NIMBLE_DIR + BIOME_TMB_DIR env vars
           and creates worker_<pid> subdirs → zero parent-dir contention.
-+ [N3]  biome_make_cluster() propagates all /Rtmp routing env vars to workers
+- [N3]  biome_make_cluster() propagates all /Rtmp routing env vars to workers
           and accepts outfile= argument (default: /Rtmp/.../cluster_logs/).
           Outfile captures worker stderr for post-mortem when a worker dies.
-+ [N4]  parallel::makeCluster() safeguard — warns + redirects to
+- [N4]  parallel::makeCluster() safeguard — warns + redirects to
           biome_make_cluster(). Educates users away from unsafe patterns.
-+ [N5]  doSNOW::registerDoSNOW() safeguard (symmetric to doParallel).
-+ [N6]  Rcpp/sourceCpp compile temp routed via TMPDIR (no new option needed,
+- [N5]  doSNOW::registerDoSNOW() safeguard (symmetric to doParallel).
+- [N6]  Rcpp/sourceCpp compile temp routed via TMPDIR (no new option needed,
           but documented — Rcpp uses tempdir() which inherits from Renviron).
-+ [N7]  rstan/cmdstanr/brms auto-config — if loaded, set output_dir and
+- [N7]  rstan/cmdstanr/brms auto-config — if loaded, set output_dir and
           cache dirs to /Rtmp. Thread cap for stan_sampling.
-+ [N8]  BRISC / spNNGP / ranger — OMP thread cap for packages using libgomp
+- [N8]  BRISC / spNNGP / ranger — OMP thread cap for packages using libgomp
           directly (not BLAS). Set n.omp.threads option on load.
-+ [N9]  New tool: biome_future_plan() — helper that picks plan() based on
+- [N9]  New tool: biome_future_plan() — helper that picks plan() based on
           workload. callr for compile-heavy (NIMBLE/Stan), cluster for I/O.
-+ [N10] New tool: biome_worker_diagnostics() — reads cluster_logs/ and shows
+- [N10] New tool: biome_worker_diagnostics() — reads cluster_logs/ and shows
           last N crashes, quickly locates the worker that died mid-chain.
-+ [N11] Dynamic rJava heap — replaces hardcoded -Xmx4g (uses user's quota).
-+ [N12] parallel::mcmapply / pvec / mclapply warnings for NFS-bound users.
-+ [N13] R_USER_CACHE_DIR kept on NFS (persistent package install cache)
+- [N11] Dynamic rJava heap — replaces hardcoded -Xmx4g (uses user's quota).
+- [N12] parallel::mcmapply / pvec / mclapply warnings for NFS-bound users.
+- [N13] R_USER_CACHE_DIR kept on NFS (persistent package install cache)
           but TMPDIR + per-pkg scratch dirs on /Rtmp (fast, ephemeral).
-+ [N14] brms::make_stancode + rstan::sampling cores arg capped at MAX_THREADS.
+- [N14] brms::make_stancode + rstan::sampling cores arg capped at MAX_THREADS.
 
 v10.0 CHANGES (from v9.8) — Local /Rtmp Disk Architecture:
 
-+ [T1]  Replaced 100GB RAM tmpfs with dedicated 400GB local disk at /Rtmp
-+ [T2]  Removed tmpfs→NFS split-brain routing
-+ [T3]  Removed NFS fallback
-+ [T4]  All per-package temp dirs use local /Rtmp/biome_<user>/<pkg>
-+ [T5]  RAMDISK_GB=0 (no RAM consumed by /Rtmp)
-+ [T7]  API_VERSION bumped 4→5
+- [T1]  Replaced 100GB RAM tmpfs with dedicated 400GB local disk at /Rtmp
+- [T2]  Removed tmpfs→NFS split-brain routing
+- [T3]  Removed NFS fallback
+- [T4]  All per-package temp dirs use local /Rtmp/biome_<user>/<pkg>
+- [T5]  RAMDISK_GB=0 (no RAM consumed by /Rtmp)
+- [T7]  API_VERSION bumped 4→5
 
 v9.8 CHANGES (from v9.7) — OpenBLAS Serial Safety:
 
-+ [B1]  SECTION -1.5: BLAS serial/pthread safety check at profile load
-+ [B2]  .biome_env$blas_is_serial: pessimistic flag
+- [B1]  SECTION -1.5: BLAS serial/pthread safety check at profile load
+- [B2]  .biome_env$blas_is_serial: pessimistic flag
