@@ -766,10 +766,81 @@ setup_nodes_local_rlibs() {
       exit 1
     fi
 
-    # Detect existing filesystem (no clobber)
+    # ── Pessimistic pre-flight: device must NOT be in use ──────────────
+    # mkfs.ext4 -F refuses ("apparently in use by the system") whenever
+    # the kernel has registered partitions on the device, OR a holder
+    # (LVM/MD/crypt) sits on top, OR a partition is mounted/in swap.
+    # We detect each case explicitly and either remediate (wipe stale
+    # signatures + partition table) or abort with a precise diagnosis.
+    local devbase
+    devbase=$(basename "${rlibs_dev}")
+
+    # 1. Holders (LVM PV / MD member / crypt) — always abort
+    if [[ -d "/sys/block/${devbase}/holders" ]]; then
+      local holders
+      holders=$(ls -1 "/sys/block/${devbase}/holders" 2>/dev/null || true)
+      if [[ -n "${holders}" ]]; then
+        log_error "${rlibs_dev} has active holders (LVM/MD/dm): ${holders}"
+        log_error "  → Tear down the holder stack first, then re-run. Aborting (HC-14)."
+        exit 1
+      fi
+    fi
+
+    # 2. Partitions — list everything under the disk
+    local parts
+    parts=$(lsblk -nrpo NAME,TYPE "${rlibs_dev}" 2>/dev/null | awk '$2=="part"{print $1}' || true)
+
+    # 3. Any partition mounted? abort
+    if [[ -n "${parts}" ]]; then
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        if awk -v dev="$p" '$1==dev{found=1} END{exit !found}' /proc/mounts; then
+          log_error "${rlibs_dev}: partition ${p} is currently mounted"
+          log_error "  → unmount it first, then re-run. Aborting (HC-14)."
+          exit 1
+        fi
+        if grep -qE "^${p}\b" /proc/swaps 2>/dev/null; then
+          log_error "${rlibs_dev}: partition ${p} is active swap"
+          log_error "  → swapoff ${p} first, then re-run. Aborting (HC-14)."
+          exit 1
+        fi
+      done <<< "${parts}"
+    fi
+
+    # 4. Whole-disk mounted? (rare, but possible)
+    if awk -v dev="${rlibs_dev}" '$1==dev{found=1} END{exit !found}' /proc/mounts; then
+      log_error "${rlibs_dev} (whole device) is currently mounted — aborting (HC-14)"
+      exit 1
+    fi
+    if grep -qE "^${rlibs_dev}\b" /proc/swaps 2>/dev/null; then
+      log_error "${rlibs_dev} is currently used as swap — aborting (HC-14)"
+      exit 1
+    fi
+
+    # Detect existing whole-disk filesystem (no clobber if it matches)
     local existing_fs
     existing_fs=$(blkid -s TYPE -o value "${rlibs_dev}" 2>/dev/null || true)
+
+    # 5. Stale signatures or a partition table that confuses mkfs?
+    #    wipefs -n shows what's there without deleting. If anything is
+    #    listed AND no whole-disk fs of the right type exists, we wipe.
+    local stale_sigs=""
+    if command -v wipefs &>/dev/null; then
+      stale_sigs=$(wipefs -n "${rlibs_dev}" 2>/dev/null | awk 'NR>1{print $0}' || true)
+    fi
+
     if [[ -z "${existing_fs}" ]]; then
+      if [[ -n "${parts}" || -n "${stale_sigs}" ]]; then
+        log_warn "  ${rlibs_dev} has no whole-disk filesystem but kernel sees:"
+        [[ -n "${parts}" ]]      && log_warn "    partitions: $(echo "${parts}" | tr '\n' ' ')"
+        [[ -n "${stale_sigs}" ]] && log_warn "    signatures: $(echo "${stale_sigs}" | tr '\n' ';' | head -c 200)"
+        log_warn "  → wiping signatures + partition table so mkfs.${rlibs_fs} can proceed"
+        run_cmd wipefs -a "${rlibs_dev}"
+        # Force the kernel to drop cached partition table
+        run_cmd partprobe "${rlibs_dev}" 2>/dev/null || true
+        run_cmd blockdev --rereadpt "${rlibs_dev}" 2>/dev/null || true
+        sleep 1
+      fi
       log_info "  ${rlibs_dev} is unformatted → creating ${rlibs_fs}"
       run_cmd "mkfs.${rlibs_fs}" -F -L biome-Rlibs "${rlibs_dev}"
     elif [[ "${existing_fs}" != "${rlibs_fs}" ]]; then
@@ -783,12 +854,18 @@ setup_nodes_local_rlibs() {
     run_cmd mkdir -p "${rlibs_root}"
 
     # Ensure /etc/fstab entry (by UUID — survives /dev/sdX renumbering)
+    # Settle udev so blkid sees the freshly-written superblock.
+    command -v udevadm &>/dev/null && udevadm settle 2>/dev/null || true
     local rlibs_uuid
     rlibs_uuid=$(blkid -s UUID -o value "${rlibs_dev}" 2>/dev/null || true)
-    if [[ -z "${rlibs_uuid}" ]]; then
-      log_error "Could not read UUID of ${rlibs_dev} (HC-14)"
+    # Validate UUID format: 8-4-4-4-12 hex
+    if [[ -z "${rlibs_uuid}" ]] || \
+       ! [[ "${rlibs_uuid}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+      log_error "Could not read a valid UUID of ${rlibs_dev} (got: '${rlibs_uuid}') (HC-14)"
+      log_error "  → Try: blkid ${rlibs_dev}   and re-run this step."
       exit 1
     fi
+    log_info "  ${rlibs_dev} UUID=${rlibs_uuid}"
     if ! grep -qE "^UUID=${rlibs_uuid}\b" /etc/fstab 2>/dev/null; then
       log_info "  Adding fstab entry: UUID=${rlibs_uuid}  ${rlibs_root}  ${rlibs_fs}  defaults,nofail  0  2"
       if [[ "${DRY_RUN}" != "true" ]]; then
