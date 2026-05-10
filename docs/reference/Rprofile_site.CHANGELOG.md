@@ -8,6 +8,87 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.5 (2026-05-10) — "Minimal-profile + audit-log permission hotfix"
+
+CONTEXT. Two latent bugs surfaced during the post-v12.4 validation pass on
+`biome-calc03`:
+
+1. **Minimal Rprofile crashed on load.** `templates/Rprofile_site.minimal.R.template`
+   used `stats::setNames()` inside the irreducible-safety env-var block, but
+   `Rprofile.site`/`R_PROFILE_USER` are sourced **before** base packages are
+   attached — `setNames` is unbound at that moment. Result:
+   `Error in setNames(list("1"), v) : could not find function "setNames"`,
+   the minimal profile aborted before defining `biome_diag()`/`biome_nfs_check()`/
+   `biome_fork_probe()`, and every HC-13 harness layer (L0/L1) failed in 0s.
+2. **Cross-user EACCES on `/Rtmp/biome_thread_guard/guard_<host>.log`.**
+   Fragments `05_thread_guard.R` and `55_options_guard.R` write an audit
+   trail to a single shared logfile per host. The first user to start R
+   created the dir+file with their default umask (0644 file ownership =
+   that user). Every subsequent user got `cannot open file ... :
+   Permission denied` (3 warnings per session) because the kernel cannot
+   open a foreign-owned 0644 file in append mode.
+
+FIX (T1, **single source of truth**, ported to T2/T3 in follow-up).
+
+| Artefact                                                | Change                                                                                                          | Status |
+|---------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|--------|
+| `templates/Rprofile_site.minimal.R.template`            | Replace `setNames(list("1"), v)` with `args <- list("1"); names(args) <- v; do.call(Sys.setenv, args)`           | NEW    |
+| `templates/Rprofile_site.d/05_thread_guard.R.template`  | Per-user log file `guard_<host>_<user>.log` + `Sys.umask("000")` + `chmod 1777` on dir-create (3 call sites)    | EDIT   |
+| `templates/Rprofile_site.d/55_options_guard.R.template` | Per-user log file + same umask/chmod hardening (2 call sites)                                                   | EDIT   |
+| `scripts/50_setup_nodes.sh` (Step 8)                    | Pre-create `/Rtmp/biome_thread_guard` with `install -d -m 1777`; remove pre-v12.5 stale shared `guard_<host>.log` | EDIT   |
+| `config/setup_nodes.vars.conf`                          | `RPROFILE_VERSION="12.5"`                                                                                       | BUMP   |
+| `docs/operations/UPGRADE_TO_v12.4.md` §3.5              | Clarified: `biome_diag()` runs via `/usr/local/bin/r_minimal`, NOT `R --vanilla`; selezione **H** è OBBLIGATORIA | DOC    |
+
+DEPLOYMENT (per node, idempotent — same procedure as v12.4 §3):
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selection: 3   (Step 8 — re-deploy fragments + create /Rtmp/biome_thread_guard 1777)
+# Selection: H   (Step 11f — re-deploy minimal Rprofile + harnesses)
+sudo systemctl restart rstudio-server
+```
+
+ONE-SHOT REMEDIATION (zero-code, sblocca subito i nodi già su v12.4):
+
+```bash
+sudo chmod 1777 /Rtmp/biome_thread_guard
+sudo rm -f /Rtmp/biome_thread_guard/*.log   # let R recreate per-user files
+```
+
+VALIDATION:
+
+```bash
+# (a) minimal profile + forensic helpers
+sudo /usr/local/bin/r_minimal -e 'biome_diag(); cat("\n"); biome_nfs_check(); cat("\n"); biome_fork_probe(n=10)'
+# Expect: full one-page diag, no "could not find function" errors.
+
+# (b) no more permission warnings on R startup
+sudo -u <any_AD_user> R --vanilla -e 'invisible(NULL)' 2>&1 | grep -i 'permission denied'
+# Expect: empty output.
+
+# (c) Lussu harness now runs
+sudo /usr/local/bin/99_diagnose_lussu_hang.sh /path/to/user_script.R
+```
+
+ROLLBACK. v12.5 only edits 4 files — all rollbacks are file-level via the
+`*.bak` backups produced by Step 8 / Step 11f. The semantic contract of
+fragments 05 and 55 is unchanged (still log to `/Rtmp/biome_thread_guard/`);
+older bundles remain compatible — only the FILENAMING changes (split per
+user). Rolling back to v12.4 simply re-introduces the cross-user EACCES.
+
+TIER DELTAS.
+
+- **T1**: implemented (this entry).
+- **T2 (docker)**: pending. Same fragment templates apply; Dockerfile must
+  add `RUN install -d -m 1777 /Rtmp/biome_thread_guard` if the container
+  pre-creates `/Rtmp`.
+- **T3 (k8s)**: pending. `/Rtmp` is per-pod `emptyDir` — sticky-1777 must
+  be set via `securityContext.fsGroup` + an init container, OR the
+  fragment's `Sys.umask("000") + chmod 1777` fallback handles first-touch.
+
+---
+
 ## v12.4 (2026-05-09) — "Lussu fork-guard + NFS library-lookup storm fix"
 
 CONTEXT. Two production pathologies surfaced after v12.2 stabilised:

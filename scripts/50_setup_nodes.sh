@@ -1140,6 +1140,25 @@ tryCatch({parse(file='${rprofile}');cat('PARSE_OK')},
     run_cmd mkdir -p "${frag_dst_dir}"
     run_cmd chmod 755 "${frag_dst_dir}"
 
+    # ── v12.5: pre-create /Rtmp/biome_thread_guard with sticky 1777 ──────
+    # Fragments 05 and 55 write per-user audit logs here. Without sticky
+    # 1777 the first user to start R becomes owner of the dir+files and
+    # every subsequent user gets EACCES on cat(file=..., append=TRUE).
+    # Per-user log filenames (guard_<host>_<user>.log) eliminate file-level
+    # contention; this dir-level fix eliminates the create-time race.
+    if [[ -d /Rtmp ]]; then
+      run_cmd install -d -m 1777 /Rtmp/biome_thread_guard
+      run_cmd chmod 1777 /Rtmp/biome_thread_guard
+      # Heal any stale file from pre-v12.5 deployments (single shared log
+      # owned by whichever user touched it first).
+      if [[ -f /Rtmp/biome_thread_guard/guard_$(hostname).log ]]; then
+        log_info "  v12.5 migration: removing stale shared guard log"
+        run_cmd rm -f "/Rtmp/biome_thread_guard/guard_$(hostname).log"
+      fi
+    else
+      log_warn "/Rtmp not present — skipping biome_thread_guard pre-create"
+    fi
+
     # Backup existing deployed fragments (if any) in one timestamped tarball
     if compgen -G "${frag_dst_dir}/*.R" >/dev/null 2>&1; then
       local frag_bak="${frag_dst_dir}.bak.$(date +%s)"

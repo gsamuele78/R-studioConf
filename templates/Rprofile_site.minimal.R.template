@@ -45,10 +45,15 @@ local({
 # Single-thread everything — defensive default. User code is free to raise
 # these AFTER load if they know what they are doing.
 local({
+  # NOTE: cannot use stats::setNames here — Rprofile.site runs BEFORE base
+  # packages (incl. stats) are loaded. Build the named list with base R only.
   for (v in c("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
               "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS",
               "GOTO_NUM_THREADS", "BLIS_NUM_THREADS", "GDAL_NUM_THREADS")) {
-    if (!nzchar(Sys.getenv(v, ""))) Sys.setenv(setNames(list("1"), v))
+    if (!nzchar(Sys.getenv(v, ""))) {
+      args <- list("1"); names(args) <- v
+      do.call(Sys.setenv, args)
+    }
   }
 })
 

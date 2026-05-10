@@ -77,10 +77,18 @@ local({
     # Log to a small audit trail on /Rtmp so we can forensically confirm
     # which cluster node had to rely on the belt-and-suspenders path.
     tryCatch({
+      # v12.5: per-user audit log file → eliminates cross-user EACCES on
+      # /Rtmp/biome_thread_guard/. Dir is sticky-1777 (created by Step 8 of
+      # 50_setup_nodes.sh); each user owns only their own *.log file.
       log_dir <- "/Rtmp/biome_thread_guard"
-      if (!dir.exists(log_dir))
-        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0777")
-      log_file <- file.path(log_dir, paste0("guard_", Sys.info()[["nodename"]], ".log"))
+      if (!dir.exists(log_dir)) {
+        old_um <- Sys.umask("000"); on.exit(Sys.umask(old_um), add = TRUE)
+        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "1777")
+        try(Sys.chmod(log_dir, mode = "1777", use_umask = FALSE), silent = TRUE)
+      }
+      log_file <- file.path(log_dir,
+                            paste0("guard_", Sys.info()[["nodename"]],
+                                   "_", Sys.info()[["user"]], ".log"))
       cat(sprintf("[%s] pid=%d user=%s missing=%s\n",
                   format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
                   Sys.getpid(),
@@ -254,11 +262,15 @@ local({
         # Audit trail — mirrors the thread-guard log format.
         tryCatch({
           log_dir <- "/Rtmp/biome_thread_guard"
-          if (!dir.exists(log_dir))
+          if (!dir.exists(log_dir)) {
+            old_um <- Sys.umask("000"); on.exit(Sys.umask(old_um), add = TRUE)
             dir.create(log_dir, recursive = TRUE, showWarnings = FALSE,
-                       mode = "0777")
+                       mode = "1777")
+            try(Sys.chmod(log_dir, mode = "1777", use_umask = FALSE), silent = TRUE)
+          }
           log_file <- file.path(log_dir,
-                                paste0("guard_", Sys.info()[["nodename"]], ".log"))
+                                paste0("guard_", Sys.info()[["nodename"]],
+                                       "_", Sys.info()[["user"]], ".log"))
           cat(sprintf("[%s] pid=%d user=%s detectCores_wrapped=1\n",
                       format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
                       Sys.getpid(), Sys.info()[["user"]]),
@@ -273,10 +285,14 @@ local({
     # fragment 45 remains the last line of defence.
     tryCatch({
       log_dir <- "/Rtmp/biome_thread_guard"
-      if (!dir.exists(log_dir))
-        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0777")
+      if (!dir.exists(log_dir)) {
+        old_um <- Sys.umask("000"); on.exit(Sys.umask(old_um), add = TRUE)
+        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "1777")
+        try(Sys.chmod(log_dir, mode = "1777", use_umask = FALSE), silent = TRUE)
+      }
       log_file <- file.path(log_dir,
-                            paste0("guard_", Sys.info()[["nodename"]], ".log"))
+                            paste0("guard_", Sys.info()[["nodename"]],
+                                   "_", Sys.info()[["user"]], ".log"))
       cat(sprintf("[%s] pid=%d user=%s detectCores_wrap_FAILED=%s\n",
                   format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
                   Sys.getpid(), Sys.info()[["user"]], e$message),

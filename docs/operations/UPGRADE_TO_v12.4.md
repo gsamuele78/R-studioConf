@@ -99,6 +99,14 @@ sudo systemctl restart rstudio-server
 
 ### 3.5 — Validazione (ogni nodo)
 
+> **NOTA v12.5**: le funzioni `biome_diag()`, `biome_nfs_check()`, `biome_fork_probe()`
+> vivono **solo** nel minimal Rprofile (deployato dalla **selezione `H`** — Step 11f).
+> Lanciarle con `R --vanilla` produrrà sempre `could not find function "biome_diag"`
+> perché `--vanilla` ignora ogni Rprofile.site/.d. La selezione `H` è quindi
+> **obbligatoria** post-upgrade per poter usare gli harness HC-13 / Lussu.
+> v12.5 inoltre fixa due bug del minimal profile (`setNames` mancante a Rprofile-time)
+> e dell'audit-log thread-guard (cross-user EACCES su `/Rtmp/biome_thread_guard/`).
+
 ```bash
 # 1) Versione Rprofile
 sudo bash scripts/50_setup_nodes.sh --verify
@@ -107,11 +115,23 @@ sudo bash scripts/50_setup_nodes.sh --verify
 sudo -u <un_utente_AD_qualunque> R --vanilla -e '.libPaths()'
 # Atteso: la prima entry deve essere /var/lib/biome-Rlibs/<user>/<R-version>
 
-# 3) ForkGuard attivo?
-sudo -u <utente> R --vanilla -e 'biome_diag()' 2>&1 | grep -i fork
-# Atteso: "ForkGuard: ENABLED" oppure "fork->PSOCK reroute armed"
+# 3) Frammento fork-guard caricato? (kernel "normale", NON minimal)
+sudo -u <utente> R --vanilla -e 'list.files("/etc/R/Rprofile_site.d")' | grep 52_mclapply_guard
+# Atteso: "52_mclapply_guard.R" presente
 
-# 4) Lussu probe (su un piccolo .R che usa terra+mclapply)
+# 4) biome_diag()/biome_nfs_check()/biome_fork_probe() — via r_minimal (NON R --vanilla)
+sudo /usr/local/bin/r_minimal -e 'biome_diag(); cat("\n"); biome_nfs_check(); cat("\n"); biome_fork_probe(n=10)'
+# Atteso: pagina di diag completa, fork probe → unique PIDs == n.
+# Se "could not find function": selezione H non eseguita — vedi nota sopra.
+
+# 5) v12.5: niente warning di permessi all'avvio di R
+sudo -u <utente> R --vanilla -e 'invisible(NULL)' 2>&1 | grep -i 'permission denied'
+# Atteso: output VUOTO. Se compaiono warning su /Rtmp/biome_thread_guard/*.log:
+#   sudo chmod 1777 /Rtmp/biome_thread_guard
+#   sudo rm -f /Rtmp/biome_thread_guard/*.log     # R li ricrea per-utente
+# Poi rilancia la selezione 3 di 50_setup_nodes.sh per applicare il fix permanente.
+
+# 6) Lussu probe (su un piccolo .R che usa terra+mclapply)
 sudo /usr/local/bin/99_diagnose_lussu_hang.sh /path/al/script_minimo.R
 # Atteso: probe E (PSOCK) e probe F (terra todisk) → PASS
 ```

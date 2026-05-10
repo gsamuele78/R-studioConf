@@ -158,11 +158,16 @@ local({
 
     # Audit trail — mirrors fragment 05's format.
     tryCatch({
+      # v12.5: per-user log file → no cross-user EACCES on shared dir.
       log_dir <- "/Rtmp/biome_thread_guard"
-      if (!dir.exists(log_dir))
-        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0777")
+      if (!dir.exists(log_dir)) {
+        old_um <- Sys.umask("000"); on.exit(Sys.umask(old_um), add = TRUE)
+        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "1777")
+        try(Sys.chmod(log_dir, mode = "1777", use_umask = FALSE), silent = TRUE)
+      }
       log_file <- file.path(log_dir,
-                            paste0("guard_", Sys.info()[["nodename"]], ".log"))
+                            paste0("guard_", Sys.info()[["nodename"]],
+                                   "_", Sys.info()[["user"]], ".log"))
       cat(sprintf("[%s] pid=%d user=%s options_mc_cores_wrapped=1\n",
                   format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
                   Sys.getpid(), Sys.info()[["user"]]),
@@ -185,10 +190,14 @@ local({
              error = function(e2) NULL)
     tryCatch({
       log_dir <- "/Rtmp/biome_thread_guard"
-      if (!dir.exists(log_dir))
-        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "0777")
+      if (!dir.exists(log_dir)) {
+        old_um <- Sys.umask("000"); on.exit(Sys.umask(old_um), add = TRUE)
+        dir.create(log_dir, recursive = TRUE, showWarnings = FALSE, mode = "1777")
+        try(Sys.chmod(log_dir, mode = "1777", use_umask = FALSE), silent = TRUE)
+      }
       log_file <- file.path(log_dir,
-                            paste0("guard_", Sys.info()[["nodename"]], ".log"))
+                            paste0("guard_", Sys.info()[["nodename"]],
+                                   "_", Sys.info()[["user"]], ".log"))
       cat(sprintf("[%s] pid=%d user=%s options_wrap_FAILED=%s\n",
                   format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
                   Sys.getpid(), Sys.info()[["user"]], e$message),
