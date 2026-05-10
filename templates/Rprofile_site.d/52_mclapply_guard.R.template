@@ -172,6 +172,38 @@ if (!exists("ENABLE_FORK_TO_PSOCK", inherits = FALSE)) {
     })
   }
 
+  # ── PSOCK GLOBAL-SYNC (v12.5 fix — HC-13 parity with fork) ─────────────────
+  # fork()/mclapply children inherit the master's globalenv "for free": every
+  # function/object defined at the top level of the user's script is visible
+  # inside FUN. PSOCK workers are FRESH R processes and start with an empty
+  # globalenv. Without this block, portable user code that defines helpers
+  # at script level (e.g. `process_chunk <- function(...) { ... }`) and then
+  # calls them from inside the mclapply FUN dies on EVERY task with
+  #   Error: could not find function "<name>"
+  # exactly as observed in the Lussu AOH 30-arcmin pipeline (4103/4103
+  # chunks failed with `could not find function "process_chunk"`).
+  # That is a silent HC-13 violation: our reroute breaks code that worked
+  # under stock `parallel::mclapply`. We therefore export globalenv() to
+  # each worker before parLapply. Failures are logged but never fatal.
+  # all.names=FALSE deliberately skips dotted housekeeping (.Random.seed,
+  # .biome_* internals, etc.) — exactly mirroring fork's "user-visible" set.
+  master_globals <- tryCatch(ls(envir = globalenv(), all.names = FALSE),
+                             error = function(e) character(0))
+  if (length(master_globals)) {
+    tryCatch({
+      parallel::clusterExport(cl, master_globals, envir = globalenv())
+      tryCatch(sys_log("ForkGuard", "GLOBAL-SYNC",
+        sprintf("exported %d global(s) to %d worker(s)",
+                length(master_globals), length(cl))),
+        error = function(e) NULL)
+    }, error = function(e) {
+      tryCatch(sys_log("ForkGuard", "WARN",
+        sprintf("clusterExport globals failed (%s); user globals unavailable on workers",
+                conditionMessage(e))),
+        error = function(e2) NULL)
+    })
+  }
+
   # Execute. parLapply preserves the (X, FUN, ...) contract of mclapply for
   # the lapply-flavoured 90% of real use; mc.preschedule / affinity.list
   # are silently ignored (PSOCK has no equivalent — log it once for clarity).

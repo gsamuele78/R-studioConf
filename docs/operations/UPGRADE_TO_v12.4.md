@@ -974,6 +974,106 @@ sudo systemctl restart rstudio-server
 
 ---
 
+## 16. Fragment 52 GLOBAL-SYNC — HC-13 closure for portable user globals (v12.9.3)
+
+> **Status:** v12.9.3 (2026-05-10) — `RPROFILE_VERSION="12.9.3"`. Hotfix
+> per un gap strutturale del fragment `52_mclapply_guard.R` presente
+> da v12.4. Insieme al fix v12.7 (PKG-SYNC) chiude la parità HC-13
+> del reroute fork→PSOCK con `parallel::mclapply` nativo.
+
+### 16.1 Cosa risolve
+
+Pipeline Lussu (`block1_aoh_to_rij.R`, 4103 chunk × 10 worker, terra +
+data.table caricati al master) fallisce ogni chunk con:
+
+```
+chunk_unhandled_error  could not find function "process_chunk"
+```
+
+`process_chunk` è definito al top-level dello script utente, sopra
+`mclapply()`. Con `mclapply` nativo (fork) la helper sarebbe stata
+visibile a ogni worker — fork eredita `globalenv()` del master. Sotto
+il nostro fork-guard v12.4 (reroute fork → PSOCK) i worker sono
+processi R **fresh** e non hanno il `globalenv()` del padre.
+
+Fragment 52 v12.4-v12.9.2 replicava i pacchetti attached (PKG-SYNC,
+v12.7) ma **non** esportava gli oggetti utente di `globalenv()`. Questo
+è una violazione HC-13 silenziosa: il reroute era invisibile **solo
+quando FUN era self-contained**.
+
+### 16.2 Fix
+
+In `templates/Rprofile_site.d/52_mclapply_guard.R.template`, dopo
+PKG-SYNC e prima di `parLapply`, viene aggiunto un blocco GLOBAL-SYNC
+che esegue `parallel::clusterExport(cl, ls(globalenv(), all.names=FALSE),
+envir=globalenv())`. `all.names=FALSE` esclude `.Random.seed`,
+`.biome_*` interni, ecc. — esattamente il set "user-visible" di fork.
+Failure loggate via `sys_log` come `ForkGuard WARN`. Bypass invariato:
+`BIOME_DISABLE_FORK_GUARD=1`.
+
+Dettagli completi (root cause, design notes, validation):
+`docs/reference/Rprofile_site.CHANGELOG.md` § v12.9.3.
+
+### 16.3 Deploy
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: 3   (Step 8 — fragments redeploy + bundle rebuild atomico)
+sudo systemctl restart rstudio-server
+sudo bash scripts/50_setup_nodes.sh --verify
+# Atteso: Rprofile.site version: 12.9.3
+```
+
+### 16.4 Validazione
+
+```bash
+# (a) Smoke test — riproduce il pattern Lussu
+sudo -u <user> Rscript -e '
+  library(terra); library(data.table)
+  process_chunk <- function(cid) data.table(chunk_id = cid, ok = TRUE)
+  res <- parallel::mclapply(1:4, function(i) process_chunk(i), mc.cores = 4)
+  stopifnot(length(res) == 4L)
+  cat("v12.9.3 GLOBAL-SYNC OK\n")'
+# v12.9.2: 4× "could not find function process_chunk".
+# v12.9.3: "v12.9.3 GLOBAL-SYNC OK".
+
+# (b) Log entries
+grep -E 'ForkGuard +(REROUTE|PKG-SYNC|GLOBAL-SYNC|WARN)' \
+     /var/log/biome-log/r_biome_system.log | tail
+
+# (c) Diagnostic harness self-test (v1.3)
+sudo -u <user> /usr/local/bin/99_diagnose_lussu_hang.sh /path/script.R
+# Atteso: "[probe_E] self-test OK: master globals propagate to PSOCK workers"
+```
+
+### 16.5 Rollback
+
+```bash
+sudo cp /etc/R/Rprofile_site.d/52_mclapply_guard.R.bak \
+        /etc/R/Rprofile_site.d/52_mclapply_guard.R
+sudo rm -rf /etc/R/Rprofile_site.d/.compiled
+sudo systemctl restart rstudio-server
+sed -i 's/RPROFILE_VERSION="12.9.3"/RPROFILE_VERSION="12.9.2"/' \
+  /opt/R-studioConf/config/setup_nodes.vars.conf
+```
+
+### 16.6 Tier deltas
+
+- **T1 (host)**: implementato.
+- **T2 (docker)**: N/A — `docker-deploy/templates/` non contiene
+  `Rprofile_site.d/` (backlog v12.7).
+- **T3 (k8s)**: SKELETON_NOT_READY.
+
+### 16.7 Out-of-scope per Lussu / utente affetto
+
+L'utente NON deve modificare `block1_aoh_to_rij.R`. Il workaround
+`BIOME_DISABLE_FORK_GUARD=1` esiste ma riapre il rischio di
+deadlock futex (terra + fork + threaded BLAS). La via corretta è
+deployare v12.9.3 sul nodo e rilanciare lo script invariato (HC-13).
+
+---
+
 ## 15. Writer-agnostic canonical-path fallback (v12.9.2)
 
 > **Status:** v12.9.2 (2026-05-10) — `RPROFILE_VERSION="12.9.2"`. Hotfix

@@ -8,6 +8,166 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.9.3 (2026-05-10) — "Fragment 52 GLOBAL-SYNC: PSOCK reroute parity with mclapply fork"
+
+### Symptom on biome-calc03
+
+User Lussu's portable `parallel::mclapply()` pipeline
+(`block1_aoh_to_rij.R`, 4103 chunks × 10 PSOCK workers, terra+data.table
+loaded at master) failed every single chunk with:
+
+```
+1: chunk_unhandled_error  could not find function "process_chunk"
+2: chunk_unhandled_error  could not find function "process_chunk"
+…
+4103: chunk_unhandled_error  could not find function "process_chunk"
+```
+
+`process_chunk` was defined at the top level of the user's `.R` file,
+right above the `mclapply()` call. With stock `parallel::mclapply`
+(fork) the helper would have been visible in every worker — fork
+inherits the master's globalenv. Under our v12.4 fork-guard
+(fragment 52, fork → PSOCK auto-reroute) the workers are FRESH R
+processes and never see the helper.
+
+### Root cause: GLOBAL-SYNC missing in fragment 52
+
+`templates/Rprofile_site.d/52_mclapply_guard.R.template` shipped (since
+v12.4) two replication blocks for the PSOCK reroute path:
+
+1. **PKG-SYNC** (v12.7) — replicates master's *attached* packages.
+2. **clusterSetRNGStream** for `mc.set.seed`.
+
+But it never replicated the master's **`globalenv()` user objects** to
+the workers. Every helper function, every `template_info`,
+`species_dt`, `chunk_dir`, etc. defined at the script's top level
+was invisible to the FUN closure as soon as parLapply executed it.
+
+This is a silent HC-13 violation: the reroute is supposed to be
+invisible. v12.4-v12.9.2 it was invisible **only when FUN was
+self-contained** (no references to globals). Lussu's portable code,
+which works on stock R + mclapply, broke on biome-calc.
+
+### Fix
+
+In `templates/Rprofile_site.d/52_mclapply_guard.R.template`, after
+PKG-SYNC and before `parLapply`, a new GLOBAL-SYNC block:
+
+```r
+master_globals <- tryCatch(ls(envir = globalenv(), all.names = FALSE),
+                           error = function(e) character(0))
+if (length(master_globals)) {
+  tryCatch({
+    parallel::clusterExport(cl, master_globals, envir = globalenv())
+    sys_log("ForkGuard", "GLOBAL-SYNC",
+            sprintf("exported %d global(s) to %d worker(s)",
+                    length(master_globals), length(cl)))
+  }, error = function(e) {
+    sys_log("ForkGuard", "WARN",
+            sprintf("clusterExport globals failed (%s); user globals unavailable on workers",
+                    conditionMessage(e)))
+  })
+}
+```
+
+Design notes:
+
+- `all.names = FALSE` deliberately skips dotted housekeeping
+  (`.Random.seed`, `.biome_*` internals) — exactly fork's
+  "user-visible" set.
+- `tryCatch` wrappers ensure failures degrade to today's behaviour
+  (logged, never fatal).
+- Only fires on the reroute path (already inside the PSOCK branch).
+- Lookups against `globalenv()` only — exactly what fork would have
+  given the worker.
+- Bypass invariato: `BIOME_DISABLE_FORK_GUARD=1` (operator escape
+  hatch — falls back to native fork mclapply, full futex-deadlock
+  risk).
+
+### Diagnostic harness updated (v1.3)
+
+`scripts/99_diagnose_lussu_hang.sh` Probe E (PSOCK swap shim) bumped
+to HARNESS_VERSION 1.3:
+
+- Shim's swapped `mclapply` now mirrors fragment 52: replicates
+  attached packages AND exports `globalenv()` user objects to
+  workers before `parLapply`.
+- Self-test added: probe defines `.__probe_E_helper` at master and
+  asserts `mclapply(1:3, function(i) .__probe_E_helper(i), mc.cores=2)`
+  returns `c(8L, 15L, 22L)` BEFORE source()ing the user script.
+  Fails with explicit `HC-13 regression: fragment 52 GLOBAL-SYNC
+  missing or broken` if globals don't propagate, so future fragment
+  regressions can never silently pass this probe.
+
+`HARNESS_VERSION="1.3"` is script-only; does NOT bump
+`RPROFILE_VERSION`.
+
+### Deploy
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: 3   (Step 8 — fragments redeploy + bundle rebuild atomico)
+sudo systemctl restart rstudio-server
+sudo bash scripts/50_setup_nodes.sh --verify
+# Atteso: Rprofile.site version: 12.9.3
+```
+
+### Validation
+
+```bash
+# (a) Smoke test — exact reproducer of Lussu's pattern
+sudo -u <user> Rscript -e '
+  library(terra); library(data.table)
+  process_chunk <- function(cid) data.table(chunk_id = cid, ok = TRUE)
+  res <- parallel::mclapply(1:4, function(i) process_chunk(i), mc.cores = 4)
+  stopifnot(length(res) == 4L,
+            all(vapply(res, function(x) x$ok, logical(1))))
+  cat("v12.9.3 GLOBAL-SYNC OK\n")
+'
+# v12.9.2: 4× "could not find function process_chunk" → checkForRemoteErrors
+# v12.9.3: "v12.9.3 GLOBAL-SYNC OK"
+
+# (b) Audit log breadcrumb
+grep -E 'ForkGuard +(REROUTE|PKG-SYNC|GLOBAL-SYNC|WARN)' \
+     /var/log/biome-log/r_biome_system.log | tail
+# Atteso una linea GLOBAL-SYNC per ogni mclapply rerouted.
+
+# (c) Lussu probe (catches future regressions)
+sudo -u <user> /usr/local/bin/99_diagnose_lussu_hang.sh /path/script.R
+# Atteso "[probe_E] self-test OK: master globals propagate to PSOCK workers"
+```
+
+### Rollback
+
+```bash
+sudo cp /etc/R/Rprofile_site.d/52_mclapply_guard.R.bak \
+        /etc/R/Rprofile_site.d/52_mclapply_guard.R
+sudo rm -rf /etc/R/Rprofile_site.d/.compiled
+sudo systemctl restart rstudio-server
+sed -i 's/RPROFILE_VERSION="12.9.3"/RPROFILE_VERSION="12.9.2"/' \
+  /opt/R-studioConf/config/setup_nodes.vars.conf
+```
+
+### Tier deltas
+
+- **T1 (host)**: implementato.
+- **T2 (docker)**: N/A — `docker-deploy/templates/` non contiene
+  `Rprofile_site.d/` (backlog strutturale v12.7, vedi v12.7 §Tier
+  deltas). Il fix v12.9.3 verrà port-forward solo quando T2 verrà
+  allineato all'intera modularizzazione v12.1+.
+- **T3 (k8s)**: SKELETON_NOT_READY — vedi v12.7.
+
+### Files touched
+
+- `templates/Rprofile_site.d/52_mclapply_guard.R.template` (+34 lines, GLOBAL-SYNC block)
+- `scripts/99_diagnose_lussu_hang.sh` (HARNESS_VERSION 1.2 → 1.3, Probe E rewrite + self-test)
+- `config/setup_nodes.vars.conf` (RPROFILE_VERSION 12.9.2 → 12.9.3)
+- `docs/operations/UPGRADE_TO_v12.4.md` (new §16 — v12.9.3 deploy notes)
+- `docs/reference/Rprofile_site.CHANGELOG.md` (this entry)
+
+---
+
 ## v12.9.2 (2026-05-10) — "Writer-agnostic canonical-path fallback in fragment 04"
 
 ### Symptom on biome-calc03

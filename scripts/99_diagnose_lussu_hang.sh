@@ -1,7 +1,12 @@
 #!/bin/bash
 # scripts/99_diagnose_lussu_hang.sh — Lussu-specific overlay over the generic
 # HC-13 user-script triage harness (99_diagnose_user_script.sh).
-# HARNESS_VERSION="1.2"  (script-level only — does NOT bump RPROFILE_VERSION)
+# HARNESS_VERSION="1.3"  (script-level only — does NOT bump RPROFILE_VERSION)
+# v1.3 (2026-05-10): Probe E now also asserts that master-defined globals
+# survive the PSOCK reroute (HC-13 parity with mclapply fork). Catches the
+# class of bug fixed by Rprofile v12.9.3 fragment 52 GLOBAL-SYNC block:
+# `could not find function "process_chunk"` × N when user's portable code
+# defines helpers at script level and calls them from inside mclapply FUN.
 
 # ==============================================================================
 # Wraps the generic harness and adds two Lussu-flavored extra probes that
@@ -164,17 +169,39 @@ SHIM_DIR="$OUT_DIR/shims"
 mkdir -p "$SHIM_DIR"
 
 # E) PSOCK swap shim
-cat > "$SHIM_DIR/probe_E_psock.R" <<RSHIM
+# v1.3: shim now exports BOTH attached pkgs AND globalenv user objects to
+# workers, mirroring the production fragment 52 GLOBAL-SYNC fix (v12.9.3).
+# Also performs a self-test BEFORE source()ing the user script: defines a
+# master-only helper, runs it through the swapped mclapply, and aborts with
+# a clear error if globals don't reach workers — so an HC-13 regression in
+# fragment 52 can never silently pass this probe.
+cat > "$SHIM_DIR/probe_E_psock.R" <<'RSHIM'
 # probe_E_psock.R — Lussu-specific diagnostic shim (HC-13)
 # Replaces parallel::mclapply with a PSOCK-cluster parLapply for the duration
 # of source()ing the user script. The user script file is NEVER modified.
 local({
     n <- max(1L, as.integer(Sys.getenv("BIOME_PROBE_NCORES", "4")))
     cl <- parallel::makeCluster(n, type = "PSOCK")
-    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
-    orig_mclapply <- parallel::mclapply
+    assign(".__probe_E_cl", cl, envir = globalenv())
     shim <- function(X, FUN, ..., mc.cores = n) {
-        parallel::clusterExport(cl, varlist = character(0), envir = .GlobalEnv)
+        # Mirror fragment 52 PKG-SYNC: replicate master attached packages
+        master_pkgs <- setdiff(rev(.packages()),
+            c("base","methods","datasets","utils","grDevices","graphics","stats","parallel"))
+        if (length(master_pkgs)) {
+            tryCatch(parallel::clusterCall(cl, function(pp) {
+                for (p in pp) suppressPackageStartupMessages(
+                    tryCatch(library(p, character.only = TRUE), error = function(e) NULL))
+            }, pp = master_pkgs), error = function(e) NULL)
+        }
+        # Mirror fragment 52 GLOBAL-SYNC: export master globals (HC-13 parity)
+        master_globals <- tryCatch(ls(envir = globalenv(), all.names = FALSE),
+                                   error = function(e) character(0))
+        # Don't ship the cluster handle itself
+        master_globals <- setdiff(master_globals, ".__probe_E_cl")
+        if (length(master_globals)) {
+            tryCatch(parallel::clusterExport(cl, master_globals, envir = globalenv()),
+                     error = function(e) NULL)
+        }
         parallel::parLapply(cl, X, FUN, ...)
     }
     # In-place override in the parallel namespace (diagnostic only)
@@ -183,9 +210,33 @@ local({
     lockBinding("mclapply", asNamespace("parallel"))
     cat(sprintf("[probe_E] mclapply -> PSOCK(parLapply) n=%d\n", n))
 })
+
+# ── Self-test (HC-13 parity assertion) ─────────────────────────────────────
+# Defines a master-only helper and runs it through the swapped mclapply.
+# Replicates Lussu's pipeline: helper defined at script top level, then
+# called by name from inside the FUN closure. Failure mode caught:
+#   `could not find function ".__probe_E_helper"` → globals NOT exported
+.__probe_E_helper <- function(x) x * 7L + 1L
+.__probe_E_self <- tryCatch(
+    parallel::mclapply(1:3, function(i) .__probe_E_helper(i), mc.cores = 2L),
+    error = function(e) e
+)
+if (inherits(.__probe_E_self, "error") ||
+    !identical(unlist(.__probe_E_self), c(8L, 15L, 22L))) {
+    msg <- if (inherits(.__probe_E_self, "error"))
+        conditionMessage(.__probe_E_self) else "result mismatch"
+    cat(sprintf("[probe_E] SELF-TEST FAIL: master globals NOT reaching workers (%s)\n", msg))
+    cat("[probe_E] HC-13 regression: fragment 52 GLOBAL-SYNC missing or broken\n")
+    quit(status = 1, save = "no")
+}
+cat("[probe_E] self-test OK: master globals propagate to PSOCK workers\n")
+
 .script <- commandArgs(trailingOnly = TRUE)[1]
 cat(sprintf("[probe_E] sourcing UNMODIFIED user script: %s\n", .script))
 source(.script, echo = FALSE)
+# Stop cluster only at the end (let the user script use it via the shim)
+tryCatch(parallel::stopCluster(get(".__probe_E_cl", envir = globalenv())),
+         error = function(e) NULL)
 cat("[probe_E] DONE\n")
 RSHIM
 
