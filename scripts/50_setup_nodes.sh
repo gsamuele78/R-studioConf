@@ -1775,13 +1775,55 @@ setup_nodes_verify_cgroups() {
     all_ok=false
   fi
 
-  # ── Layer 2: systemd template loaded and shows correct values ──
-  if systemctl cat user-.slice 2>/dev/null | grep -q "MemoryMax=${USER_SLICE_MEMORY_MAX}"; then
-    log_success "Layer 2 [PASS] systemd reports MemoryMax=${USER_SLICE_MEMORY_MAX}"
+  # ── Layer 2: systemd has loaded the drop-in and resolves it to the
+  #            expected byte count on a real instantiated user-NNNN.slice.
+  #
+  # Why not `systemctl cat user-.slice`?
+  #   `user-.slice` is a TEMPLATE unit. On modern systemd `systemctl cat`
+  #   refuses it ("Unit user-.slice could not be loaded.") and even when it
+  #   worked, the rendered output prints byte counts (e.g. 429496729600),
+  #   never the literal "400G" from our drop-in — making any string-grep
+  #   compare a coin-flip across systemd versions. Instead we ask systemd
+  #   to RESOLVE the property on a live child slice and compare bytes.
+  #
+  # If no user is logged in yet (no user-NNNN.slice instantiated), Layer 2
+  # is SKIPPED — Layer 3 will pick it up the moment a user logs in.
+  local expected_bytes=""
+  if command -v numfmt &>/dev/null; then
+    expected_bytes=$(numfmt --from=iec "${USER_SLICE_MEMORY_MAX}" 2>/dev/null || true)
+  fi
+  if [[ -z "${expected_bytes}" ]]; then
+    # Fallback parser: handles plain "400G" / "120G" / "8G" / bare bytes
+    case "${USER_SLICE_MEMORY_MAX}" in
+      *G|*g) expected_bytes=$(( ${USER_SLICE_MEMORY_MAX%[Gg]} * 1024 * 1024 * 1024 )) ;;
+      *M|*m) expected_bytes=$(( ${USER_SLICE_MEMORY_MAX%[Mm]} * 1024 * 1024 )) ;;
+      *K|*k) expected_bytes=$(( ${USER_SLICE_MEMORY_MAX%[Kk]} * 1024 )) ;;
+      *)     expected_bytes="${USER_SLICE_MEMORY_MAX}" ;;
+    esac
+  fi
+
+  local target_slice
+  target_slice=$(systemctl list-units --type=slice --no-legend 2>/dev/null \
+                 | awk '/user-[0-9]+\.slice/ {print $1; exit}')
+
+  if [[ -z "${target_slice}" ]]; then
+    log_info "Layer 2 [SKIP] no instantiated user-NNNN.slice (no users logged in)"
+    log_info "         → Layer 3 will verify on next user login"
   else
-    log_warn "Layer 2 [WARN] systemctl cat user-.slice does not show MemoryMax=${USER_SLICE_MEMORY_MAX}"
-    log_warn "         → Try: systemctl daemon-reload"
-    all_ok=false
+    local actual_bytes
+    actual_bytes=$(systemctl show -p MemoryMax --value "${target_slice}" 2>/dev/null || echo "")
+    if [[ "${actual_bytes}" == "${expected_bytes}" ]]; then
+      log_success "Layer 2 [PASS] ${target_slice}: MemoryMax=${actual_bytes} bytes (= ${USER_SLICE_MEMORY_MAX})"
+    elif [[ -z "${actual_bytes}" || "${actual_bytes}" == "infinity" ]]; then
+      log_warn "Layer 2 [WARN] ${target_slice}: MemoryMax=${actual_bytes:-<empty>} (drop-in not effective)"
+      log_warn "         → Try: systemctl daemon-reload && systemctl set-property ${target_slice} MemoryMax=${USER_SLICE_MEMORY_MAX}"
+      all_ok=false
+    else
+      log_warn "Layer 2 [WARN] ${target_slice}: MemoryMax=${actual_bytes} ≠ expected ${expected_bytes} (${USER_SLICE_MEMORY_MAX})"
+      log_warn "         → A runtime override may be shadowing the drop-in. Check:"
+      log_warn "            ls /etc/systemd/system.control/${target_slice}.d/ 2>/dev/null"
+      all_ok=false
+    fi
   fi
 
   # ── Layer 3: Kernel cgroup files for active user sessions ──
