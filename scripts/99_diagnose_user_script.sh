@@ -1,5 +1,6 @@
 #!/bin/bash
 # scripts/99_diagnose_user_script.sh — GENERIC HC-13 user-script triage harness
+# HARNESS_VERSION="1.1"  (script-level only — does NOT bump RPROFILE_VERSION)
 # ==============================================================================
 # Implements the operator-perspective L0..L4 escalation ladder defined in
 # .ai/agents.md §6.6 (HC-13) and docs/operations/USER_SCRIPT_TROUBLESHOOTING.md.
@@ -15,21 +16,52 @@
 # Usage:
 #   99_diagnose_user_script.sh <user_script.R> [arg1 arg2 ...]
 #
+# RUN AS THE AFFECTED USER (HC-13). Running as root pollutes /Rtmp with
+# root-owned session/cache dirs that block subsequent debug runs by other
+# users. The harness refuses to run as root unless BIOME_DIAG_ALLOW_ROOT=1
+# is exported (forensic last-resort for debugging the harness itself, not
+# user code).
+#
 # Optional env:
-#   BIOME_DIAG_TIMEOUT_S   per-layer timeout in seconds (default 1200 = 20 min)
-#   BIOME_DIAG_OUT_DIR     output dir (default /tmp/user_diag_<ts>)
-#   BIOME_DIAG_R_BIN       Rscript binary (default: Rscript on PATH)
+#   BIOME_DIAG_TIMEOUT_S    per-layer timeout in seconds (default 600 = 10 min)
+#   BIOME_DIAG_OUT_DIR      output dir (default /tmp/user_diag_<USER>_<ts>)
+#   BIOME_DIAG_R_BIN        Rscript binary (default: Rscript on PATH)
+#   BIOME_DIAG_ALLOW_ROOT   set to 1 to bypass the run-as-user guard (forensic)
 #
 # Exit codes:
 #   0 — all layers passed (script is healthy in production)
 #   1 — at least one layer failed; verdict in $OUT_DIR/report.md
-#   2 — invocation error (missing script, bad args)
+#   2 — invocation error (missing script, bad args, run-as-root refused)
 # ==============================================================================
 set -euo pipefail
 
 # ── Color vars (PSE convention — HC-03) ───────────────────────────────────
 RED=$'\e[0;31m'; YELLOW=$'\e[0;33m'; GREEN=$'\e[0;32m'
 BLUE=$'\e[0;34m'; CYAN=$'\e[0;36m'; BOLD=$'\e[1m'; NC=$'\e[0m'
+
+# ── HC-13 refuse-root guard ───────────────────────────────────────────────
+# The harness must reproduce the affected user's runtime env (cgroup, NFS
+# uid/gid, R_LIBS_USER, BIOME_USER_TMP). Running as root creates root-owned
+# /Rtmp/biome_root, /Rtmp/Rtmp*, /tmp/user_diag_* that other users cannot
+# read/clean. Refuse loudly; opt-in via BIOME_DIAG_ALLOW_ROOT=1.
+if [[ ${EUID:-$(id -u)} -eq 0 && "${BIOME_DIAG_ALLOW_ROOT:-0}" != "1" ]]; then
+    cat >&2 <<EOF
+${RED}${BOLD}ERROR:${NC} HC-13 harness must run as the SCRIPT OWNER, not root.
+
+The harness reproduces the user's runtime environment (cgroup user.slice,
+R_LIBS_USER, BIOME_USER_TMP, NFS uid/gid). Running as root pollutes /Rtmp
+with root-owned files that block subsequent debug runs by other users
+(observed: /Rtmp/biome_root/, /Rtmp/Rtmp*, /tmp/user_diag_*).
+
+Correct invocation (PAM session as the affected user):
+  ${BOLD}su - <username>${NC}
+  /usr/local/bin/99_diagnose_user_script.sh /path/to/user_script.R
+
+Forensic override (only to debug the harness itself, NOT user code):
+  ${BOLD}sudo BIOME_DIAG_ALLOW_ROOT=1 \$0 ...${NC}
+EOF
+    exit 2
+fi
 
 # ── Args ──────────────────────────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then
@@ -52,15 +84,39 @@ if [[ ! -f "$USER_SCRIPT" ]]; then
 fi
 USER_SCRIPT="$(realpath -- "$USER_SCRIPT")"
 
-TIMEOUT_S="${BIOME_DIAG_TIMEOUT_S:-1200}"
+TIMEOUT_S="${BIOME_DIAG_TIMEOUT_S:-600}"
 TS="$(date +%Y%m%d_%H%M%S)"
-OUT_DIR="${BIOME_DIAG_OUT_DIR:-/tmp/user_diag_${TS}}"
+RUN_USER="${USER:-$(id -un)}"
+OUT_DIR="${BIOME_DIAG_OUT_DIR:-/tmp/user_diag_${RUN_USER}_${TS}}"
 R_BIN="${BIOME_DIAG_R_BIN:-Rscript}"
 R_MIN="/usr/local/bin/r_minimal_rscript"
 
 mkdir -p "$OUT_DIR"
 REPORT="$OUT_DIR/report.md"
 SUMMARY="$OUT_DIR/summary.tsv"
+
+# ── Cleanup trap: on any exit (incl. Ctrl-C/TERM) kill our process group
+# so leftover R/Rscript workers (mclapply forks, PSOCK children) do NOT
+# linger and hold NFS/cgroup resources after the harness terminates.
+__HARNESS_PGID=$$
+cleanup_pgid() {
+    local rc=$?
+    # Kill the whole process group (negative PID = pgid). Ignore errors —
+    # most children will already be gone by the time we get here.
+    trap - EXIT INT TERM
+    kill -TERM -- "-${__HARNESS_PGID}" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-${__HARNESS_PGID}" 2>/dev/null || true
+    exit "$rc"
+}
+trap cleanup_pgid EXIT INT TERM
+# Promote ourselves to a session leader so the negative-pgid kill above
+# only targets *our* descendants, never the parent shell.
+if command -v setsid >/dev/null 2>&1 && [[ -z "${__HARNESS_SETSID:-}" ]]; then
+    export __HARNESS_SETSID=1
+    exec setsid -w "$0" "$USER_SCRIPT" "${USER_ARGS[@]}"
+fi
+__HARNESS_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
 
 # ── Header ────────────────────────────────────────────────────────────────
 echo "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════${NC}"

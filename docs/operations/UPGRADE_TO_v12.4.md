@@ -215,3 +215,74 @@ Output con `[audit]`: ogni mount viene controllato per `vers`, `nconnect`, `look
 - **T1 (host)**: implementato (questo runbook).
 - **T2 (docker)**: pending — da portare quando T2 sarà rifornito al pari di T1.
 - **T3 (k8s)**: pending — `R_LIBS_USER` su `emptyDir` per-pod, fork-guard via ConfigMap stesso fragment.
+
+---
+
+## 9. HC-13 Triage Harness — usage rules (v12.5 follow-up)
+
+Gli script di triage `99_diagnose_user_script.sh` e `99_diagnose_lussu_hang.sh`
+sono stati induriti (HARNESS_VERSION 1.1, **nessun bump di RPROFILE_VERSION**) per
+chiudere tre comportamenti pessimi osservati su biome-calc03:
+
+1. Esecuzione come `sudo` lasciava `/Rtmp/biome_root/`, `/Rtmp/Rtmp*` e
+   `/tmp/{lussu,user}_diag_*` di proprietà **root**, bloccando i debug
+   degli altri utenti.
+2. Worker `mclapply`/`PSOCK` orfani **sopravvivevano** al `timeout` perché
+   l'invio del segnale era al solo PID parent, non al process group.
+3. Default `BIOME_DIAG_TIMEOUT_S=1200` × 4 layer = fino a 80 min totali.
+
+### Regole d'uso (post-v12.5)
+
+| Regola | Comando |
+|---|---|
+| **Lanciare come l'utente affetto**, MAI come root | `su - <username>` poi `/usr/local/bin/99_diagnose_lussu_hang.sh /path/script.R` |
+| Se il log dell'utente non è leggibile a sysadmin | l'utente esegue, sysadmin legge `/tmp/lussu_diag_<user>_*/report.md` |
+| Override forensico (debug dell'harness stesso) | `sudo BIOME_DIAG_ALLOW_ROOT=1 /usr/local/bin/...` |
+| Timeout per layer (default 600s) | `BIOME_DIAG_TIMEOUT_S=300 ./99_diagnose_user_script.sh ...` |
+| Output dir alternativa | `BIOME_DIAG_OUT_DIR=/path/dir ./99_diagnose_user_script.sh ...` |
+
+L'harness ora:
+
+- **Rifiuta** EUID=0 con messaggio esplicativo (exit 2). Bypass solo via `BIOME_DIAG_ALLOW_ROOT=1`.
+- Crea `OUT_DIR` di default come `/tmp/<kind>_diag_${USER}_${TS}` (no collisioni cross-user).
+- Si auto-promuove a session leader (`setsid`) e installa un trap `EXIT/INT/TERM` che fa `kill -TERM`/`-KILL` sull'intero process group: niente più worker R orfani che tengono lock su `/Rtmp` o NFS.
+- Default `BIOME_DIAG_TIMEOUT_S=600` (10 min/layer, totale ~40 min).
+
+### Cleanup post-run (consigliato)
+
+```bash
+# Rimuovi le run dir vecchie (sicuro, sono solo log + report)
+rm -rf /tmp/lussu_diag_${USER}_* /tmp/user_diag_${USER}_*
+
+# Se hai eseguito qualcosa come root in passato (pre-v12.5), pulisci
+# /Rtmp dai residui root-owned:
+sudo rm -rf /Rtmp/biome_root /Rtmp/Rtmp[A-Za-z0-9]*
+# (NON rimuovere /Rtmp/biome_thread_guard — è il dir 1777 condiviso del v12.5)
+```
+
+### Q&A
+
+**Q. Ho usato `r_minimal` per debug. Devo fare qualcosa per tornare al profilo normale (kernel + 12 frammenti)?**
+
+No. Il profilo minimal è attivato **solo** all'interno del processo `R`/`Rscript` lanciato da `/usr/local/bin/r_minimal`, via `R_PROFILE_USER=/etc/R/Rprofile_minimal.R` + `--no-site-file`. Quando esci dalla shell di `r_minimal`, le variabili d'ambiente spariscono. Le sessioni successive (RStudio Server, `R`, `Rscript`) ricaricano automaticamente `/etc/R/Rprofile.site` + `/etc/R/Rprofile_site.d/*.R`. **RStudio Server non è mai stato sul profilo minimal**: usa `R` non `r_minimal`. Nessun restart è necessario.
+
+Verifica con un one-liner:
+
+```bash
+R --quiet -e 'cat("R_PROFILE_USER:", Sys.getenv("R_PROFILE_USER","(unset)"), "\n");
+              cat("BIOME_MINIMAL :", Sys.getenv("BIOME_MINIMAL","(unset)"), "\n");
+              cat("fragments    :", length(list.files("/etc/R/Rprofile_site.d","\\.R$")), "\n")'
+```
+
+Atteso (profilo normale): `R_PROFILE_USER=(unset)`, `BIOME_MINIMAL=(unset)`, `fragments=12`.
+
+Se invece vedi `BIOME_MINIMAL=1` → qualcuno ha esportato `R_PROFILE_USER` in `/etc/profile.d/`, `~/.bashrc`, `~/.profile`, o `~/.Renviron`. Trova e rimuovi:
+
+```bash
+grep -RIn 'R_PROFILE_USER\|BIOME_MINIMAL' /etc/profile* /etc/bash.bashrc \
+  /etc/environment ~/.bashrc ~/.profile ~/.Renviron 2>/dev/null
+```
+
+**Q. Posso lanciare l'harness come `sudo` con `BIOME_DIAG_ALLOW_ROOT=1`?**
+
+Tecnicamente sì, ma riproduce **l'env di root** (cgroup `system.slice`, niente `R_LIBS_USER` per-utente, `BIOME_USER_TMP=/Rtmp/biome_root`), quindi i risultati **non** sono rappresentativi del bug dell'utente. Usa solo per debug dell'harness stesso. Per debug del codice utente: `su - <username>`.

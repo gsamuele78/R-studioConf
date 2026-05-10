@@ -1,6 +1,7 @@
 #!/bin/bash
 # scripts/99_diagnose_lussu_hang.sh — Lussu-specific overlay over the generic
 # HC-13 user-script triage harness (99_diagnose_user_script.sh).
+# HARNESS_VERSION="1.1"  (script-level only — does NOT bump RPROFILE_VERSION)
 # ==============================================================================
 # Wraps the generic harness and adds two Lussu-flavored extra probes that
 # DO NOT MODIFY the user script (HC-13):
@@ -26,6 +27,27 @@ set -euo pipefail
 RED=$'\e[0;31m'; GREEN=$'\e[0;32m'
 BLUE=$'\e[0;34m'; CYAN=$'\e[0;36m'; BOLD=$'\e[1m'; NC=$'\e[0m'
 
+# ── HC-13 refuse-root guard (mirror of generic harness) ───────────────────
+# Fail-fast BEFORE creating $OUT_DIR or invoking the generic harness, so we
+# don't pollute /tmp or /Rtmp with root-owned artefacts. Opt-in via
+# BIOME_DIAG_ALLOW_ROOT=1 (forensic only).
+if [[ ${EUID:-$(id -u)} -eq 0 && "${BIOME_DIAG_ALLOW_ROOT:-0}" != "1" ]]; then
+    cat >&2 <<EOF
+${RED}${BOLD}ERROR:${NC} Lussu HC-13 overlay must run as the SCRIPT OWNER, not root.
+
+Running as root creates root-owned /Rtmp/biome_root, /Rtmp/Rtmp*, and
+/tmp/lussu_diag_* dirs that block subsequent debug runs by other users.
+
+Correct invocation:
+  ${BOLD}su - <username>${NC}
+  /usr/local/bin/99_diagnose_lussu_hang.sh /path/to/user_script.R
+
+Forensic override (only to debug the harness itself):
+  ${BOLD}sudo BIOME_DIAG_ALLOW_ROOT=1 \$0 ...${NC}
+EOF
+    exit 2
+fi
+
 if [[ $# -lt 1 ]]; then
     cat <<EOF >&2
 ${BOLD}99_diagnose_lussu_hang.sh${NC} — Lussu overlay (HC-13)
@@ -46,8 +68,9 @@ if [[ ! -f "$USER_SCRIPT" ]]; then
 fi
 
 TS="$(date +%Y%m%d_%H%M%S)"
-OUT_DIR="${BIOME_DIAG_OUT_DIR:-/tmp/lussu_diag_${TS}}"
-TIMEOUT_S="${BIOME_DIAG_TIMEOUT_S:-1800}"
+RUN_USER="${USER:-$(id -un)}"
+OUT_DIR="${BIOME_DIAG_OUT_DIR:-/tmp/lussu_diag_${RUN_USER}_${TS}}"
+TIMEOUT_S="${BIOME_DIAG_TIMEOUT_S:-600}"
 R_BIN="${BIOME_DIAG_R_BIN:-Rscript}"
 GENERIC="${BIOME_DIAG_GENERIC:-/usr/local/bin/99_diagnose_user_script.sh}"
 [[ -x "$GENERIC" ]] || GENERIC="$(dirname -- "$(realpath -- "$0")")/99_diagnose_user_script.sh"
@@ -55,6 +78,24 @@ GENERIC="${BIOME_DIAG_GENERIC:-/usr/local/bin/99_diagnose_user_script.sh}"
 mkdir -p "$OUT_DIR"
 export BIOME_DIAG_OUT_DIR="$OUT_DIR"
 export BIOME_DIAG_TIMEOUT_S="$TIMEOUT_S"
+
+# ── Cleanup trap + setsid: kill the whole process group on exit so leftover
+# R/Rscript fork/PSOCK workers do NOT linger holding NFS/cgroup resources.
+__HARNESS_PGID=$$
+cleanup_pgid() {
+    local rc=$?
+    trap - EXIT INT TERM
+    kill -TERM -- "-${__HARNESS_PGID}" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-${__HARNESS_PGID}" 2>/dev/null || true
+    exit "$rc"
+}
+trap cleanup_pgid EXIT INT TERM
+if command -v setsid >/dev/null 2>&1 && [[ -z "${__HARNESS_SETSID:-}" ]]; then
+    export __HARNESS_SETSID=1
+    exec setsid -w "$0" "$USER_SCRIPT" "${USER_ARGS[@]}"
+fi
+__HARNESS_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
 
 echo "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo "${BOLD}${BLUE}  LUSSU HANG TRIAGE  (HC-13 + Lussu overlay)${NC}"

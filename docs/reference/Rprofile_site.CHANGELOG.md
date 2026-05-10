@@ -77,6 +77,29 @@ fragments 05 and 55 is unchanged (still log to `/Rtmp/biome_thread_guard/`);
 older bundles remain compatible — only the FILENAMING changes (split per
 user). Rolling back to v12.4 simply re-introduces the cross-user EACCES.
 
+HARNESS HARDENING (script-only follow-up — **does NOT bump RPROFILE_VERSION**).
+
+`scripts/99_diagnose_user_script.sh` and `scripts/99_diagnose_lussu_hang.sh`
+were tagged `HARNESS_VERSION="1.1"` and patched to close three pathologies
+observed when sysadmin ran the Lussu harness as `sudo` on biome-calc03:
+
+| Patch                                | Generic harness | Lussu overlay | Effect |
+|--------------------------------------|:---------------:|:-------------:|--------|
+| Refuse-root guard (opt-in via `BIOME_DIAG_ALLOW_ROOT=1`) | ✅ | ✅ | No more root-owned `/Rtmp/biome_root/`, `/Rtmp/Rtmp*`, `/tmp/{user,lussu}_diag_*` blocking other users. |
+| Per-user `OUT_DIR` default `/tmp/<kind>_diag_${USER}_${TS}` | ✅ | ✅ | Cross-user runs cannot collide. |
+| `setsid` + EXIT/INT/TERM trap → `kill -- -$PGID` | ✅ | ✅ | Orphan `mclapply`/PSOCK workers no longer survive `timeout` (which signalled only the parent PID). |
+| Default `BIOME_DIAG_TIMEOUT_S` 1200/1800 → **600**          | ✅ | ✅ | Harness completes in ~40 min worst-case instead of 80–140 min. |
+
+Operational rules now codified in `docs/operations/UPGRADE_TO_v12.4.md` §9:
+the harness MUST be invoked from a PAM session of the affected user
+(`su - <user>`), never as root. The `BIOME_DIAG_ALLOW_ROOT=1` override is
+documented as forensic-only (debugging the harness itself, not user code).
+
+These edits are confined to two `.sh` files and one runbook section. They
+do NOT touch any `templates/Rprofile_site*.R*` artefact and therefore do
+NOT bump `RPROFILE_VERSION`. Versioning is tracked via the inline
+`HARNESS_VERSION="1.1"` header comment in each script.
+
 TIER DELTAS.
 
 - **T1**: implemented (this entry).
