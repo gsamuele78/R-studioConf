@@ -36,7 +36,10 @@ source "${COMMON_UTILS}"
 # ── Load configuration ──
 VARS_CONF="${WORKSPACE_ROOT}/config/setup_nodes.vars.conf"
 if [[ ! -f "${VARS_CONF}" ]]; then
-  log_error "Missing config: ${VARS_CONF}"
+  # NOTE: log_error wrapper is defined later in this file; use the
+  # base log() function from common_utils.sh (already sourced above)
+  # so this pre-flight error path doesn't depend on forward refs.
+  log "ERROR" "Missing config: ${VARS_CONF}"
   exit 1
 fi
 # shellcheck source=../config/setup_nodes.vars.conf disable=SC1091
@@ -68,7 +71,8 @@ for arg in "$@"; do
 done
 
 # ── Root check ──
-[[ "$(id -u)" -ne 0 ]] && { log_error "Must run as root"; exit 1; }
+# log_error wrapper isn't defined until line ~95; use base log() here.
+[[ "$(id -u)" -ne 0 ]] && { log "ERROR" "Must run as root"; exit 1; }
 
 # ── Auto-detect host info if not set ──
 [[ -z "${BIOME_HOST}" ]] && BIOME_HOST=$(hostname)
