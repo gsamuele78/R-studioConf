@@ -909,6 +909,38 @@ setup_nodes_local_rlibs() {
 
   log_info "Renviron.site will resolve R_LIBS_USER to ${rlibs_root}/<user>/<R version>"
   log_info "Existing user packages on NFS remain reachable as fallback."
+
+  # ── v12.6: Warm-up — pre-create per-user lib dirs ────────────────────
+  # Idempotent: install -d is a no-op if dir already exists. We chown to
+  # the user so the dir is writable by them on first install.packages().
+  # Limited to UID 1000..64999 (skips system accounts and nobody=65534).
+  # Users added AFTER this run are covered by the runtime Rprofile
+  # fragment 04_user_lib_bootstrap.R at their first R startup.
+  if [[ "${ENABLE_R_LIBS_LOCAL_WARMUP:-true}" == "true" && "${DRY_RUN}" != "true" ]]; then
+    local r_ver
+    r_ver="$(R --version 2>/dev/null | awk '/^R version/ {print $3; exit}' | awk -F. '{print $1"."$2}')"
+    if [[ -z "${r_ver}" ]]; then
+      log_warn "Cannot detect R version — skipping per-user lib dir warm-up"
+    else
+      log_info "Warm-up: pre-creating ${rlibs_root}/<user>/${r_ver} for existing AD/local users"
+      local warmup_count=0 warmup_skipped=0 warmup_failed=0
+      while IFS=: read -r u _ uid gid _ home shell; do
+        [[ ${uid} -ge 1000 && ${uid} -lt 65000 ]] || { warmup_skipped=$((warmup_skipped+1)); continue; }
+        [[ "${shell}" == */nologin || "${shell}" == */false ]] && { warmup_skipped=$((warmup_skipped+1)); continue; }
+        [[ -d "${home}" ]] || { warmup_skipped=$((warmup_skipped+1)); continue; }
+        local user_lib="${rlibs_root}/${u}/${r_ver}"
+        if install -d -m 0755 -o "${u}" -g "${gid}" "${user_lib}" 2>/dev/null; then
+          warmup_count=$((warmup_count+1))
+        else
+          warmup_failed=$((warmup_failed+1))
+          log_warn "Warm-up: failed to create ${user_lib} (skipping)"
+        fi
+      done < <(getent passwd)
+      log_success "Warm-up: ${warmup_count} per-user lib dir(s) ready (skipped=${warmup_skipped}, failed=${warmup_failed})"
+    fi
+  elif [[ "${ENABLE_R_LIBS_LOCAL_WARMUP:-true}" != "true" ]]; then
+    log_info "ENABLE_R_LIBS_LOCAL_WARMUP=false — runtime fragment 04_user_lib_bootstrap.R will handle per-user dirs at R startup"
+  fi
 }
 
 # ==============================================================================

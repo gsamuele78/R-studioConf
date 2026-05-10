@@ -1,0 +1,99 @@
+# templates/Rprofile_site.d/04_user_lib_bootstrap.R.template
+# ──────────────────────────────────────────────────────────────────────────────
+# USER LIB BOOTSTRAP  (v12.6 — auto-create /var/lib/biome-Rlibs/<u>/<v>)
+# ──────────────────────────────────────────────────────────────────────────────
+# Purpose: ensure that the FIRST entry of .libPaths() — the per-user
+# local-disk library deployed by /etc/R/Renviron.site at v12.4
+# (R_LIBS_USER=/var/lib/biome-Rlibs/%u/%v:...) — actually exists and is
+# writable BEFORE the user calls install.packages() or library() on a
+# fresh node.
+#
+# Without this fragment, the very first install.packages() call yields:
+#     Warning in install.packages :
+#       'lib = "/var/lib/biome-Rlibs/<user>/4.5"' is not writable
+#     Would you like to use a personal library instead? (yes/No/cancel)
+# which (a) confuses non-R-savvy users, (b) silently fails for non-
+# interactive Rscript jobs (e.g. cron pipelines), and (c) cascades through
+# every node of the cluster on each user's first contact.
+#
+# Why fragment 04 (not bash, not PAM)
+# ───────────────────────────────────
+#   - Runs in user EUID at every R/Rscript startup (no root, no PAM,
+#     no /etc/profile.d coupling).
+#   - Numbered 04 so it executes BEFORE 05_thread_guard.R (which uses
+#     /Rtmp/biome_thread_guard/<user>.log self-bootstrap as its model).
+#   - Idempotent: dir.create(recursive=TRUE) is a no-op if dir already
+#     exists.
+#   - Reversible: dir-only, no files written, no user data touched.
+#   - HC-13 compliant: NEVER touches user files (~/.Renviron, ~/.Rprofile,
+#     ~/R/...). Creates only /var/lib/biome-Rlibs/<user>/<R-ver>/ which
+#     is OUR system-managed area (sticky 1777 root, owned-by-creator
+#     subdirs).
+#
+# Scope (operator decision v12.6)
+# ───────────────────────────────
+# Active in **every** R session (interactive RStudio, terminal R, Rscript
+# workers, cron jobs). Cost is one extra dir.exists() + at most one
+# dir.create() at process start; negligible (~µs once dir exists, <1 ms
+# on first creation).
+#
+# Path validation
+# ───────────────
+# Only triggers if the target path startsWith("/var/lib/biome-Rlibs/") to
+# prevent accidental dir creation if a user/sysadmin has overridden
+# R_LIBS_USER to a custom path.
+#
+# Failure mode
+# ────────────
+# All operations are wrapped in tryCatch and return silently. If
+# /var/lib/biome-Rlibs is read-only (rare: dedicated disk re-mounted
+# read-only) or sticky-bit was lost, the dir.create() fails silently
+# and R falls back to .libPaths()[2] = $HOME/R/x86_64-pc-linux-gnu-library
+# which always works on NFS. The 99_check_user_renviron_overrides.sh
+# audit + the v12.4 step 7c probe will surface the deployment defect.
+#
+# Override
+# ────────
+# Set BIOME_DISABLE_USER_LIB_BOOTSTRAP=1 to skip (useful when debugging
+# .libPaths() resolution issues).
+# ──────────────────────────────────────────────────────────────────────────────
+
+local({
+  if (nzchar(Sys.getenv("BIOME_DISABLE_USER_LIB_BOOTSTRAP", "")))
+    return(invisible(NULL))
+
+  target <- tryCatch(.libPaths()[1L], error = function(e) NA_character_)
+  if (!is.character(target) || is.na(target) || !nzchar(target))
+    return(invisible(NULL))
+
+  # Path safety: only operate on the v12.4 managed root.
+  if (!startsWith(target, "/var/lib/biome-Rlibs/"))
+    return(invisible(NULL))
+
+  if (dir.exists(target))
+    return(invisible(NULL))
+
+  # Best-effort create. Mode 0755 + parent dir is sticky 1777 root,
+  # so the new subdir is owned by the EUID running R (the AD user).
+  ok <- tryCatch(
+    suppressWarnings(dir.create(target, recursive = TRUE, mode = "0755")),
+    error = function(e) FALSE
+  )
+
+  # Optional one-shot audit log (per-user, no cross-user collisions).
+  if (isTRUE(ok)) {
+    tryCatch({
+      audit_dir <- "/Rtmp/biome_thread_guard"
+      if (dir.exists(audit_dir)) {
+        u <- Sys.getenv("USER", unset = "unknown")
+        h <- tryCatch(Sys.info()[["nodename"]], error = function(e) "unknown-host")
+        log_file <- file.path(audit_dir, sprintf("guard_%s_%s.log", h, u))
+        old_umask <- Sys.umask("000")
+        on.exit(Sys.umask(old_umask), add = TRUE)
+        cat(sprintf("[%s] 04_user_lib_bootstrap: created %s\n",
+                    format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"), target),
+            file = log_file, append = TRUE)
+      }
+    }, error = function(e) invisible(NULL))
+  }
+})

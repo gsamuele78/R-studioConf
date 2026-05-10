@@ -8,6 +8,125 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.6 (2026-05-10) — "User-lib auto-bootstrap (`/var/lib/biome-Rlibs/<user>/<R-ver>/`)"
+
+CONTEXT. Post-v12.5 validation on `biome-calc03` exposed a UX regression
+inherited from the original v11.x library-layout migration: the very first
+`install.packages()` call by an AD user that had **never logged into the
+node before** failed with
+
+```
+Warning: lib = "/var/lib/biome-Rlibs/<user>/4.4" is not writable
+Error:   unable to install packages
+```
+
+The root cause is structural — the per-user, per-R-major-minor library
+directory under `/var/lib/biome-Rlibs/<u>/<R-ver>/` is owned root:root with
+mode 0755 by default and is never created until *something* explicitly
+invokes `dir.create()`. Fragment `05_thread_guard.R` already self-bootstraps
+its log dir, but no fragment was responsible for the **lib** dir; the
+parent `/var/lib/biome-Rlibs/<u>/` is created at PAM-session time by
+`pam_mkhomedir`+`50_setup_nodes.sh` Step 7c, but the **R-version
+sub-directory** (e.g. `4.4/`) was assumed to be hand-created by the
+operator on every R minor bump. That assumption broke for new AD users
+discovered between deploys.
+
+FIX (T1, **layered D+A strategy**, single source of truth, ports to T2/T3).
+
+| Artefact                                                             | Change                                                                                                                                                                                                  | Status |
+|----------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------|
+| `templates/Rprofile_site.d/04_user_lib_bootstrap.R.template`         | NEW fragment. Idempotent; runs in **all** R sessions (interactive + Rscript); path-validated `startsWith("/var/lib/biome-Rlibs/")`; honours `BIOME_DISABLE_USER_LIB_BOOTSTRAP=1`; full `tryCatch` wrap.  | NEW    |
+| `scripts/50_setup_nodes.sh` (Step 7c, end of `setup_nodes_local_rlibs`) | Added deploy-time warmup loop. Detects R `<major>.<minor>` from `R --version`; iterates `getent passwd` UID 1000–64999 with shell ≠ nologin/false and existing home; `install -d -m 0755 -o $u -g $gid` per user. Honours `ENABLE_R_LIBS_LOCAL_WARMUP` and `DRY_RUN`. Counts warmed/skipped/failed. | EDIT |
+| `config/setup_nodes.vars.conf`                                       | New var `ENABLE_R_LIBS_LOCAL_WARMUP=true` (default on). `RPROFILE_VERSION="12.5"` → `"12.6"`.                                                                                                            | BUMP   |
+| `scripts/99_check_user_renviron_overrides.sh`                        | (Already added pre-bump.) Audit + `--fix --commit` cleanup of stale `~/.Renviron` files rsync'd from old server. Cross-referenced from `UPGRADE_TO_v12.4.md` §10.                                        | DOC    |
+| `docs/operations/UPGRADE_TO_v12.4.md` §11                            | New section pointing operators at the v12.6 layered fix; obsoletes the manual per-user `mkdir`/`chown` workflow.                                                                                        | DOC    |
+
+DESIGN — D+A LAYERS (covers both new-deploy and runtime-discovery paths):
+
+- **Layer A (deploy-time, eager):** `50_setup_nodes.sh` Step 7c warmup
+  loop creates the dir for **every existing AD user** at the moment Step 7
+  runs. Catches the "fresh node, fresh R minor bump, AD users already
+  exist" case immediately; no first-login wait.
+- **Layer D (runtime, lazy):** Fragment `04_user_lib_bootstrap.R`
+  self-creates the dir on the **first R session** of a brand-new AD user
+  who appeared *after* the last `50_setup_nodes.sh` run (or on a node
+  where the operator skipped Step 7). EUID matches the user (since the
+  fragment runs inside their R session under `Rprofile.site`), so plain
+  `dir.create()` succeeds without setuid gymnastics.
+
+Both layers are idempotent — re-running either is a no-op when the dir
+already exists with the right owner.
+
+SCOPE OF FRAGMENT (per user-approved choice "3 a tutti"):
+
+- Runs in **all** R sessions: interactive **and** non-interactive
+  (`Rscript`, batch jobs, `R CMD BATCH`, RStudio child processes).
+  Rationale: an `Rscript` that calls `install.packages()` from cron must
+  not fail just because no human ever opened an interactive session.
+
+PATH VALIDATION (per user-approved choice "4 ok"):
+
+```r
+target <- file.path(LIB_ROOT, user, r_majmin)
+if (!startsWith(normalizePath(target, mustWork=FALSE), "/var/lib/biome-Rlibs/"))
+  return(invisible(NULL))   # refuse to create anything outside the contract
+```
+
+DEPLOYMENT (per node, idempotent):
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selection: 7   (Step 7c — local Rlibs root + warmup loop)
+# Selection: 3   (Step 8 — fragment deploy, picks up 04_user_lib_bootstrap.R)
+sudo systemctl restart rstudio-server
+```
+
+OVERRIDE (forensic-only, leave default ON in production):
+
+```bash
+# Disable the runtime fragment globally for one host (e.g. read-only /var):
+echo 'BIOME_DISABLE_USER_LIB_BOOTSTRAP=1' >> /etc/R/Renviron.site
+# Disable the deploy-time warmup loop:
+ENABLE_R_LIBS_LOCAL_WARMUP=false sudo bash scripts/50_setup_nodes.sh
+```
+
+VALIDATION:
+
+```bash
+# (a) Layer A — warmup actually ran
+sudo bash scripts/50_setup_nodes.sh   # Step 7
+# Expect tail: "[Step 7c] Rlibs warmup: warmed=N skipped=M failed=0"
+
+# (b) Layer D — fragment self-creates on first session
+sudo userdel -r testuser_v126 2>/dev/null; sudo useradd -m -s /bin/bash testuser_v126
+sudo -u testuser_v126 Rscript -e 'cat(.libPaths(), sep="\n")'
+ls -ld /var/lib/biome-Rlibs/testuser_v126/*/   # Expect: drwxr-xr-x testuser_v126 testuser_v126
+
+# (c) install.packages() works on first try
+sudo -u testuser_v126 Rscript -e 'install.packages("jsonlite", repos="https://cloud.r-project.org")'
+```
+
+ROLLBACK. Three artefacts to revert: (1) delete the fragment file, (2)
+remove the warmup loop block in Step 7c (clearly delimited), (3) bump
+`RPROFILE_VERSION` back to `12.5`. No data migration — directories
+already created remain valid; rollback only stops *new* dirs from being
+auto-created.
+
+TIER DELTAS.
+
+- **T1**: implemented (this entry).
+- **T2 (docker)**: pending. The fragment template is tier-agnostic and
+  copies into the rstudio image unchanged; the warmup loop in
+  `50_setup_nodes.sh` is host-specific and must be ported to the
+  rstudio container's entrypoint (or its `init.d` boot hook) since
+  Docker containers don't run `50_setup_nodes.sh`.
+- **T3 (k8s)**: pending. Same as T2 plus: `/var/lib/biome-Rlibs/` is a
+  PVC bind mount; the per-pod init container should run the warmup
+  loop against the mounted volume.
+
+---
+
 ## v12.5 (2026-05-10) — "Minimal-profile + audit-log permission hotfix"
 
 CONTEXT. Two latent bugs surfaced during the post-v12.4 validation pass on

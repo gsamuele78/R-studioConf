@@ -460,3 +460,56 @@ su - <username> -c 'R --no-init-file -e ".libPaths()"'
 Audit-only + documentazione ⇒ **NON** si bumpano `RPROFILE_VERSION` né
 `HARNESS_VERSION`. Vedi `docs/reference/Rprofile_site.CHANGELOG.md` per
 l'elenco delle release.
+
+---
+
+## 11. Auto-bootstrap directory R-libs per-utente (v12.6)
+
+> **Status:** v12.6 (2026-05-10) — `RPROFILE_VERSION="12.6"`. Sostituisce
+> il workflow manuale `mkdir`/`chown` per `/var/lib/biome-Rlibs/<u>/<R-ver>/`.
+
+### 11.1 Cosa risolve
+
+Prima di v12.6 la prima `install.packages()` di un utente AD mai loggato
+sul nodo falliva con:
+
+```
+Warning: lib = "/var/lib/biome-Rlibs/<user>/4.4" is not writable
+```
+
+perché la sotto-directory per la versione di R (es. `4.4/`) veniva creata
+solo a mano. v12.6 introduce due livelli idempotenti:
+
+- **Layer A (deploy-time)** — `scripts/50_setup_nodes.sh` Step 7c esegue
+  un *warmup loop* che crea `/var/lib/biome-Rlibs/<u>/<R-major.minor>/`
+  per **ogni** utente AD esistente (UID 1000–64999, shell ≠ nologin/false,
+  home esistente) con `install -d -m 0755 -o <u> -g <gid>`. Honora
+  `ENABLE_R_LIBS_LOCAL_WARMUP=true` (default ON) e `DRY_RUN`.
+- **Layer D (runtime)** — il fragment
+  `templates/Rprofile_site.d/04_user_lib_bootstrap.R` si auto-crea la dir
+  alla prima sessione R dell'utente (interactive **e** `Rscript`).
+  Path-validato (`startsWith("/var/lib/biome-Rlibs/")`); override:
+  `BIOME_DISABLE_USER_LIB_BOOTSTRAP=1`.
+
+### 11.2 Deploy
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: 7   (Step 7c — Rlibs root + warmup loop, atteso "warmed=N skipped=M failed=0")
+# Selezione: 3   (Step 8 — fragments deploy, include 04_user_lib_bootstrap.R)
+sudo systemctl restart rstudio-server
+```
+
+### 11.3 Verifica
+
+```bash
+sudo -u <ad-user> Rscript -e 'cat(.libPaths(), sep="\n")'
+ls -ld /var/lib/biome-Rlibs/<ad-user>/*/
+# Atteso: drwxr-xr-x <ad-user> <ad-user>
+```
+
+### 11.4 Override / rollback
+
+Vedi `docs/reference/Rprofile_site.CHANGELOG.md` § v12.6 — sezioni
+*OVERRIDE*, *ROLLBACK*, *TIER DELTAS*.
