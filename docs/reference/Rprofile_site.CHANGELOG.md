@@ -8,6 +8,126 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.9.4 (2026-05-11) — "glibc allocator caps + cgroup-aware terraOptions (Lussu RSS-climb)"
+
+### Symptom on biome-calc03 (post-v12.9.3 deploy)
+
+After v12.9.3 unblocked the 4103-chunk cascade, Lussu's
+`block1_aoh_to_rij.R` continued to climb in RSS on every PSOCK worker:
+
+```
+chunk_size=2  (smallest possible) → worker RSS: 1G → 8G → 24G → 63G → OOM
+gc(full=TRUE) at every chunk boundary → no effect on RSS
+```
+
+`Rss` in `/proc/<pid>/status` grew monotonically across the run even
+when the R-level heap (per `gc()`) reported < 2 GB live. Master also
+climbed; so did `terra::values(r, mat=FALSE)` calls inside
+`process_one_aoh_worker()`.
+
+### Root cause: 3 sub-bugs in T1, all interacting
+
+**(1) Renviron.template missing glibc allocator caps.**
+glibc defaults to `8 × n_cores` per-thread arenas (= 256 on a 32-core
+host). Memory `free()`'d by R's `R_alloc` / `Rf_allocVector` returns to
+the per-thread arena, **not** to the kernel via `munmap` / `sbrk(-)`.
+Result: long-running parallel R workloads (terra::values,
+data.table by-reference, parLapply fan-out) leak RSS unboundedly even
+when R's heap is healthy. Industry-standard mitigation
+(Apache Arrow R team, Rust/jemalloc folklore): set
+`MALLOC_ARENA_MAX=2`, `MALLOC_TRIM_THRESHOLD_=128MB`, `R_GC_MEM_GROW=0`.
+
+**(2) Fragment 30 (`30_psock_factory.R.template`) not propagating
+allocator vars to PSOCK workers.** Even with (1) fixed, every PSOCK
+worker spawned by `parallelly::makeClusterPSOCK(rscript_envs=env_vec)`
+inherits **only the env vars listed in `env_vec`** — it does NOT
+inherit the master's full environment. `MALLOC_*` were silently absent
+from `env_vec`, so workers re-created the default 8×n_cores arenas
+regardless of what Renviron.site said.
+
+**(3) Fragment 50 (`50_pkg_hooks.R.template`) using host RAM for
+`terraOptions(memfrac=0.5)`.** terra's `memfrac` is a fraction of the
+**bare-host RAM**, not the cgroup quota. On a 256 GB host with a 64 GB
+user.slice quota, `memfrac=0.5` ⇒ terra targets 128 GB ⇒ OOM-kill
+fires before the v12.4 `todisk=TRUE` spill kicks in.
+
+### Fix
+
+**Renviron.template (T1) + docker-deploy/templates/Renviron.template (T2 mirror)**: new
+"GLIBC ALLOCATOR TUNING" block before `ARROW_DEFAULT_MEMORY_POOL`:
+
+```bash
+MALLOC_ARENA_MAX=2
+MALLOC_TRIM_THRESHOLD_=134217728
+R_GC_MEM_GROW=0
+```
+
+**`templates/Rprofile_site.d/30_psock_factory.R.template`**: add the same
+three vars to `env_vec` so they reach every PSOCK worker spawned via
+`.biome_make_cluster_impl()` / `biome_make_cluster()` / fragment 52's
+fork-reroute path.
+
+**`templates/Rprofile_site.d/50_pkg_hooks.R.template`**: cgroup-aware
+`memmax` resolved through fragment 20's `.biome_env$.get_ram_gb()`
+accessor; capped at 50 % of the cgroup quota (or 8 GB fallback).
+
+```r
+.biome_cgroup_ram_gb <- tryCatch(.biome_env$.get_ram_gb(),
+                                 error = function(e) NA_real_)
+.biome_terra_memmax <- if (is.finite(.biome_cgroup_ram_gb))
+  max(2, floor(.biome_cgroup_ram_gb * 0.5))
+else
+  8L
+terra::terraOptions(memfrac = 0.5, memmax = .biome_terra_memmax,
+                    tempdir = td, verbose = FALSE,
+                    todisk  = .terra_todisk)
+```
+
+### Tier deltas
+
+| Tier | Status | Notes |
+|------|--------|-------|
+| T1 host | **fixed** | All 3 sub-bugs patched in this commit. |
+| T2 docker | **partial** | Renviron mirrored. Rprofile fragments arrive via shared `templates/` symlink in `docker-deploy/templates/` (already covered). |
+| T3 k8s | **deferred** | SKELETON_NOT_READY; will inherit when T2 stabilizes. |
+
+### HC-13 boundary reaffirmed
+
+User script bugs identified during audit (e.g. `terra::values(r, mat=FALSE)`
+materializing 8 GB per chunk; `i %% 10 == 0` progress logger never
+firing for `chunk_size < 10`) are **NOT** patched here. Per project
+ethos: *"esattamente mai patchare script utente se c'è problema sul
+server"*. The user fixes those in their own copy of
+`block1_aoh_to_rij.R`.
+
+### Files touched (8)
+
+- `templates/Renviron.template`
+- `templates/Rprofile_site.d/30_psock_factory.R.template`
+- `templates/Rprofile_site.d/50_pkg_hooks.R.template`
+- `config/setup_nodes.vars.conf` (RPROFILE_VERSION 12.9.3 → 12.9.4)
+- `docs/reference/Rprofile_site.CHANGELOG.md` (this file)
+- `docs/operations/UPGRADE_TO_v12.4.md` (new §17)
+- `scripts/99_diagnose_lussu_hang.sh` (HARNESS_VERSION 1.3 → 1.4, new Probe F)
+- `docker-deploy/templates/Renviron.template` (T2 mirror)
+
+### Validation
+
+`scripts/99_diagnose_lussu_hang.sh` Probe F (new) spawns a PSOCK cluster
+and asserts that workers report `Sys.getenv("MALLOC_ARENA_MAX") == "2"`.
+A regression in fragment 30's env_vec will trip Probe F (`exit 1`).
+
+### Deploy
+
+```bash
+git pull
+sudo bash scripts/50_setup_nodes.sh        # menu option 3 (Rprofile + Renviron only)
+sudo systemctl restart rstudio-server
+sudo bash scripts/99_diagnose_lussu_hang.sh # confirm Probe F passes
+```
+
+---
+
 ## v12.9.3 (2026-05-10) — "Fragment 52 GLOBAL-SYNC: PSOCK reroute parity with mclapply fork"
 
 ### Symptom on biome-calc03

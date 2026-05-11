@@ -43,8 +43,21 @@
       .terra_todisk <- isTRUE(get0("ENABLE_TERRA_TODISK_DEFAULT",
                                     inherits = FALSE, ifnotfound = TRUE)) &&
                        !nzchar(Sys.getenv("BIOME_TERRA_NORAM", ""))
-      terra::terraOptions(memfrac = 0.5, tempdir = td, verbose = FALSE,
-                          todisk = .terra_todisk)
+      # v12.9.4: cgroup-aware memmax. terra::terraOptions(memfrac=) is a
+      # fraction of HOST RAM (not cgroup quota) — on a 256 GB host with a
+      # 64 GB user.slice quota, memfrac=0.5 ⇒ 128 GB target ⇒ OOM-kill
+      # before todisk spill triggers. Resolve cgroup RAM via fragment 20's
+      # accessor and cap memmax at 50% of the cgroup quota.
+      .biome_cgroup_ram_gb <- tryCatch(.biome_env$.get_ram_gb(),
+                                       error = function(e) NA_real_)
+      .biome_terra_memmax <- if (is.finite(.biome_cgroup_ram_gb))
+        max(2, floor(.biome_cgroup_ram_gb * 0.5))   # GB; 50 % of cgroup quota
+      else
+        8L                                          # fallback safe default
+      terra::terraOptions(memfrac = 0.5,
+                          memmax  = .biome_terra_memmax,
+                          tempdir = td, verbose = FALSE,
+                          todisk  = .terra_todisk)
       .biome_env$shared_env$terra_threads <- tt
       msg_parts <- c(msg_parts,
         sprintf("Terra [LocalDisk/fork-safe%s]",

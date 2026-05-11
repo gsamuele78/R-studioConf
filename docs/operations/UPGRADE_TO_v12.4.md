@@ -1074,6 +1074,142 @@ deployare v12.9.3 sul nodo e rilanciare lo script invariato (HC-13).
 
 ---
 
+## 17. Memory allocator tuning + cgroup-aware terraOptions (v12.9.4)
+
+> **Status:** v12.9.4 (2026-05-11) — `RPROFILE_VERSION="12.9.4"`. Hotfix
+> per chiudere RSS-climb dei worker PSOCK osservato su Lussu/biome-calc03
+> (worker singolo a 63 GB con `chunk_size=2` anche dopo v12.9.3
+> GLOBAL-SYNC). HC-13 invariato — nessun file utente toccato.
+
+### 17.1 Cosa risolve
+
+Sintomo lato utente (block1_aoh_to_rij.R, invariato):
+
+```
+[main] worker N RSS=63.2 GiB after 412 chunks (chunk_size=2)
+OOM-killer terminates rsession (cgroup memory.max=64G)
+```
+
+Three sub-bugs found by audit on biome-calc03 (T1):
+
+1. **`Renviron.template` mancava i cap dell'allocator glibc.**
+   Default glibc su 32-core: `8 × 32 = 256` arene per-thread, ognuna
+   con heap fragmentation indipendente → RSS cresce monotonamente
+   anche quando R-level memory è stabile.
+
+2. **Fragment 30 (`30_psock_factory.R.template`) non propagava i
+   `MALLOC_*` ai worker PSOCK.** `parallelly::makeClusterPSOCK` non
+   eredita l'environment del master per default; senza
+   `rscript_envs=` espliciti i worker partono con i default glibc
+   anche se il master ha `MALLOC_ARENA_MAX=2`.
+
+3. **Fragment 50 (`50_pkg_hooks.R.template`) chiamava
+   `terraOptions(memfrac=...)` calcolato sulla RAM di *host*** (non
+   sulla quota cgroup). Su biome-calc03 (256 GB host, 64 GB cgroup)
+   terra credeva di avere 128 GB usabili → spilling tardivo, swap di
+   tile residenti.
+
+### 17.2 Fix
+
+- **`templates/Renviron.template`** — block GLIBC ALLOCATOR TUNING
+  prima di `ARROW_DEFAULT_MEMORY_POOL=system`:
+
+  ```
+  MALLOC_ARENA_MAX=2
+  MALLOC_TRIM_THRESHOLD_=134217728
+  R_GC_MEM_GROW=0
+  ```
+
+- **`templates/Rprofile_site.d/30_psock_factory.R.template`** —
+  appende le 3 var sopra al vettore `env_vec` passato a
+  `rscript_envs=` di `makeClusterPSOCK`. I worker ora ereditano le
+  stesse politiche di allocator del master.
+
+- **`templates/Rprofile_site.d/50_pkg_hooks.R.template`** — sostituito
+  il calcolo basato su host RAM con
+  `.biome_terra_memmax = floor(.biome_env$.get_ram_gb() * 0.5)` →
+  legge la quota cgroup (`memory.max` / `memory.limit_in_bytes`)
+  esposta da fragment 20.
+
+- **`config/setup_nodes.vars.conf`** — `RPROFILE_VERSION="12.9.4"`.
+
+- **`scripts/99_diagnose_lussu_hang.sh`** — `HARNESS_VERSION=1.4`,
+  nuovo `probe_G_malloc_envprop.R` che spawna un cluster PSOCK e
+  asserta `Sys.getenv("MALLOC_ARENA_MAX")=="2"` dentro
+  `clusterEvalQ`. `G_EC` integrato in verdict + exit code.
+
+### 17.3 Deploy
+
+```bash
+sudo /opt/R-studioConf/r_env_manager.sh
+# Selezione: 3   (Step 8 — fragments redeploy + bundle rebuild atomico)
+sudo systemctl restart rstudio-server
+
+R --no-save -e 'cat(getOption("biome_rprofile_version"), "\n")'
+# Atteso: Rprofile.site version: 12.9.4
+```
+
+### 17.4 Validazione
+
+```bash
+# (a) Master ha l'allocator capped
+R --no-save -e 'cat(Sys.getenv("MALLOC_ARENA_MAX"), "\n")'
+# Atteso: 2
+
+# (b) Worker PSOCK ereditano la var (regression-killer)
+R --no-save <<'RS'
+cl <- biome_make_cluster(2)
+print(parallel::clusterEvalQ(cl, Sys.getenv("MALLOC_ARENA_MAX")))
+parallel::stopCluster(cl)
+RS
+# Atteso: [[1]] "2"   [[2]] "2"
+
+# (c) terraOptions vede la cgroup
+R --no-save -e 'print(terra::terraOptions())'
+# Atteso: memmax ≈ 0.5 × cgroup_ram_gb (NON host RAM)
+
+# (d) Diagnostic harness self-test (v1.4)
+sudo /opt/R-studioConf/scripts/99_diagnose_lussu_hang.sh --self-test
+# Atteso: "[probe_G] OK: MALLOC_ARENA_MAX propagated to PSOCK workers"
+
+# (e) Smoke test RSS — 200 chunk simulati (Lussu pattern)
+# Atteso: RSS worker stabile < 8 GB (era 63 GB pre-v12.9.4)
+```
+
+### 17.5 Rollback
+
+```bash
+sudo cp /etc/R/Renviron.site.bak               /etc/R/Renviron.site
+sudo cp /etc/R/Rprofile_site.d/30_psock_factory.R.bak \
+        /etc/R/Rprofile_site.d/30_psock_factory.R
+sudo cp /etc/R/Rprofile_site.d/50_pkg_hooks.R.bak \
+        /etc/R/Rprofile_site.d/50_pkg_hooks.R
+sudo rm -rf /etc/R/Rprofile_site.d/.compiled
+sudo systemctl restart rstudio-server
+sed -i 's/RPROFILE_VERSION="12.9.4"/RPROFILE_VERSION="12.9.3"/' \
+  /opt/R-studioConf/config/setup_nodes.vars.conf
+```
+
+### 17.6 Tier deltas
+
+- **T1 (host)**: implementato (authoritative).
+- **T2 (docker)**: mirror parziale — il blocco GLIBC è iniettato in
+  `docker-deploy/scripts/entrypoint_rstudio.sh` (Renviron.site è
+  generato dinamicamente da Compose, non templato statico).
+  Fragment 30/50 NON applicabili (T2 non spedisce `Rprofile_site.d/`,
+  backlog v12.7).
+- **T3 (k8s)**: SKELETON_NOT_READY.
+
+### 17.7 Out-of-scope per Lussu / utente affetto
+
+Non si tocca `block1_aoh_to_rij.R`. La via corretta è deployare
+v12.9.4 sul nodo e rilanciare lo script invariato (HC-13). I bug
+noti dello script utente (`terra::values(r, mat=FALSE)`,
+progress-print non condizionato) restano sotto la sua responsabilità
+e non sono regressioni di sistema.
+
+---
+
 ## 15. Writer-agnostic canonical-path fallback (v12.9.2)
 
 > **Status:** v12.9.2 (2026-05-10) — `RPROFILE_VERSION="12.9.2"`. Hotfix

@@ -123,6 +123,22 @@ CPL_TMPDIR=/Rtmp
 # so one warmup populates for everyone. Cost: first-use download ~5MB per grid.
 PROJ_NETWORK=ON
 
+# ══════════════════════════════════════════════════════════════════════════════
+# GLIBC ALLOCATOR TUNING (v12.9.4 — Lussu RSS-climb fix)
+# ══════════════════════════════════════════════════════════════════════════════
+# Without these, glibc creates 8×n_cores per-thread arenas (= 256 on a 32-core
+# host). Memory freed via gc() / R_alloc free is returned to the arena, NOT
+# to the kernel via munmap/sbrk(-) ⇒ RSS climbs monotonically in long-running
+# parallel R workloads (terra::values, data.table by-reference, parLapply
+# fan-out). Observed: single PSOCK worker climbing to 63 GB at chunk_size=2.
+# Mitigation is industry-standard (Apache Arrow R team, Rust/jemalloc folklore).
+#
+# Propagated to PSOCK workers explicitly via env_vec in 30_psock_factory.R.
+# ══════════════════════════════════════════════════════════════════════════════
+MALLOC_ARENA_MAX=2
+MALLOC_TRIM_THRESHOLD_=134217728
+R_GC_MEM_GROW=0
+
 # ── Arrow ──
 ARROW_DEFAULT_MEMORY_POOL=system
 

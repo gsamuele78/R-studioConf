@@ -51,6 +51,14 @@
       NUMEXPR_NUM_THREADS     = as.character(worker_threads),
       GOTO_NUM_THREADS        = as.character(worker_threads),
       BLIS_NUM_THREADS        = as.character(worker_threads),
+      # v12.9.4: glibc allocator caps — must be propagated to PSOCK workers
+      # because parallelly::makeClusterPSOCK does NOT inherit master env vars
+      # unless explicitly listed in rscript_envs. Without these, workers re-
+      # create 8×n_cores arenas and RSS climbs unboundedly even when the
+      # master process has the caps set via Renviron.site.
+      MALLOC_ARENA_MAX        = "2",
+      MALLOC_TRIM_THRESHOLD_  = "134217728",
+      R_GC_MEM_GROW           = "0",
       TMP                     = RTMP_PATH,
       TEMP                    = RTMP_PATH,
       TMPDIR                  = RTMP_PATH,

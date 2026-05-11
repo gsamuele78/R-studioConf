@@ -1,7 +1,12 @@
 #!/bin/bash
 # scripts/99_diagnose_lussu_hang.sh — Lussu-specific overlay over the generic
 # HC-13 user-script triage harness (99_diagnose_user_script.sh).
-# HARNESS_VERSION="1.3"  (script-level only — does NOT bump RPROFILE_VERSION)
+# HARNESS_VERSION="1.4"  (script-level only — does NOT bump RPROFILE_VERSION)
+# v1.4 (2026-05-11): added Probe G — asserts that v12.9.4 glibc allocator caps
+#                    (MALLOC_ARENA_MAX, MALLOC_TRIM_THRESHOLD_, R_GC_MEM_GROW)
+#                    propagate to PSOCK workers via fragment 30 env_vec.
+#                    Catches a regression in 30_psock_factory.R.template's
+#                    rscript_envs= list before it reaches users.
 # v1.3 (2026-05-10): Probe E now also asserts that master-defined globals
 # survive the PSOCK reroute (HC-13 parity with mclapply fork). Catches the
 # class of bug fixed by Rprofile v12.9.3 fragment 52 GLOBAL-SYNC block:
@@ -240,6 +245,59 @@ tryCatch(parallel::stopCluster(get(".__probe_E_cl", envir = globalenv())),
 cat("[probe_E] DONE\n")
 RSHIM
 
+# G) v12.9.4 MALLOC_ARENA_MAX propagation probe
+# Spawns a PSOCK cluster via parallelly::makeClusterPSOCK (same factory used
+# by .biome_make_cluster_impl in fragment 30) and asserts that workers see
+# MALLOC_ARENA_MAX=2, MALLOC_TRIM_THRESHOLD_=134217728, R_GC_MEM_GROW=0.
+# Failure indicates regression in 30_psock_factory.R.template's env_vec.
+cat > "$SHIM_DIR/probe_G_malloc_envprop.R" <<'RSHIM'
+# probe_G_malloc_envprop.R — v12.9.4 regression check (HC-13)
+# DOES NOT source the user script (this is a system-side smoke test).
+local({
+    if (!requireNamespace("parallelly", quietly = TRUE)) {
+        cat("[probe_G] parallelly not installed — skipping (informational)\n")
+        quit(status = 0, save = "no")
+    }
+    # Use the production factory if available, otherwise plain makeClusterPSOCK
+    cl <- if (exists(".biome_env", inherits = TRUE) &&
+              !is.null(.biome_env$.biome_make_cluster_impl)) {
+        .biome_env$.biome_make_cluster_impl(workers = 2L)
+    } else {
+        # Fallback: simulate fragment 30 env_vec minimally
+        parallelly::makeClusterPSOCK(2L, rscript_envs = c(
+            MALLOC_ARENA_MAX        = "2",
+            MALLOC_TRIM_THRESHOLD_  = "134217728",
+            R_GC_MEM_GROW           = "0"))
+    }
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+    res <- parallel::clusterEvalQ(cl, list(
+        MALLOC_ARENA_MAX        = Sys.getenv("MALLOC_ARENA_MAX",        ""),
+        MALLOC_TRIM_THRESHOLD_  = Sys.getenv("MALLOC_TRIM_THRESHOLD_",  ""),
+        R_GC_MEM_GROW           = Sys.getenv("R_GC_MEM_GROW",           "")
+    ))
+    expected <- list(MALLOC_ARENA_MAX = "2",
+                     MALLOC_TRIM_THRESHOLD_ = "134217728",
+                     R_GC_MEM_GROW = "0")
+    fail <- FALSE
+    for (i in seq_along(res)) {
+        for (k in names(expected)) {
+            got <- res[[i]][[k]]; want <- expected[[k]]
+            if (!identical(got, want)) {
+                cat(sprintf("[probe_G] worker %d: %s='%s' (expected '%s')\n",
+                            i, k, got, want))
+                fail <- TRUE
+            }
+        }
+    }
+    if (fail) {
+        cat("[probe_G] HC regression: v12.9.4 MALLOC_ARENA_MAX not propagated to PSOCK workers\n")
+        cat("[probe_G] check: templates/Rprofile_site.d/30_psock_factory.R.template env_vec\n")
+        quit(status = 1, save = "no")
+    }
+    cat("[probe_G] PASS — v12.9.4 glibc allocator caps reach all PSOCK workers\n")
+})
+RSHIM
+
 # F) terra todisk shim
 cat > "$SHIM_DIR/probe_F_terra_todisk.R" <<RSHIM
 # probe_F_terra_todisk.R — Lussu-specific diagnostic shim (HC-13)
@@ -315,6 +373,8 @@ run_probe "probe_E_psock"        "$SHIM_DIR/probe_E_psock.R"
 E_EC=$?
 run_probe "probe_F_terra_todisk" "$SHIM_DIR/probe_F_terra_todisk.R"
 F_EC=$?
+run_probe "probe_G_malloc_envprop" "$SHIM_DIR/probe_G_malloc_envprop.R"
+G_EC=$?
 set -e
 
 # ── Step 4: verdict ───────────────────────────────────────────────────────
@@ -333,7 +393,15 @@ __probe_label() {
 echo "  Generic L0..L3 exit: $GENERIC_EC"
 echo "  Probe E (PSOCK swap):       $(__probe_label $E_EC)"
 echo "  Probe F (terra todisk):     $(__probe_label $F_EC)"
+echo "  Probe G (MALLOC envprop):   $(__probe_label $G_EC)"
 echo
+
+if [[ $G_EC -ne 0 ]]; then
+    echo "  ${BOLD}HC REGRESSION:${NC} v12.9.4 glibc allocator caps NOT propagating to PSOCK workers."
+    echo "  ${BOLD}SYSTEM-SIDE FIX:${NC} restore MALLOC_ARENA_MAX/MALLOC_TRIM_THRESHOLD_/R_GC_MEM_GROW"
+    echo "  in env_vec inside templates/Rprofile_site.d/30_psock_factory.R.template, then redeploy"
+    echo "  (sudo bash scripts/50_setup_nodes.sh — option 3)."
+fi
 
 
 if [[ $E_EC -eq 0 && $GENERIC_EC -ne 0 ]]; then
@@ -357,7 +425,7 @@ echo "  System-side adaptation is the preferred resolution."
 #   0 = generic + both probes PASS
 #   3 = no genuine fail anywhere, but at least one PROGRESSING (inconclusive)
 #   1 = at least one genuine FAIL/TIMEOUT/KILLED somewhere
-if [[ $GENERIC_EC -eq 0 && $E_EC -eq 0 && $F_EC -eq 0 ]]; then
+if [[ $GENERIC_EC -eq 0 && $E_EC -eq 0 && $F_EC -eq 0 && $G_EC -eq 0 ]]; then
     exit 0
 fi
 __has_progressing=0
@@ -368,7 +436,7 @@ case "$GENERIC_EC" in
     3)   __has_progressing=1 ;;
     *)   __has_genuine_fail=1 ;;
 esac
-for __c in "$E_EC" "$F_EC"; do
+for __c in "$E_EC" "$F_EC" "$G_EC"; do
     case "$__c" in
         0)   ;;
         125) __has_progressing=1 ;;
