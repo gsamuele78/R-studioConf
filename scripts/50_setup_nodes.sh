@@ -2391,6 +2391,35 @@ tryCatch({parse(file='${min_tmp}');cat('PARSE_OK')},
     log_success "Deployed: ${dst}"
   done
 
+  # ── 4. Deploy harness library companions (L0a lint + L0b smoke) ───────
+  # Contract: 99_diagnose_user_script.sh resolves these relative to its own
+  # location → since harness lives at /usr/local/bin/, lib must be at
+  # /usr/local/bin/lib/{r_lint.R,r_smoke.R,r_lint_rules.tsv}.
+  local lib_src="${WORKSPACE_ROOT}/scripts/lib"
+  local lib_dst="/usr/local/bin/lib"
+  local lib_files=( "r_lint.R" "r_smoke.R" "r_lint_rules.tsv" )
+  if [[ -d "${lib_src}" ]]; then
+    if [[ "${DRY_RUN}" != "true" ]]; then
+      install -d -m 0755 -o root -g root "${lib_dst}" \
+        || { log_error "install -d ${lib_dst} failed (HC-10)"; exit 1; }
+    fi
+    for f in "${lib_files[@]}"; do
+      if [[ ! -f "${lib_src}/${f}" ]]; then
+        log_warn "Harness lib missing: ${lib_src}/${f}"
+        continue
+      fi
+      if [[ "${DRY_RUN}" != "true" ]]; then
+        cp "${lib_src}/${f}" "${lib_dst}/${f}"
+        chmod 0644 "${lib_dst}/${f}" \
+          || { log_error "chmod 0644 ${lib_dst}/${f} failed (HC-10)"; exit 1; }
+        chown root:root "${lib_dst}/${f}" 2>/dev/null || true
+      fi
+      log_success "Deployed: ${lib_dst}/${f}"
+    done
+  else
+    log_warn "Harness lib dir missing: ${lib_src}"
+  fi
+
   log_success "HC-13 tooling deployed. Quick test:"
   log_info "  /usr/local/bin/r_minimal -e 'biome_diag()'"
   log_info "  /usr/local/bin/99_diagnose_user_script.sh /path/to/user_script.R"
