@@ -118,6 +118,15 @@ OPENBLAS_NUM_THREADS=${ALLOCATED_CORES}
 OMP_NUM_THREADS=${ALLOCATED_CORES}
 MKL_NUM_THREADS=${ALLOCATED_CORES}
 
+# GLIBC ALLOCATOR TUNING (T1 v12.9.4 mirror — RSS-climb mitigation)
+# Caps glibc per-thread arenas (default 8 * n_cores) to prevent worker
+# RSS climb under heavy parallel allocation (terra/data.table chunked
+# pipelines). MUST mirror templates/Renviron.template on T1 host tier.
+MALLOC_ARENA_MAX=2
+MALLOC_TRIM_THRESHOLD_=134217728
+R_GC_MEM_GROW=0
+
+
 # Disable GPU for Baseline
 CUDA_VISIBLE_DEVICES=-1
 TF_CPP_MIN_LOG_LEVEL=2
