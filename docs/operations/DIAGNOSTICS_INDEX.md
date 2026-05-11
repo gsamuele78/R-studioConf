@@ -3,7 +3,7 @@
 
 > **Audience:** sysadmins / on-call.  
 > **Tier:** T1 host.  
-> **Last updated:** 2026-05-09.
+> **Last updated:** 2026-05-11.
 
 Every diagnostic and one-shot fix script in `scripts/` mapped to:
 **when to run / what it produces / where logs land / what to do next.**
@@ -118,29 +118,59 @@ Rprofile state).
 
 ## 4. User-script triage (HC-13 ladder)
 
-### `scripts/99_diagnose_user_script.sh`  *(generic harness)*
+### `scripts/99_diagnose_user_script.sh`  *(generic harness, v1.3)*
 
 **Run when:** a user reports their `.R` script reproducibly fails on
 this server.
-**Mutates:** no — **never** modifies the user's `.R`.
-**What it does:** L0..L4 escalation:
+**Mutates:** no — **never** modifies the user's `.R` (HC-13).
+**What it does:** L0..L4 infrastructure ladder + L0a/L0b user-code layer:
 
 * **L0:** `r_minimal_rscript` — pure R, no Rprofile.
+* **L0a (NEW v1.3):** static lint over the user's `.R` via
+  `scripts/lib/r_lint.R` + `scripts/lib/r_lint_rules.tsv` (22 rules,
+  HIGH/MED/LOW). **Gated by `L0==PASS`** — only runs once infra is
+  proven green, so the verdict reads "infra OK, *your code* needs X"
+  rather than the usual sysadmin/researcher cut-and-paste loop.
+  Skip with `--no-lint` or `BIOME_DIAG_NO_LINT=1`. Findings are
+  *describe-only* — never patches the file. R020 (hardcoded credential)
+  emits a SECURITY banner.
+* **L0b (NEW v1.3, opt-in):** smoke run via `scripts/lib/r_smoke.R`
+  with shrunk knobs (`BIOME_SMOKE_NITER`, `BIOME_SMOKE_NBURN`,
+  `BIOME_SMOKE_N_CHAINS`, `BIOME_SMOKE_N_CHUNKS`, `BIOME_SMOKE_CHUNK_SIZE`).
+  Enable with `--smoke` or `BIOME_DIAG_SMOKE=1`. Default timeout
+  `BIOME_DIAG_SMOKE_TIMEOUT_S=300`.
 * **L1:** R with `Rprofile_minimal.R` — minimal forensic profile.
 * **L2:** R with full dispatcher BUT `.d/` fragments off.
 * **L3:** R with full dispatcher + all fragments.
 * **L4:** RStudio session emulation.
 
-**Output:** verdict L0..L5. Only L5 means "the user script is the bug".
-Anything else means a SYSTEM patch lands somewhere in
-`Renviron.template`, the dispatcher, or a specific fragment.
+**Output:** verdict L0..L5 + per-layer summary table in `report.md` +
+**`old_vs_new` appendix** (NEW v1.3) reading `/sys/fs/cgroup/$cgroup/{memory.max,
+memory.current,cpu.max}` and contrasting actual cgroup limits against
+the legacy "16 vCPU / 512 GB / 2 TB no-cgroup" VM — counters the
+"sul vecchio server funzionava" deflection with hard numbers.
+
+**Exit codes:**
+
+* `0` — ALL LAYERS PASSED.
+* `3` — PROGRESSING-only (some layer hit timeout but none failed).
+* `4` (NEW v1.3) — **INFRASTRUCTURE GREEN — user code has HIGH-severity
+  lint finding(s).** L1/L3 pass, but L0a flagged HIGH issues. The
+  research script is the bug; share `report.md` and the user-guide
+  anchors with the researcher.
+* `1` — actual failure somewhere in L0..L4.
+
+Lint rule catalogue and good-vs-bad worked examples:
+[`../user_guides/PARALLEL_R_DOS_AND_DONTS.md`](../user_guides/PARALLEL_R_DOS_AND_DONTS.md).
 
 → Full method: [`USER_SCRIPT_TROUBLESHOOTING.md`](USER_SCRIPT_TROUBLESHOOTING.md).
 
-### `scripts/99_diagnose_lussu_hang.sh`  *(Lussu-specific overlay)*
+### `scripts/99_diagnose_lussu_hang.sh`  *(Lussu-specific overlay, v1.5)*
 
 **Run when:** the user is "Lussu" or the symptom matches: long
 `mclapply` over `terra::rast` stalls forever.
+**Forwards** `--no-lint` / `--smoke` flags and exit code `4` to/from
+the generic harness (v1.5).
 **Adds two probes** to the generic harness, both UNINTRUSIVE:
 
 * **(E)** PSOCK swap — same code, but `mclapply → parLapply` on a
@@ -236,7 +266,11 @@ Did the user say "it crashed" / "it broke"?
 
 Does a specific .R reproducibly fail?
   ├─► Generic:  99_diagnose_user_script.sh
-  └─► Lussu-style: 99_diagnose_lussu_hang.sh
+  │     ├─► add --smoke to actually execute a shrunk run (L0b)
+  │     ├─► exit 4 = infra green, user code has HIGH lint findings
+  │     │     → hand researcher PARALLEL_R_DOS_AND_DONTS.md anchors
+  │     └─► report.md ends with old_vs_new cgroup appendix
+  └─► Lussu-style: 99_diagnose_lussu_hang.sh (forwards --smoke / exit 4)
 
 Does `passwd` segfault?
   └─► fix_pam_segfault_inplace.sh --check

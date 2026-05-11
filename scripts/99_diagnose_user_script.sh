@@ -1,6 +1,6 @@
 #!/bin/bash
 # scripts/99_diagnose_user_script.sh — GENERIC HC-13 user-script triage harness
-# HARNESS_VERSION="1.2"  (script-level only — does NOT bump RPROFILE_VERSION)
+# HARNESS_VERSION="1.3"  (script-level only — does NOT bump RPROFILE_VERSION)
 # ==============================================================================
 # Implements the operator-perspective L0..L4 escalation ladder defined in
 # .ai/agents.md §6.6 (HC-13) and docs/operations/USER_SCRIPT_TROUBLESHOOTING.md.
@@ -22,9 +22,11 @@
 # is exported (forensic last-resort for debugging the harness itself, not
 # user code).
 #
-# CLI flags (v1.2):
+# CLI flags (v1.3):
 #   --timeout SECONDS         per-layer wall-clock timeout (overrides env)
 #   --progress-window SECONDS PROGRESS_TIMEOUT detection window (default 60)
+#   --no-lint                 skip the L0a static lint step
+#   --smoke                   run the L0b in-process smoke (sets BIOME_DIAG_SMOKE=1)
 #   -h | --help               this help and exit
 #
 # Optional env (CLI flags take precedence):
@@ -33,6 +35,22 @@
 #   BIOME_DIAG_OUT_DIR            output dir (default /tmp/user_diag_<USER>_<ts>)
 #   BIOME_DIAG_R_BIN              Rscript binary (default: Rscript on PATH)
 #   BIOME_DIAG_ALLOW_ROOT         set to 1 to bypass the run-as-user guard (forensic)
+#   BIOME_DIAG_NO_LINT            set to 1 to disable L0a (static lint) — same as --no-lint
+#   BIOME_DIAG_SMOKE              set to 1 to enable L0b (smoke run)    — same as --smoke
+#   BIOME_DIAG_SMOKE_TIMEOUT_S    smoke wall-clock cap (default 300s)
+#
+# NEW LAYERS (v1.3, gated by L0_STATUS==PASS so infra is proven first):
+#   L0a static_lint   scripts/lib/r_lint.R  — describes user-code smells (HC-13).
+#                     HIGH/MED/LOW counts attached to report.md. R020 hardcoded
+#                     credential triggers a SECURITY banner.
+#   L0b smoke_run     scripts/lib/r_smoke.R — opt-in (BIOME_DIAG_SMOKE=1 / --smoke).
+#                     Sources the user file UNMODIFIED with BIOME_SMOKE_* knobs
+#                     and a 300s in-process timeout. Educational, not authoritative.
+#
+# OLD-VS-NEW APPENDIX (v1.3): a markdown section at the end of report.md reads
+# /sys/fs/cgroup/<self>/{memory.max,cpu.max} and contrasts them against the
+# legacy "16 vCPU / 512 GB / 2 TB no-cgroup" VM. This counters the recurring
+# researcher excuse "sul vecchio server funzionava" with hard cgroup numbers.
 #
 # VERDICT STATUSES (v1.2):
 #   PASS         layer ran to completion, exit 0.
@@ -87,8 +105,8 @@ fi
 # ── Args ──────────────────────────────────────────────────────────────────
 print_usage() {
     cat <<EOF >&2
-${BOLD}99_diagnose_user_script.sh${NC} — HC-13 generic user-script triage harness (v1.2)
-Usage: $0 [--timeout SECONDS] [--progress-window SECONDS] <user_script.R> [args...]
+${BOLD}99_diagnose_user_script.sh${NC} — HC-13 generic user-script triage harness (v1.3)
+Usage: $0 [--timeout SECONDS] [--progress-window SECONDS] [--no-lint] [--smoke] <user_script.R> [args...]
 
 Per HC-13 we run YOUR SCRIPT UNMODIFIED through 4 system layers and
 tell you which layer is responsible. We do not edit your code.
@@ -98,17 +116,22 @@ CLI flags (override env):
   --progress-window SECONDS PROGRESS_TIMEOUT mtime window (default 60s) — if
                             log was written to within this window when timeout
                             fires, status is PROGRESSING (not TIMEOUT/FAIL).
+  --no-lint                 skip L0a (static lint of user .R file)
+  --smoke                   enable L0b (in-process smoke run with BIOME_SMOKE_* knobs)
   -h | --help               this help and exit
 
 Verdict statuses: PASS / FAIL / KILLED / TIMEOUT (silent stall) / PROGRESSING.
-Exit codes: 0=all-pass, 1=genuine-fail, 2=invocation-error, 3=PROGRESSING-only.
+Exit codes: 0=all-pass, 1=genuine-fail, 2=invocation-error,
+            3=PROGRESSING-only, 4=infra-green-but-L0a-HIGH-findings.
 EOF
 }
 
-# CLI parser (v1.2): --timeout, --progress-window, -h/--help, -- terminator.
-# CLI overrides env. Anything else = positional (user script + script args).
+# CLI parser (v1.3): --timeout, --progress-window, --no-lint, --smoke,
+# -h/--help, -- terminator. CLI overrides env.
 __CLI_TIMEOUT=""
 __CLI_PROGWIN=""
+__CLI_NO_LINT=""
+__CLI_SMOKE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --timeout)
@@ -121,6 +144,10 @@ while [[ $# -gt 0 ]]; do
             __CLI_PROGWIN="$2"; shift 2 ;;
         --progress-window=*)
             __CLI_PROGWIN="${1#--progress-window=}"; shift ;;
+        --no-lint)
+            __CLI_NO_LINT=1; shift ;;
+        --smoke)
+            __CLI_SMOKE=1; shift ;;
         -h|--help)
             print_usage; exit 0 ;;
         --) shift; break ;;
@@ -128,6 +155,8 @@ while [[ $# -gt 0 ]]; do
         *)  break ;;
     esac
 done
+[[ -n "$__CLI_NO_LINT" ]] && export BIOME_DIAG_NO_LINT=1
+[[ -n "$__CLI_SMOKE"   ]] && export BIOME_DIAG_SMOKE=1
 
 # Validate numerics if provided
 for __v in "$__CLI_TIMEOUT" "$__CLI_PROGWIN"; do
@@ -212,7 +241,9 @@ cat > "$REPORT" <<EOF
 | Started | \`$(date '+%Y-%m-%d %H:%M:%S %Z')\` |
 | Per-layer timeout | ${TIMEOUT_S}s |
 | Progress window | ${PROGRESS_WINDOW_S}s |
-| Harness version | 1.2 |
+| Harness version | 1.3 |
+| Lint (L0a) | $( [[ "${BIOME_DIAG_NO_LINT:-0}" == "1" ]] && echo "disabled" || echo "enabled" ) |
+| Smoke (L0b) | $( [[ "${BIOME_DIAG_SMOKE:-0}" == "1" ]] && echo "enabled" || echo "disabled (opt-in via --smoke)" ) |
 
 
 ---
@@ -321,6 +352,102 @@ EOF
     L0_STATUS=SKIPPED
 fi
 
+# ── L0a: Static lint of the user .R file (HC-13: describes, never patches) ─
+# Gated by L0_STATUS == PASS so we always vouch for infra first. If infra
+# is red, blaming user code would be premature and corrosive to trust.
+LINTER="$(dirname -- "$(realpath -- "$0")")/lib/r_lint.R"
+L0A_STATUS=SKIPPED
+L0A_HIGH=0; L0A_MED=0; L0A_LOW=0; L0A_R020=0
+if [[ "${BIOME_DIAG_NO_LINT:-0}" == "1" ]]; then
+    echo "${YELLOW}── [L0a] static_lint ── SKIPPED (--no-lint / BIOME_DIAG_NO_LINT=1)${NC}"
+    cat >> "$REPORT" <<EOF
+
+### Layer L0a — static_lint: **SKIPPED** (disabled by operator)
+EOF
+elif [[ "$L0_STATUS" != "PASS" ]]; then
+    echo "${YELLOW}── [L0a] static_lint ── SKIPPED (L0=$L0_STATUS; fix infra first)${NC}"
+    cat >> "$REPORT" <<EOF
+
+### Layer L0a — static_lint: **SKIPPED**
+
+Skipped because L0 infra_health is \`$L0_STATUS\`. Per HC-13 we do not
+discuss user-code smells until the infrastructure is proven green —
+otherwise the conversation degenerates into "sysadmin vs researcher
+copy-paste". Fix L0 first, then re-run.
+EOF
+elif [[ ! -x "$LINTER" && ! -f "$LINTER" ]]; then
+    echo "${YELLOW}── [L0a] static_lint ── SKIPPED (linter not found: $LINTER)${NC}"
+    cat >> "$REPORT" <<EOF
+
+### Layer L0a — static_lint: **SKIPPED**
+
+Linter not found at \`$LINTER\`. Deploy via \`scripts/50_setup_nodes.sh\`.
+EOF
+else
+    echo "${CYAN}── [L0a] static_lint ──${NC}"
+    L0A_TSV="$OUT_DIR/L0a_lint.tsv"
+    L0A_MD="$OUT_DIR/L0a_lint.md"
+    set +e
+    Rscript "$LINTER" "$USER_SCRIPT"        > "$L0A_TSV" 2>"$OUT_DIR/L0a_lint.err"
+    L0A_EC=$?
+    Rscript "$LINTER" --md "$USER_SCRIPT"   > "$L0A_MD"  2>>"$OUT_DIR/L0a_lint.err" || true
+    set -e
+    L0A_HIGH=$(awk -F'\t' '$2=="HIGH"' "$L0A_TSV" | wc -l)
+    L0A_MED=$( awk -F'\t' '$2=="MED"'  "$L0A_TSV" | wc -l)
+    L0A_LOW=$( awk -F'\t' '$2=="LOW"'  "$L0A_TSV" | wc -l)
+    L0A_R020=$(awk -F'\t' '$1=="R020"' "$L0A_TSV" | wc -l)
+    case "$L0A_EC" in
+        0) L0A_STATUS=PASS ;;
+        1) L0A_STATUS=MED  ;;
+        2) L0A_STATUS=HIGH ;;
+        *) L0A_STATUS=ERROR;;
+    esac
+    echo "  findings: HIGH=$L0A_HIGH MED=$L0A_MED LOW=$L0A_LOW   status=$L0A_STATUS"
+    {
+        echo
+        echo "### Layer L0a — static_lint: **$L0A_STATUS** (HIGH=$L0A_HIGH MED=$L0A_MED LOW=$L0A_LOW)"
+        echo
+        if [[ $L0A_R020 -gt 0 ]]; then
+            echo "> ⚠ **SECURITY:** ${L0A_R020} hardcoded credential(s) detected (rule R020)."
+            echo "> Sysadmin **must** rotate the affected provider credentials and migrate"
+            echo "> them to \`~/.Renviron\` (chmod 600). Treat this report as confidential."
+            echo
+        fi
+        cat "$L0A_MD"
+        echo
+        echo "> HC-13: the linter only describes findings. The user .R file was NOT modified."
+    } >> "$REPORT"
+fi
+
+# ── L0b: Smoke run (opt-in via --smoke / BIOME_DIAG_SMOKE=1) ──────────────
+SMOKE="$(dirname -- "$(realpath -- "$0")")/lib/r_smoke.R"
+L0B_STATUS=SKIPPED
+if [[ "${BIOME_DIAG_SMOKE:-0}" != "1" ]]; then
+    echo "${YELLOW}── [L0b] smoke_run ── SKIPPED (opt-in via --smoke)${NC}"
+    cat >> "$REPORT" <<EOF
+
+### Layer L0b — smoke_run: **SKIPPED** (opt-in, pass \`--smoke\` to enable)
+EOF
+elif [[ "$L0_STATUS" != "PASS" ]]; then
+    echo "${YELLOW}── [L0b] smoke_run ── SKIPPED (L0=$L0_STATUS)${NC}"
+    cat >> "$REPORT" <<EOF
+
+### Layer L0b — smoke_run: **SKIPPED** (L0=$L0_STATUS, fix infra first)
+EOF
+elif [[ ! -f "$SMOKE" ]]; then
+    echo "${YELLOW}── [L0b] smoke_run ── SKIPPED (runner missing: $SMOKE)${NC}"
+    cat >> "$REPORT" <<EOF
+
+### Layer L0b — smoke_run: **SKIPPED** (\`$SMOKE\` not deployed)
+EOF
+else
+    run_layer "L0b" "smoke_run" \
+        env BIOME_DIAG_SMOKE=1 \
+            BIOME_DIAG_SMOKE_TIMEOUT_S="${BIOME_DIAG_SMOKE_TIMEOUT_S:-300}" \
+        "$R_BIN" "$SMOKE" "$USER_SCRIPT" "${USER_ARGS[@]}"
+    L0B_STATUS=$(awk -F'\t' '$1=="L0b"{print $3; exit}' "$SUMMARY")
+fi
+
 # ── L1: User script under PURE R (minimal profile) ────────────────────────
 L1_STATUS=SKIPPED
 if [[ -x "$R_MIN" ]]; then
@@ -370,6 +497,12 @@ if [[ "$L0_STATUS" == "FAIL" || "$L0_STATUS" == "TIMEOUT" || "$L0_STATUS" == "KI
 elif [[ $__has_progressing -eq 1 && $__has_genuine_fail -eq 0 ]]; then
     VERDICT_LINE="INCONCLUSIVE: at least one layer was PROGRESSING when timeout fired (long compute, not a stall)"
     RECOMMENDED="Re-run with --timeout doubled (e.g. --timeout $((TIMEOUT_S*2))). Script is alive; no layer blamed. HC-13: long compute is not a system bug."
+elif [[ "$L3_STATUS" == "PASS" && "$L1_STATUS" == "PASS" && "$L0A_STATUS" == "HIGH" ]]; then
+    # v1.3: infra+production both green BUT static lint surfaced HIGH-severity
+    # smells in the user .R file. Don't blame infra; tell the operator that
+    # the system is doing its job and the user code has issues to address.
+    VERDICT_LINE="INFRASTRUCTURE GREEN — user .R file has ${L0A_HIGH} HIGH-severity lint finding(s)"
+    RECOMMENDED="Read 'Layer L0a — static_lint' in the report and docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md. The system is not the bottleneck."
 elif [[ "$L3_STATUS" == "PASS" && "$L1_STATUS" == "PASS" ]]; then
 
     VERDICT_LINE="ALL LAYERS PASSED: script is healthy in production"
@@ -394,10 +527,12 @@ fi
 echo "  ${BOLD}${VERDICT_LINE}${NC}"
 echo
 echo "  Per-layer status:"
-echo "    L0 infra_health      : $L0_STATUS"
-echo "    L1 pure_R_minimal    : $L1_STATUS"
-echo "    L2 all_fragments_off : $L2_STATUS"
-echo "    L3 full_profile      : $L3_STATUS"
+echo "    L0  infra_health     : $L0_STATUS"
+echo "    L0a static_lint      : $L0A_STATUS  (HIGH=$L0A_HIGH MED=$L0A_MED LOW=$L0A_LOW)"
+echo "    L0b smoke_run        : $L0B_STATUS"
+echo "    L1  pure_R_minimal   : $L1_STATUS"
+echo "    L2  all_fragments_off: $L2_STATUS"
+echo "    L3  full_profile     : $L3_STATUS"
 echo
 echo "  Recommended next step:"
 echo "    $RECOMMENDED"
@@ -418,10 +553,12 @@ cat >> "$REPORT" <<EOF
 
 | Layer | Name | Status |
 |-------|------|--------|
-| L0 | infra_health | $L0_STATUS |
-| L1 | pure_R_minimal | $L1_STATUS |
-| L2 | all_fragments_off | $L2_STATUS |
-| L3 | full_profile | $L3_STATUS |
+| L0  | infra_health      | $L0_STATUS |
+| L0a | static_lint       | $L0A_STATUS (HIGH=$L0A_HIGH MED=$L0A_MED LOW=$L0A_LOW) |
+| L0b | smoke_run         | $L0B_STATUS |
+| L1  | pure_R_minimal    | $L1_STATUS |
+| L2  | all_fragments_off | $L2_STATUS |
+| L3  | full_profile      | $L3_STATUS |
 
 > **Per HC-13:** the user script was run UNMODIFIED in every layer above.
 > If the verdict is L0..L3, the fix lands on the SYSTEM SIDE.
@@ -429,12 +566,74 @@ cat >> "$REPORT" <<EOF
 > with the user about their code, and only with kernel-stack evidence.
 EOF
 
-# Exit code mapping (v1.2):
-#   0 = ALL LAYERS PASSED
-#   1 = at least one genuine FAIL/TIMEOUT/KILLED
-#   3 = only PROGRESSING (no genuine fail) — inconclusive, re-run with longer timeout
+# ── old_vs_new appendix ───────────────────────────────────────────────────
+# Read THIS process's cgroup memory.max and cpu.max and contrast with the
+# legacy "16 vCPU / 512 GB / 2 TB no-cgroup" VM. Counters the recurring
+# researcher excuse "sul vecchio server funzionava". HC-13: this section
+# is INFORMATIONAL (no verdict change), it just gives the operator a
+# concrete answer in the same report rather than off-channel.
+__cg_self="$(awk -F: '$1=="0"{print $3}' /proc/self/cgroup 2>/dev/null || true)"
+__cg_root="/sys/fs/cgroup${__cg_self}"
+__mem_max="(unknown)"; __cpu_max="(unknown)"; __mem_cur="(unknown)"
+[[ -r "$__cg_root/memory.max"      ]] && __mem_max="$(cat "$__cg_root/memory.max"      2>/dev/null || echo unknown)"
+[[ -r "$__cg_root/memory.current"  ]] && __mem_cur="$(cat "$__cg_root/memory.current"  2>/dev/null || echo unknown)"
+[[ -r "$__cg_root/cpu.max"         ]] && __cpu_max="$(cat "$__cg_root/cpu.max"         2>/dev/null || echo unknown)"
+
+# Format mem.max in GiB if it is a plain integer
+__mem_max_h="$__mem_max"
+if [[ "$__mem_max" =~ ^[0-9]+$ ]]; then
+    __mem_max_h="$(awk -v n="$__mem_max" 'BEGIN{printf "%.1f GiB",n/1024/1024/1024}')"
+fi
+__mem_cur_h="$__mem_cur"
+if [[ "$__mem_cur" =~ ^[0-9]+$ ]]; then
+    __mem_cur_h="$(awk -v n="$__mem_cur" 'BEGIN{printf "%.1f GiB",n/1024/1024/1024}')"
+fi
+# cpu.max is "<quota> <period>"; ratio = quota/period (-1 means unbounded)
+__cpu_human="$__cpu_max"
+if [[ "$__cpu_max" =~ ^[0-9-]+\ [0-9]+$ ]]; then
+    __q="${__cpu_max% *}"; __p="${__cpu_max#* }"
+    if [[ "$__q" == "max" || "$__q" == "-1" ]]; then
+        __cpu_human="unbounded ($__cpu_max)"
+    else
+        __cpu_human="$(awk -v q="$__q" -v p="$__p" 'BEGIN{printf "%.2f vCPU equiv. (quota=%s period=%s)",q/p,q,p}')"
+    fi
+fi
+
+cat >> "$REPORT" <<EOF
+
+---
+
+## Appendix — old_vs_new (cgroup reality check)
+
+| Resource | Legacy "old server" (no cgroup) | This biome-calc node (your slice) |
+|---|---|---|
+| Memory limit (\`memory.max\`) | 512 GiB (host total, no enforcement) | **${__mem_max_h}** |
+| Memory in use (\`memory.current\`) | n/a | ${__mem_cur_h} |
+| CPU quota (\`cpu.max\`) | 16 vCPU (host total, no enforcement) | **${__cpu_human}** |
+| Per-user temp | 2 TB shared root \`/tmp\` | \`/Rtmp\` (400 GiB ext4, per-user dir) |
+| OOM behaviour | host OOM-killer (kills any process) | cgroup MemoryMax → SIGKILL **only your tree** |
+
+> **Why this matters:** the old VM had **no per-user limits** and a 2 TB \`/tmp\`,
+> so a script that allocates 100 GiB or writes 500 GB of intermediates
+> "just worked" — at the cost of starving every other user when contention
+> hit. The biome-calc nodes enforce per-user cgroup slices: you get a
+> deterministic share, and the system **kills you cleanly** instead of
+> letting you DoS the cluster. If your script worked on the old server but
+> SIGKILLs here, the script needs to fit the slice — that is **not** a
+> system regression.
+>
+> Cgroup path read: \`${__cg_root}\`
+EOF
+
+# Exit code mapping (v1.3):
+#   0 = ALL LAYERS PASSED (and no L0a HIGH)
+#   1 = at least one genuine FAIL/TIMEOUT/KILLED in L0..L3
+#   3 = only PROGRESSING (no genuine fail) — inconclusive
+#   4 = L0..L3 all PASS but L0a flagged HIGH-severity smells in user code
 if [[ "$VERDICT_LINE" == "ALL LAYERS PASSED"* ]]; then
     exit 0
+elif [[ "$VERDICT_LINE" == "INFRASTRUCTURE GREEN"* ]]; then
+    exit 4
 elif [[ $__has_genuine_fail -eq 0 && $__has_progressing -eq 1 ]]; then
     exit 3
 else

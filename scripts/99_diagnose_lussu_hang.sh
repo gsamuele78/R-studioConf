@@ -1,7 +1,10 @@
 #!/bin/bash
 # scripts/99_diagnose_lussu_hang.sh — Lussu-specific overlay over the generic
 # HC-13 user-script triage harness (99_diagnose_user_script.sh).
-# HARNESS_VERSION="1.4"  (script-level only — does NOT bump RPROFILE_VERSION)
+# HARNESS_VERSION="1.5"  (script-level only — does NOT bump RPROFILE_VERSION)
+# v1.5 (2026-05-11): forwards new generic-harness flags --no-lint and --smoke
+#                    so that L0a (static lint) and L0b (smoke run) participate
+#                    in the Lussu overlay verdict. No probe semantics change.
 # v1.4 (2026-05-11): added Probe G — asserts that v12.9.4 glibc allocator caps
 #                    (MALLOC_ARENA_MAX, MALLOC_TRIM_THRESHOLD_, R_GC_MEM_GROW)
 #                    propagate to PSOCK workers via fragment 30 env_vec.
@@ -61,27 +64,33 @@ fi
 
 print_usage() {
     cat <<EOF >&2
-${BOLD}99_diagnose_lussu_hang.sh${NC} — Lussu overlay (HC-13, v1.2)
-Usage: $0 [--timeout SECONDS] [--progress-window SECONDS] <user_script.R> [args...]
+${BOLD}99_diagnose_lussu_hang.sh${NC} — Lussu overlay (HC-13, v1.5)
+Usage: $0 [--timeout SECONDS] [--progress-window SECONDS] [--no-lint] [--smoke] <user_script.R> [args...]
 
-Runs the generic L0..L3 harness, then two Lussu-specific probes (E, F)
-that source the unmodified user script through diagnostic shims.
+Runs the generic L0..L3 harness (incl. v1.3 L0a static_lint and optional
+L0b smoke_run), then three Lussu-specific probes (E, F, G) that source
+the unmodified user script through diagnostic shims.
 
 CLI flags (forwarded to the generic harness via env; CLI overrides env):
   --timeout SECONDS         per-layer/per-probe wall-clock timeout (default 600)
   --progress-window SECONDS PROGRESS_TIMEOUT mtime window (default 60s) — if
                             log was written to within this window when timeout
                             fires, status is PROGRESSING (not TIMEOUT/FAIL).
+  --no-lint                 skip generic harness L0a (static lint of user .R)
+  --smoke                   enable generic harness L0b (in-process smoke run)
   -h | --help               this help and exit
 
-Verdict statuses (probes E/F): PASS / FAIL / TIMEOUT / PROGRESSING.
-Exit codes: 0=all-pass, 1=genuine-fail, 2=invocation-error, 3=PROGRESSING-only.
+Verdict statuses (probes E/F/G): PASS / FAIL / TIMEOUT / PROGRESSING.
+Exit codes: 0=all-pass, 1=genuine-fail, 2=invocation-error,
+            3=PROGRESSING-only, 4=infra-green-but-L0a-HIGH-findings.
 EOF
 }
 
-# CLI parser (v1.2): mirror of generic harness — same flags, same semantics.
+# CLI parser (v1.5): same flags as generic harness — forwarded via env.
 __CLI_TIMEOUT=""
 __CLI_PROGWIN=""
+__CLI_NO_LINT=""
+__CLI_SMOKE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --timeout)
@@ -92,6 +101,8 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 ]] || { echo "${RED}ERROR:${NC} --progress-window requires SECONDS" >&2; exit 2; }
             __CLI_PROGWIN="$2"; shift 2 ;;
         --progress-window=*) __CLI_PROGWIN="${1#--progress-window=}"; shift ;;
+        --no-lint)           __CLI_NO_LINT=1; shift ;;
+        --smoke)             __CLI_SMOKE=1;   shift ;;
         -h|--help) print_usage; exit 0 ;;
         --) shift; break ;;
         -*) echo "${RED}ERROR:${NC} unknown flag: $1" >&2; print_usage; exit 2 ;;
@@ -107,6 +118,8 @@ for __v in "$__CLI_TIMEOUT" "$__CLI_PROGWIN"; do
 done
 [[ -n "$__CLI_TIMEOUT" ]] && export BIOME_DIAG_TIMEOUT_S="$__CLI_TIMEOUT"
 [[ -n "$__CLI_PROGWIN" ]] && export BIOME_DIAG_PROGRESS_WINDOW_S="$__CLI_PROGWIN"
+[[ -n "$__CLI_NO_LINT" ]] && export BIOME_DIAG_NO_LINT=1
+[[ -n "$__CLI_SMOKE"   ]] && export BIOME_DIAG_SMOKE=1
 
 if [[ $# -lt 1 ]]; then
     print_usage; exit 2
@@ -421,18 +434,24 @@ echo
 echo "  ${BOLD}HC-13 reminder:${NC} the user script was UNMODIFIED in every probe."
 echo "  System-side adaptation is the preferred resolution."
 
-# Exit code mapping (v1.2):
-#   0 = generic + both probes PASS
+# Exit code mapping (v1.5):
+#   0 = generic + all probes PASS
 #   3 = no genuine fail anywhere, but at least one PROGRESSING (inconclusive)
+#   4 = generic verdict is INFRASTRUCTURE GREEN but L0a flagged HIGH findings
+#       (forwarded as-is from the generic harness when all probes also pass)
 #   1 = at least one genuine FAIL/TIMEOUT/KILLED somewhere
 if [[ $GENERIC_EC -eq 0 && $E_EC -eq 0 && $F_EC -eq 0 && $G_EC -eq 0 ]]; then
     exit 0
 fi
+if [[ $GENERIC_EC -eq 4 && $E_EC -eq 0 && $F_EC -eq 0 && $G_EC -eq 0 ]]; then
+    exit 4
+fi
 __has_progressing=0
 __has_genuine_fail=0
-# Generic harness: 0=pass, 3=progressing-only, anything else=genuine fail
+# Generic harness: 0=pass, 3=progressing-only, 4=infra-green-but-L0a-HIGH,
+# anything else=genuine fail
 case "$GENERIC_EC" in
-    0)   ;;
+    0|4) ;;
     3)   __has_progressing=1 ;;
     *)   __has_genuine_fail=1 ;;
 esac
