@@ -1,0 +1,174 @@
+# templates/Rprofile_site.d/42_install_block.R.template
+# v12.10 — OPT-IN install-storm safety valve (default OFF, ALLOW)
+# ------------------------------------------------------------------------------
+# Loaded by dispatcher via: sys.source(envir = environment()) inside main local({...})
+# Inherits closure: .biome_env, sys_log, .biome_install_wrapper (fragment 40),
+#                   ENABLE_* flags, .C_* colors, VERSION, curr_user.
+#
+# WHY THIS FRAGMENT EXISTS
+# ------------------------
+# On biome-calc, /usr/lib/R is read-only for non-root users. A bare
+# install.packages("foo") used to fail with a confusing 2-step path:
+#
+#   1. EACCES on /usr/lib/R/site-library
+#   2. interactive prompt "would you like to use a personal library?"  → batch jobs hang
+#   3. eventual silent partial success in ~/R that drifts from cluster pin
+#
+# This fragment ships the *machinery* to short-circuit that whole dance and
+# fail fast with a single clear message pointing the user to the canonical
+# sysadmin workflow (config/r_env_manager.conf :: R_USER_PACKAGES_*).
+#
+# HC-13 compliance: by default v12.10 ships this fragment DORMANT
+# (ENABLE_INSTALL_BLOCK=FALSE). Behaviour is identical to v12.9.4 — user code
+# that calls install.packages() still gets the stock R "would you like a
+# personal library?" / EACCES path. The block is an OPT-IN safety valve a
+# sysadmin arms only when an install-storm becomes a real incident.
+#
+# COVERS
+# ------
+#   utils::install.packages       — wrapped at fragment-load time
+#   remotes::install_github       — wrapped via setHook(packageEvent("remotes",  "onLoad"))
+#   devtools::install_github      — wrapped via setHook(packageEvent("devtools", "onLoad"))
+#   pak::pkg_install / pak::pak   — wrapped via setHook(packageEvent("pak",      "onLoad"))
+#   BiocManager::install          — wrapped via setHook(packageEvent("BiocManager","onLoad"))
+#
+# FEATURE FLAG (PSE cat. 2) — DEFAULT OFF
+# ---------------------------------------
+#   ENABLE_INSTALL_BLOCK     compile-time:  FALSE  (allow — ship dormant)
+#   BIOME_FORCE_INSTALL_BLOCK runtime arm:   "1"   (per-session opt-in)
+#
+# To arm the block fleet-wide: edit this template, set
+#   ENABLE_INSTALL_BLOCK <- TRUE
+# then redeploy via scripts/50_setup_nodes.sh (RPROFILE_VERSION already 12.10).
+#
+# To arm the block for a single R session (debug / per-user):
+#   BIOME_FORCE_INSTALL_BLOCK=1 R …
+# The kernel reads the env var ONCE at session start, before user code runs.
+# ------------------------------------------------------------------------------
+
+  ENABLE_INSTALL_BLOCK <- FALSE   # v12.10: default OFF — opt-in safety valve
+
+  .biome_install_block_on <- isTRUE(ENABLE_INSTALL_BLOCK) ||
+    nzchar(Sys.getenv("BIOME_FORCE_INSTALL_BLOCK", ""))
+
+  if (!.biome_install_block_on) {
+    sys_log("InstallBlock", "SKIP",
+            "default OFF — install.packages/install_github/pak::pkg_install allowed (set BIOME_FORCE_INSTALL_BLOCK=1 to arm)")
+  } else {
+
+    # ── canonical message builder ──
+    .biome_install_block_msg <- function(call_label, pkg_label = NULL,
+                                         conf_key = "R_USER_PACKAGES_CRAN") {
+      pkg_str <- if (is.null(pkg_label) || !nzchar(pkg_label))
+        "<pkgname>"
+      else
+        sprintf("'%s'", pkg_label)
+      paste0(
+        "BIOME-CALC: ", call_label, " is disabled on this cluster.\n",
+        "            Ask the sysadmin to add ", pkg_str, " to\n",
+        "            config/r_env_manager.conf :: ", conf_key, ",\n",
+        "            then re-run.\n",
+        "            (This block was armed by the sysadmin via\n",
+        "             ENABLE_INSTALL_BLOCK=TRUE or BIOME_FORCE_INSTALL_BLOCK=1.)"
+      )
+    }
+
+    # ── 1. utils::install.packages ─────────────────────────────────────────
+    safe_install.packages <- function(pkgs = NULL, ...) {
+      pkg_label <- if (is.character(pkgs) && length(pkgs) >= 1L) pkgs[[1L]] else NULL
+      sys_log("InstallBlock", "DENY",
+              sprintf("install.packages(%s) — redirected to sysadmin",
+                      if (is.null(pkg_label)) "" else pkg_label))
+      stop(.biome_install_block_msg("install.packages()", pkg_label,
+                                    "R_USER_PACKAGES_CRAN"),
+           call. = FALSE)
+    }
+    attr(safe_install.packages, "biome_guard") <- TRUE
+    .biome_install_wrapper(safe_install.packages, "install.packages",
+                           asNamespace("utils"),
+                           save_original_to = "original_install.packages")
+
+    # ── 2. BiocManager::install ────────────────────────────────────────────
+    setHook(packageEvent("BiocManager", "onLoad"), function(...) tryCatch({
+      ns <- asNamespace("BiocManager")
+      if (!exists("install", envir = ns, inherits = FALSE)) return(invisible())
+      safe_bioc_install <- function(pkgs = character(0), ...) {
+        pkg_label <- if (length(pkgs) >= 1L) pkgs[[1L]] else NULL
+        sys_log("InstallBlock", "DENY",
+                sprintf("BiocManager::install(%s)",
+                        if (is.null(pkg_label)) "" else pkg_label))
+        stop(.biome_install_block_msg("BiocManager::install()", pkg_label,
+                                      "R_USER_PACKAGES_BIOC"),
+             call. = FALSE)
+      }
+      attr(safe_bioc_install, "biome_guard") <- TRUE
+      .biome_install_wrapper(safe_bioc_install, "install", ns,
+                             save_original_to = "original_BiocManager_install")
+    }, error = .biome_swerr("InstallBlock_BiocManager")))
+
+    # ── 3. remotes::install_github + remotes::install_* ────────────────────
+    setHook(packageEvent("remotes", "onLoad"), function(...) tryCatch({
+      ns <- asNamespace("remotes")
+      .install_github_blocker <- function(repo = NULL, ...) {
+        pkg_label <- if (is.character(repo) && length(repo) >= 1L) repo[[1L]] else NULL
+        sys_log("InstallBlock", "DENY",
+                sprintf("remotes::install_github(%s)",
+                        if (is.null(pkg_label)) "" else pkg_label))
+        stop(.biome_install_block_msg("remotes::install_github()", pkg_label,
+                                      "R_USER_PACKAGES_GITHUB"),
+             call. = FALSE)
+      }
+      attr(.install_github_blocker, "biome_guard") <- TRUE
+      for (fn_name in c("install_github", "install_gitlab", "install_bitbucket",
+                        "install_url", "install_git", "install_cran",
+                        "install_version", "install_local")) {
+        .biome_install_wrapper(.install_github_blocker, fn_name, ns,
+                               save_original_to = paste0("original_remotes_", fn_name))
+      }
+    }, error = .biome_swerr("InstallBlock_remotes")))
+
+    # ── 4. devtools::install_github + devtools::install_* ──────────────────
+    setHook(packageEvent("devtools", "onLoad"), function(...) tryCatch({
+      ns <- asNamespace("devtools")
+      .devtools_blocker <- function(repo = NULL, ...) {
+        pkg_label <- if (is.character(repo) && length(repo) >= 1L) repo[[1L]] else NULL
+        sys_log("InstallBlock", "DENY",
+                sprintf("devtools::install_github(%s)",
+                        if (is.null(pkg_label)) "" else pkg_label))
+        stop(.biome_install_block_msg("devtools::install_github()", pkg_label,
+                                      "R_USER_PACKAGES_GITHUB"),
+             call. = FALSE)
+      }
+      attr(.devtools_blocker, "biome_guard") <- TRUE
+      for (fn_name in c("install_github", "install_gitlab", "install_bitbucket",
+                        "install_url", "install_git", "install_cran",
+                        "install_version", "install_local", "install")) {
+        .biome_install_wrapper(.devtools_blocker, fn_name, ns,
+                               save_original_to = paste0("original_devtools_", fn_name))
+      }
+    }, error = .biome_swerr("InstallBlock_devtools")))
+
+    # ── 5. pak::pkg_install / pak::pak / pak::local_install ────────────────
+    setHook(packageEvent("pak", "onLoad"), function(...) tryCatch({
+      ns <- asNamespace("pak")
+      .pak_blocker <- function(pkg = NULL, ...) {
+        pkg_label <- if (is.character(pkg) && length(pkg) >= 1L) pkg[[1L]] else NULL
+        sys_log("InstallBlock", "DENY",
+                sprintf("pak install (%s)",
+                        if (is.null(pkg_label)) "" else pkg_label))
+        stop(.biome_install_block_msg("pak::pkg_install()", pkg_label,
+                                      "R_USER_PACKAGES_CRAN  (or _GITHUB for github::ref)"),
+             call. = FALSE)
+      }
+      attr(.pak_blocker, "biome_guard") <- TRUE
+      for (fn_name in c("pkg_install", "pak", "local_install",
+                        "local_install_deps", "pkg_install_local",
+                        "repo_add")) {
+        .biome_install_wrapper(.pak_blocker, fn_name, ns,
+                               save_original_to = paste0("original_pak_", fn_name))
+      }
+    }, error = .biome_swerr("InstallBlock_pak")))
+
+    sys_log("InstallBlock", "ARMED",
+            "install.packages/install_github/pak::pkg_install hard-deny active (v12.10 opt-in)")
+  }

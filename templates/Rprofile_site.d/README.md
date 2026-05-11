@@ -91,7 +91,8 @@ new fragments can be inserted between existing ones without renumbering.
 | 20 | `20_cgroup_reader.R` | split from v12.1 monolith lines 592-855 | cgroup v1/v2 detection, quota/memory limits, `setup_adaptive_callback` |
 | 30 | `30_psock_factory.R` | split from v12.1 monolith lines 857-951 | `.biome_make_cluster_impl` + `biome_make_cluster`; stashes impl into `.biome_env` for `45_`'s `safe_makeCluster` |
 | 35 | `35_compile_routing.R` | additive (v12.1) | `BIOME_RUN_ID`, `.biome_get_compile_dir`, `safe_compileNimble` (absorbs Martina-gate NIMBLE routing) |
-| 40 | `40_wrapper_installer.R` | split from v12.1 monolith lines 952-1027 | `.biome_install_wrapper` — lexical-scope-preserving function replacer (depended on by 45) |
+| 40 | `40_wrapper_installer.R` | split from v12.1 monolith lines 952-1027 | `.biome_install_wrapper` — lexical-scope-preserving function replacer (depended on by 42, 45) |
+| 42 | `42_install_block.R` | additive (v12.10) | OPT-IN install-storm safety valve — **default OFF** (`ENABLE_INSTALL_BLOCK <- FALSE`); when armed (template flip + redeploy, or per-session `BIOME_FORCE_INSTALL_BLOCK=1`) hard-denies `install.packages()` / `remotes`/`devtools`/`pak` `install_github()` / `BiocManager::install` with a single-line message redirecting users to sysadmin (requires 40) |
 | 45 | `45_memory_guards.R` | split from v12.1 monolith lines 1028-1248 | `solve` / `dist` / `outer` / `expand.grid` / `safe_makeCluster` memory guards (requires 40 and 30) |
 | 50 | `50_pkg_hooks.R` | split from v12.1 monolith lines 1249-1821 | Deferred package hooks (terra, raster, sf, nimble, stan, cmdstanr, arrow, future, rgee, ggplot2, tensorflow, rJava…) via `addTaskCallback` |
 | 60 | `60_safe_setwd.R` | additive (v12.1) | Hard-fail guard on `base::setwd()` when path missing (fixes Martina-gate class of bug) |

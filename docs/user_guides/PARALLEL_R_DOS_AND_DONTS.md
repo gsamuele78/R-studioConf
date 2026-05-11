@@ -252,9 +252,27 @@ mean_r <- terra::app(terra::rast(p), fun = mean, na.rm = TRUE)
 `install.packages()` at script top level:
 
 * Makes a network call mid-batch (slow, fragile).
-* Will silently fail on biome-calc nodes — `/usr/lib/R` is read-only
-  for non-root users.
 * Breaks reproducibility (different CRAN snapshot per run).
+* Fails with a confusing `EACCES` / "lib not writable" message on
+  biome-calc (the cluster `/usr/lib/R/site-library` is read-only for
+  non-root users, and the stock R prompt "would you like to use a
+  personal library?" hangs in batch jobs).
+* **v12.10 ships an OPT-IN system-side safety valve, default OFF.**
+  By default `install.packages("foo")` still hits the stock-R failure
+  path described above — the system does not silently change behaviour
+  (HC-13). When an install-storm becomes a real incident the sysadmin
+  can arm a hard-deny that fails fast on line 1 with:
+
+  ```
+  BIOME-CALC: install.packages() is disabled on this cluster.
+              Ask the sysadmin to add 'pkgname' to
+              config/r_env_manager.conf :: R_USER_PACKAGES_CRAN,
+              then re-run.
+  ```
+
+  Per-session opt-in (interactive sysadmin debug):
+  `BIOME_FORCE_INSTALL_BLOCK=1 R`. Fleet-wide arming is a sysadmin
+  template flip + redeploy.
 
 ### ✓ Do
 
@@ -313,22 +331,27 @@ defined.
 
 **Severity:** MED
 
-`parallel::detectCores()` returns the **host's** physical core count
-(24 on biome-calc), ignoring the cgroup cpuset that limits you to a
-slice (typically 4–8). Spawning 24 workers when you have 4 cores → 6×
-oversubscription, thrashing, and OOM.
+Bare `parallel::detectCores()` returns the **host's** physical core
+count (24 on biome-calc), ignoring the cgroup cpuset that limits you
+to a slice (typically 4–8). Spawning 24 workers when you have 4 cores
+→ 6× oversubscription, thrashing, and OOM.
 
 ### ✓ Do
 
+On biome-calc nodes the system kernel's
+`05_thread_guard.R` already routes `detectCores(logical = FALSE)`
+through the live cgroup quota, so the safe form is:
+
 ```r
-n_workers <- min(
-    parallel::detectCores(logical = FALSE) - 1,
-    as.integer(Sys.getenv("BIOME_USER_CORES", "4"))
-)
+n_workers <- max(1L, parallel::detectCores(logical = FALSE) - 1L)
 cl <- parallel::makeCluster(n_workers, type = "PSOCK")
 ```
 
-`BIOME_USER_CORES` is set by the system per session.
+This returns the **cgroup-effective** count on biome-calc, and the
+honest physical-core count on a laptop — your script stays portable.
+Do **not** read an environment variable like `BIOME_USER_CORES`: no
+such variable is exported, and any value would race with cgroup
+re-sizing during the session.
 
 ---
 
@@ -605,6 +628,13 @@ Worse than [R007](#r007-install-packages):
 * Supply-chain risk.
 * Network failure stalls compute.
 * The Git ref may move between runs (non-reproducible).
+
+**v12.10 ships an OPT-IN system-side safety valve, default OFF** —
+same mechanism as R007. By default these calls still execute (subject
+to the usual stock-R failure modes); when armed by the sysadmin
+(`ENABLE_INSTALL_BLOCK=TRUE` template flip, or per-session
+`BIOME_FORCE_INSTALL_BLOCK=1`) they hard-stop the moment `remotes`,
+`devtools`, or `pak` is loaded.
 
 ### ✓ Do
 
