@@ -1,5 +1,5 @@
-# tests/fixtures/r_lint/martina_test2.R
-# Anonymized fixture: <user_b> — GOOD-EXAMPLE reference (CLEAN).
+# tests/fixtures/r_lint/USER_G_martina_test2.R
+# Anonymized fixture: USER_A — GOOD-EXAMPLE reference (CLEAN).
 # Expected findings: NONE (canonical good-pattern, used by docs as the
 # "this is what your script should look like" example).
 #
@@ -10,13 +10,13 @@ library(nimble)
 
 # 1. Local SSD scratch dir (NOT /tmp, NOT NFS, NOT project-local _temp)
 chunk_dir <- file.path(
-    Sys.getenv("BIOME_USER_TMP", "/Rtmp"),
-    Sys.getenv("USER", "biome_user"),
+    Sys.getenv("ANONYMIZED_BIOME_USER_TMP", "/Rtmp"),
+    Sys.getenv("USER", "USER_A"),
     "mcmc_chunks"
 )
 dir.create(chunk_dir, showWarnings = FALSE, recursive = TRUE)
 
-# 2. Smoke knob — small workload when harness sets BIOME_DIAG_SMOKE=1
+# 2. Smoke knob — small workload when harness sets BIOME_SMOKE=1
 n_chunks <- as.integer(Sys.getenv("BIOME_SMOKE_N_CHUNKS", "10"))
 chunk_iters <- as.integer(Sys.getenv("BIOME_SMOKE_CHUNK_SIZE", "300"))
 

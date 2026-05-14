@@ -93,7 +93,7 @@ with root-owned files that block subsequent debug runs by other users
 (observed: /Rtmp/biome_root/, /Rtmp/Rtmp*, /tmp/user_diag_*).
 
 Correct invocation (PAM session as the affected user):
-  ${BOLD}su - <username>${NC}
+  ${BOLD}su - USER_D${NC}
   /usr/local/bin/99_diagnose_user_script.sh /path/to/user_script.R
 
 Forensic override (only to debug the harness itself, NOT user code):

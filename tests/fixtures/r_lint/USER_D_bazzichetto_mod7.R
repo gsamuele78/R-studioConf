@@ -1,5 +1,5 @@
-# tests/fixtures/r_lint/bazzichetto_mod7.R
-# Anonymized fixture: <user_b2> — synthetic NIMBLE+parLapply with extra anti-patterns.
+# tests/fixtures/r_lint/USER_D_bazzichetto_mod7.R
+# Anonymized fixture: USER_A — synthetic NIMBLE+parLapply with extra anti-patterns.
 # Expected findings: R009 (rm-list-ls), R012 (compileNimble+parLapply), R014 (cross-user save),
 #                    R015 (function depends on globalenv 'init_list'), R016 (relative load),
 #                    R017 (makeCluster no type)
@@ -24,4 +24,4 @@ cl <- makeCluster(4)
 out <- parLapply(cl, 1:4, run_one)
 stopCluster(cl)
 
-save(out, file = "/media/r_projects/<user_other2>/run_out.RData")
+save(out, file = "/media/r_projects/USER_C/run_out.RData")

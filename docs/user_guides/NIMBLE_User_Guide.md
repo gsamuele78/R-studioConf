@@ -60,12 +60,15 @@ biome_save_session()    # saves your current variables as a safety net
 ### Before Starting
 
 1. **Check server resources:**
+
    ```r
    status()
    ```
+
    This shows your RAM quota, CPU allocation, and how many users are active.
 
 2. **Save any existing work (safety net):**
+
    ```r
    biome_save_session()
    ```
@@ -73,12 +76,14 @@ biome_save_session()    # saves your current variables as a safety net
 ### Running the Model
 
 The server automatically:
+
 - Routes NIMBLE's C++ compilation to **NFS storage** (slower but reboot-safe for 16h+ runs)
 - Uses the **local /Rtmp disk** for compiler scratch files (fast, no RAM cost)
 - Caps threads to prevent overloading the shared CPU
 - Protects your compilation files from being cleaned up
 
 You will see a message like:
+
 ```
 🧪 BIOME-CALC: NIMBLE compilation routed to NFS (~/.nimble_compile/session_12345).
    Thread cap: 4 per chain. Safe for multi-chain MCMC.
@@ -99,6 +104,7 @@ You will see a message like:
 When running multiple chains (e.g., `nchains = 4`):
 
 ### Start Small
+
 ```r
 # First: 1-chain crash test (5-10 minutes)
 post_samples_1ch <- runMCMC(Cmcmc, niter = 200, nburnin = 50, nchains = 1)
@@ -108,6 +114,7 @@ post_samples <- runMCMC(Cmcmc, niter = 10000, nburnin = 2000, nchains = 4)
 ```
 
 ### Memory Estimation
+
 Each NIMBLE chain with `buildDerivs = TRUE` can use 8-15 GB of RAM during C++ compilation. For 4 chains:
 
 | Chains | Estimated RAM | Recommended? |
@@ -122,12 +129,14 @@ Each NIMBLE chain with `buildDerivs = TRUE` can use 8-15 GB of RAM during C++ co
 ## 4. What Changed From the "Old Server"
 
 The old server had **no resource management**. This meant:
+
 - ✅ Your code ran with no interference
 - ❌ One user's `solve()` on a large matrix could crash the server for everyone
 - ❌ No warnings before running out of memory
 - ❌ No automatic cleanup of orphaned processes eating CPU
 
 The new server adds **safety guards** that:
+
 - Warn you before operations that would crash the server
 - Automatically manage threads and memory per user
 - Clean up orphaned processes from crashed sessions
@@ -142,11 +151,13 @@ The new server adds **safety guards** that:
 ### "I Got a New Session Instead of My Old One"
 
 This means your previous session crashed. Common causes:
+
 1. **OOM kill** — Check for `~/ULTIMO_CRASH_RAM.txt`
 2. **Session timeout** — Sessions expire after 7 days of inactivity
 3. **Server restart** — Ask the admin if the server was restarted
 
 **What to do:**
+
 ```r
 # Check if your saved session exists
 biome_load_session()
@@ -162,6 +173,7 @@ Compiler scratch files (intermediate `.o` files) use the local `/Rtmp` disk, whi
 This combination provides both safety and good performance.
 
 Typical compile times:
+
 - Simple model: 2-5 minutes
 - Complex model (10+ variables, `buildDerivs=TRUE`): 10-30 minutes
 - First compilation is slowest; subsequent `compileNimble()` calls are faster
@@ -169,6 +181,7 @@ Typical compile times:
 ### "R Session Aborted" During MCMC
 
 If you see this error, contact the admin with:
+
 1. The model code that caused the crash
 2. The output of `status()` before the crash (if available)
 3. The approximate time of the crash
@@ -191,5 +204,6 @@ If you see this error, contact the admin with:
 ## 7. Contact
 
 For technical issues or server problems:
-- **Email:** Lifewatch_Biome_internal@live.unibo.it
+
+- **Email:** <Lifewatch_Biome_internal@live.unibo.it>
 - **Subject line:** Include "BIOME-CALC" and a brief description

@@ -1,5 +1,5 @@
-# tests/fixtures/r_lint/bazzichetto_1chain_test.R
-# Anonymized fixture: <user_b2> — single-chain HMC test variant.
+# r have to be present
+# Anonymized fixture: USER_B — single-chain HMC test variant.
 # Expected findings: R009 (rm-list-ls), R014 (cross-user save), R015 (init_list[[ from globalenv), R016 (relative load)
 
 library(nimble)
@@ -16,4 +16,4 @@ myModel <- nimbleModel(code = nimble_code, data = data_mod, constants = constant
 to_del <- ls()
 rm(list = to_del)
 
-save(myModel, file = "/media/r_projects/<user_other2>/1chain_HMC_test.RData")
+save(myModel, file = "/media/r_projects/USER_B/1chain_HMC_test.RData")

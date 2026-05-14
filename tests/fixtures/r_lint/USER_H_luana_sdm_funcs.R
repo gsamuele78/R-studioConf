@@ -1,5 +1,5 @@
-# tests/fixtures/r_lint/luana_sdm_funcs.R
-# Anonymized fixture: <user_c> — silent tryCatch swallowing pattern.
+# tests/fixtures/r_lint/USER_H_luana_sdm_funcs.R
+# Anonymized fixture: USER_A — silent tryCatch swallowing pattern.
 # Expected findings: R016 (relative readRDS), R019 (silent tryCatch x5)
 
 library(terra)
@@ -25,4 +25,4 @@ project_safely <- function(r, crs) {
 }
 
 # Relative path
-data <- readRDS("data/chelsaVariables/downscaled/bio_historic.rds")
+data <- readRDS("[ANONYMIZED_DATA_SUBDIR]/chelsaVariables/downscaled/bio_historic.rds")

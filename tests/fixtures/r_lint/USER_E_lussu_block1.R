@@ -1,11 +1,11 @@
-# tests/fixtures/r_lint/lussu_block1.R
-# Anonymized fixture: <user_a> — synthetic Lussu-style block.
+# tests/fixtures/r_lint/USER_E_lussu_block1.R
+# Anonymized fixture: USER_A — synthetic Lussu-style block.
 # Expected findings: R001 (makeCluster + no clusterExport), R006 (terra::values in loop)
 
 library(terra)
 library(parallel)
 
-raster_files <- list.files("rasters", pattern = "\\.tif$", full.names = TRUE)
+raster_files <- list.files("[ANONYMIZED_RASTERS_SUBDIR]", pattern = "\\.tif$", full.names = TRUE)
 
 process_chunk <- function(rf) {
     r <- terra::rast(rf)

@@ -1,11 +1,15 @@
-# tests/fixtures/r_lint/martina_mod7.R
-# Anonymized fixture: <user_b> — synthetic NIMBLE+PSOCK pattern.
+# tests/fixtures/r_lint/USER_F_martina_mod7.R
+# Anonymized fixture: USER_A — synthetic NIMBLE+PSOCK pattern.
 # Expected findings: R005 (setwd), R011 (cross-user path), R012 (compileNimble+parLapply), R014 (save cross-user), R016 (relative load), R017 (makeCluster no type)
 
 library(parallel)
 library(nimble)
 
-setwd("/nfs/home/<user_b>/test_<user_b>")
+# R005: setwd to a hardcoded absolute path
+# R011: cross-user absolute path
+# R005: setwd to a hardcoded absolute path
+# R011: cross-user absolute path
+setwd("/nfs/home/USER_A/test_USER_A")
 
 load(file = "Data_for_spGDMM_Lagorai.RData")
 
@@ -32,4 +36,6 @@ chain_output <- parLapply(cl, 1:4,
 
 stopCluster(cl)
 
-save(chain_output, file = "/media/r_projects/<user_other>/mod7_output.RData")
+# R014: cross-user write
+# R014: cross-user write
+save(chain_output, file = "/media/r_projects/USER_B/mod7_output.RData")
