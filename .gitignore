@@ -1,21 +1,6 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Rust
-src/biome_core_rust/target/
-src/biome_core_rust/Cargo.lock
-
 # MCP Servers
 mcp-servers/
 *.mcp.log
+
+# Node modules
+node_modules/
