@@ -15,3 +15,7 @@ venv.bak/
 # Rust
 src/biome_core_rust/target/
 src/biome_core_rust/Cargo.lock
+
+# MCP Servers
+mcp-servers/
+*.mcp.log
