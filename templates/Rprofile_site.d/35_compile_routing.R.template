@@ -106,8 +106,7 @@ if (exists(".biome_env", envir = globalenv(), inherits = FALSE)) {
 
   safe_compileNimble <- function(..., dirName = NULL,
                                   showCompilerOutput = FALSE,
-                                  resetFunctions = FALSE,
-                                  project = NULL) {
+                                  resetFunctions = FALSE) {
     if (is.null(dirName)) {
       dirName <- .biome_get_compile_dir("nimble")
       if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
@@ -117,8 +116,7 @@ if (exists(".biome_env", envir = globalenv(), inherits = FALSE)) {
     orig <- get(".biome_original_compileNimble", envir = save_store)
     orig(..., dirName = dirName,
          showCompilerOutput = showCompilerOutput,
-         resetFunctions     = resetFunctions,
-         project            = project)
+         resetFunctions     = resetFunctions)
   }
   attr(safe_compileNimble, "biome_wrapper") <- TRUE
 

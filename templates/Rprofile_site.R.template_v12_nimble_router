@@ -143,8 +143,7 @@ assign(".biome_get_compile_dir", .biome_get_compile_dir, envir = globalenv())
   
   safe_compileNimble <- function(..., dirName = NULL,
                                   showCompilerOutput = FALSE,
-                                  resetFunctions = FALSE,
-                                  project = NULL) {
+                                  resetFunctions = FALSE) {
     if (is.null(dirName)) {
       dirName <- .biome_get_compile_dir("nimble")
       if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
@@ -153,8 +152,7 @@ assign(".biome_get_compile_dir", .biome_get_compile_dir, envir = globalenv())
     }
     be$original_compileNimble(..., dirName = dirName,
                                showCompilerOutput = showCompilerOutput,
-                               resetFunctions = resetFunctions,
-                               project = project)
+                               resetFunctions = resetFunctions)
   }
   attr(safe_compileNimble, "biome_wrapper") <- TRUE
   
