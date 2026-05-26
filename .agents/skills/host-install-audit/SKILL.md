@@ -57,8 +57,30 @@ init.sh ──► r_env_manager.sh ──► scripts/NN_*.sh
 10. **Idempotency:** every script must be safe to re-run. Use `if … not yet …` guards; never destructive without `--force` flag.
 11. **Vars conf:** `config/*.vars.conf` keys exhaustively documented at top of file; default values pessimistic.
 12. **Tier-promotion:** if the fix exists in `docker-deploy/scripts/` or `kubernetes-deploy/`, ensure parity is preserved or record a `tier_deltas` entry.
+13. **R/RStudio Version Alignment:** Scripts MUST respect the dynamically configured stable R/RStudio versions defined in `config/r_env_manager.conf` and `kubernetes-deploy/configmaps.yaml`. Prevent runtime installations of different versions.
+    - **Rationale:** Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures.
+14. **R/RStudio Version Alignment:** Scripts MUST respect the dynamically configured stable R/RStudio versions defined in `config/r_env_manager.conf` and `kubernetes-deploy/configmaps.yaml`. Prevent runtime installations of different versions.
+    - **Rationale:** Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures.
 
-## HC-13 (User-Script Boundary) — special care
+## HC-14 (User-Script Boundary) — special care
+
+1. **R/RStudio Version Alignment:** Scripts MUST respect the dynamically configured stable R/RStudio versions defined in `config/r_env_manager.conf` and `kubernetes-deploy/configmaps.yaml`. Prevent runtime installations of different versions.
+    - **Rationale:** Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures.
+2. **R/RStudio Version Alignment:** Scripts MUST respect the dynamically configured stable R/RStudio versions defined in `config/r_env_manager.conf` and `kubernetes-deploy/configmaps.yaml`. Prevent runtime installations of different versions.
+    - **Rationale:** Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures.
+3. **R/RStudio Version Alignment:** Scripts MUST respect the dynamically configured stable R/RStudio versions defined in `config/r_env_manager.conf` and `kubernetes-deploy/configmaps.yaml`. Prevent runtime installations of different versions.
+    - **Rationale:** Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures.
+
+## HC-14 (User-Script Boundary) — special care
+
+1. **R/RStudio Version Alignment:** Scripts MUST respect the dynamically configured stable R/RStudio versions defined in `config/r_env_manager.conf` and `kubernetes-deploy/configmaps.yaml`. Prevent runtime installations of different versions.
+    - **Rationale:** Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures.
+2. **R/RStudio Version Alignment:** Scripts MUST respect the dynamically configured stable R/RStudio versions defined in `config/r_env_manager.conf` and `kubernetes-deploy/configmaps.yaml`. Prevent runtime installations of different versions.
+    - **Rationale:** Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures.
+3. **R/RStudio Version Alignment:** Scripts MUST respect the dynamically configured stable R/RStudio versions defined in `config/r_env_manager.conf` and `kubernetes-deploy/configmaps.yaml`. Prevent runtime installations of different versions.
+    - **Rationale:** Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures.
+
+## HC-14 (User-Script Boundary) — special care
 
 T1 hosts the diagnostic harnesses (`99_diagnose_user_script.sh`, `99_diagnose_lussu_hang.sh`, `r_minimal.sh`). Never silently rewrite a user `.R` file. Verdict line is mandatory. See `.ai/agents.md §6.6`.
 

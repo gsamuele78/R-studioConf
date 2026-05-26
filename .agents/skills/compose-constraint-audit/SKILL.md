@@ -24,18 +24,21 @@ Auditing a Docker Compose file for R-studioConf. Paradigm: **Pessimistic System 
    - Check `.ai/extracted_versions.env` for current pinned external versions.
 
 5. **HC-09 No docker.sock:** Only `docker-socket-proxy` may mount `/var/run/docker.sock`. All other services MUST NOT.
+6. **RStudio Version Alignment:** RStudio containers MUST map to the project's stable R/RStudio versions as defined in `config/r_env_manager.conf` and `kubernetes-deploy/configmaps.yaml`. Prevent unpinned runtime installations of different versions.
+   - **Rationale:** Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures.
+7. **Healthcheck:** All stateful (non-ephemeral) services must have a `healthcheck:` block.
 
-6. **Healthcheck:** All stateful (non-ephemeral) services must have a `healthcheck:` block.
+8. **Healthcheck:** All stateful (non-ephemeral) services must have a `healthcheck:` block.
 
-7. **Logging:** Must use the `&default-logging` YAML anchor pattern with `json-file` driver.
+9. **Logging:** Must use the `&default-logging` YAML anchor pattern with `json-file` driver.
 
-8. **depends_on:** Must use `condition: service_healthy` or `condition: service_completed_successfully`.
+10. **depends_on:** Must use `condition: service_healthy` or `condition: service_completed_successfully`.
 
-9. **No version: key:** Compose v2 does not need `version:` at the top.
+11. **No version: key:** Compose v2 does not need `version:` at the top.
 
-10. **Labels:** Long-running services should have `com.centurylinklabs.watchtower.enable=true`.
+12. **Labels:** Long-running services should have `com.centurylinklabs.watchtower.enable=true`.
 
-11. **Storage:** `/Rtmp` is a 400GB ext4 host disk — it SHOULD be bind-mounted into RStudio containers for large R temp workloads (NIMBLE, matrix ops). `/tmp` inside the container uses `tmpfs` with a size cap (e.g. `size=16G`). Do NOT use `/tmp` for large R temp storage — use `/Rtmp`.
+13. **Storage:** `/Rtmp` is a 400GB ext4 host disk — it SHOULD be bind-mounted into RStudio containers for large R temp workloads (NIMBLE, matrix ops). `/tmp` inside the container uses `tmpfs` with a size cap (e.g. `size=16G`). Do NOT use `/tmp` for large R temp storage — use `/Rtmp`.
 
 ## Output Format
 
