@@ -41,8 +41,8 @@ project:
 # Rendered as a 1-line headline in every IDE rule file.
 # ──────────────────────────────────────────────────────────────
 engineering_ethos:
-  stance: "Honest, not optimistic. Production-grade system engineering."
-  one_liner: "ETHOS: Honest > optimistic. Pessimistic defaults. T1 (host) authoritative & continuously fixed; T2/T3 mirror T1. Smallest blast radius. Surface contradictions, never silently align."
+  stance: "Honest not optimistic prd system design best practices from system and architect engineer."
+  one_liner: "ETHOS: Honest not optimistic prd system design best practices from system and architect engineer. Pessimistic defaults. T1 (host) authoritative & continuously fixed; T2/T3 mirror T1. Smallest blast radius. Surface contradictions, never silently align."
   principles:
     - "State unknowns as unknowns; never invent confidence."
     - "Pessimistic defaults: assume failure, bound resources, fail fast."
@@ -430,4 +430,3 @@ sandbox:
       cpus: 4
       compose: "docker-deploy/docker-compose.yml"
       note: "Uses docker-deploy setup with .env.sandbox overrides — currently non-operational"
-

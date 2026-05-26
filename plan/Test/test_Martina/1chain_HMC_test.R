@@ -48,4 +48,5 @@ mcmcConf_1ch$enableWAIC <- FALSE
 codeMCMC_1ch <- buildMCMC(mcmcConf_1ch)
 
 Cmodel_1ch <- nimble::compileNimble(model_1ch)
-CmodelMCMC_1ch <- nimble::compileNimble(codeMCMC_1ch, project = model_1ch)
+# CmodelMCMC_1ch <- nimble::compileNimble(codeMCMC_1ch, project = model_1ch)
+CmodelMCMC_1ch <- nimble::compileNimble(codeMCMC_1ch, model_1ch)

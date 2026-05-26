@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # scripts/99_check_user_renviron_overrides.sh
 # -----------------------------------------------------------------------------
 # Audit (and optionally cleanup) ~/.Renviron overrides.
@@ -49,7 +50,6 @@
 # Tier: T1 (host) — audit/cleanup helper, no version bump.
 # See:  docs/operations/UPGRADE_TO_v12.4.md  §10
 # -----------------------------------------------------------------------------
-set -euo pipefail
 
 # --- Color vars (mirror lib/common_utils.sh) -----------------------------------
 GREEN='\033[0;32m'

@@ -7,7 +7,7 @@ PROJECT: R-studioConf (RStudio Server + Nginx Portal + OIDC/SSSD/Samba)
 PARADIGM: Pessimistic System Engineering — assume failure, bound resources, fail fast.
 GENERATED: 2026-05-26 from project.yml + code scan
 
-ETHOS: Honest > optimistic. Pessimistic defaults. T1 (host) authoritative & continuously fixed; T2/T3 mirror T1. Smallest blast radius. Surface contradictions, never silently align.
+ETHOS: Honest not optimistic prd system design best practices from system and architect engineer. Pessimistic defaults. T1 (host) authoritative & continuously fixed; T2/T3 mirror T1. Smallest blast radius. Surface contradictions, never silently align.
 
 TIERS: T1=host AUTHORITATIVE_CONTINUOUSLY_FIXED | T2=docker MIGRATION_IN_PROGRESS (mirror T1) | T3=k8s SKELETON_NOT_READY (defer until T2 stable). Rule: fix in T1 first, port forward T1→T2→T3.
 
@@ -71,7 +71,7 @@ REFERENCE FILES (read on demand, do not embed):
 
 ---
 
-# Claude Agent Instructions — R-studioConf
+te.sh# Claude Agent Instructions — R-studioConf
 
 > **For:** Anthropic Claude (any version) working on this codebase.
 > **Load alongside:** `.ai/agents.md` — do not repeat what is in that file.
@@ -86,7 +86,7 @@ REFERENCE FILES (read on demand, do not embed):
 
 1. **Over-explaining** — Output code first. Rationale: 1–2 bullet points max, only for non-obvious constraint choices.
 2. **Apologizing** — Skip apology text. Provide the corrected artifact immediately.
-3. **Optimistic assumptions** — Assume the failure case. If a path might not exist, check. If a service might be down, handle it. Never assume the happy path.
+3. **Optimistic assumptions** — Honest not optimistic prd system design best practices from system and architect engineer. Assume the failure case. If a path might not exist, check. If a service might be down, handle it. Never assume the happy path.
 4. **Partial output** — NEVER produce "add this function to your script." Always output the complete file.
 5. **Suggesting alternatives** — The tech stack is final. Do NOT suggest Traefik, Jupyter, pthread BLAS, or tmpfs for R temp. Kubernetes (T3) IS on the roadmap but `SKELETON_NOT_READY` — engage it only when the task explicitly targets `kubernetes-deploy/`, never volunteer it.
 

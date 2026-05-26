@@ -1,4 +1,4 @@
-# Gemini Agent Instructions — R-studioConf
+d by all # Gemini Agent Instructions — R-studioConf
 
 > **For:** Google Gemini working on this codebase.
 > **Load alongside:** `.ai/agents.md` — project summary is there, not repeated here.
@@ -8,13 +8,15 @@
 ## Gemini-Specific Behavioral Corrections
 
 ### Grounding & Accuracy
+
 1. **Never hallucinate image names or versions.** Check `.ai/extracted_versions.env` for pinned external images. Local `botanical-*` images use `:latest` by convention — they are locally built, never pulled from a registry.
 2. **Never assume Docker Swarm mode.** Standalone Docker Compose v2 only.
 3. **Never suggest alternative tools** unless explicitly asked. RStudio, SSSD, Samba, Nginx, Ollama are final technology choices.
 4. **Never reference files that don't exist.** Ground all file references to the actual directory tree.
-5. **Never assume optimistic conditions.** If a path might not exist, check. If a service might be unavailable, handle it. Pessimistic System Engineering — assume failure.
+5. **Never assume optimistic conditions.** Honest not optimistic prd system design best practices from system and architect engineer. If a path might not exist, check. If a service might be unavailable, handle it. Pessimistic System Engineering — assume failure.
 
 ### Output Format
+
 - **Code blocks:** Full file path as a comment on line 1.
 - **Docker Compose:** Complete service block. Gemini tends to omit `deploy:` and `healthcheck:` — these are MANDATORY.
 - **Shell scripts:** Complete file. Never produce "add this to your script" snippets.

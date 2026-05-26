@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # scripts/99_diagnose_user_script.sh — GENERIC HC-13 user-script triage harness
 # HARNESS_VERSION="1.3"  (script-level only — does NOT bump RPROFILE_VERSION)
 # ==============================================================================
@@ -72,7 +73,6 @@
 #   2 — invocation error (missing script, bad args, run-as-root refused)
 #   3 — at least one layer PROGRESSING (inconclusive; re-run with longer --timeout)
 # ==============================================================================
-set -euo pipefail
 
 # ── Color vars (PSE convention — HC-03) ───────────────────────────────────
 RED=$'\e[0;31m'; YELLOW=$'\e[0;33m'; GREEN=$'\e[0;32m'

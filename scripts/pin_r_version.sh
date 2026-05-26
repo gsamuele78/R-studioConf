@@ -9,106 +9,166 @@
 
 set -euo pipefail
 
+# --- Path Resolution and Common Utilities ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+COMMON_UTILS="${WORKSPACE_ROOT}/lib/common_utils.sh"
+if [[ ! -f "${COMMON_UTILS}" ]]; then
+    echo "ERROR: Missing ${COMMON_UTILS}" >&2
+    exit 1
+fi
+# shellcheck source=../lib/common_utils.sh
+source "${COMMON_UTILS}"
+
 # --- Configuration ---
-readonly APT_PREFERENCES_FILE="/etc/apt/preferences.d/r-base"
-readonly R_PACKAGES="r-base r-base-core r-base-dev r-recommended r-cran-*"
-readonly DEFAULT_R_VERSION="4.6.0" # Example stable version, adjust as needed based on system state
+VARS_CONF="${WORKSPACE_ROOT}/config/pin_r_version.vars.conf"
+if [[ -f "${VARS_CONF}" ]]; then
+    # shellcheck source=../config/pin_r_version.vars.conf
+    source "${VARS_CONF}"
+else
+    log "WARN" "Config not found at ${VARS_CONF}. Using hardcoded defaults."
+    APT_PREFERENCES_FILE="/etc/apt/preferences.d/r-base"
+    R_PACKAGES="r-base r-base-core r-base-dev r-recommended r-cran-*"
+    DEFAULT_R_VERSION="4.6.0"
+fi
 
 # --- Helper Functions ---
 
-# Function to display messages with color
-log() {
-    local color="$1"
-    local message="$2"
-    case "$color" in
-        "info") echo -e "\\033[34mINFO: $message\\033[0m" ;;
-        "success") echo -e "\\033[32mSUCCESS: $message\\033[0m" ;;
-        "warning") echo -e "\\033[33mWARNING: $message\\033[0m" ;;
-        "error") echo -e "\\033[31mERROR: $message\\033[0m" >&2 ;;
-        *) echo "$message" ;;
-    esac
-}
-
-# Function to check if a command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Function to get available R versions (basic check)
 get_available_r_versions() {
-    if command_exists apt-get; then
-        log "info" "Checking available R versions via apt..."
-        # Attempt to get versions, filter for common R base packages
-        apt-cache madison r-base | grep -oP '(?<=version ).*(?=-)' | sort -V | uniq
+    if command -v apt-get &>/dev/null; then
+        # Use || true to prevent pipefail from crashing script if grep finds nothing
+        apt-cache madison r-base | grep -oP '(?<=version ).*(?=-)' | sort -V | uniq || true
     else
-        log "warning" "apt-get not found. Cannot list available R versions. Please provide the exact version manually."
-        echo "" # Return empty if apt-get is not available
+        log "WARN" "apt-get not found. Cannot list available R versions."
+        echo ""
+    fi
+}
+
+do_pin_version() {
+    local version="$1"
+    if [[ -z "$version" ]]; then
+        log "ERROR" "R version cannot be empty."
+        return 1
+    fi
+
+    local pin_string="${version}*"
+    log "INFO" "Selected R version to pin: '${version}' (will be pinned as '${pin_string}')."
+
+    # Idempotency check: Don't re-pin if already pinned to the exact requested version
+    if [[ -f "$APT_PREFERENCES_FILE" ]]; then
+        if grep -q "Pin: version $pin_string" "$APT_PREFERENCES_FILE"; then
+            log "INFO" "R packages are already pinned to version $pin_string. No action needed."
+            return 0
+        fi
+    fi
+
+    read -rp "$(echo -e "${YELLOW}WARNING: This will pin R packages to '${pin_string}'. Continue? (type 'yes'): ${NC}")" confirm
+    if [[ "$confirm" != "yes" ]]; then
+        log "INFO" "Operation cancelled."
+        return 0
+    fi
+
+    log "INFO" "Creating APT preferences file at '${APT_PREFERENCES_FILE}'..."
+    local tmp_file
+    tmp_file=$(mktemp)
+    cat <<EOF > "$tmp_file"
+# Pinning R packages to a specific version for stability
+# Managed by scripts/pin_r_version.sh
+Package: $R_PACKAGES
+Pin: version $pin_string
+Pin-Priority: 1001
+EOF
+
+    # Atomic write and permissions check (HC-10)
+    run_command "Install APT preferences" "mv \"$tmp_file\" \"$APT_PREFERENCES_FILE\" && chmod 644 \"$APT_PREFERENCES_FILE\"" || {
+        log "ERROR" "Failed to install APT preferences file or set permissions."
+        rm -f "$tmp_file"
+        exit 1
+    }
+
+    log "INFO" "SUCCESS: APT preferences file created."
+    log "INFO" "Running 'sudo apt-get update' to refresh package lists..."
+    run_command "Update apt" "apt-get update"
+
+    log "INFO" "Verifying R version pinning with 'apt-cache policy r-base'..."
+    run_command "Verify policy" "apt-cache policy r-base"
+    
+    log "INFO" "SUCCESS: R version pinning completed."
+}
+
+do_unpin_version() {
+    if [[ -f "$APT_PREFERENCES_FILE" ]]; then
+        read -rp "$(echo -e "${YELLOW}WARNING: This will remove '${APT_PREFERENCES_FILE}' and unpin R versions. Continue? (type 'yes'): ${NC}")" confirm
+        if [[ "$confirm" != "yes" ]]; then
+            log "INFO" "Operation cancelled."
+            return 0
+        fi
+
+        log "INFO" "Removing '${APT_PREFERENCES_FILE}'..."
+        run_command "Remove APT preferences" "rm -f ${APT_PREFERENCES_FILE}" || {
+            log "ERROR" "Failed to remove APT preferences file."
+            exit 1
+        }
+        
+        log "INFO" "SUCCESS: Unpinned R versions."
+        run_command "Update apt" "apt-get update"
+    else
+        log "INFO" "No pinning file found at '${APT_PREFERENCES_FILE}'."
     fi
 }
 
 # --- Main Script Logic ---
 
-log "info" "Starting R version pinning script."
+check_root
 
-# Check for root privileges
-if [[ "$(id -u)" -ne 0 ]]; then
-    log "error" "This script must be run as root or with sudo."
-    exit 1
-fi
+# Interactive menu loop
+main_menu() {
+    while true; do
+        echo ""
+        echo -e "${CYAN}============================================================${NC}"
+        echo -e "${GREEN} R Version Pinning Manager${NC}"
+        echo -e "${CYAN}============================================================${NC}"
+        echo "1. Show available R versions from apt"
+        echo "2. Pin to default R version (${DEFAULT_R_VERSION})"
+        echo "3. Pin to a custom R version"
+        echo "4. Unpin R version"
+        echo "5. Check current R pinning status"
+        echo "E. Exit"
+        echo -e "${CYAN}============================================================${NC}"
+        
+        read -rp "Enter choice: " choice
+        
+        case "$choice" in
+            1)
+                log "INFO" "Available R versions found:"
+                get_available_r_versions | sed 's/^/  /'
+                ;;
+            2)
+                do_pin_version "${DEFAULT_R_VERSION}"
+                ;;
+            3)
+                log "INFO" "Available R versions found:"
+                get_available_r_versions | sed 's/^/  /'
+                echo ""
+                read -rp "Enter the custom R version to pin (e.g., 4.6.0-1.2404.0): " custom_version
+                do_pin_version "$custom_version"
+                ;;
+            4)
+                do_unpin_version
+                ;;
+            5)
+                run_command "Check policy" "apt-cache policy r-base"
+                ;;
+            [Ee])
+                log "INFO" "Exiting R Version Pinning Manager."
+                break
+                ;;
+            *)
+                log "ERROR" "Invalid choice. Please enter a number 1-5 or E."
+                ;;
+        esac
+    done
+}
 
-# Check for essential commands
-if ! command_exists tee || ! command_exists apt-get || ! command_exists apt-cache || ! command_exists grep || ! command_exists sort || ! command_exists uniq; then
-    log "error" "Required commands (tee, apt-get, apt-cache, grep, sort, uniq) not found. Please ensure they are installed."
-    exit 1
-fi
-
-# Get available versions to help sysadmin
-log "info" "Attempting to list available R versions..."
-AVAILABLE_VERSIONS=$(get_available_r_versions)
-
-if [[ -n "$AVAILABLE_VERSIONS" ]]; then
-    log "info" "Available R versions found:"
-    echo "$AVAILABLE_VERSIONS" | sed 's/^/  /'
-    log "info" "You can select one of the above, or enter a custom version string (e.g., '4.6.0-1.2404.0')."
-else
-    log "warning" "Could not automatically determine available R versions. Please provide the exact version string manually."
-fi
-
-# Prompt for R version
-read -rp "Enter the R version to pin (e.g., '$DEFAULT_R_VERSION' or a specific version from above): " R_VERSION_TO_PIN
-
-if [[ -z "$R_VERSION_TO_PIN" ]]; then
-    log "error" "R version cannot be empty. Exiting."
-    exit 1
-fi
-
-# Construct the pin version string for apt preferences
-# We use a wildcard '*' to match patch versions if the user provides a major.minor.patch
-# Example: if user enters '4.6.0', we'll pin '4.6.0*'
-PIN_VERSION_STRING="${R_VERSION_TO_PIN}*"
-log "info" "Selected R version to pin: '$R_VERSION_TO_PIN' (will be pinned as '$PIN_VERSION_STRING')."
-
-# Create the APT preferences file
-log "info" "Creating APT preferences file at '$APT_PREFERENCES_FILE'..."
-cat <<EOF | sudo tee "$APT_PREFERENCES_FILE" > /dev/null
-# Pinning R packages to a specific version for stability
-# Managed by scripts/pin_r_version.sh
-Package: $R_PACKAGES
-Pin: version $PIN_VERSION_STRING
-Pin-Priority: 1001
-EOF
-
-log "success" "APT preferences file created successfully."
-
-# Update apt cache and verify
-log "info" "Running 'sudo apt update' to refresh package lists..."
-sudo apt update
-
-log "info" "Verifying R version pinning with 'apt-cache policy r-base'..."
-sudo apt-cache policy r-base
-
-log "success" "R version pinning script completed."
-log "info" "To unpin R versions, remove the file: sudo rm $APT_PREFERENCES_FILE"
-log "info" "Then run: sudo apt update && sudo apt install --only-upgrade r-base r-base-core r-base-dev r-recommended"
-log "info" "To hold packages instead of pinning (less granular): sudo apt-mark hold $R_PACKAGES"
-log "info" "To unhold: sudo apt-mark unhold $R_PACKAGES"
+main_menu
