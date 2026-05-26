@@ -10,10 +10,12 @@ Reviewing a shell script for R-studioConf. Paradigm: **Pessimistic System Engine
 ## Mandatory Checks
 
 ### 1. Error Handling (HC-03)
+
 - Line 1 MUST be `#!/usr/bin/env bash`
 - Line 2 MUST be `set -euo pipefail`
 
 ### 2. Secret Safety (HC-04)
+
 - Passwords MUST be written to temp files: `printf "%s" "$VAR" > file`
 - NEVER pass passwords as CLI arguments (`--password "$VAR"`)
 - NEVER `echo "$PASSWORD"` — leaks in process table
@@ -28,10 +30,12 @@ Any script run as a container entrypoint/CMD/ENTRYPOINT or triggered by a contai
 All scripts in `scripts/` run by the sysadmin on the host. Examples: `10_join_domain_sssd.sh`, `50_setup_nodes.sh`, `test_rstudio_login.sh`.
 
 ### 4. Config Reading
+
 - CORRECT: `grep "^VAR=" .env | cut -d= -f2- | tr -d '"'`
 - WRONG: `source .env` — unsafe with special characters in passwords
 
 ### 5. Path Resolution
+
 - MUST use: `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`
 - NEVER use bare `pwd` or hardcoded absolute paths
 
@@ -55,23 +59,31 @@ update_nginx_templates.sh → config/nginx/ → nginx-portal container
 Cross-check `.ai/agents.md §5` before changing script inputs/outputs.
 
 ### 7. Destructive Operations (HC-10)
+
 - Reset/destroy scripts MUST require explicit confirmation (`type 'yes'`)
 - Deploy scripts MUST `exit 1` if `chown` fails
 - Color output: GREEN (success), RED (error), YELLOW (warning), BLUE (info)
 
 ### 8. JSON Manipulation (HC-12)
+
 - Use `jq` for ALL JSON operations
 - NEVER use `sed`, `awk`, or `grep` to modify JSON files
 - URL-encode credentials: `jq -nr --arg v "$VAR" '$v|@uri'`
 
 ### 9. Storage References
+
 - For large R temp files: use `/Rtmp` (400GB ext4 disk), NOT `/tmp`
 - Do NOT reference `/tmp` for NIMBLE compilation or matrix scratch space
 
 ### 10. BLAS References
+
 - Package to install: `libopenblas0-serial`
 - Package to remove: `libopenblas0-pthread` (causes SIGSEGV)
 - Detection script: `/etc/profile.d/biome-coretype.sh`
+
+### 11. Pinned Versions (HC-11)
+
+- ALL upstream image versions MUST be pinned — no `:latest` tag
 
 ## Output Format
 

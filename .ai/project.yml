@@ -298,9 +298,13 @@ constraints:
       still require a `### v12.4.1` sub-section in the CHANGELOG.
     validate: "rprofile_version_has_changelog_entry"
 
+  - id: "HC-15"
+    rule: "R/RStudio version and default R configuration must dynamically map to single-source-of-truth files (config/r_env_manager.conf, configmaps.yaml) and no AI agent should suggest overriding them implicitly."
+    rationale: "Ensures consistent R/RStudio versions across all deployment tiers and AI configurations by enforcing dynamic mapping to canonical configuration files. Prevents implicit overrides that could lead to version drift and silent failures."
+    validate: "ai_config_respects_version_sources"
+
 # ──────────────────────────────────────────────────────────────
 # COMPOSE FORMAT RULES
-
 # ──────────────────────────────────────────────────────────────
 compose_rules:
   syntax: "Docker Compose v2 — NO version: key"
@@ -382,6 +386,7 @@ branding:
 # These CANNOT be inferred from compose/Dockerfiles — maintain here.
 # ──────────────────────────────────────────────────────────────
 r_runtime:
+  version_management: "Dynamically managed via config/r_env_manager.conf and kubernetes-deploy/configmaps.yaml. Upgrades MUST alter these configs, not deployment code directly."
   blas:
     package: "libopenblas0-serial"
     banned: "libopenblas0-pthread" # causes SIGSEGV with rsession pthread collision
@@ -425,3 +430,4 @@ sandbox:
       cpus: 4
       compose: "docker-deploy/docker-compose.yml"
       note: "Uses docker-deploy setup with .env.sandbox overrides — currently non-operational"
+
