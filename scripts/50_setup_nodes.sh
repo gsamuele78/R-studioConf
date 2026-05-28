@@ -1848,6 +1848,12 @@ CPUWeight=${USER_SLICE_CPU_WEIGHT}
 TasksAccounting=yes
 TasksMax=${USER_SLICE_TASKS_MAX}
 
+# Stack size: 32 MB (up from Linux default 8 MB). GEOS (sf/exactextractr)
+# recursive geometry operations on complex multi-polygons can exceed the
+# default 8 MB C stack per thread. 32 MB is a safe ceiling that still
+# catches genuine infinite-recursion bugs.
+LimitSTACK=33554432
+
 IOAccounting=yes
 IOWeight=${USER_SLICE_IO_WEIGHT}
 USEREOF

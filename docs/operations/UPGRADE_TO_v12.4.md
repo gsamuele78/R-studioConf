@@ -1210,6 +1210,202 @@ e non sono regressioni di sistema.
 
 ---
 
+## 18. Install-storm safety valve — fragment `42_install_block.R` (v12.10)
+
+> **Status:** v12.10 (2026-05-11) — `RPROFILE_VERSION="12.10"`. Nuovo
+> fragment **dormant** (default OFF) che spedisce la **machinery** per
+> bloccare `install.packages()` e affini; nessun comportamento cambia
+> finché il sysadmin non lo arma.
+
+### 18.1 Cosa risolve
+
+Su biome-calc `/usr/lib/R` è read-only per gli utenti non-root. Un
+`install.packages("foo")` nudo produce un percorso confuso in due step:
+
+1. `Warning: 'lib = "/usr/lib/R/site-library"' is not writable`
+2. prompt interattivo *"Would you like to use a personal library?"* →
+   nei batch job (no TTY) **blocca indefinitamente**; in sessioni
+   interattive l'utente dice *"yes"* e drift dal pin di cluster in
+   `config/r_env_manager.conf`.
+
+Lo stesso pattern si applica a `remotes::install_github()`,
+`devtools::install_github()`, `pak::pkg_install()` e
+`BiocManager::install()`.
+
+**HC-13 (default OFF):** il fragment **non modifica** il comportamento
+pre-v12.10 finché il sysadmin **non lo arma esplicitamente**. Quando
+armato (flag `ENABLE_INSTALL_BLOCK` o env `BIOME_FORCE_INSTALL_BLOCK`),
+la chiamata muore immediatamente con:
+
+```
+BIOME-CALC: install.packages() is disabled on this cluster.
+            Ask the sysadmin to add 'foo' to
+            config/r_env_manager.conf :: R_USER_PACKAGES_CRAN,
+            then re-run.
+            (This block was armed by the sysadmin via
+             ENABLE_INSTALL_BLOCK=TRUE or BIOME_FORCE_INSTALL_BLOCK=1.)
+```
+
+### 18.2 Fix
+
+- **Nuovo fragment** `templates/Rprofile_site.d/42_install_block.R.template`:
+  - wrappa `utils::install.packages` al fragment-load time;
+  - wrappa `remotes`, `devtools`, `pak`, `BiocManager` on-demand via
+    `setHook(packageEvent(<pkg>, "onLoad"), ...)`;
+  - salva gli originali in `.biome_env$original_install.packages` ecc.
+    così il sysadmin può comunque chiamarli direttamente a blocco attivo.
+- **Flag** `ENABLE_INSTALL_BLOCK <- FALSE` (PSE cat. 2 — default OFF).
+  Runtime opt-in: `BIOME_FORCE_INSTALL_BLOCK=1`.
+- **RPROFILE_VERSION bump** `12.9.4 → 12.10` in
+  `config/setup_nodes.vars.conf` — motivato da nuovo fragment in
+  `Rprofile_site.d/` + CHANGELOG + cross-doc (HC-18).
+
+### 18.3 Deploy
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: 3   (Step 8 — fragments redeploy + bundle rebuild atomico)
+sudo systemctl restart rstudio-server
+sudo bash scripts/50_setup_nodes.sh --verify
+# Atteso: Rprofile.site version: 12.10
+```
+
+### 18.4 Arming (sysadmin)
+
+```bash
+# A) Per-session arm (una sessione R — nessun redeploy):
+BIOME_FORCE_INSTALL_BLOCK=1 R
+
+# B) Fleet-wide arm (quando un install-storm è un incidente reale):
+sed -i 's/ENABLE_INSTALL_BLOCK <- FALSE/ENABLE_INSTALL_BLOCK <- TRUE/' \
+    templates/Rprofile_site.d/42_install_block.R.template
+sudo bash scripts/50_setup_nodes.sh   # redeploy on all calc nodes
+
+# C) Disarm fleet-wide: flip back to FALSE, redeploy.
+```
+
+### 18.5 Rollback
+
+```bash
+# Remove only the fragment from a node:
+sudo rm /etc/R/Rprofile_site.d/42_install_block.R
+# (Re-running 50_setup_nodes.sh will reinstall it default-OFF.)
+
+# Full revert: drop RPROFILE_VERSION back to 12.9.4, remove the
+# fragment template, restore R010 fix-text in r_lint_rules.tsv
+# to the v12.9.4 state.
+```
+
+### 18.6 Validazione
+
+```bash
+# (a) Fragment parse (same rule 50_setup_nodes.sh uses)
+Rscript -e 'parse(file = "templates/Rprofile_site.d/42_install_block.R.template")'
+
+# (b) Default-OFF smoke: install path unchanged from v12.9.4
+R --no-save -e 'cat(Sys.getenv("BIOME_FORCE_INSTALL_BLOCK"), "\n")'
+# Atteso: vuoto
+
+# (c) Arming smoke: install.packages blocked
+BIOME_FORCE_INSTALL_BLOCK=1 R --no-save -e 'install.packages("nonexistent")'
+# Atteso: BIOME-CALC: install.packages() is disabled on this cluster.
+```
+
+### 18.7 Tier deltas
+
+- **T1 (host)**: implementato.
+- **T2 (docker)**: N/A — `docker-deploy/templates/` non contiene
+  `Rprofile_site.d/` (backlog v12.7, §12.6).
+- **T3 (k8s)**: SKELETON_NOT_READY.
+
+### 18.8 Documentazione collaterale
+
+- `docs/reference/Rprofile_site.CHANGELOG.md` § v12.10 — root cause,
+  design notes, file list.
+- `docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md` §R007 / §R010 / §R023
+  — already references the v12.10 opt-in safety valve.
+
+---
+
+## 19. NIMBLE `compileNimble` wrapper compatibility hotfix (35_compile_routing.R.template, 2026-05-26)
+
+> **Status:** hotfix senza bump di `RPROFILE_VERSION` (fragment-only,
+> 2026-05-26). Risolve un argomento spurio `project=NULL` iniettato dal
+> wrapper `safe_compileNimble` che causava `unused argument (project =
+> NULL)` su alcune versioni di `nimble::compileNimble`.
+
+### 19.1 Cosa risolve
+
+Il wrapper `safe_compileNimble` in `35_compile_routing.R.template`
+dichiarava e inoltrava **sempre** gli argomenti `resetFunctions` e
+`project` alla originale `nimble::compileNimble`:
+
+```r
+safe_compileNimble <- function(..., dirName = NULL,
+                                showCompilerOutput = FALSE,
+                                resetFunctions = FALSE,
+                                project = NULL) {
+    ...
+    orig(..., dirName = dirName,
+         showCompilerOutput = showCompilerOutput,
+         resetFunctions     = resetFunctions,
+         project            = project)
+}
+```
+
+Alcune versioni installate di `nimble::compileNimble` non accettano
+`project`; il wrapper forzava `project = NULL` in **ogni** chiamata,
+producendo:
+
+```
+Error in compileNimble(...): unused argument (project = NULL)
+```
+
+### 19.2 Fix
+
+Rimosso l'argomento hardcoded `project` dal wrapper. La nuova firma
+sfrutta `...` per inoltrare **solo** gli argomenti passati
+dall'utente:
+
+```r
+safe_compileNimble <- function(..., dirName = NULL,
+                                showCompilerOutput = FALSE,
+                                resetFunctions = FALSE) {
+    ...
+    orig(..., dirName = dirName,
+         showCompilerOutput = showCompilerOutput,
+         resetFunctions     = resetFunctions)
+}
+```
+
+Commit GitHub: `ecce9e0` (2026-05-26, "fix rProfileFragment").
+
+### 19.3 Deploy
+
+```bash
+cd /opt/R-studioConf && git pull
+sudo bash scripts/50_setup_nodes.sh
+# Selezione: 3   (Step 8 — fragments redeploy + bundle rebuild atomico)
+sudo systemctl restart rstudio-server
+```
+
+### 19.4 Rollback
+
+```bash
+git -C /opt/R-studioConf revert ecce9e0
+sudo bash scripts/50_setup_nodes.sh   # selezione 3
+sudo systemctl restart rstudio-server
+```
+
+### 19.5 Tier deltas
+
+- **T1 (host)**: implementato.
+- **T2/T3**: N/A — il fragment `35_compile_routing` non è portato in
+  T2/T3 (backlog v12.7).
+
+---
+
 ## 15. Writer-agnostic canonical-path fallback (v12.9.2)
 
 > **Status:** v12.9.2 (2026-05-10) — `RPROFILE_VERSION="12.9.2"`. Hotfix

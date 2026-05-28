@@ -1,4 +1,4 @@
-# Rprofile_site.d/ — Kernel Feature Fragments (v12.2)
+# Rprofile_site.d/ — Kernel Feature Fragments (v12.10)
 
 Deployed by `scripts/50_setup_nodes.sh` to `/etc/R/Rprofile_site.d/`. Since
 v12.2 the `Rprofile_site.R` dispatcher is a **thin bootstrap** that, after
@@ -84,17 +84,21 @@ new fragments can be inserted between existing ones without renumbering.
    invariant has been satisfied (system → config → unchecked, in order;
    see `.ai/agents.md` §6.6).
 
-## Current fragments (v12.2)
+## Current fragments (v12.10)
 
 | # | File | Source | Purpose |
 |---|---|---|---|
+| 04 | `04_user_lib_bootstrap.R` | additive (v12.6, hardened v12.8/v12.9/v12.9.2) | Per-user local R library auto-bootstrap; creates `/var/lib/biome-Rlibs/<user>/<R-ver>/` and prepends to `.libPaths()` at session start (writer-agnostic since v12.9.2). Disable: `BIOME_DISABLE_USER_LIB_BOOTSTRAP=1`. |
+| 05 | `05_thread_guard.R` | additive (v12.3, hardened v12.5) | Cgroup-aware `parallel::detectCores()` wrapper; prevents BLAS thread pool exhaustion from `mclapply` and raises `OMP_THREAD_LIMIT`/`MC_CORES` before fork-unsafe calls. Per-user audit log at `/Rtmp/biome_thread_guard/`. |
 | 20 | `20_cgroup_reader.R` | split from v12.1 monolith lines 592-855 | cgroup v1/v2 detection, quota/memory limits, `setup_adaptive_callback` |
-| 30 | `30_psock_factory.R` | split from v12.1 monolith lines 857-951 | `.biome_make_cluster_impl` + `biome_make_cluster`; stashes impl into `.biome_env` for `45_`'s `safe_makeCluster` |
-| 35 | `35_compile_routing.R` | additive (v12.1) | `BIOME_RUN_ID`, `.biome_get_compile_dir`, `safe_compileNimble` (absorbs Martina-gate NIMBLE routing) |
+| 30 | `30_psock_factory.R` | split from v12.1 monolith lines 857-951 | `.biome_make_cluster_impl` + `biome_make_cluster`; stashes impl into `.biome_env` for `45_`'s `safe_makeCluster`; v12.9.4 adds MALLOC_ARENA_MAX propagation to PSOCK workers |
+| 35 | `35_compile_routing.R` | additive (v12.1) | `BIOME_RUN_ID`, `.biome_get_compile_dir`, `safe_compileNimble` (absorbs Martina-gate NIMBLE routing; 2026-05-26 hotfix: removed hardcoded `project=NULL` argument) |
 | 40 | `40_wrapper_installer.R` | split from v12.1 monolith lines 952-1027 | `.biome_install_wrapper` — lexical-scope-preserving function replacer (depended on by 42, 45) |
 | 42 | `42_install_block.R` | additive (v12.10) | OPT-IN install-storm safety valve — **default OFF** (`ENABLE_INSTALL_BLOCK <- FALSE`); when armed (template flip + redeploy, or per-session `BIOME_FORCE_INSTALL_BLOCK=1`) hard-denies `install.packages()` / `remotes`/`devtools`/`pak` `install_github()` / `BiocManager::install` with a single-line message redirecting users to sysadmin (requires 40) |
 | 45 | `45_memory_guards.R` | split from v12.1 monolith lines 1028-1248 | `solve` / `dist` / `outer` / `expand.grid` / `safe_makeCluster` memory guards (requires 40 and 30) |
-| 50 | `50_pkg_hooks.R` | split from v12.1 monolith lines 1249-1821 | Deferred package hooks (terra, raster, sf, nimble, stan, cmdstanr, arrow, future, rgee, ggplot2, tensorflow, rJava…) via `addTaskCallback` |
+| 50 | `50_pkg_hooks.R` | split from v12.1 monolith lines 1249-1821 | Deferred package hooks (terra, raster, sf, nimble, stan, cmdstanr, arrow, future, rgee, ggplot2, tensorflow, rJava…) via `addTaskCallback`; v12.4 adds `todisk=TRUE` default for terra; v12.9.4 adds cgroup-aware terraOptions |
+| 52 | `52_mclapply_guard.R` | additive (v12.4) | Fork Guard: reroutes `parallel::mclapply` → PSOCK when fork-unsafe packages (terra/sf/GDAL) are loaded; v12.7 adds PKG-SYNC (replicate attached packages to workers); v12.9.3 adds GLOBAL-SYNC (export master `globalenv()` to workers). Disable: `BIOME_DISABLE_FORK_GUARD=1`. |
+| 55 | `55_options_guard.R` | additive (v12.3, hardened v12.5) | Clamps `options(mc.cores)` to vcores at session start; prevents user code from oversubscribing cores; v12.5 adds per-user audit log. |
 | 60 | `60_safe_setwd.R` | additive (v12.1) | Hard-fail guard on `base::setwd()` when path missing (fixes Martina-gate class of bug) |
 | 70 | `70_persistent_tools.R` | split from v12.1 monolith lines 1822-2496 | `biome_cluster_test`, `biome_worker_diagnostics`, `biome_plot_budget`, `tools:biome_calc` attachment, final diag dump, welcome banner |
 | 80 | `80_tools_ext.R` | additive (v12.1) | `biome_tmb_compile()`, `biome_run_diagnostics()` attached to `tools:biome_calc` (requires 70) |
