@@ -1848,12 +1848,6 @@ CPUWeight=${USER_SLICE_CPU_WEIGHT}
 TasksAccounting=yes
 TasksMax=${USER_SLICE_TASKS_MAX}
 
-# Stack size: 32 MB (up from Linux default 8 MB). GEOS (sf/exactextractr)
-# recursive geometry operations on complex multi-polygons can exceed the
-# default 8 MB C stack per thread. 32 MB is a safe ceiling that still
-# catches genuine infinite-recursion bugs.
-LimitSTACK=33554432
-
 IOAccounting=yes
 IOWeight=${USER_SLICE_IO_WEIGHT}
 USEREOF
@@ -1904,6 +1898,32 @@ OLLEOF
     fi
   else
     log_info "Skipping Ollama CPU config (SKIP_OLLAMA=true)"
+  fi
+
+  # ── RStudio Server stack limit (geospatial guard) ────────────────────
+  # GEOS (sf/exactextractr) recursive geometry traversal on complex
+  # global MULTIPOLYGON datasets can exceed the Linux default 8 MB C
+  # stack per thread. This RLIMIT is scoped to rstudio-server.service
+  # and its rsession children — NOT applied globally via limits.d
+  # and NOT placed in user-.slice (slices manage cgroups, not RLIMITs).
+  local rstudio_stack_dir="/etc/systemd/system/rstudio-server.service.d"
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    log_info "[DRY-RUN] Would write ${rstudio_stack_dir}/50-biome-stack.conf"
+  else
+    run_cmd mkdir -p "${rstudio_stack_dir}"
+    cat > "${rstudio_stack_dir}/50-biome-stack.conf" <<RSSEOF
+# BIOME-CALC: RStudio geospatial stack guard — generated $(date -Iseconds)
+#
+# GEOS/sf/exactextractr recursive geometry traversal can exceed the
+# Linux default 8 MB C stack with complex global MULTIPOLYGON datasets.
+# Scope: rstudio-server.service + rsession children. NOT applied via
+# limits.d or user-.slice (RLIMIT_STACK belongs on service, not slice).
+[Service]
+LimitSTACK=33554432
+RSSEOF
+    chmod 644 "${rstudio_stack_dir}/50-biome-stack.conf"
+    log_success "RStudio stack limit: LimitSTACK=33554432 (32 MB) on rstudio-server.service"
+    log_info "  → To apply: sudo systemctl restart rstudio-server"
   fi
 
   # ── Apply changes ──

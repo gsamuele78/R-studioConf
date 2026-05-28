@@ -17,6 +17,7 @@
 | `R_LIBS_USER` | NFS `$HOME/R/...` (lookup-storm) | locale `/var/lib/biome-Rlibs/<user>/<ver>/` con fallback NFS |
 | Audit mount NFS | nessuno | step 7d read-only (vers ≥ 4.1, nconnect ≥ 4) |
 | Disco R-libs dedicato | n/a | opzionale: `R_LIBS_LOCAL_DEVICE=/dev/sdX` |
+| C stack geospaziale (`GEOS`) | `LimitSTACK` in `user-.slice.d` (IGNORATO da systemd — gli slice gestiscono cgroups, non RLIMITs) → `ulimit -s` resta 8192 | `LimitSTACK=33554432` in `rstudio-server.service.d/50-biome-stack.conf` → tutti gli rsession ereditano 32 MB di C stack. Verifica: `ulimit -s` mostra 32768 DENTRO una sessione RStudio (non via SSH come root). Step 11A. |
 
 Nessun file utente (`*.R`, `.Renviron`) viene toccato (HC-13).
 

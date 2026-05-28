@@ -2115,6 +2115,38 @@ run_audit("17.6", "system.slice has memory protection floor", {
   sprintf("OK (%.0f GB protected for nginx/sssd/telemetry)", gb)
 }, fix_hint = "Run 50_setup_nodes.sh option C")
 
+run_audit("17.6b", "rstudio-server stack limit (geospatial guard)", {
+  cfg <- "/etc/systemd/system/rstudio-server.service.d/50-biome-stack.conf"
+  if (!file.exists(cfg)) {
+    warning(sprintf("Missing: %s — GEOS C stack errors likely with complex polygons", cfg))
+    return("Not configured")
+  }
+  content <- tryCatch(readLines(cfg, warn = FALSE), error = function(e) character(0))
+  stack_line <- grep("^LimitSTACK=", content, value = TRUE)
+  if (length(stack_line) == 0) {
+    warning("LimitSTACK not found in drop-in")
+    return("No LimitSTACK directive")
+  }
+  stack_val <- as.integer(sub("LimitSTACK=", "", stack_line[1]))
+  if (is.na(stack_val)) return("Invalid LimitSTACK value")
+  expected <- 33554432
+  if (stack_val != expected) {
+    warning(sprintf("LimitSTACK=%d ≠ expected %d (32 MB)", stack_val, expected))
+  }
+  sprintf("OK (LimitSTACK=%d bytes = %d MB)", stack_val, stack_val / (1024^2))
+}, fix_hint = "Run scripts/50_setup_nodes.sh Step 11A, then systemctl daemon-reload && systemctl restart rstudio-server")
+
+run_audit("17.6c", "user-.slice does NOT contain stale LimitSTACK", {
+  cfg <- "/etc/systemd/system/user-.slice.d/50-biome-limits.conf"
+  if (!file.exists(cfg)) return("Skipped (user-.slice not deployed)")
+  content <- tryCatch(readLines(cfg, warn = FALSE), error = function(e) character(0))
+  if (any(grepl("^LimitSTACK=", content))) {
+    warning("user-.slice contains LimitSTACK — ignored by systemd (slices manage cgroups, not RLIMITs). Re-run Step 11A for updated config.")
+    return("Stale LimitSTACK present")
+  }
+  "OK (no LimitSTACK in slice — RLIMIT belongs on rstudio-server.service)"
+}, fix_hint = "Re-run scripts/50_setup_nodes.sh Step 11A. This removes LimitSTACK from user-.slice and installs it on rstudio-server.service.d instead.")
+
 run_audit("17.7", "Ollama CPU yields to user compute", {
   if (!requireNamespace("base", quietly = TRUE)) return("Skipped")
   ollama_active <- tryCatch(

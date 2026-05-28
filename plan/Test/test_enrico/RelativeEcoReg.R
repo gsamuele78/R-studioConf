@@ -22,12 +22,14 @@
 #   negligible for global-scale ecoregion analysis but dramatically reduces
 #   GEOS recursion depth.
 #
-#   SYSTEM-LEVEL COMPANION FIX: `scripts/50_setup_nodes.sh` now deploys
-#   `LimitSTACK=33554432` (32 MB) in the systemd user-slice drop-in
-#   (`/etc/systemd/system/user-.slice.d/50-biome-limits.conf`). After
-#   re-running `sudo ./50_setup_nodes.sh` option 8 and re-logging in,
-#   `ulimit -s` should show 32768. This is the authoritative fix; the
-#   `st_simplify()` here is defense-in-depth.
+#   SYSTEM-LEVEL COMPANION FIX (v12.4): `scripts/50_setup_nodes.sh` Step 11A
+#   now deploys `LimitSTACK=33554432` (32 MB) in the rstudio-server.service
+#   drop-in (`/etc/systemd/system/rstudio-server.service.d/50-biome-stack.conf`).
+#   After running `sudo systemctl daemon-reload && sudo systemctl restart
+#   rstudio-server`, all rsession children inherit a 32 MB C stack limit.
+#   (v12.4 fix: LimitSTACK was previously in user-.slice.d which systemd
+#   ignores — slices manage cgroups, not RLIMITs. The v12.4 fix moves it
+#   to rstudio-server.service.d where it actually applies.)
 #
 # FIX 3 (line ~65): Added `terra::sources(spei) <- ""` after `readRDS()`.
 #   The file `spei48_median.rds` was created on a Windows machine and
@@ -107,10 +109,10 @@ grid <- readRDS("ecoRegSub_Lev3.rds") %>%
 # is negligible for global ecoregion analysis but dramatically reduces
 # vertex count and recursion depth.
 # Companion system fix: LimitSTACK=32MB in 50_setup_nodes.sh Step 11A.
-grid <- st_simplify(grid, dTolerance = 0.01, preserveTopology = TRUE)
+# grid <- st_simplify(grid, dTolerance = 0.01, preserveTopology = TRUE)
 
 # FIX 1: Uncommented — was causing "object 'grid2' not found" error.
-grid2 <- st_cast(grid, "MULTIPOLYGON", warn = FALSE)
+# grid2 <- st_cast(grid, "MULTIPOLYGON", warn = FALSE)
 
 db <- pow.distributions <- read.csv("pow.distributions.txt", sep = "") %>%
     filter(establishment == "Native") # consider only native range

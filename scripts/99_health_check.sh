@@ -484,9 +484,26 @@ check_biome_cgroups() {
         if grep -q '^CPUQuota=' /etc/systemd/system/user-.slice.d/50-biome-limits.conf; then
             printf "  ⚠️  CPUQuota present — defeats dynamic fair-share\n"
         fi
+        # v12.4: LimitSTACK does NOT belong in user-.slice (slice manages cgroups, not RLIMITs).
+        # Stale presence here means the deployment was done before the v12.4 fix.
+        if grep -q '^LimitSTACK=' /etc/systemd/system/user-.slice.d/50-biome-limits.conf; then
+            printf "  ⚠️  Stale LimitSTACK in user-.slice (ignored by systemd) — re-run Step 11A to update\n"
+        fi
     else
         printf "  ❌ user-.slice template NOT deployed\n"
         printf "      Run: sudo bash scripts/50_setup_nodes.sh, option C\n"
+    fi
+
+    # RStudio Server stack limit (v12.4 — geospatial guard)
+    if [[ -f /etc/systemd/system/rstudio-server.service.d/50-biome-stack.conf ]]; then
+        if grep -q '^LimitSTACK=33554432' /etc/systemd/system/rstudio-server.service.d/50-biome-stack.conf; then
+            printf "  ✅ rstudio-server LimitSTACK=33554432 (32 MB)\n"
+        else
+            printf "  ⚠️  rstudio-server stack drop-in present but LimitSTACK mismatch\n"
+        fi
+    else
+        printf "  ⚠️  rstudio-server stack drop-in missing — geospatial C stack errors likely\n"
+        printf "      Run: sudo bash scripts/50_setup_nodes.sh, option 8\n"
     fi
 
     # System slice protection?
