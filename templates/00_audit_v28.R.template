@@ -1,8 +1,8 @@
 # ==============================================================================
 # BIOME-CALC: ENTERPRISE INFRASTRUCTURE AUDIT v28
 # ==============================================================================
-# Target: RStudio Server Open Source (Web Console Safe) — Rprofile v11.0 compatible
-# Usage:  source("%%BIOME_CONF%%/00_audit_v28.R")   (from R/RStudio)
+# Target: RStudio Server Open Source (Web Console Safe) — Rprofile v12.x / v11+ baseline compatible
+# Usage:  source("%%BIOME_CONF%%/audit/00_audit_v28.R")   (from R/RStudio)
 #         Or deployed by 99_audit_r_environment.sh
 #
 # Template placeholders (filled by 99_audit_r_environment.sh):
@@ -13,12 +13,12 @@
 #   %%CIFS_ARCHIVE%%  - /mnt/ProjectStorage
 #   %%PYTHON_ENV%%    - /opt/r-geospatial
 #
-# CHANGES v27.2 → v28 (Rprofile v11.0 LOCAL-DISK architecture):
+# CHANGES v27.2 → v28 (Rprofile v11+ LOCAL-DISK architecture):
 #   BREAKING: NIMBLE routing is now INVERTED vs v27.2
 #   - [12.1] NIMBLE dir MUST be on /Rtmp (was NFS $HOME in v10.0)
-#   - [8.5]  API_VERSION expected >= 6 (v11.0 schema with USER_TMP_ROOT)
+#   - [8.5]  API_VERSION expected >= 6 (v11+ schema with USER_TMP_ROOT)
 #
-#   NEW TESTS for Rprofile v11.0 [N1]-[N14]:
+#   NEW TESTS for Rprofile v11+ [N1]-[N14]:
 #   - [6.6]  BIOME_USER_TMP env var + .biome_env$USER_TMP_ROOT
 #   - [6.7]  v11.0 per-user subdirs under /Rtmp/biome_<user>/
 #   - [8.7]  New tools: biome_future_plan, biome_worker_diagnostics
@@ -86,7 +86,7 @@ audit_cat <- function(...) {
 
 audit_cat(paste0("\n", .AB,
   "==================================================================\n",
-  "  BIOME-CALC ENTERPRISE AUDIT v28 (Rprofile v11.0 compatible)\n",
+  "  BIOME-CALC ENTERPRISE AUDIT v28 (Rprofile v12.x / v11+ baseline)\n",
   "  ", format(Sys.time(), "%d %B %Y - %H:%M:%S"), "\n",
   "  Host: ", Sys.info()[["nodename"]], " | User: ", Sys.info()[["user"]], "\n",
   "==================================================================", .A0, "\n"))
@@ -192,7 +192,7 @@ run_audit("1.2", sprintf("Thread Capping Check (Max %d)", conf$max_threads), {
   if (is.na(omp)) stop("OMP_NUM_THREADS unset")
   if (omp > conf$max_threads) stop(sprintf("UNSAFE: Threads=%d (Must be <= %d for QEMU)", omp, conf$max_threads))
   sprintf("Safe: %d threads", omp)
-}, fix_hint = "Update to Rprofile >= v11.0")
+}, fix_hint = "Update to Rprofile >= v11+")
 
 run_audit("1.3", "CPU Model Detection", {
   cpuinfo <- tryCatch(readLines("/proc/cpuinfo", warn = FALSE), error = function(e) "")
@@ -280,19 +280,20 @@ run_audit("1.6", "OpenMP pkg-config", {
   }
 }, fix_hint = "Run 50_setup_nodes.sh (creates /usr/local/lib/pkgconfig/openmp.pc)")
 
-# v28: NEW — verify Rprofile >= v11.0
-run_audit("1.7", "Rprofile Version >= 11.0", {
+# v28: verify Rprofile >= v11 baseline (v12.x is current)
+run_audit("1.7", "Rprofile Version >= 11.0 (baseline)", {
   v <- tryCatch(.biome_env$VERSION, error = function(e) "unknown")
   if (v == "unknown") stop("Cannot determine Rprofile version")
   vnum <- suppressWarnings(as.numeric(gsub("[^0-9.]", "", v)))
   if (is.na(vnum)) stop(sprintf("Cannot parse version: %s", v))
   if (vnum < 9.6)   stop(sprintf("CRITICAL: v%s is pre-v9.6 — missing memory sentinels", v))
   if (vnum < 11.0)  warning(sprintf("v%s is pre-v11.0 — missing local-disk NIMBLE routing + return() fix", v))
-  sprintf("v%s", v)
-}, fix_hint = "Deploy Rprofile v11.0 via 50_setup_nodes.sh")
+  if (vnum >= 12.0) sprintf("v%s (v12.x current)", v)
+  else sprintf("v%s (v11 baseline)", v)
+}, fix_hint = "Deploy Rprofile v12.x via 50_setup_nodes.sh")
 
-# v28: NEW — BIOME_USER_TMP must be set by Rprofile Section -1.8
-run_audit("1.8", "BIOME_USER_TMP env var (v11.0)", {
+# v28: BIOME_USER_TMP must be set by Rprofile Section -1.8
+run_audit("1.8", "BIOME_USER_TMP env var (v11+)", {
   but <- Sys.getenv("BIOME_USER_TMP", "")
   if (nchar(but) == 0) stop("BIOME_USER_TMP not set (Rprofile < v11.0 or Section -1.8 failed)")
   if (!grepl("^/Rtmp/biome_", but)) {
@@ -304,7 +305,7 @@ run_audit("1.8", "BIOME_USER_TMP env var (v11.0)", {
   }
   if (!dir.exists(but)) stop(sprintf("BIOME_USER_TMP dir does not exist: %s", but))
   sprintf("OK (%s)", but)
-}, fix_hint = "Deploy Rprofile v11.0 — Section -1.8 creates the user tmp root")
+}, fix_hint = "Deploy Rprofile v11+ — Section -1.8 creates the user tmp root")
 
 # ==============================================================================
 # [2.0] SERVICES
@@ -649,8 +650,8 @@ run_audit("6.5", "Cgroup Refresh Mechanism", {
   }
 }, fix_hint = "Deploy Rprofile v11.0")
 
-# v28: NEW — .biome_env$USER_TMP_ROOT must be set and match BIOME_USER_TMP
-run_audit("6.6", ".biome_env$USER_TMP_ROOT (v11.0)", {
+# v28: .biome_env$USER_TMP_ROOT must be set and match BIOME_USER_TMP
+run_audit("6.6", ".biome_env$USER_TMP_ROOT (v11+)", {
   usr <- tryCatch(.biome_env$USER_TMP_ROOT, error = function(e) NULL)
   if (is.null(usr)) stop("USER_TMP_ROOT not in .biome_env (Rprofile < v11.0)")
   env_val <- Sys.getenv("BIOME_USER_TMP", "")
@@ -661,8 +662,8 @@ run_audit("6.6", ".biome_env$USER_TMP_ROOT (v11.0)", {
   sprintf("OK (%s)", usr)
 }, fix_hint = "Deploy Rprofile v11.0")
 
-# v28: NEW — v11.0 per-user subdirs must all exist after deferred init
-run_audit("6.7", "v11.0 per-user subdirs under /Rtmp/biome_<user>/", {
+# v28: per-user subdirs must all exist after deferred init
+run_audit("6.7", "v11+ per-user subdirs under /Rtmp/biome_<user>/", {
   usr <- tryCatch(.biome_env$USER_TMP_ROOT,
                   error = function(e) file.path("/Rtmp", paste0("biome_", Sys.info()[["user"]])))
   expected_subdirs <- c("nimble_compile", "tmb_compile", "stan_compile",
@@ -672,7 +673,7 @@ run_audit("6.7", "v11.0 per-user subdirs under /Rtmp/biome_<user>/", {
     if (!dir.exists(file.path(usr, sub))) missing <- c(missing, sub)
   }
   if (length(missing) > 0) {
-    warning(sprintf("Missing v11.0 subdirs under %s: %s", usr, paste(missing, collapse=", ")))
+    warning(sprintf("Missing v11+ subdirs under %s: %s", usr, paste(missing, collapse=", ")))
   }
   present <- setdiff(expected_subdirs, missing)
   sprintf("OK (%d/%d present: %s)", length(present), length(expected_subdirs),
@@ -1267,14 +1268,14 @@ run_audit("11.4", "Caret Hyperparameter Grid", {
 
 
 # ==============================================================================
-# [12.0] NIMBLE COMPILATION TESTS (v11.0: ROUTING INVERTED — now on /Rtmp)
+# [12.0] NIMBLE COMPILATION TESTS (v11+: ROUTING INVERTED — now on /Rtmp)
 # ==============================================================================
 # v10.0 routed NIMBLE compile to $HOME (NFS) "for reboot safety".
-# v11.0 FIX: routes to /Rtmp local disk to avoid NFS dir-cache races during
+# v11+ FIX: routes to /Rtmp local disk to avoid NFS dir-cache races during
 # concurrent compileNimble() in parLapply workers (cause of unserialize() crashes).
 # Compile artifacts are ephemeral and regenerated every session — no persistence needed.
 # ==============================================================================
-audit_cat("\n[12.0] NIMBLE COMPILATION TESTS (v11.0 routing)\n")
+audit_cat("\n[12.0] NIMBLE COMPILATION TESTS (v11+ routing)\n")
 
 run_audit("12.1", "NIMBLE Model Compilation (LOCAL /Rtmp routing)", {
   if (!.audit_pkgs[["nimble"]]) return("Skipped (nimble not installed)")
@@ -1307,7 +1308,7 @@ run_audit("12.1", "NIMBLE Model Compilation (LOCAL /Rtmp routing)", {
     home <- Sys.getenv("HOME")
     if (nchar(nimble_dir) > 0) {
       if (grepl(paste0("^", home), nimble_dir)) {
-        stop(sprintf("REGRESSION: NIMBLE dir on NFS (%s) — v11.0 requires /Rtmp!", nimble_dir))
+        stop(sprintf("REGRESSION: NIMBLE dir on NFS (%s) — v11+ requires /Rtmp!", nimble_dir))
       }
       if (!grepl("^/Rtmp/", nimble_dir)) {
         warning(sprintf("NIMBLE dir not on /Rtmp: %s", nimble_dir))
@@ -1321,7 +1322,7 @@ run_audit("12.1", "NIMBLE Model Compilation (LOCAL /Rtmp routing)", {
             dt, if (nchar(nimble_dir) > 0) basename(nimble_dir) else "unknown", post_t)
   }, error = function(e) stop(sprintf("NIMBLE compile failed: %s", e$message)))
 }, timeout = 120, use_fork = TRUE,
-   fix_hint = "Deploy Rprofile v11.0 (NIMBLE hook routes to /Rtmp, not NFS)")
+   fix_hint = "Deploy Rprofile v11+ (NIMBLE hook routes to /Rtmp, not NFS)")
 
 run_audit("12.2", "NIMBLE MCMC Build + Short Run", {
   if (!.audit_pkgs[["nimble"]]) return("Skipped (nimble not installed)")
@@ -1377,13 +1378,13 @@ run_audit("12.3", "NIMBLE buildDerivs (HMC-ready)", {
 }, timeout = 180, use_fork = TRUE,
    fix_hint = "Check nimbleHMC installation")
 
-# v28: NEW — per-worker NIMBLE compile subdir (worker_<pid>) [N2]
-run_audit("12.4", "NIMBLE per-worker compile subdir (v11.0 [N2])", {
+# v28: per-worker NIMBLE compile subdir (worker_<pid>) [N2]
+run_audit("12.4", "NIMBLE per-worker compile subdir (v11+ [N2])", {
   if (!.audit_pkgs[["nimble"]]) return("Skipped (nimble not installed)")
   # We verify the env var + directory scaffolding exists.
   # The actual per-worker subdir is created when PSOCK worker starts.
   usr <- tryCatch(.biome_env$USER_TMP_ROOT, error = function(e) NULL)
-  if (is.null(usr)) stop("USER_TMP_ROOT missing — Rprofile < v11.0")
+  if (is.null(usr)) stop("USER_TMP_ROOT missing — Rprofile < v11+")
   nimble_root <- file.path(usr, "nimble_compile")
   if (!dir.exists(nimble_root)) stop(sprintf("nimble_compile root missing: %s", nimble_root))
 
@@ -1404,10 +1405,10 @@ run_audit("12.4", "NIMBLE per-worker compile subdir (v11.0 [N2])", {
                     basename(session_dir_v11)))
     sprintf("OK (root=%s, session dir pending)", nimble_root)
   }
-}, fix_hint = "Deploy Rprofile v11.0 [N1+N2]: NIMBLE hook routes to /Rtmp")
+}, fix_hint = "Deploy Rprofile v11+ [N1+N2]: NIMBLE hook routes to /Rtmp")
 
-# v28: NEW — TMB per-PID compile dir (v11.0 [N1])
-run_audit("12.5", "TMB per-PID compile dir (v11.0)", {
+# v28: TMB per-PID compile dir (v11+ [N1])
+run_audit("12.5", "TMB per-PID compile dir (v11+)", {
   if (!.audit_pkgs[["TMB"]] && !.audit_pkgs[["glmmTMB"]]) {
     return("Skipped (TMB/glmmTMB not installed)")
   }
@@ -1425,7 +1426,7 @@ run_audit("12.5", "TMB per-PID compile dir (v11.0)", {
     warning(sprintf("TMB dir not under %s: %s", expected_prefix, tmb_env))
   }
   sprintf("OK (%s)", basename(tmb_env))
-}, fix_hint = "Deploy Rprofile v11.0 and library(glmmTMB) to trigger")
+}, fix_hint = "Deploy Rprofile v11+ and library(glmmTMB) to trigger")
 
 # ==============================================================================
 # [13.0] OpenMP VALIDATION (v28 NEW SECTION)
@@ -1597,7 +1598,7 @@ run_audit("13.6", "BRISC/spNNGP/ranger OMP cap (v11.0 [N8])", {
 
 
 # ==============================================================================
-# [14.0] INFRASTRUCTURE PLUMBING (v11.0 extended)
+# [14.0] INFRASTRUCTURE PLUMBING (v11+ extended)
 # ==============================================================================
 audit_cat("\n[14.0] INFRASTRUCTURE PLUMBING\n")
 
@@ -1792,11 +1793,11 @@ run_audit("14.12", "RhpcBLASctl Thread Control", {
 }, fix_hint = "install.packages('RhpcBLASctl')")
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  v28 NEW TESTS — v11.0 SAFEGUARDS AND TOOLS                              ║
+# ║  v28 TESTS — v11+ SAFEGUARDS AND TOOLS                                   ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
 # v28 [N3]: biome_make_cluster() accepts outfile= and routes to cluster_logs/
-run_audit("14.13", "biome_make_cluster outfile parameter (v11.0 [N3])", {
+run_audit("14.13", "biome_make_cluster outfile parameter (v11+ [N3])", {
   bmc <- tryCatch(get("biome_make_cluster", envir = as.environment("tools:biome_calc")),
                   error = function(e) NULL)
   if (is.null(bmc)) stop("biome_make_cluster not found")
@@ -1824,15 +1825,15 @@ run_audit("14.13", "biome_make_cluster outfile parameter (v11.0 [N3])", {
   logs_found <- if (dir.exists(cl_dir)) list.files(cl_dir, pattern = "^psock_.*\\.log$") else character(0)
   sprintf("OK (outfile arg present, cluster_logs=%d file(s))", length(logs_found))
 }, timeout = 30, use_fork = TRUE,
-   fix_hint = "Deploy Rprofile v11.0 (biome_make_cluster with outfile=)")
+   fix_hint = "Deploy Rprofile v11+ (biome_make_cluster with outfile=)")
 
 # v28 [N4]: parallel::makeCluster safeguard (warns + optionally redirects)
-run_audit("14.14", "parallel::makeCluster safeguard (v11.0 [N4])", {
+run_audit("14.14", "parallel::makeCluster safeguard (v11+ [N4])", {
   # v11.0 wraps parallel::makeCluster to emit a warning when called with PSOCK.
   # Check that original_makeCluster was saved in .biome_env (proof of install).
   orig <- tryCatch(get("original_makeCluster", envir = .biome_env), error = function(e) NULL)
   if (is.null(orig)) {
-    warning("parallel::makeCluster safeguard not installed (Rprofile pre-v11.0 or ENABLE_PARALLEL_GUARD=FALSE)")
+    warning("parallel::makeCluster safeguard not installed (Rprofile pre-v11+ or ENABLE_PARALLEL_GUARD=FALSE)")
     return("Not installed")
   }
   if (!is.function(orig)) stop("original_makeCluster is not a function")
@@ -1842,10 +1843,10 @@ run_audit("14.14", "parallel::makeCluster safeguard (v11.0 [N4])", {
   sprintf("%s (original preserved, wrapped=%s)",
           if (is_wrapped) "Active" else "Not wrapped",
           is_wrapped)
-}, fix_hint = "Deploy Rprofile v11.0 [N4]")
+}, fix_hint = "Deploy Rprofile v11+ [N4]")
 
 # v28 [N5]: doSNOW::registerDoSNOW safeguard
-run_audit("14.15", "doSNOW::registerDoSNOW safeguard (v11.0 [N5])", {
+run_audit("14.15", "doSNOW::registerDoSNOW safeguard (v11+ [N5])", {
   if (!.audit_pkgs[["doSNOW"]]) return("Skipped (doSNOW not installed)")
   orig <- tryCatch(get("original_registerDoSNOW", envir = .biome_env), error = function(e) NULL)
   if (is.null(orig)) {
@@ -1857,14 +1858,14 @@ run_audit("14.15", "doSNOW::registerDoSNOW safeguard (v11.0 [N5])", {
 }, fix_hint = "Deploy Rprofile v11.0 [N5] and library(doSNOW)")
 
 # v28 [N3]: Full worker env propagation — BIOME_NIMBLE_DIR + BIOME_TMB_DIR + etc
-run_audit("14.16", "Worker env propagation (v11.0 [N3])", {
+run_audit("14.16", "Worker env propagation (v11+ [N3])", {
   bmc <- tryCatch(get("biome_make_cluster", envir = as.environment("tools:biome_calc")),
                   error = function(e) NULL)
   if (is.null(bmc)) stop("biome_make_cluster not found")
   tryCatch({
     cl <- bmc(workers = 1, worker_threads = 1L)
     on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
-    # Worker must have all v11.0 env vars inherited
+    # Worker must have all v11+ env vars inherited
     worker_env <- parallel::clusterCall(cl, function() {
       list(
         BIOME_WORKER_MODE = Sys.getenv("BIOME_WORKER_MODE"),
@@ -1893,10 +1894,10 @@ run_audit("14.16", "Worker env propagation (v11.0 [N3])", {
             if (nchar(worker_env$BIOME_NIMBLE_DIR) > 0) basename(worker_env$BIOME_NIMBLE_DIR) else "MISSING")
   }, error = function(e) stop(sprintf("Worker env test failed: %s", e$message)))
 }, timeout = 30, use_fork = TRUE,
-   fix_hint = "Deploy Rprofile v11.0 [N3] — check env_vec in .biome_make_cluster_impl")
+   fix_hint = "Deploy Rprofile v11+ [N3] — check env_vec in .biome_make_cluster_impl")
 
 # v28 [N9]: biome_future_plan() helper — strategy selection
-run_audit("14.17", "biome_future_plan() helper (v11.0 [N9])", {
+run_audit("14.17", "biome_future_plan() helper (v11+ [N9])", {
   bfp <- tryCatch(get("biome_future_plan", envir = as.environment("tools:biome_calc")),
                   error = function(e) NULL)
   if (is.null(bfp)) stop("biome_future_plan not found in tools:biome_calc")
@@ -1918,10 +1919,10 @@ run_audit("14.17", "biome_future_plan() helper (v11.0 [N9])", {
   }
   sprintf("Available (sequential smoke OK)")
 }, timeout = 10,
-   fix_hint = "Deploy Rprofile v11.0 [N9]")
+   fix_hint = "Deploy Rprofile v11+ [N9]")
 
 # v28 [N10]: biome_worker_diagnostics() tool
-run_audit("14.18", "biome_worker_diagnostics() tool (v11.0 [N10])", {
+run_audit("14.18", "biome_worker_diagnostics() tool (v11+ [N10])", {
   bwd <- tryCatch(get("biome_worker_diagnostics", envir = as.environment("tools:biome_calc")),
                   error = function(e) NULL)
   if (is.null(bwd)) stop("biome_worker_diagnostics not found")
@@ -1934,10 +1935,10 @@ run_audit("14.18", "biome_worker_diagnostics() tool (v11.0 [N10])", {
   # It returns invisible(NULL) or a vector of paths — both are fine
   "Available (smoke OK)"
 }, timeout = 10,
-   fix_hint = "Deploy Rprofile v11.0 [N10]")
+   fix_hint = "Deploy Rprofile v11+ [N10]")
 
 # v28 [N7]: rstan/cmdstanr/brms output_dir routing
-run_audit("14.19", "Stan output_dir routing (v11.0 [N7])", {
+run_audit("14.19", "Stan output_dir routing (v11+ [N7])", {
   stan_loaded <- isNamespaceLoaded("rstan") || isNamespaceLoaded("cmdstanr") || isNamespaceLoaded("brms")
   if (!stan_loaded) return("Skipped (no Stan package loaded)")
   # Must have fired the hook
@@ -1959,10 +1960,10 @@ run_audit("14.19", "Stan output_dir routing (v11.0 [N7])", {
   if (!isTRUE(rstan_opt)) issues <- c(issues, "rstan.auto_write not TRUE")
   if (length(issues) > 0) warning(paste(issues, collapse = "; "))
   sprintf("OK (rstan.auto_write=%s, brms.file_refit=%s)", rstan_opt, brms_opt)
-}, fix_hint = "Deploy Rprofile v11.0 [N7] and library(rstan|cmdstanr|brms)")
+}, fix_hint = "Deploy Rprofile v11+ [N7] and library(rstan|cmdstanr|brms)")
 
 # v28 [CRITICAL]: top-level return() bug fix — ensure worker Rscript survives profile load
-run_audit("14.20", "Top-level return() bug fix (v11.0 CRITICAL)", {
+run_audit("14.20", "Top-level return() bug fix (v11+ CRITICAL)", {
   # v10.0 had a bug: `return(invisible(NULL))` at top-level of Rprofile.site
   # causes "Error: no function to return from" under Rscript, which halts
   # execution BEFORE the -e body runs. Worker PSOCK nodes die at handshake.

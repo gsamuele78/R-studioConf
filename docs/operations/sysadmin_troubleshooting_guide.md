@@ -18,7 +18,7 @@ This guide is organized by **symptom → diagnostic → root cause → fix → v
 /etc/biome-calc/                            # Config root
 /etc/biome-calc/coretype                    # Current OPENBLAS_CORETYPE value
 /etc/biome-calc/audit.conf                  # Audit parameters
-/etc/biome-calc/00_audit_v27.R              # Deployed audit script (87KB)
+/etc/biome-calc/audit/00_audit_v28.R        # Deployed audit script (from templates/)
 /var/log/biome-log/r_biome_system.log       # All R session events (world-writable)
 /nfs/home/<user>                            # User homes (NFS from TrueNAS)
 /Rtmp                                       # Local 400GB temp disk
@@ -46,7 +46,7 @@ sudo bash scripts/99_troubleshoot_env.sh --auth --test-user john.doe
 sudo bash scripts/99_troubleshoot_env.sh --storage --test-user john.doe
 
 # Audit from R console
-source('/etc/biome-calc/00_audit_v27.R')
+source('/etc/biome-calc/audit/00_audit_v28.R')
 
 # Resource status from R console
 status()

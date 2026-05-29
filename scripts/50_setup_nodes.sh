@@ -8,7 +8,7 @@
 # Part of: R-studioConf legacy deployment suite
 # Requires: lib/common_utils.sh, config/setup_nodes.vars.conf
 #           templates/Rprofile_site.R.template
-#           templates/00_audit_v27.R.template
+#           templates/00_audit_v28.R.template
 #
 # Usage:
 #   sudo ./50_setup_nodes.sh                 (interactive menu)
@@ -1604,7 +1604,7 @@ setup_nodes_logging() {
 
   # Deploy audit script from template
   local tmp_audit
-  tmp_audit=$(mktemp /tmp/00_audit_v27.R.deploy.XXXXXX)
+  tmp_audit=$(mktemp /tmp/00_audit_v28.R.deploy.XXXXXX)
   local generated_audit
   process_template "${AUDIT_TEMPLATE}" generated_audit \
     BIOME_CONF="${BIOME_CONF}" \
@@ -1615,10 +1615,11 @@ setup_nodes_logging() {
     PYTHON_ENV="${PYTHON_ENV}"
 
   printf "%s" "$generated_audit" > "${tmp_audit}"
-  run_cmd cp "${tmp_audit}" "${BIOME_CONF}/00_audit_v27.R"
+  run_cmd mkdir -p "${BIOME_CONF}/audit"
+  run_cmd cp "${tmp_audit}" "${BIOME_CONF}/audit/00_audit_v28.R"
   rm -f "${tmp_audit}"
-  run_cmd chmod 644 "${BIOME_CONF}/00_audit_v27.R"
-  log_success "Audit: ${BIOME_CONF}/00_audit_v27.R"
+  run_cmd chmod 644 "${BIOME_CONF}/audit/00_audit_v28.R"
+  log_success "Audit: ${BIOME_CONF}/audit/00_audit_v28.R"
 
   # System log
   mkdir -p "$(dirname "${LOG_FILE}")"
@@ -1633,7 +1634,7 @@ setup_nodes_logging() {
     run_cmd chmod 775 /var/log/biome_converter
   fi
 
-  # Audit config (read by 00_audit_v27.R and 99_audit_r_environment.sh)
+  # Audit config (read by 00_audit_v28.R and 99_audit_r_environment.sh)
   cat > "${BIOME_CONF}/audit.conf" <<ACONF
 # BIOME-CALC Audit Config — Generated: $(date -Iseconds)
 nfs_home       <- "${NFS_HOME}"
@@ -2499,7 +2500,7 @@ setup_nodes_summary() {
   echo ""
   echo "  Next steps:"
   echo "    1. sudo systemctl restart rstudio-server"
-  echo "    2. In R: source('${BIOME_CONF}/00_audit_v27.R')"
+  echo "    2. In R: source('${BIOME_CONF}/audit/00_audit_v28.R')"
   echo "    3. In R: status()"
   echo ""
   echo "  Key files deployed:"
@@ -2507,7 +2508,7 @@ setup_nodes_summary() {
   echo "    /etc/R/Renviron.site"
   echo "    /etc/profile.d/biome-coretype.sh"
   echo "    /etc/rstudio/rsession-profile"
-  echo "    ${BIOME_CONF}/00_audit_v27.R"
+  echo "    ${BIOME_CONF}/audit/00_audit_v28.R"
   echo "    ${BIOME_CONF}/audit.conf"
   echo "    ${LOG_FILE}"
   echo "    ${SWAP_FILE} (${SWAP_SIZE_GB}GB)"

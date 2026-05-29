@@ -1,8 +1,8 @@
 #!/bin/bash
 # 99_health_check.sh - System Health Check Script
 # Verifies all services are running, configs are valid, and AD connectivity works.
-# Extended with BIOME-CALC v11.0 Rprofile + audit v28 infrastructure checks.
-# Version: 1.1.0
+# Extended with BIOME-CALC v12.x Rprofile + audit v28 infrastructure checks.
+# Version: 1.2.0
 
 set -euo pipefail
 
@@ -49,7 +49,7 @@ check_services() {
         services+=("winbind")
     fi
 
-    # BIOME v11.0: additional services
+    # BIOME additional services
     if systemctl list-unit-files 2>/dev/null | grep -q "ollama.service"; then
         services+=("ollama")
     fi
@@ -210,22 +210,22 @@ check_time_sync() {
 }
 
 # =============================================================================
-# BIOME-CALC v11.0 INFRASTRUCTURE CHECKS (new in v1.1.0)
+# BIOME-CALC INFRASTRUCTURE CHECKS (v12.x + audit v28)
 # =============================================================================
 
 # Check /Rtmp is a real local disk (not tmpfs, not missing)
 check_biome_rtmp() {
-    log "INFO" "=== Checking /Rtmp Local Disk (v11.0) ==="
+    log "INFO" "=== Checking /Rtmp Local Disk ==="
 
     if ! mountpoint -q /Rtmp 2>/dev/null && ! [[ -d /Rtmp ]]; then
-        printf "  ❌ /Rtmp not present (v11.0 requires dedicated local disk)\n"
+        printf "  ❌ /Rtmp not present (requires dedicated local disk)\n"
         return 1
     fi
 
     local fs_type
     fs_type=$(df -T /Rtmp 2>/dev/null | awk 'NR==2 {print $2}')
     if [[ "$fs_type" == "tmpfs" ]]; then
-        printf "  ❌ /Rtmp is TMPFS — v11.0 requires ext4/xfs (eats RAM, guards misfire)\n"
+        printf "  ❌ /Rtmp is TMPFS — requires ext4/xfs (eats RAM, guards misfire)\n"
         return 1
     fi
     printf "  ✅ /Rtmp filesystem: %s\n" "$fs_type"
@@ -258,9 +258,9 @@ check_biome_rtmp() {
     return 0
 }
 
-# Check Rprofile v11.0 is deployed and syntactically valid
+# Check Rprofile is deployed and syntactically valid
 check_biome_rprofile() {
-    log "INFO" "=== Checking Rprofile v11.0 ==="
+    log "INFO" "=== Checking Rprofile Deployment ==="
 
     local rprofile=/etc/R/Rprofile.site
     if [[ ! -f "$rprofile" ]]; then
@@ -288,13 +288,17 @@ check_biome_rprofile() {
         fi
     fi
 
-    # Version header — v11.0 marker
-    if grep -qE 'v11\.0|LOCAL-DISK ARCHITECTURE' "$rprofile"; then
-        printf "  ✅ Rprofile version: v11.0 marker found\n"
+    # Version header detection
+    if grep -qE 'v12\.|LOCAL-DISK ARCHITECTURE' "$rprofile"; then
+        printf "  ✅ Rprofile version: v12.x marker found\n"
+    elif grep -qE 'v11\.0' "$rprofile"; then
+        local found_ver
+        found_ver=$(grep -oE 'v[0-9]+\.[0-9]+' "$rprofile" | head -1)
+        printf "  ⚠️  Rprofile version: %s (upgrade to v12.x recommended)\n" "$found_ver"
     elif grep -qE 'v10\.|v9\.' "$rprofile"; then
         local found_ver
         found_ver=$(grep -oE 'v[0-9]+\.[0-9]+' "$rprofile" | head -1)
-        printf "  ⚠️  Rprofile version: %s (v11.0 fixes NFS races + top-level return() bug)\n" "$found_ver"
+        printf "  ❌ Rprofile version: %s (v11+ required — NFS races + top-level return() bug)\n" "$found_ver"
     else
         printf "  ⚠️  Rprofile version: could not detect in header\n"
     fi
@@ -323,7 +327,7 @@ check_biome_rprofile() {
 
 # Check BLAS is openblas-serial (not pthread which causes SIGSEGV)
 check_biome_blas() {
-    log "INFO" "=== Checking OpenBLAS Variant (v11.0 requires serial) ==="
+    log "INFO" "=== Checking OpenBLAS Variant (requires serial) ==="
 
     if ! command -v dpkg &>/dev/null; then
         printf "  ⚠️  dpkg not available — cannot verify BLAS packages\n"
@@ -368,7 +372,7 @@ check_biome_blas() {
 
 # Check OpenMP infrastructure (libgomp + pkg-config openmp.pc)
 check_biome_openmp() {
-    log "INFO" "=== Checking OpenMP Infrastructure (v11.0 [N8]) ==="
+    log "INFO" "=== Checking OpenMP Infrastructure ==="
 
     # libgomp1 package
     if command -v dpkg &>/dev/null; then
@@ -412,7 +416,7 @@ check_biome_openmp() {
 
 # Check /Rtmp/biome_<user>/ per-user layout and cluster_logs health
 check_biome_user_layout() {
-    log "INFO" "=== Checking /Rtmp per-user layout (v11.0) ==="
+    log "INFO" "=== Checking /Rtmp per-user layout ==="
 
     if ! [[ -d /Rtmp ]]; then
         printf "  ⚠️  /Rtmp missing — skipping per-user check\n"
@@ -428,7 +432,7 @@ check_biome_user_layout() {
 
     printf "  ✅ Users with /Rtmp init: %d\n" "${#biome_dirs[@]}"
 
-    # v11.0 expected subdirs
+    # Expected subdirs
     local -a expected=(nimble_compile tmb_compile stan_compile rcpp_cache cluster_logs keras_cache plot_cache)
     local sample_dir="${biome_dirs[0]}"
     local missing=()
@@ -438,10 +442,10 @@ check_biome_user_layout() {
         fi
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
-        printf "  ⚠️  Sample user (%s) missing v11.0 subdirs: %s\n" \
+        printf "  ⚠️  Sample user (%s) missing expected subdirs: %s\n" \
                "$(basename "$sample_dir")" "${missing[*]}"
     else
-        printf "  ✅ Sample user has all 7 v11.0 subdirs: %s\n" "$(basename "$sample_dir")"
+        printf "  ✅ Sample user has all 7 expected subdirs: %s\n" "$(basename "$sample_dir")"
     fi
 
     # Recent worker errors across all users
