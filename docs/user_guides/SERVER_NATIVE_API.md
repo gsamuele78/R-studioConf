@@ -51,6 +51,27 @@ point.
 
 ## Thread-pool widening
 
+These helpers are exposed via an **attached runtime environment** (`biome:runtime`),
+not via `.GlobalEnv`. They survive `rm(list = ls())` and other common workspace
+cleanup patterns. Call syntax is unchanged:
+
+```r
+biome_unleash_threads(8)
+biome_restore_threads()
+```
+
+When writing portable wrapper code, prefer:
+
+```r
+if (exists("biome_unleash_threads", mode = "function")) {
+  biome_unleash_threads(8)
+  on.exit(biome_restore_threads(), add = TRUE)
+}
+```
+
+Do **not** hardcode `exists(..., envir = globalenv(), inherits = FALSE)` — the
+helpers are no longer in `.GlobalEnv`.
+
 ### `biome_unleash_threads(n = 4L, gdal = FALSE)`
 
 Temporarily raises `OMP_NUM_THREADS` / `OPENBLAS_NUM_THREADS` / `MKL_NUM_THREADS`

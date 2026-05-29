@@ -107,36 +107,58 @@ local({
   #
   # This gives us a single, reviewable call site instead of researchers
   # sprinkling Sys.setenv() and later wondering why mclapply froze.
-  if (!exists("biome_unleash_threads", envir = globalenv(), inherits = FALSE)) {
-    assign("biome_unleash_threads", function(n = 4L, gdal = FALSE) {
-      n <- max(1L, as.integer(n))
-      Sys.setenv(OMP_NUM_THREADS      = as.character(n),
-                 OMP_THREAD_LIMIT     = as.character(n),
-                 OPENBLAS_NUM_THREADS = as.character(n),
-                 MKL_NUM_THREADS      = as.character(n))
-      if (isTRUE(gdal)) Sys.setenv(GDAL_NUM_THREADS = as.character(n),
-                                   PROJ_NUM_THREADS = as.character(n))
-      message(sprintf(
-        "BIOME-CALC: native thread caps raised to %d%s. ",
-        n, if (isTRUE(gdal)) " (incl. GDAL/PROJ)" else ""),
-        "DO NOT call parallel::mclapply() or future::plan(multicore) while raised; ",
-        "call biome_restore_threads() first.")
-      invisible(n)
-    }, envir = globalenv())
-  }
+  #
+  # v12.11: helpers are exposed via an attached runtime environment
+  # "biome:runtime" rather than .GlobalEnv, so they survive
+  # rm(list = ls()) and other common user cleanup patterns.
+  # Normal call syntax (biome_unleash_threads(8)) is unchanged;
+  # portable checks should use exists(..., mode="function") not
+  # exists(..., envir=globalenv(), inherits=FALSE).
+  #
+  # Implementation: attach(list(...)) creates a searchable attached
+  # database from the named list.  Because the helpers are NOT in
+  # .GlobalEnv, rm(list = ls()) does not delete them.  Once attached
+  # we lock bindings in the resulting environment so they cannot be
+  # overwritten or removed accidentally.
+  runtime_name <- "biome:runtime"
 
-  if (!exists("biome_restore_threads", envir = globalenv(), inherits = FALSE)) {
-    assign("biome_restore_threads", function() {
-      Sys.setenv(OMP_NUM_THREADS      = "1",
-                 OMP_THREAD_LIMIT     = "1",
-                 OMP_NESTED           = "FALSE",
-                 OPENBLAS_NUM_THREADS = "1",
-                 MKL_NUM_THREADS      = "1",
-                 GDAL_NUM_THREADS     = "1",
-                 PROJ_NUM_THREADS     = "1")
-      message("BIOME-CALC: native thread caps restored to 1 (fork-safe).")
-      invisible(1L)
-    }, envir = globalenv())
+  if (!(runtime_name %in% search())) {
+    tryCatch({
+      attach(list(
+        biome_unleash_threads = function(n = 4L, gdal = FALSE) {
+          n <- max(1L, as.integer(n))
+          Sys.setenv(OMP_NUM_THREADS      = as.character(n),
+                     OMP_THREAD_LIMIT     = as.character(n),
+                     OPENBLAS_NUM_THREADS = as.character(n),
+                     MKL_NUM_THREADS      = as.character(n))
+          if (isTRUE(gdal)) Sys.setenv(GDAL_NUM_THREADS = as.character(n),
+                                       PROJ_NUM_THREADS = as.character(n))
+          message(sprintf(
+            "BIOME-CALC: native thread caps raised to %d%s. ",
+            n, if (isTRUE(gdal)) " (incl. GDAL/PROJ)" else ""),
+            "DO NOT call parallel::mclapply() or future::plan(multicore) while raised; ",
+            "call biome_restore_threads() first.")
+          invisible(n)
+        },
+        biome_restore_threads = function() {
+          Sys.setenv(OMP_NUM_THREADS      = "1",
+                     OMP_THREAD_LIMIT     = "1",
+                     OMP_NESTED           = "FALSE",
+                     OPENBLAS_NUM_THREADS = "1",
+                     MKL_NUM_THREADS      = "1",
+                     GDAL_NUM_THREADS     = "1",
+                     PROJ_NUM_THREADS     = "1")
+          message("BIOME-CALC: native thread caps restored to 1 (fork-safe).")
+          invisible(1L)
+        }),
+        name = runtime_name, warn.conflicts = FALSE)
+
+      # Lock the newly-attached environment bindings
+      rt <- as.environment(runtime_name)
+      tryCatch({
+        lockEnvironment(rt, bindings = TRUE)
+      }, error = function(e) invisible(NULL))
+    }, error = function(e) invisible(NULL))
   }
 
   # ────────────────────────────────────────────────────────────────────────

@@ -85,6 +85,13 @@ sheet (`docs/user_guides/BOTANIST_CHEATSHEET.md`) and the MOTD
 server-native API is documented separately in
 `docs/user_guides/SERVER_NATIVE_API.md` and flagged as *advanced / optional*.
 
+These helpers are exposed via an **attached runtime environment**
+(`biome:runtime`) rather than `.GlobalEnv`. This protects them from
+`rm(list = ls())` and other common workspace cleanup patterns while
+keeping the call syntax unchanged. Portable wrapper code should use
+`exists("helper_name", mode = "function")` (search-path aware) instead of
+`exists(..., envir = globalenv(), inherits = FALSE)`.
+
 ---
 
 ## Invariants every new fragment must respect
