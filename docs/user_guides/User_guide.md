@@ -142,7 +142,7 @@ train_keras_worker <- function(learning_rate, dati_x, dati_y) {
 }
 ```
 
-4. Grafici in Background (La sindrome del "Pittore Bendato")
+1. Grafici in Background (La sindrome del "Pittore Bendato")
 Quando lanciate un calcolo parallelo o un lavoro in background, quei processi non hanno uno schermo (sono "headless"). Se il vostro script finisce con plot(dati) o print(mio_ggplot), il server ignorerà il comando o andrà in errore, e il grafico andrà perduto.
 
 Soluzione: Costringete R a stampare l'immagine su un file fisico.
@@ -333,7 +333,29 @@ Mandate queste 6 cose a `%%BIOME_CONTACT%%` (oppure aprite ticket al sistema ind
 
 ---
 
-## 10. Cross-Reference (per chi vuole approfondire)
+## 10. FAQ: Perché non posso aprire più sessioni RStudio contemporaneamente?
+
+**Domanda:** Ho provato ad aprire RStudio su due nodi diversi (es. `biome-calc01` e `biome-calc02`) con lo stesso account, ma la prima sessione si disconnette. Perché?
+
+**Risposta:** Questa è una **limitazione fondamentale di RStudio Server Open Source (OSS)**, la versione gratuita che utilizziamo. RStudio Server OSS supporta **una sola sessione R attiva per utente alla volta**. Quando si tenta di connettersi da un secondo browser o nodo, il sistema rileva la nuova connessione e termina quella precedente.
+
+**Perché esiste questa limitazione?**
+È una scelta architetturale della versione open-source. La versione commerciale **Posit Workbench** (ex RStudio Server Professional) offre sessioni multiple simultanee per lo stesso utente, ma questa funzionalità non è disponibile nella versione OSS.
+
+**A cosa servono quindi i nodi multipli?**
+I nodi (`biome-calc01`, `biome-calc02`, …) esistono per permettere a **utenti diversi** di lavorare contemporaneamente, ciascuno sul proprio nodo. Il NAS condiviso (NFS) serve per accedere ai propri file da qualsiasi nodo senza dover ricaricare i dati, non per mantenere sessioni RStudio multiple.
+
+**Cosa posso fare se ho bisogno di più ambienti R?**
+
+- Salvare il lavoro corrente e avviare una nuova sessione dopo il logout.
+- Usare `biome_make_cluster()` per parallelizzare calcoli all'interno della stessa sessione.
+- Valutare RStudio Desktop in locale per un secondo ambiente isolato.
+
+Per approfondimenti tecnici, consultare: `docs/user_guides/rstudio_session_isolation.md`
+
+---
+
+## 11. Cross-Reference (per chi vuole approfondire)
 
 - 🌿 **`BOTANIST_CHEATSHEET.md`** — versione 1-pagina di queste regole.
 - 🧬 **`large_spatial_matrices.md`** — workflow `terra` / `sf` per dataset > 50 GB.
@@ -341,3 +363,4 @@ Mandate queste 6 cose a `%%BIOME_CONTACT%%` (oppure aprite ticket al sistema ind
 - 🔧 **`SERVER_NATIVE_API.md`** — helper `biome_*()` (solo power-user / admin).
 - 📜 **`understanding_the_new_server.md`** — perché il server si comporta così.
 - 📐 **`docs/architecture/USER_CONTRACT.md`** — versione formale del contratto utente-sistema.
+- 🔒 **`rstudio_session_isolation.md`** — perché non puoi aprire RStudio su due nodi contemporaneamente.
