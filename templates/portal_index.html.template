@@ -234,94 +234,113 @@
             </a>
         </div>
 
-        <section id="serviceGrid" class="portal-grid blurred-locked">
-            <a href="/rstudio/" class="portal-card" target="_blank">
-                <div class="card-icon">📊</div>
-                <div class="card-content">
-                    <h2>RStudio Server</h2>
-                    <p>Advanced statistical computing and graphics environment.</p>
-                </div>
-                <div class="card-arrow">→</div>
-            </a>
-            
-            <!-- RStudio Iframe Container (Hidden Off-screen for Background Connectivity) -->
-            <!-- Note: Cannot use display:none because RStudio layout engine fails. Using typical desktop size to ensure valid splitter math. -->
-            <!-- RStudio Iframe Container Removed to prevent multi-session conflicts -->
-            <!-- <div id="rstudio-container" class="service-container" style="position: absolute; left: -9999px; top: -9999px; width: 1200px; height: 800px; overflow: hidden; opacity: 0;">
-                <iframe 
-                    id="rstudio-frame" 
-                    src="/rstudio-inner/" 
-                    allow="clipboard-read; clipboard-write"
-                    referrerpolicy="no-referrer-when-downgrade">
-                </iframe>
-            </div> -->
+         <!-- ── Row 1: Core work services ── -->
+         <section id="serviceGrid" class="portal-grid portal-grid-organized blurred-locked">
+             <a href="/rstudio/" class="portal-card" target="_blank">
+                 <div class="card-icon">📊</div>
+                 <div class="card-content">
+                     <h2>RStudio Server</h2>
+                     <p>Advanced statistical computing and graphics environment.</p>
+                 </div>
+                 <div class="card-arrow">→</div>
+             </a>
 
-            <a href="/files/" class="portal-card" target="_blank">
-                <div class="card-icon">☁️</div>
-                <div class="card-content">
-                    <h2>Research Data</h2>
-                    <p>Nextcloud File Access & Collaboration.</p>
-                </div>
-                <div class="card-arrow">→</div>
-            </a>
+             <a href="/files/" class="portal-card" target="_blank">
+                 <div class="card-icon">☁️</div>
+                 <div class="card-content">
+                     <h2>Research Data</h2>
+                     <p>Nextcloud File Access & Collaboration.</p>
+                 </div>
+                 <div class="card-arrow">→</div>
+             </a>
 
-            <a href="/terminal/" class="portal-card" id="terminal-tile" target="_blank">
-                <div class="card-icon">💻</div>
-                <div class="card-content">
-                    <h2>Secure Terminal</h2>
-                    <p>Direct shell access via Web Terminal.</p>
-                </div>
-                <div class="card-arrow">→</div>
-            </a>
-            
-             <a href="https://www.unibo.it" target="_blank" class="portal-card external">
-                <div class="card-icon">🏛️</div>
-                <div class="card-content">
-                    <h2>University Home</h2>
-                    <p>Official University of Bologna website.</p>
-                </div>
-                <div class="card-arrow">↗</div>
-            </a>
+             <a href="/terminal/" class="portal-card" id="terminal-tile" target="_blank">
+                 <div class="card-icon">💻</div>
+                 <div class="card-content">
+                     <h2>Secure Terminal</h2>
+                     <p>Direct shell access via Web Terminal.</p>
+                 </div>
+                 <div class="card-arrow">→</div>
+             </a>
 
-            <!-- ── API DOCS TILE (logged-in only, shown with service grid) ── -->
-            <a href="/api/docs" target="_blank" class="portal-card" id="api-docs-tile" style="%%MONITOR_TILE_DISPLAY%%">
-                <div class="card-icon">📋</div>
-                <div class="card-content">
-                    <h2>API Documentation</h2>
-                    <p>Interactive Swagger UI — test telemetry endpoints live.</p>
-                </div>
-                <div class="card-arrow">↗</div>
-            </a>
+             <!-- ── Row 2: Platform / documentation resources ── -->
 
-            <!-- ── MONITORING TILE (logged-in only, shown with service grid) ── -->
-            <a href="/status/" target="_blank" class="monitor-tile" id="monitor-tile" style="%%MONITOR_TILE_DISPLAY%%">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                    <div>
-                        <div style="font-size:1.8rem;margin-bottom:0.4rem;">📈</div>
-                        <h2 style="font-family:'Playfair Display',serif;font-size:1.35rem;color:#fff;margin:0 0 0.3rem;">Server Dashboard</h2>
-                        <p style="font-size:0.88rem;color:#ccc;margin:0;">Live R computation &amp; node status.</p>
-                    </div>
-                    <span style="color:#8FBC8F;font-size:1.1rem;opacity:0;transition:opacity 0.3s;" class="tile-arrow">→</span>
-                </div>
-                <div class="mini-gauge-row">
-                    <div class="mini-gauge">
-                        <div class="mini-gauge-label">CPU</div>
-                        <div class="mini-gauge-val" id="mt-cpu">—</div>
-                        <div class="mini-bar-track"><div class="mini-bar-fill" id="mt-cpu-bar" style="width:0%;background:#8FBC8F;"></div></div>
-                    </div>
-                    <div class="mini-gauge">
-                        <div class="mini-gauge-label">RAM</div>
-                        <div class="mini-gauge-val" id="mt-ram">—</div>
-                        <div class="mini-bar-track"><div class="mini-bar-fill" id="mt-ram-bar" style="width:0%;background:#2196f3;"></div></div>
-                    </div>
-                    <div class="mini-gauge">
-                        <div class="mini-gauge-label">R Sessions</div>
-                        <div class="mini-gauge-val" id="mt-sess">—</div>
-                    </div>
-                </div>
-            </a>
+             <!-- ── MONITORING TILE (logged-in only, shown with service grid) ── -->
+             <a href="/status/" target="_blank" class="monitor-tile" id="monitor-tile" style="%%MONITOR_TILE_DISPLAY%%">
+                 <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                     <div>
+                         <div style="font-size:1.8rem;margin-bottom:0.4rem;">📈</div>
+                         <h2 style="font-family:'Playfair Display',serif;font-size:1.35rem;color:#fff;margin:0 0 0.3rem;">Server Dashboard</h2>
+                         <p style="font-size:0.88rem;color:#ccc;margin:0;">Live R computation & node status.</p>
+                     </div>
+                     <span style="color:#8FBC8F;font-size:1.1rem;opacity:0;transition:opacity 0.3s;" class="tile-arrow">→</span>
+                 </div>
+                 <div class="mini-gauge-row">
+                     <div class="mini-gauge">
+                         <div class="mini-gauge-label">CPU</div>
+                         <div class="mini-gauge-val" id="mt-cpu">—</div>
+                         <div class="mini-bar-track"><div class="mini-bar-fill" id="mt-cpu-bar" style="width:0%;background:#8FBC8F;"></div></div>
+                     </div>
+                     <div class="mini-gauge">
+                         <div class="mini-gauge-label">RAM</div>
+                         <div class="mini-gauge-val" id="mt-ram">—</div>
+                         <div class="mini-bar-track"><div class="mini-bar-fill" id="mt-ram-bar" style="width:0%;background:#2196f3;"></div></div>
+                     </div>
+                     <div class="mini-gauge">
+                         <div class="mini-gauge-label">R Sessions</div>
+                         <div class="mini-gauge-val" id="mt-sess">—</div>
+                     </div>
+                 </div>
+             </a>
 
-        </section>
+             <!-- ── WIKI / DOCUMENTATION TILE (external SharePoint, logged-in only) ── -->
+             <a href="https://liveunibo.sharepoint.com/sites/biome_unibo/SitePages/BiomeDataResources.aspx"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="portal-card external">
+                 <div class="card-icon">📚</div>
+                 <div class="card-content">
+                     <h2>Wiki / Documentation</h2>
+                     <p>User and admin documentation for BIOME resources.</p>
+                 </div>
+                 <div class="card-arrow">↗</div>
+             </a>
+
+             <!-- ── API DOCS TILE (logged-in only, shown with service grid) ── -->
+             <a href="/api/docs" target="_blank" class="portal-card" id="api-docs-tile" style="%%MONITOR_TILE_DISPLAY%%">
+                 <div class="card-icon">📋</div>
+                 <div class="card-content">
+                     <h2>API Documentation</h2>
+                     <p>Interactive Swagger UI — test telemetry endpoints live.</p>
+                 </div>
+                 <div class="card-arrow">↗</div>
+             </a>
+
+             <!-- ── Row 3: Institutional / project links ── -->
+
+             <a href="https://www.unibo.it" target="_blank" class="portal-card external final-row-start">
+                 <div class="card-icon">🏛️</div>
+                 <div class="card-content">
+                     <h2>University Home</h2>
+                     <p>Official University of Bologna website.</p>
+                 </div>
+                 <div class="card-arrow">↗</div>
+             </a>
+
+             <!-- ── LIFE4POLLINATORS TILE (external Drupal, logged-in only) ── -->
+             <a href="https://www.life4pollinators.eu/en"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="portal-card external">
+                 <div class="card-icon">🐝</div>
+                 <div class="card-content">
+                     <h2>LIFE4Pollinators</h2>
+                     <p>Project website, outreach and pollinator resources.</p>
+                 </div>
+                 <div class="card-arrow">↗</div>
+             </a>
+
+         </section>
 
         <footer class="glass-footer">
             <p>&copy; %%CURRENT_YEAR%% BIOME BigData Resources. Department of Biological, Geological, and Environmental Sciences.</p>

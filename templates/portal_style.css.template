@@ -262,6 +262,22 @@ body {
     }
 }
 
+/* ── Desktop Row Organization (3-row layout) ── */
+@media (min-width: 1100px) {
+    .portal-grid-organized {
+        grid-template-columns: repeat(6, 1fr);
+    }
+
+    .portal-grid-organized > .portal-card,
+    .portal-grid-organized > .monitor-tile {
+        grid-column: span 2;
+    }
+
+    .portal-grid-organized > .final-row-start {
+        grid-column: 2 / span 2;
+    }
+}
+
 /* --- Login Modal Styles --- */
 .modal {
     display: none; 

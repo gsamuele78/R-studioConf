@@ -73,7 +73,34 @@ The layout (`portal_style.css.template`) is built to be mobile-friendly.
 - **Scrolling**: `overflow-y: auto` ensures content is scrollable if it exceeds the viewport height (e.g., on phones).
 - **Flex Header**: The header collapses gracefully, stacking the logo and title.
 
-## 4. File Structure
+## 4. Tile Organization (3-Row Layout)
+
+The portal tiles are organized into three logical rows on desktop (≥1100 px viewport width). On smaller screens the cards wrap responsively using the existing auto-fit grid.
+
+### Row 1 — Core work services
+
+- **RStudio Server** (local): Statistical computing IDE.
+- **Research Data** (local): Nextcloud file access and collaboration.
+- **Secure Terminal** (local): Web shell via ttyd.
+
+### Row 2 — Platform / documentation resources
+
+- **Server Dashboard** (local): Live R computation and node status (telemetry-dependent, hidden when telemetry is disabled).
+- **Wiki / Documentation** (external → SharePoint): User and admin documentation for BIOME resources. Opens in a new tab at `https://liveunibo.sharepoint.com/sites/biome_unibo/SitePages/BiomeDataResources.aspx`. Not iframed or proxied (SharePoint blocks embedding via `X-Frame-Options: DENY`).
+- **API Documentation** (local): Interactive Swagger UI for the telemetry API (telemetry-dependent).
+
+### Row 3 — Institutional / project links
+
+- **University Home** (external): University of Bologna website. Anchors the bottom row with `.final-row-start` so the two-card row is centered on desktop.
+- **LIFE4Pollinators** (external → Drupal): Project website and pollinator resources. Opens in a new tab at `https://www.life4pollinators.eu/en`. Not iframed (Drupal site sets `X-Frame-Options: SAMEORIGIN`).
+
+### Design constraints
+
+- All tiles live inside `#serviceGrid` and inherit the locked/unlocked state from the existing portal login flow. No additional authentication is needed.
+- External tiles use `target="_blank" rel="noopener noreferrer"`. No BIOME portal credentials are forwarded to Drupal or SharePoint.
+- No Nginx reverse-proxy locations or iframe wrappers are required for the external tiles.
+
+## 5. File Structure
 
 - `templates/portal_index.html.template`: The main HTML/JS logic.
 - `templates/portal_style.css.template`: The visual styling.
