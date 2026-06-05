@@ -688,19 +688,31 @@ run_audit("6.6", ".biome_env$USER_TMP_ROOT (v11+)", {
 run_audit("6.7", "v11+ per-user subdirs under /Rtmp/biome_<user>/", {
   usr <- tryCatch(.biome_env$USER_TMP_ROOT,
                   error = function(e) file.path("/Rtmp", paste0("biome_", Sys.info()[["user"]])))
-  expected_subdirs <- c("nimble_compile", "tmb_compile", "stan_compile",
-                        "rcpp_cache", "cluster_logs", "keras_cache", "plot_cache")
+  # v12.x fragment architecture: compile dirs are run-specific under
+  #   /Rtmp/biome_<user>/<pkg>/<BIOME_RUN_ID>/{master|worker_<pid>}/
+  # (see fragment 35_compile_routing.R).  Stable roots are the <pkg> dirs
+  # themselves; per-run subdirs are created lazily by .biome_get_compile_dir().
+  # Legacy v11.0 names nimble_compile/tmb_compile were removed in v11.2.
+  expected_roots <- c("nimble", "tmb", "stan_compile", "rcpp_cache",
+                      "cluster_logs", "keras_cache", "plot_cache")
+  # Also check for run-specific subdirs if BIOME_RUN_ID is set
+  run_id <- Sys.getenv("BIOME_RUN_ID", "")
+  if (nzchar(run_id)) {
+    for (pkg in c("nimble", "stan", "rcpp", "tmb")) {
+      expected_roots <- c(expected_roots, file.path(pkg, run_id))
+    }
+  }
   missing <- c()
-  for (sub in expected_subdirs) {
+  for (sub in expected_roots) {
     if (!dir.exists(file.path(usr, sub))) missing <- c(missing, sub)
   }
   if (length(missing) > 0) {
-    warning(sprintf("Missing v11+ subdirs under %s: %s", usr, paste(missing, collapse=", ")))
+    warning(sprintf("Missing subdirs under %s: %s", usr, paste(missing, collapse=", ")))
   }
-  present <- setdiff(expected_subdirs, missing)
-  sprintf("OK (%d/%d present: %s)", length(present), length(expected_subdirs),
+  present <- setdiff(expected_roots, missing)
+  sprintf("OK (%d/%d present: %s)", length(present), length(expected_roots),
           paste(present, collapse=","))
-}, fix_hint = "Deploy Rprofile v12.x (Section -1.8 pre-creates all subdirs)")
+}, fix_hint = "Deploy Rprofile v12.x fragments (35_compile_routing creates dirs lazily)")
 
 
 # ==============================================================================
@@ -810,10 +822,23 @@ run_audit("8.6", "BLAS Serial Detection Flag", {
   } else if (isTRUE(blas_serial)) {
     "Serial BLAS confirmed (solve guard thread reduction disabled — safe)"
   } else {
+    # .biome_env$blas_is_serial may be FALSE even when serial BLAS is active
+    # because sessionInfo()$BLAS reports the unresolved Debian alternatives
+    # symlink (e.g. libblas.so.3).  Resolve the real symlink target.
     blas_path <- tryCatch(sessionInfo()$BLAS, error = function(e) "unknown")
-    warning(sprintf("blas_is_serial=FALSE (BLAS: %s)", basename(blas_path)))
+    blas_real <- tryCatch(system2("readlink", args = c("-f", blas_path),
+                                  stdout = TRUE, stderr = FALSE),
+                          error = function(e) "unknown")
+    if (length(blas_real) > 0 && grepl("openblas-serial|libopenblas.*serial", blas_real[1])) {
+      # Resolved symlink confirms serial — false alarm from .biome_env heuristic
+      sprintf("Serial BLAS confirmed via symlink resolution (%s)", basename(blas_real[1]))
+    } else {
+      warning(sprintf("blas_is_serial=FALSE (BLAS: %s, resolved: %s)",
+                      basename(blas_path),
+                      if (length(blas_real)) basename(blas_real[1]) else "unknown"))
+    }
   }
-}, fix_hint = "Deploy Rprofile v12.x + switch to openblas-serial")
+}, fix_hint = "Deploy Rprofile v12.x + switch to openblas-serial (check: update-alternatives --display libblas.so.3)")
 
 run_audit("8.7", "v11.0 new tools in tools:biome_calc", {
   required <- c("biome_future_plan", "biome_worker_diagnostics",
@@ -1161,7 +1186,7 @@ run_audit("10.7", "Sparse Matrix Cholesky (Matrix pkg)", {
       t0 <- Sys.time()
       x_sol <- Matrix::solve(ch, b)
       dt_solve <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
-      resid <- max(abs(as.numeric(M %*% x_sol - b)))
+      resid <- max(abs(as.numeric(as.matrix(M %*% x_sol - b))))
       if (resid > 1e-6) stop(sprintf("Sparse solve residual: %.2e", resid))
       sparsity <- round(1 - Matrix::nnzero(M) / (N * N), 4) * 100
       rm(M, ch, b, x_sol); gc(verbose = FALSE)
@@ -1491,52 +1516,76 @@ run_audit("12.3", "NIMBLE buildDerivs (HMC-ready)", {
 }, timeout = 180, use_fork = TRUE,
    fix_hint = "Check nimbleHMC installation (Rprofile v12.x)")
 
-run_audit("12.4", "NIMBLE per-worker compile subdir (v11+ [N2])", {
+run_audit("12.4", "NIMBLE per-worker compile subdir (v12.x fragment 35)", {
   if (!.audit_pkgs[["nimble"]]) "Skipped (nimble not installed)"
   else {
     usr <- tryCatch(.biome_env$USER_TMP_ROOT, error = function(e) NULL)
     if (is.null(usr)) stop("USER_TMP_ROOT missing — Rprofile < v11+")
-    nimble_root <- file.path(usr, "nimble_compile")
-    if (!dir.exists(nimble_root)) stop(sprintf("nimble_compile root missing: %s", nimble_root))
-    bnd <- Sys.getenv("BIOME_NIMBLE_DIR", "")
-    if (nchar(bnd) == 0) stop("BIOME_NIMBLE_DIR env var not set (workers can't route)")
-    if (bnd != nimble_root) {
-      warning(sprintf("BIOME_NIMBLE_DIR=%s != %s", bnd, nimble_root))
+    # v12.x fragment 35_compile_routing.R: compile dirs are run-specific
+    #   /Rtmp/biome_<user>/nimble/<BIOME_RUN_ID>/{master|worker_<pid>}/
+    # BIOME_NIMBLE_DIR was removed in v11.2 (NIMBLE never read it).
+    # The safe_compileNimble wrapper injects dirName via .biome_get_compile_dir().
+    if (!exists(".biome_get_compile_dir", inherits = TRUE)) {
+      stop(".biome_get_compile_dir not found — fragment 35 not loaded")
     }
+    compile_dir <- tryCatch(.biome_get_compile_dir("nimble"),
+                            error = function(e) stop(sprintf("compile dir error: %s", e$message)))
+    if (!startsWith(compile_dir, usr)) {
+      warning(sprintf("NIMBLE compile dir %s not under USER_TMP_ROOT %s", compile_dir, usr))
+    }
+    # Check wrapper is installed on nimble::compileNimble
+    wrapper_ok <- tryCatch({
+      ns <- asNamespace("nimble")
+      fn <- get("compileNimble", envir = ns, inherits = FALSE)
+      isTRUE(attr(fn, "biome_wrapper"))
+    }, error = function(e) FALSE)
+    if (!wrapper_ok) warning("safe_compileNimble wrapper not installed — fragment 35 may not have run")
+    # Check no stale NFS path
     old_nfs_path <- file.path(Sys.getenv("HOME"), ".nimble_compile")
-    session_dir_v11 <- file.path(nimble_root, paste0("session_", Sys.getpid()))
-    if (dir.exists(session_dir_v11)) {
-      sprintf("OK (root=%s, session dir=%s)", nimble_root, basename(session_dir_v11))
+    if (dir.exists(old_nfs_path)) {
+      warning(sprintf("Stale NFS compile dir detected: %s (should be under /Rtmp)", old_nfs_path))
+    }
+    if (dir.exists(compile_dir)) {
+      sprintf("OK (compile_dir=%s, wrapper=%s)", compile_dir, if (wrapper_ok) "active" else "missing")
     } else {
-      warning(sprintf("Session dir not created yet (will be on first compileNimble): %s",
-                      basename(session_dir_v11)))
-      sprintf("OK (root=%s, session dir pending)", nimble_root)
+      sprintf("OK (compile_dir=%s pending — created on first compileNimble, wrapper=%s)",
+              compile_dir, if (wrapper_ok) "active" else "missing")
     }
   }
-}, fix_hint = "Deploy Rprofile v12.x [N1+N2]: NIMBLE hook routes to /Rtmp")
+}, fix_hint = "Deploy Rprofile v12.x fragments (35_compile_routing + 50_pkg_hooks)")
 
-run_audit("12.5", "TMB per-PID compile dir (v11+)", {
+run_audit("12.5", "TMB per-PID compile dir (v12.x fragment 80)", {
   if (!.audit_pkgs[["TMB"]] && !.audit_pkgs[["glmmTMB"]]) {
     "Skipped (TMB/glmmTMB not installed)"
   } else {
-    tmb_env <- Sys.getenv("TMB_COMPILE_DIR", "")
-    if (nchar(tmb_env) == 0) {
-      warning("TMB_COMPILE_DIR not set (TMB/glmmTMB hook not fired yet)")
-      "Pending (load library(glmmTMB) to trigger hook)"
+    # v11.2: TMB_COMPILE_DIR was phantom (TMB never reads it) — removed.
+    # v12.x: use biome_tmb_compile(file) from fragment 80_tools_ext.R,
+    # which calls .biome_get_compile_dir("tmb") from fragment 35.
+    # The compile dir is run-specific:
+    #   /Rtmp/biome_<user>/tmb/<BIOME_RUN_ID>/master
+    if (!exists(".biome_get_compile_dir", inherits = TRUE)) {
+      stop(".biome_get_compile_dir not found — fragment 35 not loaded")
     }
-    else {
-      if (!grepl("^/Rtmp/", tmb_env)) {
-        warning(sprintf("TMB_COMPILE_DIR=%s — expected under /Rtmp", tmb_env))
-      }
-      usr <- tryCatch(.biome_env$USER_TMP_ROOT, error = function(e) "/Rtmp/unknown")
-      expected_prefix <- file.path(usr, "tmb_compile")
-      if (!startsWith(tmb_env, expected_prefix)) {
-        warning(sprintf("TMB dir not under %s: %s", expected_prefix, tmb_env))
-      }
-      sprintf("OK (%s)", basename(tmb_env))
+    compile_dir <- tryCatch(.biome_get_compile_dir("tmb"),
+                            error = function(e) stop(sprintf("compile dir error: %s", e$message)))
+    usr <- tryCatch(.biome_env$USER_TMP_ROOT, error = function(e) "/Rtmp/unknown")
+    if (!startsWith(compile_dir, usr)) {
+      warning(sprintf("TMB compile dir %s not under USER_TMP_ROOT %s", compile_dir, usr))
+    }
+    # Check biome_tmb_compile helper is available
+    helper_ok <- exists("biome_tmb_compile", envir = as.environment("tools:biome_calc"),
+                        inherits = FALSE)
+    if (!helper_ok) {
+      warning("biome_tmb_compile() not found in tools:biome_calc — fragment 80 may not be loaded")
+    }
+    if (dir.exists(compile_dir)) {
+      sprintf("OK (compile_dir=%s, helper=%s)", compile_dir, if (helper_ok) "active" else "missing")
+    } else {
+      sprintf("OK (compile_dir=%s pending — created on first biome_tmb_compile(), helper=%s)",
+              compile_dir, if (helper_ok) "active" else "missing")
     }
   }
-}, fix_hint = "Deploy Rprofile v12.x and library(glmmTMB) to trigger")
+}, fix_hint = "Deploy Rprofile v12.x fragments (35_compile_routing + 80_tools_ext)")
 
 # ==============================================================================
 # [13.0] OpenMP VALIDATION (v28 NEW SECTION)
@@ -1720,18 +1769,25 @@ run_audit("14.2", "future::plan() Worker Thread Safety", {
    fix_hint = "Check future::plan() hook in Rprofile v12.x")
 
 run_audit("14.3", "Renviron.site Variable Contract", {
+  # Static contract: /etc/R/Renviron.site MUST set these vars.
+  # OPENBLAS_NUM_THREADS=1 is the static fallback; Rprofile dynamically
+  # raises thread caps per-session — runtime value may differ from 1.
   required_vars <- list(
     TMPDIR           = "/Rtmp",
     TMP              = "/Rtmp",
     TEMP             = "/Rtmp",
     R_TEMPDIR        = "/Rtmp",
-    OPENBLAS_NUM_THREADS = "1",
     RETICULATE_PYTHON = NULL,
     FONTCONFIG_PATH  = "/etc/fonts",
     BSPM_SUDO        = "true",
     TF_CPP_MIN_LOG_LEVEL = "2",
     BIOME_TMP_DISK_GB = NULL
   )
+  # Separate check: Renviron.site file must contain OPENBLAS_NUM_THREADS=1
+  renviron_ok <- tryCatch({
+    rlines <- readLines("/etc/R/Renviron.site", warn = FALSE)
+    any(grepl("^OPENBLAS_NUM_THREADS=1$", rlines))
+  }, error = function(e) FALSE)
   missing <- c(); wrong <- c()
   for (var_name in names(required_vars)) {
     val <- Sys.getenv(var_name, "")
@@ -1741,9 +1797,19 @@ run_audit("14.3", "Renviron.site Variable Contract", {
       wrong <- c(wrong, sprintf("%s=%s (expected %s)", var_name, val, expected))
     }
   }
+  if (!renviron_ok) {
+    warning("OPENBLAS_NUM_THREADS=1 not found in /etc/R/Renviron.site")
+  }
   if (length(missing) > 0) stop(sprintf("Missing env vars: %s", paste(missing, collapse=", ")))
   if (length(wrong) > 0) warning(paste(wrong, collapse="; "))
-  sprintf("OK (%d vars verified)", length(required_vars))
+  # Runtime OPENBLAS_NUM_THREADS may be >1 (dynamic cap by Rprofile) — not an error
+  rt_blas <- Sys.getenv("OPENBLAS_NUM_THREADS", "1")
+  max_t <- tryCatch(.biome_env$shared_env$last_threads, error = function(e) 16)
+  blas_note <- if (rt_blas != "1") {
+    sprintf(" (runtime=%s, cap=%d — dynamic, OK)", rt_blas, max_t)
+  } else ""
+  sprintf("OK (%d vars verified, Renviron OPENBLAS_NUM_THREADS=1%s)",
+          length(required_vars), blas_note)
 }, fix_hint = "Redeploy Renviron.site via 50_setup_nodes.sh (Rprofile v12.x)")
 
 run_audit("14.4", "Arrow Thread Capping", {
@@ -1815,43 +1881,69 @@ run_audit("14.8", "data.table fread SmartIO Hook", {
 }, timeout = 10,
    fix_hint = "Check SmartIO section in Rprofile v12.x")
 
-run_audit("14.9", "rJava Heap Scaling (v11.0 dynamic)", {
-  if (!requireNamespace("rJava", quietly = TRUE)) "Skipped (rJava not installed)"
-  else {
+run_audit("14.9", "rJava Heap Scaling (v12.x dynamic hook)", {
+  # v12.x fragment 50_pkg_hooks.R: rJava heap is configured lazily when
+  # rJava namespace is loaded.  The hook sets options(java.parameters).
+  # If rJava is not loaded, this is not a failure — the hook will fire on
+  # first library(rJava).
+  if (!requireNamespace("rJava", quietly = TRUE)) {
+    "Skipped (rJava not installed — heap hook will fire on first library(rJava))"
+  } else {
     java_params <- getOption("java.parameters", "")
+    hook_done <- tryCatch(.biome_env$shared_env$.rjava_hook_done, error = function(e) FALSE)
     if (nchar(java_params) == 0 || !grepl("-Xmx", java_params)) {
-      hook_done <- tryCatch(.biome_env$shared_env$.rjava_hook_done, error = function(e) FALSE)
       if (!isTRUE(hook_done)) {
-        warning("rJava heap not configured — Java defaults to 256MB (climate4R OOM risk)")
+        # rJava namespace loaded but hook didn't fire — may be pre-v12.x profile
+        warning("rJava heap not configured — Java defaults to 256MB (climate4R OOM risk). Load library(rJava) to trigger v12.x hook.")
+      } else {
+        warning("rJava hook fired but java.parameters empty — may need session restart")
+      }
+      "WARN (heap not configured)"
+    } else {
+      heap_match <- regmatches(java_params, regexpr("-Xmx([0-9]+)g", java_params))
+      if (length(heap_match) > 0) {
+        heap_gb <- as.integer(sub("-Xmx([0-9]+)g", "\\1", heap_match))
+        quota <- tryCatch(.biome_env$shared_env$last_quota, error = function(e) 0)
+        expected_heap <- max(2L, min(16L, as.integer(floor(quota * 0.25))))
+        if (heap_gb > 16L) warning(sprintf("Java heap %dGB > v11.0 cap of 16GB (GC pauses risk)", heap_gb))
+        if (heap_gb < 2) warning(sprintf("Java heap only %dGB — too low for climate4R", heap_gb))
+        sprintf("OK (heap=%dGB, quota=%dGB, expected~%dGB, max_cap=16GB)",
+                heap_gb, quota, expected_heap)
+      } else {
+        sprintf("OK (java.parameters='%s')", java_params)
       }
     }
-    heap_match <- regmatches(java_params, regexpr("-Xmx([0-9]+)g", java_params))
-    if (length(heap_match) > 0) {
-      heap_gb <- as.integer(sub("-Xmx([0-9]+)g", "\\1", heap_match))
-      quota <- tryCatch(.biome_env$shared_env$last_quota, error = function(e) 0)
-      expected_heap <- max(2L, min(16L, as.integer(floor(quota * 0.25))))
-      if (heap_gb > 16L) warning(sprintf("Java heap %dGB > v11.0 cap of 16GB (GC pauses risk)", heap_gb))
-      if (heap_gb < 2) warning(sprintf("Java heap only %dGB — too low for climate4R", heap_gb))
-      sprintf("OK (heap=%dGB, quota=%dGB, expected~%dGB, max_cap=16GB)",
-              heap_gb, quota, expected_heap)
-    } else {
-      sprintf("Pending (java.parameters='%s')", java_params)
-    }
   }
-}, fix_hint = "Load library(rJava) to trigger heap hook (v12.x [N11])")
+}, fix_hint = "Load library(rJava) to trigger heap hook (v12.x fragment 50_pkg_hooks [N11])")
 
 run_audit("14.10", "Orphan Cleanup Service", {
-  timer_active <- tryCatch(
-    system2("systemctl", args = c("is-active", "--quiet", "biome-cleanup-orphans.timer"),
-            stdout = FALSE, stderr = FALSE) == 0,
-    error = function(e) FALSE)
-  script_exists <- file.exists("/usr/local/bin/cleanup_r_orphans.sh")
+  # v12.x: orphan cleanup is deployed via cron, not systemd timer.
+  # 50_setup_nodes.sh writes /etc/cron.d/r_orphan_cleanup and deploys
+  # scripts to ${BIOME_CONF}/script/ (default: /opt/biome/script/).
+  cron_file <- "/etc/cron.d/r_orphan_cleanup"
+  biome_conf <- Sys.getenv("BIOME_CONF", "/opt/biome")
+  script_dir <- file.path(biome_conf, "script")
+  scripts_expected <- c("cleanup_r_orphans.sh", "notify_r_orphans.sh",
+                        "r_orphan_report.sh")
   issues <- c()
-  if (!timer_active) issues <- c(issues, "biome-cleanup-orphans.timer not active")
-  if (!script_exists) issues <- c(issues, "cleanup_r_orphans.sh not deployed")
-  if (length(issues) > 0) warning(paste(issues, collapse = "; "))
-  else sprintf("OK (timer=active, script=deployed)")
-}, fix_hint = "Run 50_setup_nodes.sh")
+  if (!file.exists(cron_file)) {
+    issues <- c(issues, sprintf("%s missing", cron_file))
+  } else {
+    cron_content <- tryCatch(readLines(cron_file, warn = FALSE), error = function(e) character(0))
+    if (!any(grepl("cleanup_r_orphans\\.sh", cron_content))) {
+      issues <- c(issues, "cleanup_r_orphans.sh not referenced in cron")
+    }
+  }
+  for (s in scripts_expected) {
+    sp <- file.path(script_dir, s)
+    if (!file.exists(sp)) issues <- c(issues, sprintf("%s not deployed", s))
+  }
+  if (length(issues) > 0) {
+    warning(paste(issues, collapse = "; "))
+  } else {
+    sprintf("OK (cron=%s, scripts=%s)", basename(cron_file), script_dir)
+  }
+}, fix_hint = "Run 50_setup_nodes.sh Step 11b (orphan cleanup deploys via cron)")
 
 run_audit("14.11", "Kernel Swappiness", {
   swappiness <- tryCatch(as.integer(readLines("/proc/sys/vm/swappiness", warn = FALSE)),
@@ -1937,34 +2029,49 @@ run_audit("14.16", "Worker env propagation (v12.x [N3])", {
   tryCatch({
     cl <- bmc(workers = 1, worker_threads = 1L)
     on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+    # v12.x fragment 30_psock_factory env_vec: BIOME_NIMBLE_DIR and BIOME_TMB_DIR
+    # were removed in v11.2 (phantom env vars).  Real vars propagated:
+    #   BIOME_WORKER_MODE, BIOME_USER_TMP, BIOME_RUN_ID, BIOME_RUN_TIMESTAMP,
+    #   BIOME_STAN_DIR, BIOME_RCPP_CACHE, OMP/OPENBLAS/MKL_NUM_THREADS,
+    #   R_TEMPDIR, GDAL_NUM_THREADS, CPL_TMPDIR, GDAL_PAM_PROXY_DIR,
+    #   CUDA_VISIBLE_DEVICES, MALLOC_ARENA_MAX
     worker_env <- parallel::clusterCall(cl, function() {
       list(
         BIOME_WORKER_MODE = Sys.getenv("BIOME_WORKER_MODE"),
-        BIOME_USER_TMP   = Sys.getenv("BIOME_USER_TMP"),
-        BIOME_NIMBLE_DIR = Sys.getenv("BIOME_NIMBLE_DIR"),
-        BIOME_TMB_DIR    = Sys.getenv("BIOME_TMB_DIR"),
-        BIOME_STAN_DIR   = Sys.getenv("BIOME_STAN_DIR"),
-        BIOME_RCPP_CACHE = Sys.getenv("BIOME_RCPP_CACHE"),
-        TMPDIR           = Sys.getenv("TMPDIR"),
-        OPENBLAS_CORETYPE = Sys.getenv("OPENBLAS_CORETYPE")
+        BIOME_USER_TMP    = Sys.getenv("BIOME_USER_TMP"),
+        BIOME_RUN_ID      = Sys.getenv("BIOME_RUN_ID"),
+        BIOME_STAN_DIR    = Sys.getenv("BIOME_STAN_DIR"),
+        BIOME_RCPP_CACHE  = Sys.getenv("BIOME_RCPP_CACHE"),
+        TMPDIR            = Sys.getenv("TMPDIR"),
+        OMP_NUM_THREADS   = Sys.getenv("OMP_NUM_THREADS"),
+        OPENBLAS_NUM_THREADS = Sys.getenv("OPENBLAS_NUM_THREADS"),
+        MALLOC_ARENA_MAX  = Sys.getenv("MALLOC_ARENA_MAX")
       )
     })[[1]]
     parallel::stopCluster(cl)
-    missing_vars <- names(worker_env)[vapply(worker_env, function(x) nchar(x) == 0, logical(1))]
+    # Required vars for v12.x workers
+    required_worker_vars <- c("BIOME_WORKER_MODE", "BIOME_USER_TMP")
+    missing_vars <- required_worker_vars[!nchar(vapply(worker_env[required_worker_vars],
+                                       function(x) x, character(1))) > 0]
     if (length(missing_vars) > 0) {
       warning(sprintf("Worker missing env vars: %s", paste(missing_vars, collapse=", ")))
     }
-    for (k in c("BIOME_USER_TMP", "BIOME_NIMBLE_DIR", "BIOME_TMB_DIR", "BIOME_STAN_DIR", "BIOME_RCPP_CACHE")) {
+    # /Rtmp routing check for dirs that MUST be on local disk
+    for (k in c("BIOME_USER_TMP", "BIOME_STAN_DIR", "BIOME_RCPP_CACHE")) {
       if (nchar(worker_env[[k]]) > 0 && !grepl("^/Rtmp/", worker_env[[k]])) {
         warning(sprintf("%s=%s — not under /Rtmp", k, worker_env[[k]]))
       }
     }
-    sprintf("OK (%d vars, WORKER_MODE=%s, NIMBLE_DIR=%s)",
+    mma <- worker_env$MALLOC_ARENA_MAX
+    mma_note <- if (nchar(mma) > 0)
+      sprintf(", MALLOC_ARENA_MAX=%s", mma) else ""
+    sprintf("OK (%d vars, WORKER_MODE=%s, RUN_ID=%s%s)",
             length(worker_env), worker_env$BIOME_WORKER_MODE,
-            if (nchar(worker_env$BIOME_NIMBLE_DIR) > 0) basename(worker_env$BIOME_NIMBLE_DIR) else "MISSING")
+            if (nchar(worker_env$BIOME_RUN_ID) > 0) substr(worker_env$BIOME_RUN_ID, 1, 20) else "MISSING",
+            mma_note)
   }, error = function(e) stop(sprintf("Worker env test failed: %s", e$message)))
 }, timeout = 30, use_fork = TRUE,
-   fix_hint = "Deploy Rprofile v12.x [N3] — check env_vec in .biome_make_cluster_impl")
+   fix_hint = "Deploy Rprofile v12.x [N3] — check env_vec in .biome_make_cluster_impl (fragment 30)")
 
 run_audit("14.17", "biome_future_plan() helper (v12.x [N9])", {
   bfp <- tryCatch(get("biome_future_plan", envir = as.environment("tools:biome_calc")),
@@ -2072,11 +2179,23 @@ run_audit("14.20", "Top-level return() bug fix (v11+ CRITICAL)", {
 audit_cat("\n[15.0] LOCAL R LIBRARY VALIDATION (v12.4+)\n")
 
 run_audit("15.1", "Renviron.site R_LIBS_USER set", {
+  # v12.4+: R_LIBS_USER is emitted by 50_setup_nodes.sh only when
+  # ENABLE_R_LIBS_LOCAL=true.  If local R libs are disabled, absence
+  # of R_LIBS_USER is valid legacy NFS-only behavior.
+  local_libs_root <- "/var/lib/biome-Rlibs"
+  local_libs_enabled <- dir.exists(local_libs_root)
   rs_env <- tryCatch({
     lines <- readLines("/etc/R/Renviron.site", warn = FALSE)
     libs_line <- grep("^R_LIBS_USER=", lines, value = TRUE)
-    if (length(libs_line) == 0) stop("R_LIBS_USER not found in Renviron.site")
-    if (grepl("/var/lib/biome-Rlibs", libs_line[1])) {
+    if (length(libs_line) == 0) {
+      if (local_libs_enabled) {
+        stop(sprintf("R_LIBS_USER not found in Renviron.site but %s exists — redeploy Renviron.site",
+                     local_libs_root))
+      } else {
+        # Local libs not deployed — legacy NFS-only mode is valid
+        sprintf("OK (R_LIBS_USER not set — local R libs disabled, NFS-only legacy mode)")
+      }
+    } else if (grepl("/var/lib/biome-Rlibs", libs_line[1])) {
       sprintf("OK (%s)", sub("^R_LIBS_USER=", "", libs_line[1]))
     } else {
       warning(sprintf("R_LIBS_USER=%s — expected /var/lib/biome-Rlibs/...",
@@ -2270,55 +2389,89 @@ run_audit("17.2", "user-.slice template deployed", {
 }, fix_hint = "Run 50_setup_nodes.sh option C")
 
 run_audit("17.3", "user slice MemoryHigh in effect", {
+  # First validate the drop-in template exists (authoritative source).
+  # Runtime slice may be missing if user session predates deployment.
+  dropin <- "/etc/systemd/system/user-.slice.d/50-biome-limits.conf"
+  if (!file.exists(dropin)) {
+    stop(sprintf("Drop-in missing: %s — run 50_setup_nodes.sh Step 11A first", dropin))
+  }
   uid <- tryCatch(as.integer(system2("id", args = "-u", stdout = TRUE)), error = function(e) -1L)
   if (uid < 1000) "Skipped (not a regular user — likely running as root)"
   else {
     slice_path <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/memory.high", uid)
     if (!file.exists(slice_path)) {
-      stop(sprintf("Slice file missing: %s — user has no active slice?", slice_path))
+      # Drop-in deployed but runtime slice not materialized for this session
+      warning(sprintf("Runtime slice not materialized: %s — user session may predate cgroup deployment. Log out and back in, or run: systemctl daemon-reload && systemctl restart user-%d.slice",
+                      slice_path, uid))
+      sprintf("WARN (drop-in deployed, runtime slice pending — relogin required)")
+    } else {
+      raw <- tryCatch(readLines(slice_path, n = 1, warn = FALSE), error = function(e) "")
+      if (raw == "max" || raw == "") stop("MemoryHigh not set on this user's slice")
+      gb <- as.numeric(raw) / (1024^3)
+      if (gb < 16) warning(sprintf("MemoryHigh=%.0fGB is unusually low", gb))
+      if (gb > 400) warning(sprintf("MemoryHigh=%.0fGB is unusually high", gb))
+      sprintf("OK (throttle at %.0f GB)", gb)
     }
-    raw <- tryCatch(readLines(slice_path, n = 1, warn = FALSE), error = function(e) "")
-    if (raw == "max" || raw == "") stop("MemoryHigh not set on this user's slice")
-    gb <- as.numeric(raw) / (1024^3)
-    if (gb < 16) warning(sprintf("MemoryHigh=%.0fGB is unusually low", gb))
-    if (gb > 400) warning(sprintf("MemoryHigh=%.0fGB is unusually high", gb))
-    sprintf("OK (throttle at %.0f GB)", gb)
   }
-}, fix_hint = "Run 50_setup_nodes.sh option C, then log out and back in")
+}, fix_hint = "Run 50_setup_nodes.sh Step 11A, then log out and back in")
 
 run_audit("17.4", "user slice MemoryMax (catastrophic ceiling)", {
+  dropin <- "/etc/systemd/system/user-.slice.d/50-biome-limits.conf"
+  if (!file.exists(dropin)) {
+    stop(sprintf("Drop-in missing: %s — run 50_setup_nodes.sh Step 11A first", dropin))
+  }
   uid <- tryCatch(as.integer(system2("id", args = "-u", stdout = TRUE)), error = function(e) -1L)
   if (uid < 1000) "Skipped (not a regular user)"
   else {
     slice_path <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/memory.max", uid)
-    if (!file.exists(slice_path)) stop("memory.max not found for this user's slice")
-    raw <- tryCatch(readLines(slice_path, n = 1, warn = FALSE), error = function(e) "")
-    if (raw == "max") {
-      warning("MemoryMax not set — runaway process could OOM the entire host")
+    if (!file.exists(slice_path)) {
+      warning(sprintf("Runtime slice not materialized: %s — relogin required", slice_path))
+      "WARN (drop-in deployed, runtime slice pending — relogin required)"
     } else {
-      gb <- as.numeric(raw) / (1024^3)
-      sprintf("OK (kill ceiling at %.0f GB, applies to this slice only)", gb)
+      raw <- tryCatch(readLines(slice_path, n = 1, warn = FALSE), error = function(e) "")
+      if (raw == "max") {
+        warning("MemoryMax not set — runaway process could OOM the entire host")
+      } else {
+        gb <- as.numeric(raw) / (1024^3)
+        sprintf("OK (kill ceiling at %.0f GB, applies to this slice only)", gb)
+      }
     }
   }
-}, fix_hint = "Set USER_SLICE_MEMORY_MAX in setup_nodes.vars.conf")
+}, fix_hint = "Set USER_SLICE_MEMORY_MAX in setup_nodes.vars.conf, then relogin")
 
 run_audit("17.5", "user slice CPU is weight-only (no hard quota)", {
+  dropin <- "/etc/systemd/system/user-.slice.d/50-biome-limits.conf"
+  if (!file.exists(dropin)) {
+    stop(sprintf("Drop-in missing: %s — run 50_setup_nodes.sh Step 11A first", dropin))
+  }
+  # Validate drop-in has CPUWeight (no CPUQuota) — authoritative contract
+  dcontent <- tryCatch(readLines(dropin, warn = FALSE), error = function(e) character(0))
+  has_cpuweight <- any(grepl("^CPUWeight=", dcontent))
+  has_cpuquota  <- any(grepl("^CPUQuota=", dcontent))
+  if (!has_cpuweight) stop("CPUWeight not set in drop-in")
+  if (has_cpuquota) warning("CPUQuota found in drop-in — removes dynamic fair-share when server is empty")
   uid <- tryCatch(as.integer(system2("id", args = "-u", stdout = TRUE)), error = function(e) -1L)
-  if (uid < 1000) "Skipped (not a regular user)"
-  else {
-    cpu_max <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/cpu.max", uid)
+  if (uid < 1000) {
+    sprintf("OK (drop-in valid, CPUWeight present, no CPUQuota — skip runtime check for uid<1000)")
+  } else {
     cpu_weight <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/cpu.weight", uid)
-    raw_max <- tryCatch(readLines(cpu_max, n = 1, warn = FALSE), error = function(e) "")
-    raw_weight <- tryCatch(readLines(cpu_weight, n = 1, warn = FALSE), error = function(e) "")
-    parts <- strsplit(raw_max, " ")[[1]]
-    has_quota <- length(parts) >= 1 && parts[1] != "max"
-    weight <- suppressWarnings(as.integer(raw_weight))
-    if (has_quota) {
-      pct <- as.numeric(parts[1]) / as.numeric(parts[2]) * 100
-      warning(sprintf("CPUQuota set at %.0f%% — this prevents dynamic fair-share when server is empty", pct))
+    if (!file.exists(cpu_weight)) {
+      warning(sprintf("Runtime slice not materialized: %s — relogin required", cpu_weight))
+      "WARN (drop-in deployed, runtime slice pending — relogin required)"
+    } else {
+      raw_weight <- tryCatch(readLines(cpu_weight, n = 1, warn = FALSE), error = function(e) "")
+      weight <- suppressWarnings(as.integer(raw_weight))
+      if (is.na(weight) || weight <= 0) stop("CPUWeight not set on runtime slice")
+      cpu_max <- sprintf("/sys/fs/cgroup/user.slice/user-%d.slice/cpu.max", uid)
+      raw_max <- tryCatch(readLines(cpu_max, n = 1, warn = FALSE), error = function(e) "")
+      parts <- strsplit(raw_max, " ")[[1]]
+      has_quota <- length(parts) >= 1 && parts[1] != "max"
+      if (has_quota) {
+        pct <- as.numeric(parts[1]) / as.numeric(parts[2]) * 100
+        warning(sprintf("CPUQuota set at %.0f%% — this prevents dynamic fair-share when server is empty", pct))
+      }
+      sprintf("OK (weight=%d, no hard quota → dynamic fair-share active)", weight)
     }
-    if (is.na(weight) || weight <= 0) stop("CPUWeight not set")
-    sprintf("OK (weight=%d, no hard quota → dynamic fair-share active)", weight)
   }
 }, fix_hint = "Remove CPUQuota line from /etc/systemd/system/user-.slice.d/50-biome-limits.conf")
 
