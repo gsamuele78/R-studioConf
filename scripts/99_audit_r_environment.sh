@@ -35,6 +35,36 @@ fi
 # shellcheck source=../lib/common_utils.sh disable=SC1091
 source "${COMMON_UTILS}"
 
+# ── Logging wrappers ──
+log_step() {
+  echo ""
+  log "INFO" "============================================================"
+  log "INFO" "$1"
+  log "INFO" "============================================================"
+}
+log_info() { log "INFO" "$1"; }
+log_success() { log "INFO" "[SUCCESS] $1"; }
+log_error() { log "ERROR" "$1"; }
+log_warn() { log "WARN" "$1"; }
+
+# ── Local Backup Helper ──
+backup_file() {
+  local file_path="$1"
+  if [[ ! -e "$file_path" ]]; then
+    log_info "Skipping backup: '${file_path}' does not exist."
+    return 0
+  fi
+  local backup_target_dir="/var/backups/r_env_manager/files/$(dirname "${file_path}")"
+  mkdir -p "${backup_target_dir}"
+  local timestamp
+  timestamp=$(date +"%Y%m%d_%H%M%S")
+  local backup_name
+  backup_name="$(basename "$file_path").${timestamp}.bak"
+  
+  log_info "Backing up '${file_path}' to '${backup_target_dir}/${backup_name}'"
+  cp -aL "${file_path}" "${backup_target_dir}/${backup_name}"
+}
+
 # ── Load configuration ──
 VARS_CONF="${WORKSPACE_ROOT}/config/setup_nodes.vars.conf"
 if [[ ! -f "${VARS_CONF}" ]]; then
@@ -91,8 +121,17 @@ deploy_audit() {
   # Process template (substitutes all %%PLACEHOLDER%% values from vars.conf)
   local tmp_audit
   tmp_audit=$(mktemp /tmp/00_audit_v28.R.deploy.XXXXXX)
-  process_template "${AUDIT_TEMPLATE}" "${tmp_audit}"
-  execute_command cp "${tmp_audit}" "${AUDIT_DEST}"
+  local generated_audit
+  process_template "${AUDIT_TEMPLATE}" generated_audit \
+    BIOME_CONF="${BIOME_CONF}" \
+    LOG_FILE="${LOG_FILE}" \
+    MAX_THREADS="${MAX_THREADS}" \
+    NFS_HOME="${NFS_HOME}" \
+    CIFS_ARCHIVE="${CIFS_ARCHIVE}" \
+    PYTHON_ENV="${PYTHON_ENV}"
+
+  printf "%s" "$generated_audit" > "${tmp_audit}"
+  cp "${tmp_audit}" "${AUDIT_DEST}"
   rm -f "${tmp_audit}"
   chmod 644 "${AUDIT_DEST}"
 
