@@ -16,7 +16,7 @@
 message("\n==================================================================")
 message("   BIOME-CALC BOTANICAL PLOT STRESS TEST & SYSTEM DIAGNOSTIC")
 message("   Start Time: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
-message("   R version: ", rlang::str_sub(R.version$version.string, 1, 15) %||% R.version$version.string)
+message("   R version: ", substr(R.version$version.string, 1, 40))
 message("   System User: ", Sys.info()[["user"]])
 message("==================================================================\n")
 
@@ -69,29 +69,35 @@ if (!is.null(blas_lib) && grepl("openblas-pthread", blas_lib, ignore.case = TRUE
 # 1.3 Memory & Cgroup Budgeting
 # Read cgroup or system memory limits to scale the simulation grid safely.
 get_available_ram_mb <- function() {
-  cgroup_limit <- tryCatch({
-    if (file.exists("/sys/fs/cgroup/memory.max")) {
-      txt <- trimws(readLines("/sys/fs/cgroup/memory.max", n = 1, warn = FALSE))
-      if (txt != "max") as.numeric(txt) / (1024^2) else Inf
-    } else if (file.exists("/sys/fs/cgroup/memory/memory.limit_in_bytes")) {
-      as.numeric(readLines("/sys/fs/cgroup/memory/memory.limit_in_bytes", n = 1, warn = FALSE)) / (1024^2)
-    } else {
-      Inf
-    }
-  }, error = function(e) Inf)
-  
-  sys_avail <- tryCatch({
-    meminfo <- readLines("/proc/meminfo", warn = FALSE)
-    avail_line <- grep("^MemAvailable:", meminfo, value = TRUE)
-    if (length(avail_line) > 0) {
-      as.numeric(gsub("[^0-9]", "", avail_line)) / 1024
-    } else {
-      free <- as.numeric(gsub("[^0-9]", "", grep("^MemFree:", meminfo, value = TRUE)))
-      cached <- as.numeric(gsub("[^0-9]", "", grep("^Cached:", meminfo, value = TRUE)))
-      (free + cached) / 1024
-    }
-  }, error = function(e) 2048) # 2GB fallback
-  
+  cgroup_limit <- tryCatch(
+    {
+      if (file.exists("/sys/fs/cgroup/memory.max")) {
+        txt <- trimws(readLines("/sys/fs/cgroup/memory.max", n = 1, warn = FALSE))
+        if (txt != "max") as.numeric(txt) / (1024^2) else Inf
+      } else if (file.exists("/sys/fs/cgroup/memory/memory.limit_in_bytes")) {
+        as.numeric(readLines("/sys/fs/cgroup/memory/memory.limit_in_bytes", n = 1, warn = FALSE)) / (1024^2)
+      } else {
+        Inf
+      }
+    },
+    error = function(e) Inf
+  )
+
+  sys_avail <- tryCatch(
+    {
+      meminfo <- readLines("/proc/meminfo", warn = FALSE)
+      avail_line <- grep("^MemAvailable:", meminfo, value = TRUE)
+      if (length(avail_line) > 0) {
+        as.numeric(gsub("[^0-9]", "", avail_line)) / 1024
+      } else {
+        free <- as.numeric(gsub("[^0-9]", "", grep("^MemFree:", meminfo, value = TRUE)))
+        cached <- as.numeric(gsub("[^0-9]", "", grep("^Cached:", meminfo, value = TRUE)))
+        (free + cached) / 1024
+      }
+    },
+    error = function(e) 2048
+  ) # 2GB fallback
+
   min(cgroup_limit, sys_avail)
 }
 
@@ -151,7 +157,7 @@ if (has_ragg) {
   render_dev <- "ragg"
 } else {
   message("  [WARN] 'ragg' is missing. Falling back to standard cairo/png (may be 2-4x slower).")
-  render_dev = "standard"
+  render_dev <- "standard"
 }
 
 # ------------------------------------------------------------------------------
@@ -166,13 +172,16 @@ if (is_rstudio) {
   # Query active graphic device
   active_dev <- dev.cur()
   message("  --> Current Active Graphics Device: ", names(active_dev), " (Code: ", active_dev, ")")
-  
+
   # Audit the RStudio plotting backend configuration
   # If ragg is selected in RStudio's options, the rendering of plot tab will be fast.
-  rstudio_backend <- tryCatch({
-    # RStudio options list is stored inside tools:rstudio
-    get("rstudio.graphics.backend", envir = as.environment("tools:rstudio"))
-  }, error = function(e) "unknown/default")
+  rstudio_backend <- tryCatch(
+    {
+      # RStudio options list is stored inside tools:rstudio
+      get("rstudio.graphics.backend", envir = as.environment("tools:rstudio"))
+    },
+    error = function(e) "unknown/default"
+  )
   message("  --> RStudio Options Graphics Backend: ", rstudio_backend)
 } else {
   message("  [HEADLESS] Running outside RStudio IDE (non-interactive). Plot tab tests will write files to disk.")
@@ -199,15 +208,15 @@ grid <- expand.grid(lon = lon_seq, lat = lat_seq)
 is_in_italy <- function(lon, lat) {
   # Approximate polygon skeleton of the Italian peninsula + Sicily + Sardinia
   # Peninsula body
-  peninsula <- lat >= 38 & lat <= 47.5 & lon >= 7.5 & lon <= 18.5 & 
-               (lon >= (8.0 + (lat - 38) * 0.4) & lon <= (16.5 + (lat - 38) * 0.1))
+  peninsula <- lat >= 38 & lat <= 47.5 & lon >= 7.5 & lon <= 18.5 &
+    (lon >= (8.0 + (lat - 38) * 0.4) & lon <= (16.5 + (lat - 38) * 0.1))
   # Alps extension in the north
   alps_zone <- lat > 45 & lon >= 6.5 & lon <= 14
   # Sicily
   sicily <- lat >= 36.5 & lat < 38.3 & lon >= 12.0 & lon <= 15.8
   # Sardinia
   sardinia <- lat >= 38.8 & lat < 41.5 & lon >= 8.0 & lon <= 10.0
-  
+
   peninsula | alps_zone | sicily | sardinia
 }
 
@@ -215,10 +224,10 @@ is_in_italy <- function(lon, lat) {
 calc_elevation <- function(lon, lat) {
   elev <- rep(0, length(lon))
   italy_idx <- is_in_italy(lon, lat)
-  
+
   # Base terrain for landmass
   elev[italy_idx] <- 120 # low plains base
-  
+
   # Alps contribution (North)
   alps_idx <- italy_idx & lat > 45
   if (any(alps_idx)) {
@@ -226,7 +235,7 @@ calc_elevation <- function(lon, lat) {
     dist_alps <- sqrt((lon[alps_idx] - 9.5)^2 + (lat[alps_idx] - 46.2)^2)
     elev[alps_idx] <- elev[alps_idx] + pmax(0, 3800 - dist_alps * 1200)
   }
-  
+
   # Apennines contribution (Spine down the center)
   # Dynamic ridge center line: lon = 12.5 - (lat - 42) * 0.35
   spine_idx <- italy_idx & lat >= 38 & lat <= 45
@@ -235,18 +244,18 @@ calc_elevation <- function(lon, lat) {
     dist_spine <- abs(lon[spine_idx] - ridge_lon)
     elev[spine_idx] <- elev[spine_idx] + pmax(0, 2200 - dist_spine * 900)
   }
-  
+
   # Sicily Mountains (Etna)
   etna_idx <- italy_idx & lat >= 37.2 & lat <= 37.8 & lon >= 14.8 & lon <= 15.2
   if (any(etna_idx)) {
     dist_etna <- sqrt((lon[etna_idx] - 15.0)^2 + (lat[etna_idx] - 37.75)^2)
     elev[etna_idx] <- elev[etna_idx] + pmax(0, 3300 - dist_etna * 6000)
   }
-  
+
   # Add moderate topography noise to look like a real DEM
   noise <- rnorm(length(lon), mean = 0, sd = 40)
   elev[italy_idx] <- pmax(5, elev[italy_idx] + noise[italy_idx])
-  
+
   elev
 }
 
@@ -256,8 +265,9 @@ grid$is_land <- is_in_italy(grid$lon, grid$lat)
 
 # Mean Annual Temperature: base decreases with latitude, and drops with elevation
 grid$temperature <- ifelse(grid$is_land,
-                           24 - 0.75 * (grid$lat - 35) - 0.0065 * grid$elevation,
-                           NA)
+  24 - 0.75 * (grid$lat - 35) - 0.0065 * grid$elevation,
+  NA
+)
 
 # Filter out sea points for land plotting (or keep as NA)
 grid$elevation_land <- ifelse(grid$is_land, grid$elevation, NA)
@@ -280,11 +290,11 @@ sim_points$temperature <- 24 - 0.75 * (sim_points$lat - 35) - 0.0065 * sim_point
 
 # Niche suitability probability function
 suitability <- exp(-0.5 * ((sim_points$temperature - 16.5) / 2.5)^2) * # temp preference around 16.5°C
-               exp(-0.5 * (pmax(0, sim_points$elevation - 200) / 300)^2) # prefers lowlands/hills
+  exp(-0.5 * (pmax(0, sim_points$elevation - 200) / 300)^2) # prefers lowlands/hills
 
 # Add GBIF sampling bias: higher recording rate in northern regions & coastal lowlands
-sampling_bias <- ifelse(sim_points$lat > 42, 1.0, 0.6) * 
-                 ifelse(sim_points$elevation < 150, 1.0, 0.4)
+sampling_bias <- ifelse(sim_points$lat > 42, 1.0, 0.6) *
+  ifelse(sim_points$elevation < 150, 1.0, 0.4)
 
 occurrence_prob <- suitability * sampling_bias
 keep_idx <- runif(length(occurrence_prob)) < occurrence_prob
@@ -294,9 +304,11 @@ occurrences <- sim_points[keep_idx, ]
 n_occurrences <- nrow(occurrences)
 occurrences$gbifID <- 4000000000 + seq_len(n_occurrences)
 occurrences$species <- "Olea europaea L."
-occurrences$coordinateUncertaintyInMeters <- sample(c(5, 10, 30, 100, 500, 1000, 5000), 
-                                                    n_occurrences, replace = TRUE, 
-                                                    prob = c(0.3, 0.2, 0.2, 0.15, 0.08, 0.05, 0.02))
+occurrences$coordinateUncertaintyInMeters <- sample(c(5, 10, 30, 100, 500, 1000, 5000),
+  n_occurrences,
+  replace = TRUE,
+  prob = c(0.3, 0.2, 0.2, 0.15, 0.08, 0.05, 0.02)
+)
 occurrences$eventDate <- as.Date("2020-01-01") + sample(0:2000, n_occurrences, replace = TRUE)
 
 message("  [OK] Generated simulated land covariate grid (", grid_resolution, "x", grid_resolution, ").")
@@ -308,7 +320,7 @@ message("  [OK] Generated ", n_occurrences, " realistic GBIF occurrences for 'Ol
 message("\n[STEP 4/6] Building ggplot Maps...")
 
 # Define a cohesive theme with clean layout fallback
-map_theme <- ggplot2::theme_minimal() + 
+map_theme <- ggplot2::theme_minimal() +
   ggplot2::theme(
     text = ggplot2::element_text(color = "#2d2d2d"),
     plot.title = ggplot2::element_text(face = "bold", size = 13, color = "#111111"),
@@ -330,8 +342,10 @@ p1 <- ggplot2::ggplot() +
   # Draw a grey landmass underlay
   ggplot2::geom_tile(data = subset(grid, is_land), ggplot2::aes(x = lon, y = lat), fill = "#e2e8f0") +
   # Draw the plant occurrence points
-  ggplot2::geom_point(data = occurrences, ggplot2::aes(x = lon, y = lat, color = coordinateUncertaintyInMeters),
-                      alpha = 0.5, size = 1.0) +
+  ggplot2::geom_point(
+    data = occurrences, ggplot2::aes(x = lon, y = lat, color = coordinateUncertaintyInMeters),
+    alpha = 0.5, size = 1.0
+  ) +
   ggplot2::scale_color_gradientn(
     name = "Uncertainty (m)",
     colors = c("#059669", "#d97706", "#dc2626"),
@@ -390,11 +404,15 @@ p3 <- ggplot2::ggplot() +
     na.value = "#dbebfa"
   ) +
   # Contour lines of point density (Niche density)
-  ggplot2::geom_density_2d(data = occurrences, ggplot2::aes(x = lon, y = lat), 
-                           color = "#111111", alpha = 0.6, bins = 6, size = 0.4) +
+  ggplot2::geom_density_2d(
+    data = occurrences, ggplot2::aes(x = lon, y = lat),
+    color = "#111111", alpha = 0.6, bins = 6, size = 0.4
+  ) +
   # Overlay actual points
-  ggplot2::geom_point(data = occurrences, ggplot2::aes(x = lon, y = lat), 
-                      color = "#ff7f00", alpha = 0.25, size = 0.6) +
+  ggplot2::geom_point(
+    data = occurrences, ggplot2::aes(x = lon, y = lat),
+    color = "#ff7f00", alpha = 0.25, size = 0.6
+  ) +
   ggplot2::coord_quickmap(xlim = c(6.5, 19.0), ylim = c(35.5, 47.0)) +
   ggplot2::labs(
     title = "Ecological Niche: Olea europaea vs Mean Temperature",
@@ -415,7 +433,7 @@ message("\n[STEP 5/6] Running Graphics Device Stress Test (Disk I/O & Render Ben
 test_render <- function(plot_obj, filename, label, dev_type) {
   dest_path <- file.path(temp_dir_target, filename)
   t0 <- Sys.time()
-  
+
   if (dev_type == "ragg") {
     ragg::agg_png(dest_path, width = 2400, height = 2400, res = 300)
     print(plot_obj)
@@ -425,14 +443,14 @@ test_render <- function(plot_obj, filename, label, dev_type) {
     print(plot_obj)
     dev.off()
   }
-  
+
   t1 <- Sys.time()
   elapsed <- as.numeric(difftime(t1, t0, units = "secs"))
   file_size_mb <- file.info(dest_path)$size / (1024^2)
-  
+
   message(sprintf("  [%s] Rendered to: %s", dev_type, basename(dest_path)))
   message(sprintf("        Time: %.3f seconds | File Size: %.2f MB", elapsed, file_size_mb))
-  
+
   list(elapsed = elapsed, size = file_size_mb, path = dest_path)
 }
 
@@ -448,14 +466,17 @@ res_p3 <- test_render(p3, "italy_niche_merged.png", "Plot 3", render_dev)
 
 # Clean up temp rendering files from local /Rtmp to comply with "smallest blast radius" and storage cleanup
 cleanup_temp_files <- function() {
-  tryCatch({
-    file.remove(res_p1$path)
-    file.remove(res_p2$path)
-    file.remove(res_p3$path)
-    message("  [OK] Cleaned up intermediate stress test images from temp disk.")
-  }, error = function(e) {
-    message("  [WARN] Failed to delete some temporary plots: ", e$message)
-  })
+  tryCatch(
+    {
+      file.remove(res_p1$path)
+      file.remove(res_p2$path)
+      file.remove(res_p3$path)
+      message("  [OK] Cleaned up intermediate stress test images from temp disk.")
+    },
+    error = function(e) {
+      message("  [WARN] Failed to delete some temporary plots: ", e$message)
+    }
+  )
 }
 # Keep files for RStudio webconsole viewing temporarily, but schedule them for deletion
 on.exit(cleanup_temp_files(), add = TRUE)
@@ -469,15 +490,18 @@ total_render_time <- res_p1$elapsed + res_p2$elapsed + res_p3$elapsed
 memory_delta_mb <- gc(verbose = FALSE)[2, 6] # R current heap size
 
 # Check if network home directory is affected by rendering activities
-nfs_home_check <- tryCatch({
-  home_dir <- Sys.getenv("HOME")
-  nfs_path <- file.path(home_dir, ".biome_plot_nfs_test")
-  t0_nfs <- Sys.time()
-  writeLines("NFS Latency Test", nfs_path)
-  file.remove(nfs_path)
-  t1_nfs <- Sys.time()
-  as.numeric(difftime(t1_nfs, t0_nfs, units = "secs"))
-}, error = function(e) -1)
+nfs_home_check <- tryCatch(
+  {
+    home_dir <- Sys.getenv("HOME")
+    nfs_path <- file.path(home_dir, ".biome_plot_nfs_test")
+    t0_nfs <- Sys.time()
+    writeLines("NFS Latency Test", nfs_path)
+    file.remove(nfs_path)
+    t1_nfs <- Sys.time()
+    as.numeric(difftime(t1_nfs, t0_nfs, units = "secs"))
+  },
+  error = function(e) -1
+)
 
 # Compile results in Markdown format for the RStudio Web Console
 cat("\n\n==================================================================\n")
@@ -492,9 +516,11 @@ cat(sprintf("  * Total Rendering Time  : %.3f sec\n", total_render_time))
 cat(sprintf("  * Active Heap Memory    : %.1f MB\n", memory_delta_mb))
 cat(sprintf("  * Target Plot Directory : %s\n", temp_dir_target))
 if (nfs_home_check > 0) {
-  cat(sprintf("  * NFS Home Write Latency: %.4f sec (%s)\n", 
-              nfs_home_check, 
-              if (nfs_home_check < 0.05) "Excellent" else if (nfs_home_check < 0.2) "Acceptable" else "SEVERE LATENCY WARNING"))
+  cat(sprintf(
+    "  * NFS Home Write Latency: %.4f sec (%s)\n",
+    nfs_home_check,
+    if (nfs_home_check < 0.05) "Excellent" else if (nfs_home_check < 0.2) "Acceptable" else "SEVERE LATENCY WARNING"
+  ))
 } else {
   cat("  * NFS Home Write Latency: Failed or Unreadable\n")
 }
@@ -512,15 +538,15 @@ if (total_render_time > 8.0) {
 if (is_rstudio) {
   message("\n[PLOT PANE DISPLAY ACTION]")
   message("  Printing the final merged niche plot (Plot 3) to the RStudio Plot viewer...")
-  
+
   # Set up a timing trap for the WebSocket transmission to the user's browser
   t0_display <- Sys.time()
   print(p3)
   t1_display <- Sys.time()
-  
+
   display_elapsed <- as.numeric(difftime(t1_display, t0_display, units = "secs"))
   message(sprintf("  --> Plot print call completed in %.3f seconds.", display_elapsed))
-  
+
   # Diagnostic evaluation of RStudio plot pane problems
   if (display_elapsed > 4.0) {
     message("\n⚠️  [PLOT VISUALIZATION LAG DETECTED]")
@@ -533,7 +559,7 @@ if (is_rstudio) {
     message("     3. Slow /tmp mount: RStudio caches active plots in the user session temp directory.")
     message("        Verify that R_SESSION_TMPDIR is routed to local SSD (/Rtmp) and not NFS.")
   } else {
-    message("\n✅ [STATUS] Interactive plot pane submission was fast (%.3f s).", display_elapsed)
+    message(sprintf("\n✅ [STATUS] Interactive plot pane submission was fast (%.3f s).", display_elapsed))
   }
 } else {
   cat("\n💡 [RSTUDIO GRAPHICS TROUBLESHOOTING GUIDE]\n")

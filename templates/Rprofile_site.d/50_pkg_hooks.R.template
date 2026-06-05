@@ -128,23 +128,49 @@
       msg_parts <- c(msg_parts, "Keras [LocalDisk]")
     }, error = .biome_swerr("Line_1436"))
 
-    # ── ggplot / plotly / tmap / mapview ──
-    if (ENABLE_GGPLOT_OPT && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly") ||
-                               isNamespaceLoaded("tmap") || isNamespaceLoaded("mapview")) &&
-        !isTRUE(.biome_env$shared_env$.ggplot_hook_done)) tryCatch({
-      gt <- file.path(user_tmp_root, "plot_cache")
-      if (!dir.exists(gt)) dir.create(gt, recursive = TRUE, showWarnings = FALSE)
-      # Note: we do NOT overwrite TMP/TEMP globally here because that breaks other stuff.
-      # Per-plot temp is handled by ragg/cairo via tempfile() → inherits TMPDIR = /Rtmp ✓
-      has_ragg <- requireNamespace("ragg", quietly = TRUE)
-      if (has_ragg) options(device = ragg::agg_png)
+      # ── ggplot / plotly / tmap / mapview ──
+      if (ENABLE_GGPLOT_OPT && (isNamespaceLoaded("ggplot2") || isNamespaceLoaded("plotly") ||
+                                 isNamespaceLoaded("tmap") || isNamespaceLoaded("mapview")) &&
+          !isTRUE(.biome_env$shared_env$.ggplot_hook_done)) tryCatch({
+        gt <- file.path(user_tmp_root, "plot_cache")
+        if (!dir.exists(gt)) dir.create(gt, recursive = TRUE, showWarnings = FALSE)
+        # Note: we do NOT overwrite TMP/TEMP globally here because that breaks other stuff.
+        # Per-plot temp is handled by ragg/cairo via tempfile() → inherits TMPDIR = /Rtmp ✓
+        has_ragg <- requireNamespace("ragg", quietly = TRUE)
+        # ── CRITICAL: RStudioGD guard (v12.2 fix) ──────────────────────────────────
+        # options(device = ragg::agg_png) MUST NOT fire inside an interactive
+        # RStudio Server session. ragg::agg_png is a file-writing device; it
+        # silently replaces RStudioGD (the WebSocket device that feeds the Plot
+        # pane), causing all plots to render to /Rtmp PNG files and never appear
+        # in the browser UI. This is the confirmed root cause of the researcher-
+        # reported "plots not showing" issue on biome-calc01 (2026-06-05).
+        #
+        # Headless/Rscript contexts (RSTUDIO env var unset): ragg::agg_png is the
+        # correct default — no interactive plot pane exists, file output is wanted.
+        #
+        # Interactive RStudio sessions: leave options('device') as RStudioGD.
+        # Users who explicitly want ragg for file export call ragg::agg_png()
+        # directly (as in the stress-test script's test_render() function).
+        #
+        # OPERATOR DOCS: See docs/operations/TROUBLESHOOTING.md §1.7 for the
+        # investigation summary, runbook, and durable remediation procedure.
+        # Diagnostic: source("scripts/99_diagnose_rstudio_plot_pane.R") in
+        # the affected RStudio console.
+        # CHANGELOG:  docs/reference/Rprofile_site.CHANGELOG.md §v12.10-doc.
+        # ──────────────────────────────────────────────────────────────────────────
+      is_interactive_rstudio <- interactive() &&
+                                (nzchar(Sys.getenv("RSTUDIO", "")) ||
+                                 nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", "")))
+      if (has_ragg && !is_interactive_rstudio) options(device = ragg::agg_png)
       options(bitmapType = "cairo")
       options(ggplot2.continuous.colour = "viridis", ggplot2.continuous.fill = "viridis")
       Sys.setenv(FONTCONFIG_PATH = "/etc/fonts")
       if (requireNamespace("systemfonts", quietly = TRUE)) {
         tryCatch(systemfonts::system_fonts(), error = .biome_swerr("Line_1452"))
       }
-      backend_label <- if (has_ragg) "ragg" else "cairo"
+      backend_label <- if (has_ragg) {
+        if (is_interactive_rstudio) "ragg/RStudioGD" else "ragg"
+      } else "cairo"
       vis_pkgs <- c("Ggplot", if (isNamespaceLoaded("tmap")) "Tmap",
                     if (isNamespaceLoaded("mapview")) "Mapview")
       .biome_env$shared_env$.ggplot_hook_done <- TRUE

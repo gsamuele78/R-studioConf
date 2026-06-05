@@ -8,6 +8,121 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.10-doc (2026-06-05) — "RStudioGD plot-pane diagnostics + runbook"
+
+### Trigger
+
+A researcher on biome-calc01 reported that plots were no longer appearing
+in the RStudio Server Plots pane. Commands like `plot(1,1)` and
+`print(my_ggplot)` executed without errors but produced no visible output
+in the browser. The stress-test and diagnostic scripts
+(`99_botanical_plot_stress_test.R`, `99_diagnose_rstudio_plot_pane.R`)
+confirmed the session was healthy except for one finding: `options("device")`
+was a function that did **not** mention `RStudioGD`.
+
+### Investigation
+
+Tracing through the deployed host files vs. the GitHub template revealed
+the root cause:
+
+* **Deployed `/etc/R/Rprofile_site.d/50_pkg_hooks.R`** (stale, pre-v12.2):
+
+  ```r
+  if (has_ragg) options(device = ragg::agg_png)
+  ```
+
+  This fires **unconditionally** and replaces `RStudioGD` with
+  `ragg::agg_png` — a file-writing device. All plots then write to
+  `/Rtmp/*.png` files instead of being streamed over the WebSocket to
+  the browser.
+
+* **GitHub `templates/Rprofile_site.d/50_pkg_hooks.R.template`** (current, v12.2+):
+
+  ```r
+  is_interactive_rstudio <- interactive() &&
+    (nzchar(Sys.getenv("RSTUDIO", "")) ||
+     nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", "")))
+  if (has_ragg && !is_interactive_rstudio) options(device = ragg::agg_png)
+  ```
+
+  This correctly guards against overwriting `RStudioGD` in interactive
+  RStudio Server sessions while still setting `ragg::agg_png` as the
+  default for headless/Rscript contexts (where file output is correct).
+
+**Conclusion:** The GitHub template is correct. The production node was
+running a stale deploy. The durable fix is redeploying via
+`scripts/50_setup_nodes.sh` → option 3 (Config files only).
+
+### Fix (T1 authoritative)
+
+No change to Rprofile fragments. The fragment semantics are unchanged.
+
+**1. Hardened `scripts/99_diagnose_rstudio_plot_pane.R` (TEST 2).**
+The diagnostic now:
+
+* Detects whether the session is interactive RStudio via `RSTUDIO` /
+  `RSTUDIO_USER_IDENTITY` env vars.
+* Classifies 12 file-writing devices (`ragg::agg_png`, `png`, `jpeg`,
+  `pdf`, `svg`, etc.) as **CRITICAL** inside interactive RStudio — not
+  a soft WARN as before.
+* Attempts `options(device = "RStudioGD")` repair automatically.
+* Prints the exact sysadmin remediation commands when a stale fragment
+  is detected.
+
+**2. Fixed `scripts/99_botanical_plot_stress_test.R` formatting bug.**
+`message("...fast (%.3f s).", display_elapsed)` → `message(sprintf(...))`.
+`message()` does not format `%f`, so the elapsed time was appended as
+literal text after the format string. The stress test already uses base
+`substr()` (not `rlang::str_sub`) — the host runtime error with
+`rlang::str_sub` was from a stale deployed copy.
+
+**3. Added `docs/operations/TROUBLESHOOTING.md` §1.7.**
+New runbook section: "RStudio Plots pane blank / plots not displayed
+in browser". Covers symptom, root cause (`grep` verification on the
+production node), quick per-session workaround, durable sysadmin fix
+(redeploy option 3 + restart), diagnostic script reference, and
+secondary causes checklist (user `.Rprofile`, collapsed pane, browser
+cache).
+
+**4. Updated `templates/Rprofile_site.d/50_pkg_hooks.R.template` header.**
+Added cross-reference comment pointing operators to
+`docs/operations/TROUBLESHOOTING.md §1.7` for the full investigation
+and remediation context.
+
+### Files touched
+
+* `scripts/99_diagnose_rstudio_plot_pane.R` (TEST 2 hardened: +60 lines)
+* `scripts/99_botanical_plot_stress_test.R` (line 536 `message→sprintf` fix)
+* `docs/operations/TROUBLESHOOTING.md` (new §1.7 runbook entry)
+* `templates/Rprofile_site.d/50_pkg_hooks.R.template` (header comment cross-reference)
+* `docs/reference/Rprofile_site.CHANGELOG.md` (this entry)
+
+### No RPROFILE_VERSION bump
+
+RPROFILE_VERSION remains `"12.10"`. None of the Rprofile fragment
+semantics changed — the v12.2 guard was already in the GitHub template
+and in `config/setup_nodes.vars.conf`. The changes in this commit are
+diagnostic-tooling and documentation only, which do not cause a
+byte-compiled bundle mismatch.
+
+### Tier deltas
+
+* **T2 (docker-deploy):** Same `50_pkg_hooks.R.template` fragment
+  applies. The diagnostic scripts and runbook are T1-host specific;
+  T2 containers inherit the template at build time.
+* **T3 (kubernetes-deploy):** SKELETON_NOT_READY — defer.
+
+### Operator remediation on the production host
+
+```bash
+git pull
+sudo bash scripts/50_setup_nodes.sh
+# → select option 3 (Config files only — Rprofile + Renviron, Step 8)
+sudo systemctl restart rstudio-server
+```
+
+---
+
 ## v12.10 (2026-05-11) — "install-storm safety valve (opt-in) + R010 doc reconciliation"
 
 ### Trigger

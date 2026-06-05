@@ -1,4 +1,5 @@
-<!-- docs/operations/TROUBLESHOOTING.md -->
+s the changes so th<!-- docs/operations/TROUBLESHOOTING.md -->
+
 # Troubleshooting Runbook (Symptom → Action)
 
 > **Audience:** sysadmins / operators on call.  
@@ -154,6 +155,91 @@ r_minimal_rscript /path/to/user.R
 ```
 
 This is the L0/L1 surface in the HC-13 escalation ladder.
+
+### 1.7 RStudio Plots pane blank / plots not displayed in browser
+
+**Symptom:** User runs `plot(1,1)` or `print(my_ggplot)` in RStudio Server.
+The R console shows no error and the command completes quickly, but the
+Plots pane on the bottom-right stays blank or shows a stale previous image.
+
+**Root cause (by far the most common):** A stale `Rprofile_site.d/`
+fragment sets `options(device = ragg::agg_png)` **without** the v12.2
+RStudioGD guard. `ragg::agg_png` is a file-writing device — it silently
+replaces `RStudioGD` (the WebSocket device that sends the plot to the
+browser). All plot commands then write PNG files to `/Rtmp` and the
+browser never sees them.
+
+The current (correct) template at
+`templates/Rprofile_site.d/50_pkg_hooks.R.template` lines 155-158 reads:
+
+```r
+is_interactive_rstudio <- interactive() &&
+  (nzchar(Sys.getenv("RSTUDIO", "")) ||
+   nzchar(Sys.getenv("RSTUDIO_USER_IDENTITY", "")))
+if (has_ragg && !is_interactive_rstudio) options(device = ragg::agg_png)
+```
+
+**First commands (on the production node)**
+
+```bash
+# Check whether the deployed fragment still has the unsafe unconditional form:
+grep -nC8 'ragg::agg_png' /etc/R/Rprofile_site.d/50_pkg_hooks.R
+
+# Expected output (v12.2+ guarded form):
+#   if (has_ragg && !is_interactive_rstudio) options(device = ragg::agg_png)
+
+# If you see this instead (old unconditional form), you found the bug:
+#   if (has_ragg) options(device = ragg::agg_png)
+```
+
+**Quick per-session workaround (user-side)**
+
+```r
+# In the affected RStudio console:
+graphics.off()
+options(device = "RStudioGD")
+plot(1, 1)   # should now appear in the Plots pane
+```
+
+This fix lasts only for the current session. The durable fix is below.
+
+**Durable fix (sysadmin)**
+
+```bash
+# Ensure the repo is current, then redeploy config files only:
+git pull
+sudo bash scripts/50_setup_nodes.sh
+# → select option 3 (Config files only — Rprofile + Renviron, Step 8)
+
+# Verify the deployed fragment now has the guard:
+grep -A2 'ragg::agg_png' /etc/R/Rprofile_site.d/50_pkg_hooks.R
+# Expected: if (has_ragg && !is_interactive_rstudio) options(device = ragg::agg_png)
+
+sudo systemctl restart rstudio-server
+```
+
+**Note:** If the node is running an Rprofile byte-compiled bundle
+(`/etc/R/Rprofile_site.d/.compiled/`), option 3 (`50_setup_nodes.sh`)
+also rebuilds the bundle, so the stale cached fragment is flushed.
+
+**Diagnostic script**
+
+The in-RStudio diagnostic `99_diagnose_rstudio_plot_pane.R` now
+detects file-writing devices inside interactive RStudio sessions as
+CRITICAL and attempts `options(device = "RStudioGD")` repair:
+
+```r
+source("scripts/99_diagnose_rstudio_plot_pane.R")
+```
+
+**Secondary causes (if the guarded fragment is already deployed)**
+
+* User script may override `options(device)` with a file-writing device.
+  Check `~/.Rprofile` and project-level `.Rprofile` for `options(device = ...)`.
+* The Plots pane may be collapsed; drag the divider up or click the
+  "Plots" tab to expand it.
+* RStudio browser cache may be stale; resize the browser window or the
+  RStudio pane to force a WebSocket re-render.
 
 ---
 
