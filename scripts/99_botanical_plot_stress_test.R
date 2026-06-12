@@ -2,15 +2,25 @@
 # ==============================================================================
 # BIOME-CALC: BOTANICAL PLOT STRESS TEST & GRAPHICS SYSTEM DIAGNOSTIC
 # ==============================================================================
-# Target: RStudio Server / R 4.6.0 environment (X11 = FALSE, Cairo = TRUE)
+# Target: RStudio Server / R 4.6.0 environment (X11 = FALSE)
 # Purpose: Simulates a realistic GBIF plant occurrence dataset in Italy,
-#          generates three ecological maps (occurrences, elevation covariate,
-#          and the merged spatial niche map), and stress-tests the server's
-#          resource boundaries (RAM, cgroups, /Rtmp I/O, and thread explosion).
+#          generates three ecological maps, and runs TWO independent tests:
 #
-# Interactive Display:
-#   When run via Rscript (terminal), it benchmarks and outputs files under /Rtmp.
-#   When run inside RStudio, it tests the interactive "Plots" pane (RStudioGD).
+#   [A] REAL PLOT PANE TEST — for researchers inside RStudio Server.
+#       Prints botanical maps directly to the RStudio Plots pane (RStudioGD).
+#       What you should SEE: three maps appearing in the bottom-right
+#       "Plots" tab of RStudio, one after another. No file is saved.
+#       If you see the maps in the pane → your session is healthy.
+#       If you don't → run scripts/99_diagnose_rstudio_plot_pane.R.
+#
+#   [B] SERVER FILE RENDER STRESS TEST — for sysadmins benchmarking.
+#       Renders the same maps to /Rtmp/*.png files using ragg or Cairo.
+#       Measures render time, file size, RAM usage, and NFS latency.
+#       This is NOT visible in the Plot pane — it writes to disk.
+#
+# Interactive vs Headless:
+#   When run inside RStudio: runs [A] (pane test) then [B] (benchmark).
+#   When run via Rscript (terminal): runs only [B] (no pane available).
 # ==============================================================================
 
 message("\n==================================================================")
@@ -23,23 +33,40 @@ message("==================================================================\n")
 # ------------------------------------------------------------------------------
 # 1. PESSIMISTIC SYSTEM PRE-FLIGHT DIAGNOSTICS & RESOURCE GUARDS
 # ------------------------------------------------------------------------------
-message("[STEP 1/6] Running System Diagnostics & Resource Guards...")
+message("[STEP 1/7] Running System Diagnostics & Resource Guards...")
 
-# 1.1 Force Headless-Safe Graphics Device (X11 = FALSE, Cairo = TRUE)
-# Since the server has capabilities("X11") == FALSE, we must enforce cairo.
-# Otherwise, R's default bitmap device can fallback to X11 and throw a connection error.
-options(bitmapType = "cairo")
-message("  [OK] Enforced options(bitmapType = 'cairo') for headless compatibility.")
-
-# Check capabilities
+# 1.1 Graphics Engine Audit (informational — does NOT change RStudioGD)
+# NOTE: We do NOT force options(bitmapType = "cairo") here because it is
+# already set by the system Rprofile (50_pkg_hooks.R). Forcing it again
+# is harmless but redundant. The RStudio Plots pane uses RStudioGD, not
+# the bitmap device — bitmapType only affects png()/jpeg()/tiff() calls.
 caps <- capabilities()
 if (!caps["cairo"]) {
   message("  [CRITICAL] Cairo rendering is NOT available in this R environment!")
+} else {
+  message("  [OK] Cairo rendering engine is available.")
 }
 if (caps["X11"]) {
-  message("  [WARN] X11 is available. Ensuring we ignore it to prevent display lockups.")
+  message("  [WARN] X11 is available (should be disabled on headless cluster nodes).")
 } else {
   message("  [OK] Verified X11 is disabled (standard for headless cluster nodes).")
+}
+
+# Check current device setting — informational (don't change it)
+dev_info <- options("device")[[1]]
+if (is.function(dev_info)) {
+  dev_text <- paste(deparse(dev_info), collapse = " ")
+  if (grepl("RStudioGD", dev_text)) {
+    message("  [OK] Default graphics device is RStudioGD (Plots pane will work).")
+  } else if (grepl("agg_png|png|jpeg|tiff|pdf|svg", dev_text, ignore.case = TRUE)) {
+    message("  [CRITICAL] Default graphics device is a FILE writer: ", substr(dev_text, 1, 60))
+    message("             This REPLACES the Plots pane! Plots go to files, not the browser.")
+    message("             Fix: run source('scripts/99_diagnose_rstudio_plot_pane.R')")
+  } else {
+    message("  [INFO] Default graphics device: ", substr(dev_text, 1, 60), "...")
+  }
+} else if (is.character(dev_info)) {
+  message("  [INFO] Default graphics device: '", dev_info, "'")
 }
 
 # 1.2 Thread Capping & BLAS Check
@@ -163,7 +190,7 @@ if (has_ragg) {
 # ------------------------------------------------------------------------------
 # 2. RSTUDIO INTERACTIVE GRAPHICS PORT AUDITS
 # ------------------------------------------------------------------------------
-message("\n[STEP 2/6] Auditing RStudio Graphics Device Status...")
+message("\n[STEP 2/7] Auditing RStudio Graphics Device Status...")
 
 is_rstudio <- (Sys.getenv("RSTUDIO") == "1") || (.Platform$OS.type == "unix" && .Platform$GUI == "RStudio")
 
@@ -190,7 +217,7 @@ if (is_rstudio) {
 # ------------------------------------------------------------------------------
 # 3. REALISTIC BOTANICAL DATA SIMULATION (Italy Occurrence Template)
 # ------------------------------------------------------------------------------
-message("\n[STEP 3/6] Simulating Realistic Botanical & Spatial Covariate Data...")
+message("\n[STEP 3/7] Simulating Realistic Botanical & Spatial Covariate Data...")
 
 # 3.1 Italy Spatial Bounding Box
 # Longitude: 6.0 to 19.0 (West to East)
@@ -317,7 +344,7 @@ message("  [OK] Generated ", n_occurrences, " realistic GBIF occurrences for 'Ol
 # ------------------------------------------------------------------------------
 # 4. BUILDING MAPS
 # ------------------------------------------------------------------------------
-message("\n[STEP 4/6] Building ggplot Maps...")
+message("\n[STEP 4/7] Building ggplot Maps...")
 
 # Define a cohesive theme with clean layout fallback
 map_theme <- ggplot2::theme_minimal() +
@@ -426,9 +453,84 @@ t1_p3 <- Sys.time()
 message("  --> Plot 3 built in: ", round(as.numeric(difftime(t1_p3, t0_p3, units = "secs")), 3), " s")
 
 # ------------------------------------------------------------------------------
-# 5. HARD RESOURCE STRESS TESTING & WRITING BUDGET CHECKS
+# 5. [PART A] REAL RSTUDIO PLOT PANE TEST (researcher-facing)
 # ------------------------------------------------------------------------------
-message("\n[STEP 5/6] Running Graphics Device Stress Test (Disk I/O & Render Benchmarking)...")
+# This test sends botanical maps directly to the RStudio Plots pane via
+# RStudioGD (the WebSocket device). No files are written. If you see the
+# maps in your bottom-right "Plots" tab, your session is healthy.
+#
+# If you DON'T see them, the most common cause is a stale Rprofile fragment
+# setting options(device = ragg::agg_png) — run the diagnostic script:
+#   source("scripts/99_diagnose_rstudio_plot_pane.R")
+# ------------------------------------------------------------------------------
+message("\n[STEP 5/7] [PART A] REAL RSTUDIO PLOT PANE TEST — Researcher Visual Check...")
+message("  This sends botanical maps to your browser Plots pane (RStudioGD).")
+message("  Look at the bottom-right 'Plots' tab in RStudio after each map name.")
+message("  If you see the maps → your session is healthy.")
+message("  If you don't → run: source('scripts/99_diagnose_rstudio_plot_pane.R')\n")
+
+if (is_rstudio) {
+  # Clear any stale file devices before testing the real pane
+  graphics.off()
+
+  message("  [TEST A.1] Printing Plot 1 (Occurrences) to RStudioGD...")
+  message("             → Look at the Plots tab NOW. Do you see the map?")
+  tryCatch(
+    {
+      print(p1)
+      message("  [PASS] Plot 1 sent to RStudioGD.")
+    },
+    error = function(e) {
+      message("  [FAIL] Plot 1 error: ", e$message)
+    }
+  )
+
+  message("\n  [TEST A.2] Printing Plot 2 (Elevation DEM) to RStudioGD...")
+  message("             → The Plots tab should update with a new map.")
+  tryCatch(
+    {
+      print(p2)
+      message("  [PASS] Plot 2 sent to RStudioGD.")
+    },
+    error = function(e) {
+      message("  [FAIL] Plot 2 error: ", e$message)
+    }
+  )
+
+  message("\n  [TEST A.3] Printing Plot 3 (Merged Niche Map) to RStudioGD...")
+  message("             → Final map. If you see all three, your Plot pane works.")
+  t0_display <- Sys.time()
+  tryCatch(
+    {
+      print(p3)
+      t1_display <- Sys.time()
+      display_elapsed <- as.numeric(difftime(t1_display, t0_display, units = "secs"))
+      message(sprintf("  [PASS] Plot 3 sent to RStudioGD in %.3f seconds.", display_elapsed))
+    },
+    error = function(e) {
+      message("  [FAIL] Plot 3 error: ", e$message)
+    }
+  )
+} else {
+  message("  [SKIP] Not running inside RStudio — no Plots pane available.")
+  message("         Log in to the RStudio Server web interface to run the pane test.")
+  message("         Or use Rscript mode for the file-render benchmark below.")
+}
+
+# ------------------------------------------------------------------------------
+# 6. [PART B] SERVER FILE RENDER STRESS TEST (sysadmin benchmarking)
+# ------------------------------------------------------------------------------
+# This writes high-resolution PNG files to /Rtmp using ragg or Cairo.
+# It measures render time, file size, RAM usage, and NFS latency.
+# These files are NOT visible in the browser Plots pane — they go to disk.
+# ------------------------------------------------------------------------------
+message("\n[STEP 6/7] [PART B] SERVER FILE RENDER STRESS TEST — Disk I/O Benchmark...")
+message("  This renders maps to /Rtmp/*.png files (not the browser pane).")
+message("  It measures raw server rendering performance for sysadmin diagnostics.\n")
+
+# Enforce bitmapType for the file-render benchmark only
+# (bitmapType = "cairo" affects png()/jpeg() file devices only — NOT RStudioGD)
+options(bitmapType = "cairo")
 
 test_render <- function(plot_obj, filename, label, dev_type) {
   dest_path <- file.path(temp_dir_target, filename)
@@ -448,48 +550,49 @@ test_render <- function(plot_obj, filename, label, dev_type) {
   elapsed <- as.numeric(difftime(t1, t0, units = "secs"))
   file_size_mb <- file.info(dest_path)$size / (1024^2)
 
-  message(sprintf("  [%s] Rendered to: %s", dev_type, basename(dest_path)))
-  message(sprintf("        Time: %.3f seconds | File Size: %.2f MB", elapsed, file_size_mb))
+  message(sprintf(
+    "  [%s] Rendered: %s  |  %.3f s  |  %.2f MB",
+    dev_type, basename(dest_path), elapsed, file_size_mb
+  ))
 
   list(elapsed = elapsed, size = file_size_mb, path = dest_path)
 }
 
 # Run stress tests to disk
-message("Rendering Plot 1 (Occurrences)...")
+message("Rendering Plot 1 (Occurrences) to disk...")
 res_p1 <- test_render(p1, "italy_occurrences.png", "Plot 1", render_dev)
 
-message("Rendering Plot 2 (Elevation DEM)...")
+message("Rendering Plot 2 (Elevation DEM) to disk...")
 res_p2 <- test_render(p2, "italy_elevation.png", "Plot 2", render_dev)
 
-message("Rendering Plot 3 (Merged Niche Map)...")
+message("Rendering Plot 3 (Merged Niche Map) to disk...")
 res_p3 <- test_render(p3, "italy_niche_merged.png", "Plot 3", render_dev)
 
-# Clean up temp rendering files from local /Rtmp to comply with "smallest blast radius" and storage cleanup
+# Clean up temp rendering files from local /Rtmp
 cleanup_temp_files <- function() {
   tryCatch(
     {
       file.remove(res_p1$path)
       file.remove(res_p2$path)
       file.remove(res_p3$path)
-      message("  [OK] Cleaned up intermediate stress test images from temp disk.")
+      message("  [OK] Cleaned up stress test images from ", temp_dir_target)
     },
     error = function(e) {
       message("  [WARN] Failed to delete some temporary plots: ", e$message)
     }
   )
 }
-# Keep files for RStudio webconsole viewing temporarily, but schedule them for deletion
 on.exit(cleanup_temp_files(), add = TRUE)
 
 # ------------------------------------------------------------------------------
-# 6. RSTUDIO PLOT PANE DISPLAY AUDIT
+# 7. DIAGNOSTIC REPORT
 # ------------------------------------------------------------------------------
-message("\n[STEP 6/6] Compiling System Diagnostics & Plot Pane Guide...")
+message("\n[STEP 7/7] Compiling System Diagnostic Report...")
 
 total_render_time <- res_p1$elapsed + res_p2$elapsed + res_p3$elapsed
-memory_delta_mb <- gc(verbose = FALSE)[2, 6] # R current heap size
+memory_delta_mb <- gc(verbose = FALSE)[2, 6]
 
-# Check if network home directory is affected by rendering activities
+# Check if NFS home directory is responsive
 nfs_home_check <- tryCatch(
   {
     home_dir <- Sys.getenv("HOME")
@@ -503,75 +606,59 @@ nfs_home_check <- tryCatch(
   error = function(e) -1
 )
 
-# Compile results in Markdown format for the RStudio Web Console
 cat("\n\n==================================================================\n")
-cat("                BIOME-CALC GRAPHICS DIAGNOSTIC REPORT\n")
+cat("         BIOME-CALC GRAPHICS DIAGNOSTIC REPORT\n")
 cat("==================================================================\n")
-cat(sprintf("  * Active Render Engine  : %s\n", render_dev))
-cat(sprintf("  * Grid Resolution       : %d x %d cells\n", grid_resolution, grid_resolution))
-cat(sprintf("  * Plot 1 Rendering Time : %.3f sec (File: %.2f MB)\n", res_p1$elapsed, res_p1$size))
-cat(sprintf("  * Plot 2 Rendering Time : %.3f sec (File: %.2f MB)\n", res_p2$elapsed, res_p2$size))
-cat(sprintf("  * Plot 3 Rendering Time : %.3f sec (File: %.2f MB)\n", res_p3$elapsed, res_p3$size))
-cat(sprintf("  * Total Rendering Time  : %.3f sec\n", total_render_time))
-cat(sprintf("  * Active Heap Memory    : %.1f MB\n", memory_delta_mb))
-cat(sprintf("  * Target Plot Directory : %s\n", temp_dir_target))
+cat(sprintf("  File Render Engine     : %s\n", render_dev))
+cat(sprintf("  Grid Resolution        : %d x %d cells\n", grid_resolution, grid_resolution))
+cat(sprintf("  Plot 1 File Render     : %.3f s (%.2f MB)\n", res_p1$elapsed, res_p1$size))
+cat(sprintf("  Plot 2 File Render     : %.3f s (%.2f MB)\n", res_p2$elapsed, res_p2$size))
+cat(sprintf("  Plot 3 File Render     : %.3f s (%.2f MB)\n", res_p3$elapsed, res_p3$size))
+cat(sprintf("  Total File Render Time : %.3f s\n", total_render_time))
+cat(sprintf("  Active Heap Memory     : %.1f MB\n", memory_delta_mb))
+cat(sprintf("  Target Plot Directory  : %s\n", temp_dir_target))
 if (nfs_home_check > 0) {
   cat(sprintf(
-    "  * NFS Home Write Latency: %.4f sec (%s)\n",
+    "  NFS Home Write Latency : %.4f s (%s)\n",
     nfs_home_check,
     if (nfs_home_check < 0.05) "Excellent" else if (nfs_home_check < 0.2) "Acceptable" else "SEVERE LATENCY WARNING"
   ))
 } else {
-  cat("  * NFS Home Write Latency: Failed or Unreadable\n")
+  cat("  NFS Home Write Latency : Failed or Unreadable\n")
 }
 cat("==================================================================\n")
 
 if (total_render_time > 8.0) {
-  cat("\n⚠️  [PERFORMANCE ALERT] Total rendering time exceeded 8 seconds.\n")
-  cat("   - Recommend installing 'ragg' package for 2-4x speedups.\n")
-  cat("   - Verify that OpenBLAS is using the 'serial' library and not 'pthread'.\n")
+  cat("\n⚠️  [PERFORMANCE ALERT] File render time exceeded 8 seconds.\n")
+  cat("   - Verify OpenBLAS is 'serial' (not 'pthread').\n")
+  cat("   - Check /Rtmp disk health: df -h /Rtmp\n")
 } else {
-  cat("\n✅ [STATUS] Graphics rendering performance is within healthy production bounds.\n")
+  cat("\n✅ [STATUS] File render performance is within healthy bounds.\n")
 }
 
-# 6.2 Plot Pane Display Logic
+# RStudio-specific guidance
 if (is_rstudio) {
-  message("\n[PLOT PANE DISPLAY ACTION]")
-  message("  Printing the final merged niche plot (Plot 3) to the RStudio Plot viewer...")
-
-  # Set up a timing trap for the WebSocket transmission to the user's browser
-  t0_display <- Sys.time()
-  print(p3)
-  t1_display <- Sys.time()
-
-  display_elapsed <- as.numeric(difftime(t1_display, t0_display, units = "secs"))
-  message(sprintf("  --> Plot print call completed in %.3f seconds.", display_elapsed))
-
-  # Diagnostic evaluation of RStudio plot pane problems
-  if (display_elapsed > 4.0) {
-    message("\n⚠️  [PLOT VISUALIZATION LAG DETECTED]")
-    message("   The RStudio Plot viewer took more than 4 seconds to accept the plot.")
-    message("   This usually indicates a bottleneck in one of these components:")
-    message("     1. RStudio WebSocket Buffer: Rendering complex vectors over the websocket is slow.")
-    message("        FIX: Install 'ragg' and go to RStudio: Tools -> Global Options -> General")
-    message("             -> Graphics -> Graphic Device Backend -> Select 'AGG'.")
-    message("     2. Large point layers: Downsample your occurrences data or use stat_density_2d.")
-    message("     3. Slow /tmp mount: RStudio caches active plots in the user session temp directory.")
-    message("        Verify that R_SESSION_TMPDIR is routed to local SSD (/Rtmp) and not NFS.")
-  } else {
-    message(sprintf("\n✅ [STATUS] Interactive plot pane submission was fast (%.3f s).", display_elapsed))
-  }
+  cat("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+  cat("  RESEARCHER PLOT PANE CHECKLIST\n")
+  cat("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+  cat("  [1] Look at the bottom-right 'Plots' tab in RStudio.\n")
+  cat("  [2] You should see three botanical maps of Italy.\n")
+  cat("  [3] If you see them → your Plot pane is working correctly.\n")
+  cat("  [4] If you DON'T see them → run this in the RStudio console:\n")
+  cat("        source('scripts/99_diagnose_rstudio_plot_pane.R')\n")
+  cat("  [5] If you need to save plots for a publication, use:\n")
+  cat("        ggsave('my_map.png', plot = p3, width = 8, height = 6)\n")
+  cat("      This writes to your NFS home, NOT the Plots pane.\n")
+  cat("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 } else {
-  cat("\n💡 [RSTUDIO GRAPHICS TROUBLESHOOTING GUIDE]\n")
-  cat("   To test RStudio's interactive Plot viewer and diagnose visualization issues:\n")
+  cat("\n💡 [RSCRIPT / HEADLESS MODE]\n")
+  cat("   This test ran in file-benchmark mode only (no Plots pane).\n")
+  cat("   To test the interactive RStudio Plot viewer:\n")
   cat("     1. Log in to the RStudio Server web interface.\n")
-  cat("     2. Run: source(\"/home/jfs/00_Antigravity_workspace/R-studioConf/scripts/99_botanical_plot_stress_test.R\")\n")
-  cat("     3. Verify if the plot appears in the 'Plots' tab on the bottom right.\n")
-  cat("     4. If it hangs, throws a display error, or takes >5 seconds, check:\n")
-  cat("        - RStudio Options: Tools -> Global Options -> General -> Graphics -> Backend.\n")
-  cat("          Set backend to 'AGG' (ragg package) or 'Cairo' instead of 'Default'.\n")
-  cat("        - Ensure you have options(bitmapType = 'cairo') active in Renviron/Rprofile.\n")
-  cat("        - Verify `/Rtmp/biome_<user>` is writeable and has free space.\n")
+  cat("     2. Open this file and click 'Source':\n")
+  cat("        scripts/99_botanical_plot_stress_test.R\n")
+  cat("     3. Check the 'Plots' tab on the bottom-right.\n")
+  cat("   If plots don't appear, run: scripts/99_diagnose_rstudio_plot_pane.R\n\n")
 }
 
-message("\n=== SYSTEM DIAGNOSTIC COMPLETED ===")
+message("=== SYSTEM DIAGNOSTIC COMPLETED ===")

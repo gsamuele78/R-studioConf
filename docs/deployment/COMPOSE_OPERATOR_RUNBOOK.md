@@ -8,7 +8,7 @@
 
 ```bash
 cd docker-deploy/
-[ -f .env ] || cp .env.sandbox .env && $EDITOR .env   # HC-08: never commit .env
+[ -f .env ] || cp .env.sandbox.example .env && $EDITOR .env   # HC-08: never commit .env
 ./scripts/validate_deployment.sh                       # HC-03 strict mode
 ```
 

@@ -407,6 +407,82 @@ check. If it's been disabled:
 sudo bash scripts/15_setup_nginx_cleanup.sh   # re-installs cron
 ```
 
+### 5.5 Portal login crashes nginx worker / auth_pam segfault
+
+**Symptom:** Nginx worker processes exit with signal 11 (SIGSEGV) when
+portal login calls `/auth-check`. Nginx error log shows:
+
+```text
+[alert] worker process <pid> exited on signal 11 (core dumped)
+```
+
+Kernel log (`dmesg` / `journalctl -k`) shows segfaults in:
+
+```text
+ngx_http_auth_pam_module.so
+nginx
+libc.so.6
+```
+
+**This is NOT a portal template or Samba/Winbind problem.** The
+`pam_lastlog.so` warning is secondary noise — working nodes also lack
+that file.
+
+**First commands**
+
+```bash
+# Package drift — compare with known-good node
+dpkg -l | grep -E 'nginx|auth-pam'
+
+# Apt history — find when the bad upgrade landed
+sudo zgrep -hE 'nginx|libnginx-mod-http-auth-pam' /var/log/apt/history.log /var/log/apt/history.log.*.gz
+
+# Node comparison (failed vs working) — run on BOTH nodes
+hostname
+dpkg -l | grep -E 'nginx|auth-pam|samba|winbind|libpam-winbind|libnss-winbind|pam-runtime|libpam0g'
+systemctl status nginx winbind smbd nmbd --no-pager -l
+id www-data
+getent group winbindd_priv
+ls -ld /var/lib/samba/winbindd_privileged
+ls -l /var/lib/samba/winbindd_privileged/pipe
+wbinfo -t
+wbinfo -P
+grep -Hn 'pam_winbind\|pam_unix\|pam_deny\|pam_permit\|pam_lastlog' /etc/pam.d/common-auth /etc/pam.d/common-account /etc/pam.d/common-session /etc/pam.d/common-session-noninteractive /etc/pam.d/nginx
+```
+
+**Known-bad package state**
+
+| Package | Bad version | Good version |
+|---|---|---|
+| nginx | `1.24.0-2ubuntu7.10` | `1.24.0-2ubuntu7.9` |
+| nginx-common | `1.24.0-2ubuntu7.10` | `1.24.0-2ubuntu7.9` |
+| nginx-full | `1.24.0-2ubuntu7.10` | `1.24.0-2ubuntu7.9` |
+| libnginx-mod-stream | `1.24.0-2ubuntu7.10` | `1.24.0-2ubuntu7.9` |
+| libnginx-mod-http-auth-pam | same in both | `1:1.5.5-2build2` |
+
+**Fix**
+
+1. Protect working nodes:
+
+   ```bash
+   sudo apt-mark hold nginx nginx-common nginx-full libnginx-mod-stream libnginx-mod-http-auth-pam
+
+   sudo tee /etc/apt/preferences.d/99-block-nginx-bad.pref >/dev/null <<'EOF'
+   Package: nginx nginx-common nginx-full libnginx-mod-stream
+   Pin: version 1.24.0-2ubuntu7.10
+   Pin-Priority: -1
+   EOF
+   ```
+
+   > APT ignores files in `/etc/apt/preferences.d/` with invalid extensions.
+   > Use `.pref` or no extension. `99-block-nginx-2ubuntu7.10` is silently
+   > ignored because `.10` is not recognised.
+
+2. Downgrade failed nodes using `dpkg-repack` from a working node (see full
+   procedure in the dedicated runbook).
+
+→ Full runbook: [`NGINX_AUTH_PAM_REGRESSION_2026-06.md`](NGINX_AUTH_PAM_REGRESSION_2026-06.md).
+
 ---
 
 ## 6. Telemetry & status panel

@@ -7,6 +7,21 @@ description: Validates Kubernetes manifests in kubernetes-deploy/ against R-stud
 
 > **HONEST STATUS:** T3 is `SKELETON_NOT_READY` per `.ai/project.yml → deployment_tiers.T3_k8s`. Promote to production only after **T2 (docker)** fully mirrors **T1 (host)**. Never present the k8s tier as ready when it is not.
 
+## Triage (check first — stop if irrelevant)
+
+1. Is the file under `kubernetes-deploy/`? If not, skip this skill.
+2. Is the file a `*.yaml` or `*.yml`? If not, skip.
+3. T3 is SKELETON_NOT_READY — surface gaps honestly; do not silently fix blockers without explicit scope.
+
+## Severity Rubric
+
+| Severity | Criteria |
+|----------|----------|
+| CRITICAL | Missing resource limits/requests, embedded secrets, exposed DB service, docker.sock mount |
+| HIGH | Unpinned upstream image, missing `set -euo pipefail` in deploy scripts, no StorageClass for /Rtmp |
+| MEDIUM | Missing NetworkPolicy/PDB/HPA, missing PSA labels, stale ConfigMap |
+| LOW | Kustomize hygiene, label conventions, documentation gaps |
+
 ## Promotion contract (read before editing anything in `kubernetes-deploy/`)
 
 ```
@@ -45,7 +60,7 @@ kubernetes-deploy/
 1. **HC-01 resource bounds:** Every container has `resources.limits` AND `resources.requests` for both `cpu` and `memory`. (k8s requests are stricter than compose limits; both are required.)
 2. **HC-04 secrets:** Never embed plaintext secrets in YAML. `secrets.yaml` is a placeholder; runtime values come from `env/.env.prd` via `deploy_k8s.sh`. No `--from-literal=PASSWORD=…` survives outside the deploy script.
 3. **HC-05 no DB exposure:** No `Service` of type `NodePort`/`LoadBalancer` for postgres-like workloads.
-4. **HC-07 image pinning:** Image tags pinned via `kustomization.yaml → images:` block; no `:latest` for externally-sourced images. Local botanical images allowed `:latest` per documented exception (mirror T2 rule).
+4. **HC-07 image pinning:** Image tags pinned via `kustomization.yaml → images:` block; no `:latest` for externally-sourced images. Locally-built images (`botanical-*`, `rstudio-botanical-*`) are tagged via `${IMAGE_TAG}` variable (defaults to `:latest` in sandbox/CI; production deploys MUST set a pinned tag) — per codified HC-07 exception.
 5. **HC-09 no docker.sock:** Never mount `/var/run/docker.sock` into a pod.
 6. **HC-10 chown failure:** `deploy_k8s.sh` and `validate_k8s.sh` start with `set -euo pipefail`; any `kubectl create … || error` path exits non-zero on permission failure.
 7. **HC-11 no CDN:** Portal ConfigMap nginx config has no external font/CSS URLs.

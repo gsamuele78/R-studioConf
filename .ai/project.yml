@@ -202,13 +202,13 @@ constraints:
     validate: "no_runtime_pkg_install"
 
   - id: "HC-07"
-    rule: "Pin ALL upstream image versions — no :latest tag"
-    rationale: "Reproducible builds. Version drift between components causes silent failures."
+    rule: "Pin ALL upstream image versions — no :latest tag. Locally-built images (botanical-*, rstudio-botanical-*) are tagged via IMAGE_TAG variable (defaults to :latest in sandbox/CI; production deploys MUST set a pinned tag)."
+    rationale: "Reproducible builds. Version drift between components causes silent failures. Locally-built images are exempt from the :latest prohibition because they are never pulled from a registry — the tag is controlled by the deployer via IMAGE_TAG."
     validate: "compose_no_latest_tags"
 
   - id: "HC-08"
-    rule: ".env files are NEVER committed to git"
-    rationale: "Contains passwords, tokens, fingerprints."
+    rule: ".env files are NEVER committed to git. Exception: .env.sandbox.example files containing only test tokens (no production secrets) MAY be committed for sandbox/CI reproducibility."
+    rationale: "Contains passwords, tokens, fingerprints. Sandbox .env.example files use placeholder/test tokens only and are committed to enable reproducible CI/sandbox environments."
     validate: "gitignore_has_env"
 
   - id: "HC-09"
@@ -429,4 +429,4 @@ sandbox:
       ram: 4096
       cpus: 4
       compose: "docker-deploy/docker-compose.yml"
-      note: "Uses docker-deploy setup with .env.sandbox overrides — currently non-operational"
+      note: "Uses docker-deploy setup with .env.sandbox.example overrides — currently non-operational"

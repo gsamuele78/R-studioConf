@@ -24,7 +24,7 @@ COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.yml"
 
 # ── Minimum validations enabled NOW (cheap, safe) ─────────────
 [ -f "$COMPOSE_FILE" ] || fail "docker-compose.yml not found at $COMPOSE_FILE"
-[ -f "$ENV_FILE" ]     || fail ".env not found at $ENV_FILE — copy .env.sandbox or create one (HC-08: never commit it)"
+[ -f "$ENV_FILE" ]     || fail ".env not found at $ENV_FILE — copy .env.sandbox.example or create one (HC-08: never commit it)"
 
 # HC-08: .env should not be tracked by git
 if git -C "$DEPLOY_DIR/.." check-ignore -q "docker-deploy/.env" 2>/dev/null; then

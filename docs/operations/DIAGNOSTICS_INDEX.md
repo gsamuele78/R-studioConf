@@ -3,7 +3,7 @@
 
 > **Audience:** sysadmins / on-call.  
 > **Tier:** T1 host.  
-> **Last updated:** 2026-05-11.
+> **Last updated:** 2026-06-12.
 
 Every diagnostic and one-shot fix script in `scripts/` mapped to:
 **when to run / what it produces / where logs land / what to do next.**
@@ -61,6 +61,49 @@ batches.
 **Next step on drift:** rebuild affected node ([`CLEAN_VM_BASELINE.md`](CLEAN_VM_BASELINE.md))
 or pin the drifting package(s) in
 `config/r_env_manager.conf :: R_USER_PACKAGES_CRAN`.
+
+### `scripts/99_check_user_renviron_overrides.sh`
+
+**Run when:** user reports environment variable mismatch; after
+`50_setup_nodes.sh` deploy; when debugging `~/.Renviron` overrides that
+shadow system defaults.
+**Mutates:** no.
+**What it checks:** scans all user home directories for `~/.Renviron`
+files that override system-set variables (`R_LIBS_SITE`, `R_LIBS_USER`,
+`TMPDIR`, `RSTUDIO_WHICH_R`, OpenBLAS/OMP thread vars). Flags any
+override that diverges from the BIOME-CALC canonical values in
+`/etc/R/Renviron.site`.
+**Output:** per-user report of overrides; warning banner for security-
+sensitive variables (`RSTUDIO_WHICH_R`, `TMPDIR`).
+**Next step on conflict:** notify user; if override is malicious or
+accidentally breaks the platform, escalate to sysadmin to audit the
+user's `.Renviron`.
+
+### `scripts/99_diagnose_rstudio_plot_pane.R`  *(R script, not bash)*
+
+**Run when:** user reports blank RStudio Plots pane; `plot()` or
+`print(ggplot)` produces no visible output in browser.
+**Run from:** RStudio console: `source("scripts/99_diagnose_rstudio_plot_pane.R")`
+**Mutates:** no (diagnostic only; repair mode is opt-in).
+**What it checks:** current graphics device, RStudioGD availability,
+`ragg::agg_png` guard presence, Rprofile fragment version, interactive-
+session detection.
+**Output:** CRITICAL/WARN/OK per check; attempts `options(device="RStudioGD")`
+repair if safe.
+**Next step:** see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) §1.7.
+
+### `scripts/99_botanical_plot_stress_test.R`  *(R script, not bash)*
+
+**Run when:** validating RStudio graphics pipeline after deploy or
+upgrade; reproducing Plots-pane issues under controlled conditions.
+**Run from:** RStudio console: `source("scripts/99_botanical_plot_stress_test.R")`
+**Mutates:** no (writes test plots to `/Rtmp/biome_<user>/plot_cache/`).
+**What it checks:** base-R plot, ggplot2, ragg device, plot caching to
+`/Rtmp`, RStudioGD WebSocket round-trip. Iterates over multiple plot
+types and reports which render and which fail.
+**Output:** pass/fail per plot type; timing per render.
+**Next step on FAIL:** run `99_diagnose_rstudio_plot_pane.R` on the same
+session.
 
 ---
 
@@ -234,7 +277,115 @@ and intentionally does **not** source `/etc/R/Rprofile_site.d/`.
 
 ---
 
-## 7. Where each script logs
+## 7. Tools (`scripts/tools/`) — auxiliary utilities
+
+These are not `99_*` diagnostics but are essential for day-2 operations.
+All are read-only unless noted.
+
+### `scripts/tools/hw_report.sh`
+
+**Run when:** onboarding a new node; quarterly hardware audit; after
+Proxmox VM resize.
+**Mutates:** no.
+**What it reports:** CPU model/cores/sockets, RAM total, disk layout
+(`lsblk`), NUMA topology, `/Rtmp` filesystem type and size, network
+interfaces.
+**Output:** color-coded text report to stdout.
+**Next step:** compare against other nodes; flag discrepancies for the
+VM host admin.
+
+### `scripts/tools/deployment_summary.sh`
+
+**Run when:** after a full `init.sh` run; quarterly audit; before
+handing a node to researchers.
+**Mutates:** no.
+**What it reports:** R version, RStudio Server version, BLAS variant,
+Rprofile version, AD join status, cgroup v2 presence, NFS mounts,
+`/Rtmp` size, SSL cert expiry, running BIOME services.
+**Output:** structured text summary with PASS/WARN/FAIL per check.
+**Next step on FAIL:** cross-reference [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
+
+### `scripts/tools/manage_r_sessions.sh`
+
+**Run when:** a user has orphaned rsession processes; before
+maintenance reboots; when `/Rtmp` is full from stale sessions.
+**Mutates:** YES (in `--kill-orphans` mode). Read-only otherwise.
+**Modes:**
+
+```bash
+sudo bash manage_r_sessions.sh                      # list all active sessions
+sudo bash manage_r_sessions.sh --user <username>    # filter by user
+sudo bash manage_r_sessions.sh --kill-orphans       # kill orphaned rsessions
+```
+
+**Output:** table of active sessions (PID, user, CPU%, MEM%, runtime);
+orphan classification.
+**Next step on orphan flood:** investigate why RStudio session cleanup
+failed; check `rstudio-server` health.
+
+### `scripts/tools/check_processor_threads.sh`
+
+**Run when:** user reports `detectCores()` returns unexpected value;
+after cgroup config change; when benchmarking parallel performance.
+**Mutates:** no.
+**What it checks:** physical cores, logical threads, cgroup-effective
+cores (`/sys/fs/cgroup/cpu.max`), `nproc` soft limit, R's
+`parallel::detectCores()` output under the BIOME profile.
+**Output:** comparison table of each core-count source.
+**Next step on mismatch:** verify `user-.slice.d/50-biome-limits.conf`
+and re-run `50_setup_nodes.sh`.
+
+### `scripts/tools/bigger_usage_reports.sh`
+
+**Run when:** quarterly capacity planning; investigating `/Rtmp` growth;
+before expanding storage.
+**Mutates:** no.
+**What it reports:** per-user `/Rtmp` usage (top 20), per-user home-dir
+usage, total `/Rtmp` age distribution, largest file listing.
+**Output:** text report.
+**Next step on high usage:** notify top consumers; run orphan cleanup;
+consider per-user quotas.
+
+### `scripts/tools/check_installed_R_Package.sh`
+
+**Run when:** verifying a package install across nodes; after
+`r_env_manager.sh` package batch; when a user says "package X is
+missing".
+**Mutates:** no.
+**Wraps:** `scripts/tools/check_installed_R_Package.R`.
+**Usage:** `sudo bash check_installed_R_Package.sh <pkg-name>`
+**Output:** installed version, library path, loaded-from path.
+**Next step if missing:** add to `config/r_env_manager.conf` and re-run
+`r_env_manager.sh`.
+
+### `scripts/tools/check_pkg_config.sh`
+
+**Run when:** troubleshooting R package compilation failures (missing
+system libs); after OS upgrade; when `install.packages()` fails with
+"configuration failed".
+**Mutates:** no.
+**What it checks:** system library presence for common R package
+dependencies: `libgdal`, `libproj`, `libgeos`, `libudunits2`, `libgsl`,
+`libharfbuzz`, `libfribidi`, `libmysqlclient`, `libpq`, `libsodium`,
+`libsecret`, `libsasl2`, `libcurl`, `libxml2`, `libssl`, `libfontconfig`.
+**Output:** installed/not-installed per library.
+**Next step on missing:** `apt-get install` the missing `-dev` package.
+
+### `scripts/tools/r_pkg_drift_detector.R`  *(R script)*
+
+**Run when:** wrapped by `scripts/99_check_pkg_drift.sh`; directly for
+interactive investigation.
+**Mutates:** no (unless `--update-baseline`).
+**What it does:** compares installed R packages against a sysadmin-owned
+baseline (`/var/lib/biome-calc/pkg_baseline.rds`). Classifies drift by
+severity: HIGH (base/recommended packages), MEDIUM (CRAN packages in
+`r_env_manager.conf`), LOW (user-installed packages).
+**Output:** JSON report with per-package diff.
+**Next step:** see `99_check_pkg_drift.sh` entry in §1.
+
+---
+
+## 8. Where each script logs
 
 | Script | Log location |
 |---|---|
@@ -258,7 +409,43 @@ and intentionally does **not** source `/etc/R/Rprofile_site.d/`.
 
 ---
 
-## 8. Decision tree (TL;DR)
+## 9. Nginx / auth_pam package drift
+
+### Node comparison for nginx auth_pam regression
+
+**Run when:** nginx worker segfaults on portal login; `[alert] worker
+process exited on signal 11` in nginx error log; kernel segfaults in
+`ngx_http_auth_pam_module.so`.
+
+**Mutates:** no.
+
+**What it checks:** nginx package versions, auth_pam module version,
+PAM stack identity, Winbind health, privileged pipe access, domain
+trust.
+
+**Commands (run on BOTH failed and working nodes):**
+
+```bash
+hostname
+dpkg -l | grep -E 'nginx|auth-pam|samba|winbind|libpam-winbind|libnss-winbind|pam-runtime|libpam0g'
+systemctl status nginx winbind smbd nmbd --no-pager -l
+id www-data
+getent group winbindd_priv
+ls -ld /var/lib/samba/winbindd_privileged
+ls -l /var/lib/samba/winbindd_privileged/pipe
+wbinfo -t
+wbinfo -P
+grep -Hn 'pam_winbind\|pam_unix\|pam_deny\|pam_permit\|pam_lastlog' /etc/pam.d/common-auth /etc/pam.d/common-account /etc/pam.d/common-session /etc/pam.d/common-session-noninteractive /etc/pam.d/nginx
+```
+
+**Known-bad state:** nginx `1.24.0-2ubuntu7.10` with
+`libnginx-mod-http-auth-pam 1:1.5.5-2build2`.
+
+**Next step:** [`NGINX_AUTH_PAM_REGRESSION_2026-06.md`](NGINX_AUTH_PAM_REGRESSION_2026-06.md).
+
+---
+
+## 10. Decision tree (TL;DR)
 
 ```
 Did the user say "it crashed" / "it broke"?

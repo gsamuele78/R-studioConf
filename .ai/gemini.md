@@ -1,4 +1,4 @@
-d by all # Gemini Agent Instructions — R-studioConf
+# Gemini Agent Instructions — R-studioConf
 
 > **For:** Google Gemini working on this codebase.
 > **Load alongside:** `.ai/agents.md` — project summary is there, not repeated here.

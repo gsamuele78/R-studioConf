@@ -1,148 +1,111 @@
 <!-- docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md -->
-# Parallel R — Do's and Don'ts on `biome-calc`
+# Safe Parallel R on BIOME-CALC — Do's and Don'ts
 
-> **Audience:** botanists / researchers writing R scripts that will run
-> on the shared `biome-calc` cluster (with cgroup-bounded RAM and CPU,
-> NFS home directories, and PSOCK/parLapply parallelism).
-> **Companion to:** `scripts/99_diagnose_user_script.sh` (lint layer
-> L0a). Each section below is anchored from
-> `scripts/lib/r_lint_rules.tsv :: doc_anchor`.
+> **Audience:** botanists / researchers writing R scripts that run on the
+> shared BIOME-CALC platform.
+> **Last verified:** 2026-06-08
+> **Rprofile version:** 12.10
 
 ---
 
 ## Why this guide exists
 
-The cluster is **not** the old 16 vCPU / 512 GB / 2 TB no-cgroup VM.
-On `biome-calc`:
+BIOME-CALC is a shared research platform with resource limits enforced by
+the operating system. Your R session runs inside a **cgroup slice** that
+bounds your CPU and RAM. The platform also provides transparent guards
+that make standard R functions safer, but you still need to follow a few
+rules to keep your code portable and efficient.
 
-* You get a **slice** of cores and RAM enforced by Linux cgroups.
-  `parallel::detectCores()` lies — it returns the host's 24 cores, but
-  the kernel will only schedule your fraction.
-* `$HOME` is **NFS**. Every per-iteration write goes over the network.
-* `/Rtmp` is **400 GB local SSD ext4** — use it for scratch, not `/tmp`,
-  not `~/`.
-* PSOCK workers (the safe default on Linux for `terra`/`sf`/NIMBLE) start
-  with an **empty `globalenv()`**. Functions and objects are NOT
-  inherited the way `mclapply` (fork) inherits them.
+Key facts about the platform:
 
-The system harness `99_diagnose_user_script.sh` will, after proving the
-infrastructure is green (L0..L3), lint your `.R` file against 22 rules
-and quote the relevant section below. **The system never edits your
-script — that's HC-13.** The fix lives in your code. This document is
-how to apply it.
+- **`/Rtmp`** is a 400 GB local SSD disk for temporary files. Use it for
+  scratch data, not your home directory and not `/tmp`.
+- **Your home directory is on NFS** (network storage). Frequent small
+  writes over NFS are slow. Route temporary I/O to `/Rtmp`.
+- **`parallel::detectCores()` is cgroup-aware** on BIOME-CALC. It returns
+  the number of cores allocated to your session, not the full host count.
+- **`parallel::mclapply()` is guarded.** When you have loaded packages
+  that are unsafe to fork (terra, sf, raster), the platform automatically
+  reroutes to a safer PSOCK cluster.
+- **`nimble::compileNimble()` is wrapped** to route compilation scratch
+  to `/Rtmp` automatically.
+- **Package installation inside scripts is blocked** by default. Ask the
+  sysadmin to add packages to the platform configuration.
 
-If a section starts with **HIGH**, you must fix it before re-running on
-production data. **MED** = will bite under load. **LOW** = style /
-portability.
+The platform **never edits your R scripts** (that is a hard rule, HC-13).
+The fixes described here are changes you make in your own code.
 
 ---
 
-## Rule index
+## Quick reference: Do / Don't
 
-| Rule | Severity | Title |
+| Situation | ✗ Don't | ✓ Do |
 |---|---|---|
-| [R001](#r001-makecluster-clusterexport) | HIGH | makeCluster without clusterExport |
-| [R002](#r002-mclapply-terra) | MED  | mclapply forks over terra/sf objects |
-| [R003](#r003-chunk-size) | MED  | suspiciously small chunk_size |
-| [R004](#r004-progress) | LOW  | progress prints without throttling |
-| [R005](#r005-setwd) | HIGH | setwd to a hardcoded absolute path |
-| [R006](#r006-terra-values) | MED  | terra::values() inside a hot loop |
-| [R007](#r007-install-packages) | HIGH | install.packages() at script top level |
-| [R008](#r008-library-position) | LOW  | library() called after non-trivial code |
-| [R009](#r009-rm-ls) | LOW  | rm(list = ls()) wipes globalenv |
-| [R010](#r010-detectcores) | MED  | detectCores() ignores cgroup |
-| [R011](#r011-cross-user) | HIGH | cross-user absolute path |
-| [R012](#r012-compilenimble) | HIGH | compileNimble() crossing PSOCK |
-| [R013](#r013-outfile-nfs) | MED  | cluster outfile on NFS |
-| [R014](#r014-cross-user-write) | MED  | save/writeRaster to another user's dir |
-| [R015](#r015-globalenv-closure) | MED  | globalenv name indexed inside a closure |
-| [R016](#r016-relative-paths) | MED  | relative path in load/source/readRDS |
-| [R017](#r017-makecluster-type) | MED  | makeCluster without explicit type= |
-| [R019](#r019-silent-trycatch) | HIGH | silent tryCatch (empty error handler) |
-| [R020](#r020-credentials) | HIGH | hardcoded credential |
-| [R021](#r021-mac-only-path) | MED  | Mac-only path (`/Volumes/...`) |
-| [R023](#r023-install-github) | HIGH | install_github() in script |
-| [R025](#r025-unbounded-retry) | MED  | unbounded retry on network call |
-| [R028](#r028-project-tempdir) | MED  | project-local `_temp/` cache dir |
-| [R029](#r029-tempdir-scratch) | MED  | Temporary files directed to non-local scratch (`/tmp` or NFS) |
-
-Plus: [Good example](#good-example-martina_test2r) — a clean reference fixture.
+| Parallel workers | `makeCluster(8)` without `type=` | `parallel::makeCluster(n, type = "PSOCK")` |
+| Fork-based parallel with spatial packages | `mclapply(..., mc.cores = 8)` after `library(terra)` | Use PSOCK cluster or let the platform auto-reroute |
+| Scratch / temp files | `saveRDS(x, "/tmp/myfile.rds")` | `saveRDS(x, file.path(Sys.getenv("BIOME_USER_TMP"), "myfile.rds"))` |
+| Working directory | `setwd("/home/olduser/project")` | Use `here::here()` or pass paths as arguments |
+| Package installation | `install.packages("pkg")` inside a script | Ask sysadmin to add to `config/r_env_manager.conf` |
+| GitHub package install | `devtools::install_github("user/repo")` | Ask sysadmin; they pin a specific commit |
+| Core count | `parallel::detectCores()` without `logical = FALSE` | `max(1L, parallel::detectCores(logical = FALSE) - 1L)` |
+| NIMBLE across workers | Compile on master, send compiled object to workers | Compile inside each worker |
+| Hardcoded credentials | `api_key <- "sk-1234abcd"` | `Sys.getenv("MY_API_KEY")` with `~/.Renviron` |
+| Silent error handling | `tryCatch(work(), error = function(e) NULL)` | Log the error: `message(conditionMessage(e))` |
 
 ---
 
-## R001 — makeCluster + clusterExport
+## Detailed rules
 
-**Severity:** HIGH
+### R001 — Use explicit PSOCK clusters
 
-PSOCK workers start with an **empty `globalenv()`**. A function defined
-at the top of your script is invisible inside `parLapply(cl, x, FUN)`.
-The classic Lussu symptom: `"could not find function process_chunk"`
-repeated `n_chunks` times.
+PSOCK workers start with an empty workspace. Functions and objects
+defined in your main script are not visible inside `parLapply()` unless
+you export them.
 
-### ✗ Don't
+**✗ Don't:**
 
 ```r
-process_chunk <- function(i) { ... }
-
+process_chunk <- function(i) { mean(rnorm(1000)) }
 cl <- makeCluster(8)
-res <- parLapply(cl, 1:N, process_chunk)   # workers do NOT see process_chunk
+res <- parLapply(cl, 1:100, process_chunk)   # workers don't see process_chunk
 ```
 
-### ✓ Do
+**✓ Do:**
 
 ```r
-process_chunk <- function(i) { ... }
-
+process_chunk <- function(i) { mean(rnorm(1000)) }
 cl <- parallel::makeCluster(8, type = "PSOCK")
-parallel::clusterEvalQ(cl, { library(terra); library(data.table) })
-parallel::clusterExport(
-    cl,
-    varlist = c("process_chunk", "presence_rule", "amount_mode"),
-    envir   = environment()
-)
-res <- parallel::parLapply(cl, 1:N, process_chunk)
+parallel::clusterExport(cl, varlist = "process_chunk", envir = environment())
+res <- parallel::parLapply(cl, 1:100, process_chunk)
 parallel::stopCluster(cl)
 ```
 
-Or use `furrr` with auto-detected globals:
-
-```r
-library(future); library(furrr)
-plan(multisession, workers = 8)
-res <- future_map(1:N, process_chunk,
-                  .options = furrr_options(globals = TRUE,
-                                           packages = c("terra", "data.table")))
-```
-
 ---
 
-## R002 — mclapply over terra/sf
+### R002 — Avoid forking with spatial packages
 
-**Severity:** MED
+Packages like `terra`, `sf`, and `raster` use C++ objects that cannot be
+safely duplicated by `fork()`. On BIOME-CALC the platform automatically
+reroutes `mclapply()` to PSOCK when these packages are loaded, but it is
+still better practice to use PSOCK explicitly.
 
-`terra` and `sf` carry C++/GDAL handles. `mclapply()` uses `fork()`,
-which duplicates those handles **by reference**. The first child to
-free a handle corrupts the others. Symptom: random SIGSEGV, NFS
-deadlock, or "stale GDAL handle" under load.
-
-### ✗ Don't
+**✗ Don't:**
 
 ```r
-parallel::mclapply(rast_paths, function(p) {
+library(terra)
+results <- parallel::mclapply(rast_paths, function(p) {
     r <- terra::rast(p)
     terra::global(r, "mean", na.rm = TRUE)
 }, mc.cores = 8)
 ```
 
-### ✓ Do
-
-Use a **PSOCK** cluster and ship the **paths** (strings), not the
-opened raster objects:
+**✓ Do:**
 
 ```r
+library(terra)
 cl <- parallel::makeCluster(8, type = "PSOCK")
 parallel::clusterEvalQ(cl, library(terra))
-res <- parallel::parLapply(cl, rast_paths, function(p) {
+results <- parallel::parLapply(cl, rast_paths, function(p) {
     r <- terra::rast(p)
     terra::global(r, "mean", na.rm = TRUE)
 })
@@ -151,39 +114,33 @@ parallel::stopCluster(cl)
 
 ---
 
-## R003 — chunk_size
+### R003 — Choose a reasonable chunk size
 
-**Severity:** MED
+If you split work into chunks, avoid tiny chunks (≤ 10 iterations).
+Scheduler overhead dominates and you create thousands of temporary files.
 
-`chunk_size <= 10` means scheduler overhead dominates real work, and
-you accumulate 10 000+ partial-result files on `/Rtmp`. Lussu's 4103
-chunks at chunk_size = 1 produced 16k files in one run.
-
-### ✓ Do
+**✓ Do:**
 
 ```r
-chunk_size <- 200   # profile with proc.time() per chunk; 50..500 is typical
+chunk_size <- 200   # 50–500 is typical; profile with proc.time()
 ```
 
 ---
 
-## R004 — progress prints
+### R004 — Throttle progress messages
 
-**Severity:** LOW
+Printing a message for every iteration floods the log and slows down
+NFS writes.
 
-Per-iteration `cat()` to stderr floods the log under load and stalls
-NFS log writes.
-
-### ✗ Don't
+**✗ Don't:**
 
 ```r
 for (i in seq_along(chunks)) {
-    cat("processing", i, "\n")   # 4103 lines/min
-    ...
+    cat("processing", i, "\n")
 }
 ```
 
-### ✓ Do
+**✓ Do:**
 
 ```r
 if (i %% 100 == 0) message(sprintf("[%s] %d / %d", Sys.time(), i, N))
@@ -191,40 +148,33 @@ if (i %% 100 == 0) message(sprintf("[%s] %d / %d", Sys.time(), i, N))
 
 ---
 
-## R005 — setwd to absolute path
+### R005 — Do not use `setwd()` with hardcoded paths
 
-**Severity:** HIGH
+`setwd("/home/olduser/project")` breaks when the script runs on a
+different machine or by a different user.
 
-`setwd("/Users/foo/bar")` or `setwd("/home/old_user/...")` is a portability
-bomb. The path may not exist on this server. The "old VM" had it; this
-one does not.
-
-### ✓ Do
+**✓ Do:**
 
 ```r
-# Pass the workdir as an argument:
+# Pass the work directory as a command-line argument:
 args <- commandArgs(trailingOnly = TRUE)
-work_dir <- args[1] %||% Sys.getenv("DATA_DIR", "[default_data_dir]")
+work_dir <- args[1]
 
-# Or use here::here() (auto-detects project root via .here / .Rproj):
+# Or use here::here() to auto-detect the project root:
 library(here)
-data_path <- here("[data_subdir]", "[input_file]")
+data_path <- here("data", "input.csv")
 ```
 
-Never `setwd()` inside a function or inside a parallel worker.
+Never call `setwd()` inside a parallel worker.
 
 ---
 
-## R006 — terra::values() in hot loops
+### R006 — Avoid `terra::values()` in hot loops
 
-**Severity:** MED
+`terra::values()` reads an entire raster into RAM. Calling it inside a
+loop with many workers can exhaust memory.
 
-`terra::values()` materializes the **entire raster** into RAM. Calling
-it per-iteration in a `for`/`lapply` loop is the #1 cause of `mclapply`
-OOM under cgroup MemoryMax. With a 12 GB raster and 8 workers, you
-need 96 GB RAM you don't have.
-
-### ✗ Don't
+**✗ Don't:**
 
 ```r
 for (p in rast_paths) {
@@ -233,166 +183,102 @@ for (p in rast_paths) {
 }
 ```
 
-### ✓ Do
+**✓ Do:**
 
 ```r
-# Extract only what you need (point sample):
+# Extract only what you need:
 pts <- terra::vect(coords, type = "points", crs = "EPSG:4326")
 vals <- terra::extract(terra::rast(p), pts)
 
-# Or windowed reduction without materialization:
+# Or use windowed reduction:
 mean_r <- terra::app(terra::rast(p), fun = mean, na.rm = TRUE)
 ```
 
 ---
 
-## R007 — install.packages() in script
+### R007 — Do not install packages inside scripts
 
-**Severity:** HIGH
+`install.packages()` inside a script causes network calls mid-batch,
+breaks reproducibility, and may fail with permission errors on the
+shared platform.
 
-`install.packages()` at script top level:
+**✓ Do:**
 
-* Makes a network call mid-batch (slow, fragile).
-* Breaks reproducibility (different CRAN snapshot per run).
-* Fails with a confusing `EACCES` / "lib not writable" message on
-  biome-calc (the cluster `/usr/lib/R/site-library` is read-only for
-  non-root users, and the stock R prompt "would you like to use a
-  personal library?" hangs in batch jobs).
-* **v12.10 ships an OPT-IN system-side safety valve, default OFF.**
-  By default `install.packages("foo")` still hits the stock-R failure
-  path described above — the system does not silently change behaviour
-  (HC-13). When an install-storm becomes a real incident the sysadmin
-  can arm a hard-deny that fails fast on line 1 with:
+Ask the sysadmin to add the package to the platform configuration
+(`config/r_env_manager.conf`). The package will be installed cluster-wide
+at the next deployment.
 
-  ```
-  BIOME-CALC: install.packages() is disabled on this cluster.
-              Ask the sysadmin to add 'pkgname' to
-              config/r_env_manager.conf :: R_USER_PACKAGES_CRAN,
-              then re-run.
-  ```
-
-  Per-session opt-in (interactive sysadmin debug):
-  `BIOME_FORCE_INSTALL_BLOCK=1 R`. Fleet-wide arming is a sysadmin
-  template flip + redeploy.
-
-### ✓ Do
-
-Ask the sysadmin to add the package to
-`config/r_env_manager.conf :: R_USER_PACKAGES_CRAN`. The next deploy
-will pin it cluster-wide. In your script:
+In your script, simply load the package:
 
 ```r
-suppressPackageStartupMessages({
-    library(terra)
-    library(data.table)
-})
+library(terra)
+library(data.table)
 ```
 
 ---
 
-## R008 — library() position
+### R008 — Put `library()` calls at the top
 
-**Severity:** LOW
+If a package is missing, you want to know immediately, not after
+30 minutes of computation.
 
-`library()` should be at the **top** of the file. If you put it after
-30 minutes of preprocessing and the package is missing, you have wasted
-30 minutes.
-
-### ✓ Do
+**✓ Do:**
 
 ```r
-suppressPackageStartupMessages({
-    library(terra)
-    library(sf)
-    library(nimble)
-    library(data.table)
-})
+library(terra)
+library(sf)
+library(data.table)
 
 # ... rest of the script ...
 ```
 
 ---
 
-## R009 — rm(list = ls())
+### R009 — Avoid `rm(list = ls())`
 
-**Severity:** LOW
+This hides bugs by making interactive runs different from batch runs.
 
-Hides bugs (every interactive run starts from a "clean" state different
-from the batch run) and can delete objects another sourced script just
-defined.
+**✓ Do:**
 
-### ✓ Do
-
-* Start a **fresh R session** (RStudio: Session → Restart R).
-* Or list specific objects: `rm(big_raster, working_df)`.
+- Start a fresh R session (Session → Restart R in RStudio).
+- Or remove specific objects: `rm(big_raster, temp_df)`.
 
 ---
 
-## R010 — detectCores()
+### R010 — Use `detectCores(logical = FALSE)`
 
-**Severity:** MED
-
-Bare `parallel::detectCores()` returns the **host's** physical core
-count (24 on biome-calc), ignoring the cgroup cpuset that limits you
-to a slice (typically 4–8). Spawning 24 workers when you have 4 cores
-→ 6× oversubscription, thrashing, and OOM.
-
-### ✓ Do
-
-On biome-calc nodes the system kernel's
-`05_thread_guard.R` already routes `detectCores(logical = FALSE)`
-through the live cgroup quota, so the safe form is:
+On BIOME-CALC, `parallel::detectCores()` is wrapped to return your
+cgroup-effective core count. Use `logical = FALSE` for physical cores:
 
 ```r
 n_workers <- max(1L, parallel::detectCores(logical = FALSE) - 1L)
 cl <- parallel::makeCluster(n_workers, type = "PSOCK")
 ```
 
-This returns the **cgroup-effective** count on biome-calc, and the
-honest physical-core count on a laptop — your script stays portable.
-Do **not** read an environment variable like `BIOME_USER_CORES`: no
-such variable is exported, and any value would race with cgroup
-re-sizing during the session.
+This is portable: on your laptop it returns the honest physical core
+count; on BIOME-CALC it returns your allocated slice.
 
 ---
 
-## R011 — cross-user absolute path
-
-**Severity:** HIGH
+### R011 — Do not use hardcoded paths to other users' directories
 
 ```r
-read.csv("[path/to/shared/data.csv]")
+read.csv("/home/otheruser/data.csv")   # permission denied or worse
 ```
 
-Either you don't have permission (script fails late, after expensive
-setup) or — worse — you do have permission and you silently corrupt
-someone else's data when writing.
+**✓ Do:**
 
-### ✓ Do
-
-* Shared inputs go under `/media/r_projects/<project>/`. Ask the
-  sysadmin to grant ACL.
-* Or copy what you need into your own `~/`.
+- Shared inputs go under `/media/r_projects/<project>/`.
+- Or copy what you need into your own home directory.
 
 ---
 
-## R012 — compileNimble() crossing PSOCK
+### R012 — Compile NIMBLE inside each worker
 
-**Severity:** HIGH
+Compiled NIMBLE objects cannot be sent across a PSOCK socket. Compile
+inside the worker, not on the master.
 
-Compiled NIMBLE C++ objects **cannot** be serialized across a PSOCK
-socket. If you compile on the master and `parLapply()` workers receive
-the compiled object, they will hang forever or crash with
-`"external pointer is not valid"`.
-
-### ✓ Do — option A: stay single-threaded
-
-```r
-mcmc <- nimbleMCMC(code = nimble_code, data = data_list,
-                   inits = init_list, niter = 5000, nburnin = 1000)
-```
-
-### ✓ Do — option B: compile inside the worker
+**✓ Do — compile inside the worker:**
 
 ```r
 worker_fn <- function(seed, code, data_list, inits, niter, nburn) {
@@ -409,413 +295,281 @@ res <- parallel::parLapply(cl, seeds, worker_fn,
                            inits = init_list, niter = 5000, nburn = 1000)
 ```
 
-Compile **inside** the worker. Never ship the compiled object across
-the cluster.
-
 ---
 
-## R013 — outfile on NFS
+### R013 — Keep cluster logs off NFS
 
-**Severity:** MED
+PSOCK worker logs written to NFS can deadlock under load.
 
-```r
-makeCluster(8, outfile = "cluster.log")    # ← resolves under getwd() = NFS
-```
-
-PSOCK worker logs hammered onto NFS deadlock the cluster under load.
-
-### ✓ Do
+**✓ Do:**
 
 ```r
 cluster_log <- file.path(
     Sys.getenv("BIOME_USER_TMP", "/Rtmp"),
-    Sys.getenv("USER", "u"),
     "cluster.log"
 )
-dir.create(dirname(cluster_log), showWarnings = FALSE, recursive = TRUE)
 cl <- parallel::makeCluster(8, type = "PSOCK", outfile = cluster_log)
 ```
 
 ---
 
-## R014 — cross-user write
-
-**Severity:** MED
-
-Same as [R011](#r011-cross-user) but for writes:
+### R014 — Write only to your own directories
 
 ```r
-saveRDS(result, "[path/to/another_user/results.rds]")    # PERMISSION DENIED
-writeRaster(r, "[path/to/old_user/r_out.tif]")          # silent ACL failure
+saveRDS(result, "/home/otheruser/results.rds")   # permission denied
 ```
 
-Production nodes enforce strict ACLs. The script will fail late.
+**✓ Do:**
 
-### ✓ Do
-
-Write to your own `~/` or to a project-shared dir under
+Write to your own home directory or to a shared project directory under
 `/media/r_projects/<project>/`.
 
 ---
 
-## R015 — globalenv name indexed inside a closure
+### R015 — Pass dependencies as explicit arguments to workers
 
-**Severity:** MED
+Variables from your main session are not visible inside PSOCK workers
+unless you export them.
+
+**✗ Don't:**
 
 ```r
 worker_fn <- function(seed) {
-    inits <- init_list[[seed]]    # ← init_list resolved at call time
-    constants <- constants[["X"]]  # ← same problem
+    inits <- init_list[[seed]]    # init_list not found in worker
     runMCMC(...)
 }
 parLapply(cl, 1:K, worker_fn)
 ```
 
-Inside a PSOCK worker, `init_list` and `constants` are not in the
-worker's globalenv unless you `clusterExport` them. The worker errors
-with `object 'init_list' not found`.
-
-### ✓ Do
-
-Pass dependencies as **explicit arguments**:
+**✓ Do:**
 
 ```r
-worker_fn <- function(seed, init_list, constants) {
-    runMCMC(..., inits = init_list[[seed]], constants = constants)
+worker_fn <- function(seed, init_list) {
+    runMCMC(..., inits = init_list[[seed]])
 }
-parLapply(cl, 1:K, worker_fn,
-          init_list = init_list, constants = constants)
+parLapply(cl, 1:K, worker_fn, init_list = init_list)
 ```
 
 ---
 
-## R016 — relative paths in load/source/readRDS
+### R016 — Avoid relative paths in `load()`, `source()`, `readRDS()`
 
-**Severity:** MED
+Relative paths depend on the current working directory, which can change.
 
-```r
-load("Data_for_spGDMM.RData")   # resolves vs. getwd()
-source("helpers.R")
-readRDS("model.rds")
-```
-
-The harness changes `getwd()` between layers; a fragment loads on your
-laptop and breaks at L1.
-
-### ✓ Do
+**✓ Do:**
 
 ```r
 data_dir <- Sys.getenv("BIOME_DATA_DIR", ".")
-load(file.path(data_dir, "Data_for_spGDMM.RData"))
+load(file.path(data_dir, "workspace.RData"))
 
-# Or:
+# Or use here::here():
 library(here)
 source(here("R", "helpers.R"))
 ```
 
 ---
 
-## R017 — makeCluster without explicit type=
+### R017 — Always specify `type = "PSOCK"` in `makeCluster()`
 
-**Severity:** MED
+The default type on Linux is `"FORK"`, which is unsafe with spatial
+packages.
 
-```r
-cl <- makeCluster(8)        # Linux default = FORK; Windows = PSOCK
-```
-
-FORK + `terra`/`sf`/NIMBLE = silent corruption (see [R002](#r002-mclapply-terra)).
-Always be explicit.
-
-### ✓ Do
+**✓ Do:**
 
 ```r
 cl <- parallel::makeCluster(8, type = "PSOCK")
-# Or use the system helper from /etc/R/Rprofile_site.d/30_psock_factory.R:
-cl <- .biome_make_cluster(8)
 ```
 
 ---
 
-## R019 — silent tryCatch
+### R019 — Do not silently swallow errors
 
-**Severity:** HIGH
+An empty error handler makes failures invisible.
+
+**✗ Don't:**
 
 ```r
 res <- tryCatch(expensive_call(), error = function(e) NULL)
-res <- tryCatch(expensive_call(), error = function(e) { })   # empty body
 ```
 
-Swallowing every error makes the script appear to "work" while
-producing wrong/empty output. The botanist downstream sees missing
-chains and blames the cluster.
-
-### ✓ Do
-
-At minimum, log the error:
+**✓ Do:**
 
 ```r
 res <- tryCatch(
     expensive_call(),
     error = function(e) {
         message(sprintf("[ERROR @ %s] %s", Sys.time(), conditionMessage(e)))
-        NA   # or a sentinel the caller can check
+        NA
     }
 )
 ```
 
 ---
 
-## R020 — hardcoded credential
-
-**Severity:** HIGH — **SECURITY**
+### R020 — Never hardcode credentials
 
 ```r
-gbif_pwd <- "[REDACTED_PASSWORD]"
-api_key  <- "[REDACTED_API_KEY]"
+api_key <- "sk-1234abcd"   # visible in git, NFS, logs
 ```
 
-A plaintext password committed to NFS or git is a confidentiality
-breach. The harness's **L0a SECURITY banner** fires on this rule.
-
-### ✓ Do
+**✓ Do:**
 
 ```r
-gbif_pwd <- Sys.getenv("GBIF_PWD")
-if (!nzchar(gbif_pwd)) stop("GBIF_PWD not set in ~/.Renviron")
+api_key <- Sys.getenv("MY_API_KEY")
+if (!nzchar(api_key)) stop("MY_API_KEY not set in ~/.Renviron")
 ```
 
-Then in `~/.Renviron` (chmod 600):
+Store the value in `~/.Renviron` (with permissions `600`):
 
 ```
-GBIF_PWD=...
+MY_API_KEY=sk-1234abcd
 ```
-
-If you have already committed or shared a credential, **ask the
-sysadmin to rotate it**. The leaked one is gone.
 
 ---
 
-## R021 — Mac-only path (`/Volumes/...`)
-
-**Severity:** MED
+### R021 — Avoid Mac-only paths
 
 ```r
-data_dir <- "[path/to/external/drive/data]"
+data_dir <- "/Volumes/ExternalDrive/data"   # only exists on macOS
 ```
 
-This path only exists on the macOS author's machine. Linux server →
-first read fails.
+**✓ Do:**
 
-### ✓ Do
-
-Move data under `~/` or `/media/r_projects/<project>/` and use
+Move data to your home directory or a shared project directory, and use
 relative paths or `here::here()`.
 
 ---
 
-## R023 — install_github() in script
+### R023 — Do not install from GitHub inside scripts
 
-**Severity:** HIGH
+`devtools::install_github()` runs arbitrary code from a Git repository
+and breaks reproducibility.
 
-```r
-devtools::install_github("someuser/somerepo")
-remotes::install_github("...")
-pak::pkg_install("github::...")
-```
+**✓ Do:**
 
-Worse than [R007](#r007-install-packages):
-
-* Arbitrary code from a third-party Git ref runs on every batch start.
-* Supply-chain risk.
-* Network failure stalls compute.
-* The Git ref may move between runs (non-reproducible).
-
-**v12.10 ships an OPT-IN system-side safety valve, default OFF** —
-same mechanism as R007. By default these calls still execute (subject
-to the usual stock-R failure modes); when armed by the sysadmin
-(`ENABLE_INSTALL_BLOCK=TRUE` template flip, or per-session
-`BIOME_FORCE_INSTALL_BLOCK=1`) they hard-stop the moment `remotes`,
-`devtools`, or `pak` is loaded.
-
-### ✓ Do
-
-Ask the sysadmin to add the package to
-`config/r_env_manager.conf :: R_USER_PACKAGES_GITHUB`. They'll pin it to
-a specific commit SHA.
+Ask the sysadmin to add the package to `config/r_env_manager.conf` with
+a pinned commit SHA.
 
 ---
 
-## R025 — unbounded retry
+### R025 — Bound your retries
 
-**Severity:** MED
+An infinite retry loop on a network call can burn your entire wall-time
+budget.
 
-```r
-osm_data <- NULL
-while (is.null(osm_data)) {
-    osm_data <- try(opq("Italy") |> osmdata_sf(), silent = TRUE)
-}
-```
-
-If the OSM/GBIF server is permanently down, this spins forever, holds
-NFS handles, and never times out — your batch quietly burns its
-wall-time budget.
-
-### ✓ Do
-
-Bounded retry with exponential backoff:
+**✓ Do:**
 
 ```r
-osm_data <- NULL
 for (i in 1:5) {
-    osm_data <- tryCatch(
-        opq("Italy") |> osmdata_sf(),
+    result <- tryCatch(
+        fetch_data(),
         error = function(e) { message("attempt ", i, ": ", conditionMessage(e)); NULL }
     )
-    if (!is.null(osm_data)) break
-    Sys.sleep(2^i)   # 2, 4, 8, 16, 32 seconds
+    if (!is.null(result)) break
+    Sys.sleep(2^i)
 }
-if (is.null(osm_data)) stop("OSM unreachable after 5 attempts")
 ```
 
 ---
 
-## R028 — project-local `_temp/` cache
-
-**Severity:** MED
+### R028 — Do not use project-local cache directories on NFS
 
 ```r
-saveRDS(intermediate, "_temp/chunk_001.rds")
-writeRaster(r, "./tmp/r.tif")
-write_csv(df, "cache/output.csv")
+saveRDS(intermediate, "_temp/chunk_001.rds")   # writes to NFS
 ```
 
-This puts intermediate cache **on NFS**, hammers the metadata server,
-and is never cleaned. The 20 000-raster Lussu run produced 4 GB of
-`_temp/` cruft over a weekend.
-
-### ✓ Do
+**✓ Do:**
 
 ```r
-cache_dir <- file.path(
-    Sys.getenv("BIOME_USER_TMP", "/Rtmp"),
-    Sys.getenv("USER", "u"),
-    "cache"
-)
+cache_dir <- file.path(Sys.getenv("BIOME_USER_TMP", "/Rtmp"), "cache")
 dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
 saveRDS(intermediate, file.path(cache_dir, "chunk_001.rds"))
 ```
 
-`/Rtmp` is local SSD ext4 (400 GB), wiped on reboot. Perfect for
-intermediate cache. **Not** `/tmp` (small tmpfs, will fill).
+`/Rtmp` is local SSD storage, wiped on reboot — ideal for intermediate
+results.
 
 ---
 
-## R029 — Temporary files directed to non-local scratch (`/tmp` or NFS)
+### R029 — Direct temporary files to `/Rtmp`, not `/tmp` or NFS
 
-**Severity:** MED
+`/tmp` is a small RAM-based filesystem that fills quickly. NFS is slow
+for frequent temporary I/O.
 
-```r
-# Example of problematic temp file usage:
-# terra::terraOptions(tempdir = "/tmp/my_terra_temp") # /tmp is often tmpfs, small
-# terra::terraOptions(tempdir = "/nfs/home/user/my_terra_temp") # NFS is slow for temp I/O
-```
-
-Temporary files generated by `terra`, `GDAL`, or R's `tempfile()`
-should be directed to the local, high-performance `/Rtmp` directory.
-Using `/tmp` can lead to it filling up quickly, and using NFS for
-frequent temporary file I/O can cause significant performance
-bottlenecks and potential deadlocks, as seen in the Lussu script's
-original implementation.
-
-### ✓ Do
+**✓ Do:**
 
 ```r
 # For terra:
 terra::terraOptions(
-    tempdir = file.path(Sys.getenv("BIOME_USER_TMP", "/Rtmp"),
-                        Sys.getenv("USER", "u"),
-                        "terra_temp")
+    tempdir = file.path(Sys.getenv("BIOME_USER_TMP", "/Rtmp"), "terra_temp")
 )
 
 # For R's tempfile():
-temp_file_path <- file.path(Sys.getenv("BIOME_USER_TMP", "/Rtmp"),
-                            Sys.getenv("USER", "u"),
-                            "r_temp",
-                            sprintf("my_temp_file_%s.rds", Sys.getenv("BIOME_DIAG_RUN_ID", "")))
-# Ensure directory exists if needed
-dir.create(dirname(temp_file_path), showWarnings = FALSE, recursive = TRUE)
-# Then use temp_file_path in saveRDS, etc.
+my_temp <- file.path(Sys.getenv("BIOME_USER_TMP", "/Rtmp"), "my_temp_file.rds")
+saveRDS(data, my_temp)
 ```
 
 ---
 
-## Good example — `martina_test2.R`
+## Good example — single-threaded chunked processing
 
-This fixture (under `tests/fixtures/r_lint/martina_test2.R`) is the
-**canonical clean reference** — it produces zero lint findings.
+This pattern produces clean, portable code that works well on BIOME-CALC:
 
 ```r
 library(nimble)
 
-# 1. Local SSD scratch dir (NOT /tmp, NOT NFS, NOT project-local _temp)
+# 1. Use local SSD scratch (not /tmp, not NFS)
 chunk_dir <- file.path(
     Sys.getenv("BIOME_USER_TMP", "/Rtmp"),
-    Sys.getenv("USER", "biome_user"),
     "mcmc_chunks"
 )
 dir.create(chunk_dir, showWarnings = FALSE, recursive = TRUE)
 
-# 2. Smoke knob — small workload when harness sets BIOME_SMOKE=1
+# 2. Support smoke testing (small workload for quick validation)
 n_chunks    <- as.integer(Sys.getenv("BIOME_SMOKE_N_CHUNKS",  "10"))
 chunk_iters <- as.integer(Sys.getenv("BIOME_SMOKE_CHUNK_SIZE", "300"))
 
-# 3. Compile in master only — never serialize across PSOCK
+# 3. Process in chunks, writing to local disk
 chunk_files <- character(n_chunks)
 for (i in seq_len(n_chunks)) {
     gc(verbose = FALSE)
-    samples <- rnorm(chunk_iters)              # placeholder for runMCMC(...)
+    samples <- rnorm(chunk_iters)              # replace with runMCMC(...)
     chunk_files[i] <- file.path(chunk_dir, sprintf("chunk_%03d.rds", i))
     saveRDS(samples, chunk_files[i])
     rm(samples)
 }
 
-# 4. Merge from disk and clean up scratch
+# 4. Merge from disk and clean up
 merged <- do.call(c, lapply(chunk_files, readRDS))
 unlink(chunk_files)
 
 cat(sprintf("Done: %d samples merged, scratch cleaned\n", length(merged)))
 ```
 
-**What makes it good:**
+**Why this is good:**
 
-* Uses `BIOME_USER_TMP`/`/Rtmp` (R028 ✓), not `/tmp` or `_temp/`.
-* Uses `BIOME_SMOKE_*` env knobs so the harness's `--smoke` layer (L0b)
-  can shrink the workload without editing the file (HC-13 ✓).
-* `gc()` per chunk → bounded RSS.
-* `saveRDS` + `unlink` → no scratch accumulation.
-* Single-threaded — so no PSOCK/clusterExport pitfalls (R001/R012/R015 ✓).
-* No `setwd()` (R005 ✓), no cross-user paths (R011/R014 ✓), no relative
-  paths (R016 ✓), no hardcoded credentials (R020 ✓).
+- Uses `/Rtmp` for scratch, not `/tmp` or NFS.
+- `gc()` per chunk keeps memory usage bounded.
+- `saveRDS` + `unlink` prevents scratch accumulation.
+- Single-threaded — no PSOCK/clusterExport pitfalls.
+- No `setwd()`, no hardcoded paths, no credentials.
+- Supports `BIOME_SMOKE_*` environment variables for quick testing.
 
-If your script doesn't need parallelism, **don't add it.** Single-threaded
-chunked I/O with `gc()` per chunk is often faster than 8 fork/PSOCK
-workers fighting over `/Rtmp` and the cgroup memory limit.
+If your script does not need parallelism, **do not add it.**
+Single-threaded chunked I/O with `gc()` per chunk is often faster than
+multiple workers competing for memory and disk.
 
 ---
 
-## When you're stuck
+## When you need help
 
-1. Run the diagnostic: `bash scripts/99_diagnose_user_script.sh --user [example_user] [path/to/your.R]`
-2. Open `/[path/to/diag_output]/report.md` — the lint
-   findings reference rule IDs (R001..R028) that anchor back to this
-   document.
-3. Re-run with `--smoke` to actually execute a shrunk version (you'll
-   need `BIOME_SMOKE_*` env knobs in your script — see the good
-   example above).
-4. If exit code is `4`, the infrastructure is green and the fix is in
-   your script. The `report.md` `old_vs_new` appendix shows your real
-   cgroup limits vs. the legacy VM — useful evidence when the chat
-   thread starts with "ma sul vecchio server funzionava".
+1. Check this guide first — most common issues are covered above.
+2. If your script hangs or crashes, contact the sysadmin. They can run
+   diagnostics that identify whether the problem is in the platform
+   configuration or in your code.
+3. The platform **never edits your R scripts**. You always control what
+   changes and when.
 
-The system never edits your `.R` (HC-13). You always have full control
-over what changes and when.
+---
+
+*Authoritative source: [`docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md`](https://github.com/gsamuele78/R-studioConf/blob/main/docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md) — last verified 2026-06-08.*

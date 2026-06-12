@@ -87,14 +87,54 @@ for f in "$PROJECT_ROOT"/docker-deploy/docker-compose.yml "$PROJECT_ROOT"/sandbo
     done < <(grep -E '^\s+image:' "$f" 2>/dev/null || true)
 done
 
-echo "  Extracted ${#IMAGES[@]} unique images:"
+# Classify images: upstream (pinned, from registry) vs locally-built (tag via IMAGE_TAG variable)
+declare -A UPSTREAM_IMAGES
+declare -A LOCAL_IMAGES
+for base in $(echo "${!IMAGES[@]}" | tr ' ' '\n' | sort); do
+    ver="${IMAGES[$base]}"
+    # Locally-built images: tag defaults to 'latest' via ${IMAGE_TAG:-latest} or similar variable expansion
+    if [[ "$ver" == "latest" ]] && [[ "$base" != *"/"* ]]; then
+        LOCAL_IMAGES["$base"]="$ver"
+    else
+        UPSTREAM_IMAGES["$base"]="$ver"
+    fi
+done
+
+# 1a-bis. Extract upstream base images from Dockerfile FROM lines
+declare -A DOCKERFILE_FROM
+for df in "$PROJECT_ROOT"/docker-deploy/Dockerfile "$PROJECT_ROOT"/docker-deploy/Dockerfile.*; do
+    [ ! -f "$df" ] && continue
+    while IFS= read -r line; do
+        [[ "$line" =~ ^FROM[[:space:]]+([^[:space:]]+)([[:space:]]+as[[:space:]]+.*)?$ ]] || continue
+        from_img="${BASH_REMATCH[1]}"
+        # Skip local build stages (no registry prefix, no tag)
+        [[ "$from_img" != *"/"* ]] && continue
+        base="${from_img%:*}"
+        ver="${from_img##*:}"
+        DOCKERFILE_FROM["$base"]="$ver"
+    done < "$df"
+done
+
+echo "  Extracted ${#UPSTREAM_IMAGES[@]} upstream images (compose), ${#LOCAL_IMAGES[@]} locally-built, ${#DOCKERFILE_FROM[@]} Dockerfile FROMs"
 VERSIONS_FILE="$AI_DIR/extracted_versions.env"
 : > "$VERSIONS_FILE"
-for base in $(echo "${!IMAGES[@]}" | tr ' ' '\n' | sort); do
-    echo "    $base:${IMAGES[$base]}"
-    # Sanitize key for env file (replace / and - with _)
+# Write upstream images
+for base in $(echo "${!UPSTREAM_IMAGES[@]}" | tr ' ' '\n' | sort); do
+    echo "    UPSTREAM  $base:${UPSTREAM_IMAGES[$base]}"
     key=$(echo "$base" | sed 's/[^A-Za-z0-9]/_/g' | tr '[:lower:]' '[:upper:]')
-    echo "${key}=${IMAGES[$base]}" >> "$VERSIONS_FILE"
+    echo "${key}=${UPSTREAM_IMAGES[$base]}" >> "$VERSIONS_FILE"
+done
+# Write Dockerfile FROM images
+for base in $(echo "${!DOCKERFILE_FROM[@]}" | tr ' ' '\n' | sort); do
+    echo "    FROM      $base:${DOCKERFILE_FROM[$base]}"
+    key=$(echo "$base" | sed 's/[^A-Za-z0-9]/_/g' | tr '[:lower:]' '[:upper:]')
+    echo "DOCKERFILE_${key}=${DOCKERFILE_FROM[$base]}" >> "$VERSIONS_FILE"
+done
+# Write locally-built images
+for base in $(echo "${!LOCAL_IMAGES[@]}" | tr ' ' '\n' | sort); do
+    echo "    LOCAL     $base:${LOCAL_IMAGES[$base]} (tag via \${IMAGE_TAG})"
+    key=$(echo "$base" | sed 's/[^A-Za-z0-9]/_/g' | tr '[:lower:]' '[:upper:]')
+    echo "${key}=${LOCAL_IMAGES[$base]}" >> "$VERSIONS_FILE"
 done
 
 # 1b. Extract script inventory
@@ -104,9 +144,9 @@ SCRIPT_COUNT=$(find "$PROJECT_ROOT/scripts" -name '*.sh' | wc -l)
 echo "    Found $SCRIPT_COUNT scripts"
 
 # 1c. Extract .env variable names from sandbox files
-echo "  Scanning .env.sandbox files..."
+echo "  Scanning .env.sandbox.example files..."
 declare -A ENV_VARS
-for f in "$PROJECT_ROOT"/docker-deploy/.env.sandbox; do
+for f in "$PROJECT_ROOT"/docker-deploy/.env.sandbox.example; do
     [ ! -f "$f" ] && continue
     stack=$(basename "$(dirname "$f")")
     while IFS= read -r line; do
@@ -209,8 +249,12 @@ COMPOSE FORMAT:
 - \"docker compose\" (space) NOT \"docker-compose\" (hyphen)
 - Always: deploy, healthcheck, logging, labels, depends_on
 
-PINNED VERSIONS (extracted from code — do not override):
-$(for base in $(echo "${!IMAGES[@]}" | tr ' ' '\n' | sort); do echo "  $base: ${IMAGES[$base]}"; done)
+PINNED UPSTREAM VERSIONS (extracted from Dockerfiles — do not override):
+$(for base in $(echo "${!DOCKERFILE_FROM[@]}" | tr ' ' '\n' | sort); do echo "  $base: ${DOCKERFILE_FROM[$base]}"; done)
+$(for base in $(echo "${!UPSTREAM_IMAGES[@]}" | tr ' ' '\n' | sort); do echo "  $base: ${UPSTREAM_IMAGES[$base]}"; done)
+
+LOCALLY-BUILT IMAGES (tag via \${IMAGE_TAG} variable; production deploys MUST set a pinned tag):
+$(for base in $(echo "${!LOCAL_IMAGES[@]}" | tr ' ' '\n' | sort); do echo "  $base: \${IMAGE_TAG:-latest} (locally built, not pulled from registry)"; done)
 
 WHEN GENERATING CODE:
 - Output COMPLETE files, not fragments

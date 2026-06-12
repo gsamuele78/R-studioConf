@@ -22,6 +22,7 @@ Verify they are still running on each host.
 | R orphan report | same | `ORPHAN_CRON_REPORT` | CSV + email to `admin_recipients.txt`. |
 | Let's Encrypt renewal | `32_setup_letsencrypt.sh` | certbot.timer | Renew + nginx reload. |
 | Package drift scan | (manual or cron) | — | `99_check_pkg_drift.sh` — recommend weekly. |
+| Renviron override scan | (manual) | — | `99_check_user_renviron_overrides.sh` — after deploys or when users report env mismatches. |
 
 Verify with: `systemctl list-timers --all | grep -E 'cleanup|orphan|certbot'`
 and `crontab -l -u root`.
@@ -37,8 +38,15 @@ sudo bash scripts/99_health_check.sh
 # Drift scan
 sudo bash scripts/99_check_pkg_drift.sh
 
+# Renviron override scan (user-side env drift)
+sudo bash scripts/99_check_user_renviron_overrides.sh
+
 # Disk pressure
 df -h /Rtmp /home /var
+
+# Nginx package drift check (prevent auth_pam regression)
+dpkg -l | grep -E 'nginx|auth-pam'
+apt-mark showhold | grep -E 'nginx|auth-pam'
 ```
 
 If the drift scan flags packages, decide:
@@ -47,6 +55,52 @@ If the drift scan flags packages, decide:
   re-run `r_env_manager.sh`.
 * **Rebuild** the diverging node from a clean baseline
   ([`CLEAN_VM_BASELINE.md`](CLEAN_VM_BASELINE.md)).
+
+### 2.1 Nginx package drift guard
+
+Ubuntu `unattended-upgrades` can move nginx to a version that is
+incompatible with `libnginx-mod-http-auth-pam`, causing worker segfaults
+on portal login. The known-good version is `1.24.0-2ubuntu7.9`; the
+known-bad version is `1.24.0-2ubuntu7.10`.
+
+**Verify on every node:**
+
+```bash
+dpkg -l | grep -E 'nginx|auth-pam'
+# Expected:
+#   nginx                       1.24.0-2ubuntu7.9
+#   nginx-common                1.24.0-2ubuntu7.9
+#   nginx-full                  1.24.0-2ubuntu7.9
+#   libnginx-mod-stream         1.24.0-2ubuntu7.9
+#   libnginx-mod-http-auth-pam  1:1.5.5-2build2
+
+apt-mark showhold | grep -E 'nginx|auth-pam'
+# Expected: all five packages listed
+
+ls /etc/apt/preferences.d/99-block-nginx-bad.pref
+# Expected: file exists with Pin-Priority: -1 for 1.24.0-2ubuntu7.10
+```
+
+> **Important:** APT ignores files in `/etc/apt/preferences.d/` with
+> invalid extensions. Use `.pref` or no extension. The filename
+> `99-block-nginx-2ubuntu7.10` is silently ignored because `.10` is
+> not a recognised preferences extension.
+
+**If a node has the bad version**, downgrade using `dpkg-repack` from a
+working node. Full procedure:
+[`NGINX_AUTH_PAM_REGRESSION_2026-06.md`](NGINX_AUTH_PAM_REGRESSION_2026-06.md).
+
+**To protect a node that is still on the good version:**
+
+```bash
+sudo apt-mark hold nginx nginx-common nginx-full libnginx-mod-stream libnginx-mod-http-auth-pam
+
+sudo tee /etc/apt/preferences.d/99-block-nginx-bad.pref >/dev/null <<'EOF'
+Package: nginx nginx-common nginx-full libnginx-mod-stream
+Pin: version 1.24.0-2ubuntu7.10
+Pin-Priority: -1
+EOF
+```
 
 ---
 

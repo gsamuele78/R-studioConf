@@ -1,4 +1,4 @@
-te.sh# Claude Agent Instructions — R-studioConf
+# Claude Agent Instructions — R-studioConf
 
 > **For:** Anthropic Claude (any version) working on this codebase.
 > **Load alongside:** `.ai/agents.md` — do not repeat what is in that file.

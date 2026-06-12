@@ -1,11 +1,26 @@
 ---
 name: script-safety-review
-description: Reviews shell scripts for safety and compliance with R-studioConf project standards. Use when creating, modifying, or reviewing any .sh file in the scripts/ directory. Checks error handling, secret safety, interactive input rules, and script coupling.
+description: Reviews shell scripts for safety and compliance with R-studioConf project standards. Use when creating, modifying, or reviewing any .sh file in the repository (scripts/, lib/, docker-deploy/scripts/, .ai/, sandbox/). Checks error handling, secret safety, interactive input rules, and script coupling.
 ---
 
 # Script Safety Review Skill
 
 Reviewing a shell script for R-studioConf. Paradigm: **Pessimistic System Engineering** — assume failure, fail fast.
+
+## Triage (check first — stop if irrelevant)
+
+1. Is the file a `.sh` script? If not, skip this skill.
+2. Is the file under `archive/`, `Infra-Iam-PKI/`, or `src/biome_core_rust/`? If yes, skip (out of scope per ignore_globs).
+3. Container-internal scripts (entrypoints, CMD wrappers): interactive input (`read -p`) is CRITICAL FAILURE.
+
+## Severity Rubric
+
+| Severity | Criteria |
+|----------|----------|
+| CRITICAL | Missing `set -euo pipefail`, password on CLI, `read -p` in container script, silent chown failure |
+| HIGH | Unsafe `source .env`, bare `pwd`, hardcoded absolute paths, `sed`/`awk` on JSON |
+| MEDIUM | Missing color vars, missing `SCRIPT_DIR` resolution, non-idempotent |
+| LOW | Style/formatting deviations, non-blocking warnings |
 
 ## Mandatory Checks
 
@@ -81,9 +96,10 @@ Cross-check `.ai/agents.md §5` before changing script inputs/outputs.
 - Package to remove: `libopenblas0-pthread` (causes SIGSEGV)
 - Detection script: `/etc/profile.d/biome-coretype.sh`
 
-### 11. Pinned Versions (HC-11)
+### 11. Pinned Versions (HC-07)
 
-- ALL upstream image versions MUST be pinned — no `:latest` tag
+- ALL upstream image versions MUST be pinned — no `:latest` tag for registry images
+- Locally-built images (`botanical-*`, `rstudio-botanical-*`) are tagged via `${IMAGE_TAG}` variable (defaults to `:latest` in sandbox/CI; production deploys MUST set a pinned tag) — per codified HC-07 exception
 
 ## Output Format
 
@@ -91,4 +107,3 @@ Cross-check `.ai/agents.md §5` before changing script inputs/outputs.
 [PASS/FAIL/WARN] Check: description
   Line N: problematic code
   → Fix: specific fix
-```

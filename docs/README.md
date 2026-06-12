@@ -34,12 +34,14 @@ authoritative deployment of the *botanical big-data calculus* platform.
 - [`SECURITY_MODEL.md`](architecture/SECURITY_MODEL.md) — auth flows, isolation, Nginx hardening.
 - [`USER_CONTRACT.md`](architecture/USER_CONTRACT.md) — formal HC-13 ("adapt the system, not the user script").
 - [`architecture_analysis.md`](architecture/architecture_analysis.md) — cgroup model, CORETYPE, threading rationale.
+- [`rstudio_cluster_evolution_pki_iam_ood.md`](architecture/rstudio_cluster_evolution_pki_iam_ood.md) — future-architecture analysis (PKI, IAM, Open OnDemand, Positron).
+- [`rstudio_positron_june_2026_capability_audit.md`](architecture/rstudio_positron_june_2026_capability_audit.md) — RStudio OSS / Positron capability audit (June 2026).
 
 ### 2. Component Guides (`components/`)
 
-- [`NGINX_GATEWAY.md`](components/NGINX_GATEWAY.md) — config deep-dive, headers, rewrite rules.
-- [`PORTAL_FRONTEND.md`](components/PORTAL_FRONTEND.md) — HTML/JS auto-login, CSS responsiveness.
-- [`SERVICES_INTEGRATION.md`](components/SERVICES_INTEGRATION.md) — RStudio Server, TTYD, Nextcloud wiring.
+- [`NGINX_GATEWAY.md`](components/NGINX_GATEWAY.md) — Nginx reverse proxy configuration, proxy buffer tuning for RStudio sessions.
+- [`PORTAL_FRONTEND.md`](components/PORTAL_FRONTEND.md) — glassmorphism landing page, OAuth2 proxy integration.
+- [`SERVICES_INTEGRATION.md`](components/SERVICES_INTEGRATION.md) — RStudio Server, SSSD/Samba, OAuth2 proxy, telemetry, Ollama wiring.
 
 ### 3. Deployment (`deployment/`)
 
@@ -52,14 +54,14 @@ authoritative deployment of the *botanical big-data calculus* platform.
 ### 4. Operations (`operations/`)
 
 - [`OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md) — one-page cheat-sheet for day-2.
-- [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed runbook (RStudio, PAM, identity, storage, nginx, telemetry, ttyd, escalation).
+- [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed runbook (RStudio, PAM, identity, storage, nginx, telemetry, escalation).
 - [`DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md) — every `99_*.sh` / `fix_*.sh` (When / Mutates / Output / NextStep) + decision tree.
 - [`MAINTENANCE.md`](operations/MAINTENANCE.md) — daily / weekly / monthly / quarterly tasks, R-version bump, AD rotation, rollback.
 - [`UPGRADE_TO_v12.4.md`](operations/UPGRADE_TO_v12.4.md) — Rprofile v12.4 upgrade runbook (Lussu fork-guard + NFS lookup-storm fix).
-- [`USER_QUOTAS_AND_RESOURCES.md`](operations/USER_QUOTAS_AND_RESOURCES.md) — RAM/CPU/scratch quotas, `unix::rlimit_as`, cgroups, `systemd-oomd`.
-- [`USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) — debugging user R scripts without editing them.
-- [`LUSSU_HANG_BISECTION.md`](operations/LUSSU_HANG_BISECTION.md) — `mclapply`-on-`terra::rast` hang bisection.
-- [`CLEAN_VM_BASELINE.md`](operations/CLEAN_VM_BASELINE.md) — clean-baseline VM template procedure.
+- [`USER_QUOTAS_AND_RESOURCES.md`](operations/USER_QUOTAS_AND_RESOURCES.md) — RAM/CPU/scratch quotas, cgroup user slices, systemd resource controls.
+- [`USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) — debugging user R scripts without editing them (HC-13 compliant).
+- [`LUSSU_HANG_BISECTION.md`](operations/LUSSU_HANG_BISECTION.md) — `mclapply`-on-`terra::rast` hang bisection (worked example).
+- [`CLEAN_VM_BASELINE.md`](operations/CLEAN_VM_BASELINE.md) — clean-baseline VM template procedure (L4 reference).
 - [`add_storage_no_reboot.md`](operations/add_storage_no_reboot.md) — hot-add NFS/disk.
 - [`diagnostic_logs.md`](operations/diagnostic_logs.md) — log location reference.
 - [`sysadmin_troubleshooting_guide.md`](operations/sysadmin_troubleshooting_guide.md) — long-form sysadmin handbook.
@@ -86,9 +88,12 @@ authoritative deployment of the *botanical big-data calculus* platform.
 - [`BOTANIST_CHEATSHEET.md`](user_guides/BOTANIST_CHEATSHEET.md) — **start here** as an end-user (1 page, 10 rules).
 - [`User_guide.md`](user_guides/User_guide.md) — full Italian-language HPC guide for researchers.
 - [`understanding_the_new_server.md`](user_guides/understanding_the_new_server.md) — why the server behaves as it does.
+- [`PARALLEL_R_DOS_AND_DONTS.md`](user_guides/PARALLEL_R_DOS_AND_DONTS.md) — safe parallel R patterns on BIOME-CALC.
 - [`large_spatial_matrices.md`](user_guides/large_spatial_matrices.md) — `terra` / `sf` workflows for > 50 GB rasters.
 - [`NIMBLE_User_Guide.md`](user_guides/NIMBLE_User_Guide.md) — parallel MCMC on BIOME-CALC.
-- [`SERVER_NATIVE_API.md`](user_guides/SERVER_NATIVE_API.md) — `biome_*()` helpers (power-user / admin only).
+- [`SERVER_NATIVE_API.md`](user_guides/SERVER_NATIVE_API.md) — `biome_*()` helpers (advanced users).
+- [`rstudio_session_isolation.md`](user_guides/rstudio_session_isolation.md) — how RStudio sessions are isolated.
+- [`risposta_ricercatore_sessioni_rstudio.md`](user_guides/risposta_ricercatore_sessioni_rstudio.md) — Italian-language session FAQ.
 
 ### 8. Specialised guides
 
@@ -99,20 +104,26 @@ authoritative deployment of the *botanical big-data calculus* platform.
 
 - [`FUTURE_MIGRATION.md`](FUTURE_MIGRATION.md) — OIDC, Kubernetes, Ansible adoption path.
 
+### 10. Meta
+
+- [`DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md) — central audit register tracking documentation status and remediation actions.
+
 ---
 
-## 🔒 Hard Rules (HC-1..HC-17 — read before contributing)
+## 🔒 Hard Rules (HC-01..HC-15 — read before contributing)
 
 The full list lives in `.clinerules` / `.cursorrules` / `.windsurfrules`
-at the repo root. The most consequential for documentation:
+at the repo root, and in `.ai/project.yml`. The most consequential for documentation:
 
 - **HC-13** — Adapt the system to portable user R code; **never silently
   patch user scripts**. Fixes go in `Rprofile_site.d/`, `Renviron`,
   cgroups, PAM — never in a `.R` written by the researcher.
-- **HC-3** — Fix in T1 first, then port forward T1 → T2 → T3. Do not
+- **HC-03** — Fix in T1 first, then port forward T1 → T2 → T3. Do not
   document a workaround in T2/T3 that masks a T1 defect.
-- **HC-12** — `.env` files are never committed; templates use
+- **HC-08** — `.env` files are never committed; templates use
   `%%PLACEHOLDERS%%` only.
+- **HC-14** — `RPROFILE_VERSION` bumps must land with matching CHANGELOG
+  section + cross-doc references in the same commit.
 
 ---
 
@@ -127,4 +138,4 @@ at the repo root. The most consequential for documentation:
 
 ---
 
-*Last full audit: 2026-05-09 — see git log for incremental changes.*
+*Last full audit: 2026-06-08 — see `DOCUMENTATION_AUDIT.md` for detailed status.*

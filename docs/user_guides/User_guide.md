@@ -3,6 +3,40 @@ Benvenuti sul nuovo server BIOME-CALC! Questa macchina è stata ingegnerizzata p
 
 Essendo un server di livello enterprise (HPC), si comporta in modo diverso dal vostro computer portatile o dai server di vecchia generazione. Questa guida vi spiegherà come strutturare il vostro codice R per farlo letteralmente "volare", evitando disconnessioni, crash e blocchi.
 
+**🔧 Strumento di diagnostica rapida:** Se avete problemi con i grafici che non compaiono nel pannello "Plots" di RStudio, eseguite nella console:
+
+```
+source("/home/jfs/00_Antigravity_workspace/R-studioConf/scripts/99_diagnose_rstudio_plot_pane.R")
+```
+
+Questo script analizza la vostra sessione e vi dice esattamente cosa non funziona. Per un test completo dei grafici (mappe botaniche realistiche dell'Italia + benchmark del server), usate:
+
+```
+source("/home/jfs/00_Antigravity_workspace/R-studioConf/scripts/99_botanical_plot_stress_test.R")
+```
+
+1. Grafici in Background (La sindrome del "Pittore Bendato")
+
+**⚠️ IMPORTANTE: Questo NON è un bug del server.** È il comportamento normale di qualsiasi processo senza interfaccia grafica (Rscript, cron job, background job). I grafici interattivi (`plot()`, `print(ggplot)`) funzionano SOLO dentro RStudio perché usano un canale speciale chiamato RStudioGD che comunica direttamente con il vostro browser.
+
+Quando lanciate un calcolo parallelo o un lavoro in background, quei processi non hanno uno schermo (sono "headless"). Se il vostro script finisce con `plot(dati)` o `print(mio_ggplot)`, il server ignorerà il comando o andrà in errore, e il grafico andrà perduto.
+
+**Come faccio a sapere se il mio pannello Plots funziona?**
+Aprite RStudio e copiate questo nella console:
+
+```
+plot(1, 1, main = "Test: il grafico appare nel pannello Plots?")
+```
+
+Se vedete il punto nel pannello "Plots" (in basso a destra) → tutto OK.
+Se NON lo vedete → eseguite lo script di diagnostica:
+
+```
+source("/home/jfs/00_Antigravity_workspace/R-studioConf/scripts/99_diagnose_rstudio_plot_pane.R")
+```
+
+**Soluzione per processi in background:** Costringete R a stampare l'immagine su un file fisico.
+
 1. Gestione Sessioni e Prevenzione Crash (L'errore "Aw, Snap!")
 Sui vecchi sistemi, chiudendo RStudio, veniva salvato in automatico un file nascosto chiamato .RData contenente tutto l'ambiente di lavoro. Lavorando con Big Data, questo file può raggiungere svariati Gigabyte. Al vostro login successivo, RStudio cercherà di caricare tutti quei Giga nel vostro browser, facendolo collassare (il classico errore "Aw, Snap!" o "Error Code 4" su Chrome).
 

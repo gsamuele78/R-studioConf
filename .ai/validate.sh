@@ -46,7 +46,7 @@ CHECKS=0
 pass() { echo -e "  ${GREEN}✓${NC} $1"; }
 fail() { echo -e "  ${RED}✗ FAIL:${NC} $1"; ERRORS=$((ERRORS + 1)); }
 warn() { echo -e "  ${YELLOW}⚠ WARN:${NC} $1"; WARNINGS=$((WARNINGS + 1)); }
-hint() { [ "$SHOW_HINTS" = true ] && echo -e "    ${BLUE}→ Fix:${NC} $1"; }
+hint() { if [ "$SHOW_HINTS" = true ]; then echo -e "    ${BLUE}→ Fix:${NC} $1"; fi; }
 section() { echo ""; echo -e "${BOLD}[$1]${NC}"; }
 
 COMPOSE_FILES="$PROJECT_ROOT/docker-deploy/docker-compose.yml"
@@ -178,6 +178,11 @@ for f in $COMPOSE_FILES; do
         # Skip comments and build contexts
         [[ "$line" =~ ^\s*# ]] && continue
         image_val=$(echo "$line" | sed 's/.*image:\s*//' | tr -d '"' | tr -d "'" | xargs)
+        # Detect variable-default-to-latest: ${IMAGE_TAG:-latest} or ${VAR:-latest}
+        if [[ "$image_val" =~ \$\{[A-Za-z_][A-Za-z0-9_]*:-latest\} ]]; then
+            warn "$rel_path → image '$image_val' defaults to :latest via variable expansion (locally-built image — ensure production deploy sets a pinned tag)"
+            continue
+        fi
         # Skip local builds (no / in name, has : with local tag)
         [[ "$image_val" == *":latest"* ]] && {
             fail "$rel_path → image '$image_val' uses :latest tag"
@@ -203,7 +208,7 @@ if [ -f "$PROJECT_ROOT/.gitignore" ]; then
         pass ".gitignore excludes .env files"
     else
         fail ".gitignore does not exclude .env files"
-        hint "Add '.env' and '*.env' to .gitignore (keep !.env.example and !*.env.sandbox)"
+        hint "Add '.env' and '*.env' to .gitignore (keep !.env.example and !*.env.sandbox.example)"
     fi
 else
     fail "No .gitignore found at project root"
@@ -212,7 +217,7 @@ fi
 # Check if any .env (non-sandbox, non-example) is tracked
 CHECKS=$((CHECKS + 1))
 if command -v git &>/dev/null && [ -d "$PROJECT_ROOT/.git" ]; then
-    tracked_envs=$(git -C "$PROJECT_ROOT" ls-files '*.env' 2>/dev/null | grep -v '.env.sandbox' | grep -v '.env.example' | grep -v '.env.template' | grep -v '^.ai/extracted_versions.env$' || true)
+    tracked_envs=$(git -C "$PROJECT_ROOT" ls-files '*.env' 2>/dev/null | grep -v '.env.sandbox.example' | grep -v '.env.example' | grep -v '.env.template' | grep -v '^.ai/extracted_versions.env$' || true)
     if [ -n "$tracked_envs" ]; then
         fail "Production .env files tracked in git: $tracked_envs"
         hint "git rm --cached <file> && add to .gitignore"

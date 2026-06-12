@@ -18,26 +18,26 @@ on:
   push:
     paths:
       # Only run when files that affect constraints change
-      - 'docker-deploy/docker-compose.yml'
-      - 'docker-deploy/Dockerfile*'
-      - 'kubernetes-deploy/**'
-      - 'scripts/**/*.sh'
-      - 'sandbox/*.yml'
-      - 'docker-deploy/.env.sandbox'
-      - '.ai/**'
-      - '.cursorrules'
-      - '.clinerules'
-      - '.windsurfrules'
-      - 'CLAUDE.md'
-      - '.github/copilot-instructions.md'
+      - "docker-deploy/docker-compose.yml"
+      - "docker-deploy/Dockerfile*"
+      - "kubernetes-deploy/**"
+      - "scripts/**/*.sh"
+      - "sandbox/*.yml"
+      - "docker-deploy/.env.sandbox.example"
+      - ".ai/**"
+      - ".cursorrules"
+      - ".clinerules"
+      - ".windsurfrules"
+      - "CLAUDE.md"
+      - ".github/copilot-instructions.md"
   pull_request:
     paths:
-      - 'docker-deploy/docker-compose.yml'
-      - 'docker-deploy/Dockerfile*'
-      - 'kubernetes-deploy/**'
-      - 'scripts/**/*.sh'
-      - 'sandbox/*.yml'
-      - '.ai/**'
+      - "docker-deploy/docker-compose.yml"
+      - "docker-deploy/Dockerfile*"
+      - "kubernetes-deploy/**"
+      - "scripts/**/*.sh"
+      - "sandbox/*.yml"
+      - ".ai/**"
 
 jobs:
   # ────────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ jobs:
       - name: Validate docker-deploy compose
         run: |
           # Create minimal .env for compose config validation
-          cp docker-deploy/.env.sandbox docker-deploy/.env
+          cp docker-deploy/.env.sandbox.example docker-deploy/.env
           docker compose -f docker-deploy/docker-compose.yml config > /dev/null
         continue-on-error: false
 
