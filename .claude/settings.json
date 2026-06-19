@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk -F'value_length=' '{print $1 \"len=\" length\\($2\\)}')",
+      "Bash(git reset *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
