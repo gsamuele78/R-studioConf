@@ -165,15 +165,17 @@ user→project map are the spear-phishing assets).
   associative array) that had been silently aborting `make audit`.*
 - **[OPEN]** `.ai/agents.md §5` is stale — missing 10+ scripts, 3 wrong
   descriptions — and it feeds those wrong descriptions to every AI agent.
-- **[OPEN] `.ai/generate.sh` IDE-rule drift (surfaced by `ci.yml`).** With the
-  `set -u` crash fixed, `generate-check` now runs and reveals the 6 generated IDE
-  files (`CLAUDE.md`, `.clinerules`, …) are out of sync, and that the generator
-  (a) **date-stamps** its output (so it self-drifts daily) and (b) **misclassifies**
-  the `${VAR:-img}:${IMAGE_TAG}` local images as upstream (it predates that compose
-  syntax). Because the committed files are *semantically better* than a regenerate,
-  `generate-check` is wired as **informational (non-blocking)** in CI, not a gate.
-  Real fix (deferred): make the stamp deterministic + teach the classifier the
-  `${IMAGE_TAG}` convention, then regenerate.
+- **[FIXED] `.ai/generate.sh` IDE-rule drift (surfaced by `ci.yml`).** Three
+  generator defects fixed: (1) the bash-5.2 `set -u` crash on empty associative
+  arrays (now empty-safe `sorted_keys`/`acount` helpers, no `set +u` band-aid);
+  (2) the image **classifier** — it misclassified the `${VAR:-img}:${IMAGE_TAG}`
+  local images as upstream. It now resolves compose `${VAR:-default}`/`${VAR}`
+  expansions and keys "locally-built" on the service's **`build:` key**
+  (authoritative, via `yq`; identical no-yq fallback for portability). The corrupt
+  `extracted_versions.env` (mangled `__OLLAMA_AI_IMAGE__…` keys) is regenerated
+  clean. (3) `--check` is now **date-insensitive** so it no longer self-drifts
+  daily. Result: `make audit` is green and `generate-check` is a **blocking** CI
+  gate (`t1-static`), not informational.
 - **[PARTIAL]** Reference docs lag: `SCRIPT_CATALOG`/`CONFIGURATION_MAP`/
   `DIAGNOSTICS_INDEX` miss `pin_r_version.*`, all of `scripts/tools/` (8 files), and
   3 diagnostics; `CONFIGURATION_MAP` still said `RPROFILE_VERSION 12.4` (actual

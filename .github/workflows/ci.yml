@@ -58,15 +58,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Constraint compliance (HC-01..HC-11)
-        run: make validate
-
-      - name: Doc coherence (HC-14 — RPROFILE_VERSION ↔ CHANGELOG)
-        run: make doc-coherence
-
-      - name: IDE-rule freshness (informational — known generator drift)
-        continue-on-error: true
-        run: make generate-check
+      - name: Audit gate (HC-01..HC-11 + IDE-rule sync + HC-14 doc coherence)
+        # `make audit` = validate + generate-check + doc-coherence. generate-check
+        # is deterministic (date-insensitive; classifier reads compose build: keys,
+        # yq-preferred with a no-yq fallback that yields identical output).
+        run: make audit
 
       - name: Bash syntax (bash -n) on every shell script
         run: |

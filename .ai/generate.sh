@@ -48,57 +48,56 @@ echo -e "${BOLD}═════════════════════�
 # ──────────────────────────────────────────────────────────────
 echo -e "${BLUE}[Phase 1] Extracting data from codebase...${NC}"
 
-# 1a. Extract image versions from production compose files
-parse_image_ref() {
+# Empty-safe associative-array helpers.
+# bash 5.2 raises "unbound variable" for ${!a[@]} / ${#a[@]} on an empty (or
+# declared-but-unassigned) associative array under `set -u`; the ${a[@]+...}
+# guard (assigned into a fresh indexed array) sidesteps it cleanly.
+sorted_keys() { local -n _r="$1"; local -a _k=( ${_r[@]+"${!_r[@]}"} ); ((${#_k[@]})) || return 0; printf '%s\n' "${_k[@]}" | sort; }
+acount()      { local -n _r="$1"; local -a _k=( ${_r[@]+"${!_r[@]}"} ); echo "${#_k[@]}"; }
+
+# 1a. Extract & classify compose images.
+#   - base/tag are resolved from compose ${VAR:-default} and ${VAR} expansions
+#     (a bare ${IMAGE_TAG} resolves to its conventional :latest default).
+#   - an image is LOCALLY-BUILT iff its compose service declares a `build:` key
+#     (authoritative; read via yq when present). Without yq/jq we fall back to
+#     "resolved base has no registry path" — both yield the same result here.
+resolve_image_ref() {
     local raw="$1"
-
-    # Compose var pattern: ${IMAGE_VAR:-repo/image}:${TAG_VAR:-1.2.3}
-    if [[ "$raw" =~ ^\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]+)\}:\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]+)\}$ ]]; then
-        echo "${BASH_REMATCH[1]}|${BASH_REMATCH[2]}"
-        return 0
-    fi
-
-    # Compose var pattern with default image and literal tag: ${IMAGE_VAR:-repo/image}:1.2.3
-    if [[ "$raw" =~ ^\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]+)\}:([^{}$]+)$ ]]; then
-        echo "${BASH_REMATCH[1]}|${BASH_REMATCH[2]}"
-        return 0
-    fi
-
-    # Plain image:tag form
+    raw="$(sed -E 's/\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]*)\}/\1/g' <<<"$raw")"   # ${VAR:-default} -> default
+    raw="$(sed -E 's/\$\{[A-Za-z_][A-Za-z0-9_]*\}/latest/g'      <<<"$raw")"   # ${VAR} (no default) -> latest
     if [[ "$raw" == *:* ]]; then
-        local base="${raw%:*}"
-        local ver="${raw##*:}"
-        echo "$base|$ver"
+        printf '%s|%s' "${raw%:*}" "${raw##*:}"
     else
-        echo "$raw|untagged"
+        printf '%s|latest' "$raw"
     fi
 }
 
-declare -A IMAGES
-for f in "$PROJECT_ROOT"/docker-deploy/docker-compose.yml "$PROJECT_ROOT"/sandbox/*.yml; do
-    [ ! -f "$f" ] && continue
-    while IFS= read -r line; do
-        img=$(echo "$line" | sed 's/.*image:\s*//' | tr -d '"' | tr -d "'" | xargs)
-        [ -z "$img" ] && continue
-        parsed=$(parse_image_ref "$img")
-        base="${parsed%%|*}"
-        ver="${parsed##*|}"
-        IMAGES["$base"]="$ver"
-    done < <(grep -E '^\s+image:' "$f" 2>/dev/null || true)
-done
+declare -A IMAGES UPSTREAM_IMAGES LOCAL_IMAGES
+classify_ref() {   # $1 = raw image ref, $2 = is_local (true|false)
+    local parsed base ver
+    parsed="$(resolve_image_ref "$1")"; base="${parsed%%|*}"; ver="${parsed##*|}"
+    [ -z "$base" ] && return 0
+    IMAGES["$base"]="$ver"
+    if [ "$2" = "true" ]; then LOCAL_IMAGES["$base"]="$ver"; else UPSTREAM_IMAGES["$base"]="$ver"; fi
+}
 
-# Classify images: upstream (pinned, from registry) vs locally-built (tag via IMAGE_TAG variable)
-declare -A UPSTREAM_IMAGES
-declare -A LOCAL_IMAGES
-for base in $(echo "${!IMAGES[@]}" | tr ' ' '\n' | sort); do
-    ver="${IMAGES[$base]}"
-    # Locally-built images: tag defaults to 'latest' via ${IMAGE_TAG:-latest} or similar variable expansion
-    if [[ "$ver" == "latest" ]] && [[ "$base" != *"/"* ]]; then
-        LOCAL_IMAGES["$base"]="$ver"
+COMPOSE_FILE="$PROJECT_ROOT/docker-deploy/docker-compose.yml"
+if [ -f "$COMPOSE_FILE" ]; then
+    if command -v yq >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        while IFS=$'\t' read -r img has_build; do
+            [ -z "$img" ] && continue
+            [ "$img" = "null" ] && continue
+            classify_ref "$img" "$has_build"
+        done < <(yq -r '.services | to_entries[] | select(.value.image) | "\(.value.image)\t\(.value.build != null)"' "$COMPOSE_FILE")
     else
-        UPSTREAM_IMAGES["$base"]="$ver"
+        while IFS= read -r line; do
+            img="$(sed 's/.*image:[[:space:]]*//' <<<"$line" | tr -d "\"'" | xargs)"
+            [ -z "$img" ] && continue
+            base="$(resolve_image_ref "$img")"; base="${base%%|*}"
+            if [[ "$base" == *"/"* ]]; then classify_ref "$img" "false"; else classify_ref "$img" "true"; fi
+        done < <(grep -E '^\s+image:' "$COMPOSE_FILE" 2>/dev/null || true)
     fi
-done
+fi
 
 # 1a-bis. Extract upstream base images from Dockerfile FROM lines
 declare -A DOCKERFILE_FROM
@@ -115,33 +114,27 @@ for df in "$PROJECT_ROOT"/docker-deploy/Dockerfile "$PROJECT_ROOT"/docker-deploy
     done < "$df"
 done
 
-# bash 5.2 regression: ${arr[@]} / ${#arr[@]} / ${!arr[@]} on an EMPTY associative
-# array raise "unbound variable" under `set -u` (LOCAL_IMAGES is empty whenever the
-# compose pins local images via ${IMAGE_TAG} rather than a literal :latest tag).
-# Reads below only enumerate arrays we fully control, so relax nounset for the block.
-set +u
-echo "  Extracted ${#UPSTREAM_IMAGES[@]} upstream images (compose), ${#LOCAL_IMAGES[@]} locally-built, ${#DOCKERFILE_FROM[@]} Dockerfile FROMs"
+echo "  Extracted $(acount UPSTREAM_IMAGES) upstream images (compose), $(acount LOCAL_IMAGES) locally-built, $(acount DOCKERFILE_FROM) Dockerfile FROMs"
 VERSIONS_FILE="$AI_DIR/extracted_versions.env"
 : > "$VERSIONS_FILE"
 # Write upstream images
-for base in $(echo "${!UPSTREAM_IMAGES[@]}" | tr ' ' '\n' | sort); do
+for base in $(sorted_keys UPSTREAM_IMAGES); do
     echo "    UPSTREAM  $base:${UPSTREAM_IMAGES[$base]}"
     key=$(echo "$base" | sed 's/[^A-Za-z0-9]/_/g' | tr '[:lower:]' '[:upper:]')
     echo "${key}=${UPSTREAM_IMAGES[$base]}" >> "$VERSIONS_FILE"
 done
 # Write Dockerfile FROM images
-for base in $(echo "${!DOCKERFILE_FROM[@]}" | tr ' ' '\n' | sort); do
+for base in $(sorted_keys DOCKERFILE_FROM); do
     echo "    FROM      $base:${DOCKERFILE_FROM[$base]}"
     key=$(echo "$base" | sed 's/[^A-Za-z0-9]/_/g' | tr '[:lower:]' '[:upper:]')
     echo "DOCKERFILE_${key}=${DOCKERFILE_FROM[$base]}" >> "$VERSIONS_FILE"
 done
 # Write locally-built images
-for base in $(echo "${!LOCAL_IMAGES[@]}" | tr ' ' '\n' | sort); do
+for base in $(sorted_keys LOCAL_IMAGES); do
     echo "    LOCAL     $base:${LOCAL_IMAGES[$base]} (tag via \${IMAGE_TAG})"
     key=$(echo "$base" | sed 's/[^A-Za-z0-9]/_/g' | tr '[:lower:]' '[:upper:]')
     echo "${key}=${LOCAL_IMAGES[$base]}" >> "$VERSIONS_FILE"
 done
-set -u  # end empty-associative-array guard
 
 # 1b. Extract script inventory
 echo ""
@@ -211,12 +204,12 @@ VERSIONS_BLOCK="## Pinned Versions (extracted from docker-compose.yml on $(date 
 | Image | Version | Source |
 |-------|---------|--------|"
 
-for base in $(echo "${!IMAGES[@]}" | tr ' ' '\n' | sort); do
+for base in $(sorted_keys IMAGES); do
     VERSIONS_BLOCK+="
 | \`$base\` | \`${IMAGES[$base]}\` | docker-compose.yml |"
 done
 
-echo "  Generated versions table with ${#IMAGES[@]} entries"
+echo "  Generated versions table with $(acount IMAGES) entries"
 
 # ──────────────────────────────────────────────────────────────
 # PHASE 4: Generate constraint block
@@ -256,11 +249,11 @@ COMPOSE FORMAT:
 - Always: deploy, healthcheck, logging, labels, depends_on
 
 PINNED UPSTREAM VERSIONS (extracted from Dockerfiles — do not override):
-$(for base in $(echo "${!DOCKERFILE_FROM[@]}" | tr ' ' '\n' | sort); do echo "  $base: ${DOCKERFILE_FROM[$base]}"; done)
-$(for base in $(echo "${!UPSTREAM_IMAGES[@]}" | tr ' ' '\n' | sort); do echo "  $base: ${UPSTREAM_IMAGES[$base]}"; done)
+$(for base in $(sorted_keys DOCKERFILE_FROM); do echo "  $base: ${DOCKERFILE_FROM[$base]}"; done)
+$(for base in $(sorted_keys UPSTREAM_IMAGES); do echo "  $base: ${UPSTREAM_IMAGES[$base]}"; done)
 
 LOCALLY-BUILT IMAGES (tag via \${IMAGE_TAG} variable; production deploys MUST set a pinned tag):
-$(for base in $(echo "${!LOCAL_IMAGES[@]}" | tr ' ' '\n' | sort); do echo "  $base: \${IMAGE_TAG:-latest} (locally built, not pulled from registry)"; done)
+$(for base in $(sorted_keys LOCAL_IMAGES); do echo "  $base: \${IMAGE_TAG:-latest} (locally built, not pulled from registry)"; done)
 
 WHEN GENERATING CODE:
 - Output COMPLETE files, not fragments
@@ -311,7 +304,12 @@ write_file() {
     if [ "$CHECK_MODE" = true ]; then
         if [ -f "$target" ]; then
             existing=$(cat "$target")
-            if [ "$existing" = "$content" ]; then
+            # Normalize the volatile generation date (ISO yyyy-mm-dd) so --check is
+            # deterministic day-to-day — only real content drift fails the gate.
+            local norm_existing norm_content
+            norm_existing=$(sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}/<DATE>/g' <<<"$existing")
+            norm_content=$(sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}/<DATE>/g' <<<"$content")
+            if [ "$norm_existing" = "$norm_content" ]; then
                 echo -e "  ${GREEN}✓${NC} $label is up-to-date"
             else
                 echo -e "  ${RED}✗${NC} $label is OUTDATED — run .ai/generate.sh to update"

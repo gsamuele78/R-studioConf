@@ -55,9 +55,9 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   `.github/workflows/test_setup_r_env.yml` — it drove the deleted `setup_r_env.sh`
   layout and wrapped every step in `|| true` (permanent false green). New
   `.github/workflows/ci.yml` runs 7 real jobs, no `|| true`:
-  - `t1-static` — `make validate` (HC-01..HC-11) + `make doc-coherence` (HC-14) +
-    `bash -n` on every script + exec-bit guard + the `r_env_manager.sh` root-guard
-    contract. (`generate-check` runs **informational**, see Fixed below.)
+  - `t1-static` — `make audit` (HC-01..11 constraints + IDE-rule sync +
+    HC-14 doc coherence) + `bash -n` on every script + exec-bit guard + the
+    `r_env_manager.sh` root-guard contract.
   - `t1-bash-unit` — `bats tests/unit/test_common_utils.bats`.
   - `r-runtime-static` — Rprofile dispatcher/fragment **parse gate** +
     `tests/r_lint_test.sh` HC-13 linter oracle.
@@ -79,12 +79,19 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   `99_troubleshoot_env.sh`, `pin_r_version.sh` were committed `100644`, making
   `15_`/`40_` invisible in the launcher menu. Now `100755`, locked by
   `tests/check_exec_bits.sh` in CI.
-- **`.ai/generate.sh` `set -u` crash** (bash 5.2): `${#arr[@]}`/`${!arr[@]}` on the
-  always-empty `LOCAL_IMAGES` associative array raised `unbound variable`, silently
-  aborting `make audit` everywhere. Guarded the empty-assoc reads. *Note:* with the
-  crash gone, `generate-check` now reveals pre-existing IDE-rule drift (date stamp +
-  `${IMAGE_TAG}` image misclassification) — tracked OPEN in the audit; the check is
-  wired informational, not blocking.
+- **`.ai/generate.sh` — deep fix (3 defects), `make audit` now green.**
+  - **bash-5.2 `set -u` crash**: `${#arr[@]}`/`${!arr[@]}` on empty associative
+    arrays raised `unbound variable`, silently aborting `make audit` everywhere.
+    Replaced with empty-safe `sorted_keys`/`acount` helpers (no `set +u`).
+  - **Image classifier**: the `${VAR:-img}:${IMAGE_TAG}` local images were
+    misclassified as upstream (the parser predated that compose syntax). Now
+    resolves compose `${VAR:-default}`/`${VAR}` expansions and classifies
+    "locally-built" by the service's **`build:` key** (authoritative, via `yq`;
+    portable no-yq fallback yields identical output). Regenerated the corrupt
+    `extracted_versions.env` (mangled `__OLLAMA_AI_IMAGE__…` keys) clean.
+  - **`--check` determinism**: now date-insensitive, so it no longer self-drifts
+    daily. `generate-check` is therefore a **blocking** CI gate (`t1-static`),
+    and all 6 IDE-rule files were regenerated in sync.
 
 ### Added
 
