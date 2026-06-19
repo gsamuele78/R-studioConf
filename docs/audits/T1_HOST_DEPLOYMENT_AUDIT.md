@@ -14,8 +14,10 @@
 > [`../../config/SITE_OVERRIDE.md`](../../config/SITE_OVERRIDE.md),
 > [`../reference/CONFIGURATION_MAP.md`](../reference/CONFIGURATION_MAP.md) §0, and
 > `plan/secret_scrub_site_overlay_plan.md`. The root **README.md** rewrite
-> (§5 / Phase 0.1) is now **[FIXED]**. The CRITICAL correctness defects in
-> §1 and most of §3/§4 and the rest of §5 remain **OPEN**.
+> (§5 / Phase 0.1), the **false-green CI** rewrite (§5 / Phase 0.2 — now
+> [`ci.yml`](../../.github/workflows/ci.yml)) and the **script exec-bit** hygiene
+> (§3) are now **[FIXED]**. The CRITICAL correctness defects in §1 and most of
+> §3/§4 and the rest of §5 remain **OPEN**.
 
 ---
 
@@ -101,11 +103,11 @@ user→project map are the spear-phishing assets).
   `20_configure_rstudio.sh` — 665 privileged lines, `31_setup_web_portal.sh`,
   `99_verify_domain_join.sh`, `test_rstudio_login.sh`, `ttyd_login_wrapper.sh`).
   HC-03 violation on exactly the scripts doing `sed -i`/`chown` on `/etc`.
-- **[OPEN]** 6 required scripts are not executable (`git ls-files -s = 100644`):
+- **[FIXED]** 6 required scripts were not executable (`git ls-files -s = 100644`):
   `15_setup_nginx_cleanup.sh`, `40_install_telemetry.sh`, three `99_*`,
-  `pin_r_version.sh`. The launcher only lists `-executable` files, so `15_` and
-  `40_` are invisible in the menu. `init.sh` papers over it with a `chmod` loop,
-  but only if you enter through `init.sh`.
+  `pin_r_version.sh` — so `15_`/`40_` were invisible in the launcher menu.
+  *Now: all committed `100755`, and `tests/check_exec_bits.sh` (wired into the
+  `t1-static` CI job) pins the git mode so the regression cannot return.*
 - **[OPEN]** Duplicate `31_` prefix (`31_optimize_system.sh` and
   `31_setup_web_portal.sh`; the latter's header self-identifies as
   `09_web_portal_setup.sh`). Filesystem-arbitrary ordering in the launcher.
@@ -153,10 +155,27 @@ user→project map are the spear-phishing assets).
   [`docs/README.md`](../README.md) + [`INSTALLATION_GUIDE.md`](../deployment/INSTALLATION_GUIDE.md).
   *The prior `setup_r_env.sh` + `install/` + `/var/log/r_setup/` + `:8787` content
   is gone.*
-- **[OPEN]** `.github/workflows/test_setup_r_env.yml` tests that ghost layout with
-  `|| true` everywhere → permanent false green.
+- **[FIXED]** `.github/workflows/test_setup_r_env.yml` tested the ghost layout with
+  `|| true` everywhere → permanent false green. *Now: deleted and replaced by
+  [`ci.yml`](../../.github/workflows/ci.yml) — a 7-job pipeline (T1 constraint/syntax/
+  exec-bit gate, bats unit tests, Rprofile-template parse gate + r_lint oracle,
+  `nginx -t` render check, T2 `compose config` + hadolint + light-image build, a
+  nightly 01:00 monster-image build canary, and a package-manifest lint), no
+  `|| true`. Exposed and fixed a `set -u` crash in `.ai/generate.sh` (bash-5.2 empty
+  associative array) that had been silently aborting `make audit`.*
 - **[OPEN]** `.ai/agents.md §5` is stale — missing 10+ scripts, 3 wrong
   descriptions — and it feeds those wrong descriptions to every AI agent.
+- **[FIXED] `.ai/generate.sh` IDE-rule drift (surfaced by `ci.yml`).** Three
+  generator defects fixed: (1) the bash-5.2 `set -u` crash on empty associative
+  arrays (now empty-safe `sorted_keys`/`acount` helpers, no `set +u` band-aid);
+  (2) the image **classifier** — it misclassified the `${VAR:-img}:${IMAGE_TAG}`
+  local images as upstream. It now resolves compose `${VAR:-default}`/`${VAR}`
+  expansions and keys "locally-built" on the service's **`build:` key**
+  (authoritative, via `yq`; identical no-yq fallback for portability). The corrupt
+  `extracted_versions.env` (mangled `__OLLAMA_AI_IMAGE__…` keys) is regenerated
+  clean. (3) `--check` is now **date-insensitive** so it no longer self-drifts
+  daily. Result: `make audit` is green and `generate-check` is a **blocking** CI
+  gate (`t1-static`), not informational.
 - **[PARTIAL]** Reference docs lag: `SCRIPT_CATALOG`/`CONFIGURATION_MAP`/
   `DIAGNOSTICS_INDEX` miss `pin_r_version.*`, all of `scripts/tools/` (8 files), and
   3 diagnostics; `CONFIGURATION_MAP` still said `RPROFILE_VERSION 12.4` (actual
@@ -180,7 +199,9 @@ then features. Each phase is independently shippable.
 1. Rewrite root `README.md` as a thin accurate landing page → point to
    `docs/README.md` + `INSTALLATION_GUIDE.md`. **[FIXED]**
 2. Fix or delete `.github/workflows/test_setup_r_env.yml` (remove `|| true`
-   masking; test real entrypoints). **[OPEN]**
+   masking; test real entrypoints). **[FIXED]** — deleted; replaced by `ci.yml`
+   (7 jobs, T1 + T2, zero `|| true`). Also fixed the `.ai/generate.sh` `set -u`
+   crash it surfaced. Exec-bit hygiene (§3) fixed as part of this.
 3. Introduce a repo-root `CHANGELOG.md` (Keep-a-Changelog); add `[Unreleased]`. **[FIXED]**
 4. Re-sync `.ai/agents.md §5` and the corrupted
    `.agents/skills/host-install-audit/SKILL.md`. **[OPEN]**
