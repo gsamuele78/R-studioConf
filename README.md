@@ -1,164 +1,202 @@
-# Automated R, RStudio Server & Nginx Reverse Proxy Deployment Kit
+<!-- README.md -->
+# BIOME-CALC — RStudio Server + Nginx Portal + AD/OIDC Deployment Kit
 
-![Shell Logo](https://img.shields.io/badge/Shell-Bash-blue)
-![OS](https://img.shields.io/badge/OS-Ubuntu%2022.04%2F24.04-orange)
-![License](https://img.shields.io/badge/License-GPL3.0-green)
-![Compliance](https://img.shields.io/badge/ShellCheck-Compliant-brightgreen)
+![Shell](https://img.shields.io/badge/Shell-Bash-blue)
+![OS](https://img.shields.io/badge/OS-Ubuntu%2024.04%20LTS-orange)
+![Tier](https://img.shields.io/badge/T1-host%20authoritative-success)
+![Rprofile](https://img.shields.io/badge/Rprofile__site-v12.10-blueviolet)
+![License](https://img.shields.io/badge/License-GPL--3.0-green)
 
-This repository provides a robust, modular, and automated set of scripts for deploying a production-ready R environment, including R, RStudio Server, Nginx reverse proxy, SSSD+Kerberos authentication, and system optimizations for Ubuntu 22.04/24.04 LTS.
+**BIOME-CALC / R-studioConf** is the host-tier (T1) automation kit for a shared,
+multi-user **botanical big-data calculus platform**: RStudio Server (OSS) behind
+an Nginx TLS portal, OIDC via oauth2-proxy, Active Directory identity via
+**SSSD *or* Samba**, a `ttyd` web terminal, a telemetry API, and a hardened,
+cgroup-bounded R runtime tuned for large spatial (`terra`/`sf`) and Bayesian
+(`nimble`/`stan`) workloads.
 
-The solution is designed for reproducibility, security, and manageability — leveraging configuration-driven Bash modules, best practices for scientific computing, and safe, idempotent operations (re-runnable scripts).
-
----
-
-## Core Features
-
-* **Full R Environment Automation:** Installs R (with OpenBLAS & OpenMP), RStudio Server (auto-latest), and a curated set of CRAN/GitHub R packages.
-* **Binary Package Support:** Configures BSPM (Binary Package Manager) and R2U, enabling fast system-level R package installs.
-* **Nginx Reverse Proxy:** Automates Nginx setup as a secure reverse proxy for RStudio Server, supporting SSL and custom domains.
-* **Domain Authentication:** Integrates SSSD and Kerberos for enterprise-grade domain login (Active Directory/LDAP).
-* **VM & Performance Tuning:** Includes scripts for optimizing VM deployments (disk, RAM, CPU, overcommit, etc).
-* **Safe Logging & Backup:** All actions are logged, and critical files are backed up before modification.
-* **Menu & Modularization:** Offers an interactive menu and function-based invocation for each setup component.
+It is built on **pessimistic system engineering**: assume failure, bound every
+resource, fail fast, and keep the smallest blast radius. Documentation describes
+the system *as it actually is* — not as we wish it were.
 
 ---
 
-## Project Structure
+## ⚠️ Read this first
 
-The project is organized into a main orchestrator and modular installation scripts under `install/`.
-
-```
-.
-├── setup_r_env.sh                 # Main orchestrator script (full R, RStudio, Nginx, SSSD, etc)
-├── install/
-│   ├── common_utils.sh            # Shared Bash utilities and helpers
-│   ├── nginx_setup.sh             # Automated Nginx reverse proxy configuration
-│   ├── optimize_vm.sh             # VM disk, RAM, CPU tuning
-│   ├── rstudio_setup.sh           # Stand-alone RStudio Server install script
-│   ├── sssd_kerberos_setup.sh     # SSSD + Kerberos domain authentication setup
-│   ├── conf/                      # Directory for configuration templates or overrides
-│   └── templates/                 # Directory for script/template assets (SSL, Nginx, etc)
-├── LICENSE
-└── README.md                      # This documentation
-```
+- **This README is a landing page.** The authoritative, role-indexed
+  documentation lives in **[`docs/README.md`](docs/README.md)**.
+- **To deploy:** follow
+  **[`docs/deployment/INSTALLATION_GUIDE.md`](docs/deployment/INSTALLATION_GUIDE.md)**
+  (Ubuntu 24.04, 5 phases, idempotent).
+- **Known-defect register:** the deep audit at
+  [`docs/audits/T1_HOST_DEPLOYMENT_AUDIT.md`](docs/audits/T1_HOST_DEPLOYMENT_AUDIT.md)
+  tracks open correctness/hygiene items — read it before trusting any single
+  script blindly (e.g. `restore_config()` and Uninstall are currently known-broken).
 
 ---
 
-## Part 1: Full R, RStudio & Nginx Environment Deployment
+## Tier model
 
-### Prerequisites
+| Tier | Location | Status |
+|------|----------|--------|
+| **T1** | host (this repo: `scripts/`, `config/`, `templates/`, `lib/`) | **AUTHORITATIVE — continuously fixed** |
+| **T2** | [`docker-deploy/`](docker-deploy/) | mirror of T1 — migration in progress |
+| **T3** | [`kubernetes-deploy/`](kubernetes-deploy/) | skeleton — not production-ready |
 
-1. **Ubuntu 22.04 or 24.04 LTS** (VM or physical, root/sudo access required).
-2. Network connectivity (for CRAN, GitHub, Posit, and system updates).
-3. (Recommended) Dedicated VM, especially for production or classroom/multi-user setups.
+**Rule:** every bug is fixed in **T1 first**, then ported forward T1 → T2 → T3.
+A T2/T3 workaround must never mask a T1 defect. Full ethos: `.ai/agents.md`,
+`.ai/project.yml`.
 
-### Step-by-Step Instructions
+---
 
-#### 1. Clone the Repository
+## Quickstart (T1 host)
 
 ```bash
 git clone https://github.com/gsamuele78/R-studioConf.git
 cd R-studioConf
+bash init.sh        # chmods scripts/*, sudo-execs the orchestrator
 ```
 
-#### 2. Run the Main Setup Script
+`init.sh` launches **`r_env_manager.sh`** — an idempotent, lock-guarded
+orchestrator that validates minimum memory/disk, then drives the numbered phase
+scripts from an interactive menu.
 
-By default, the main script provides an interactive menu. For full automation, use the `install_all` action.
+| | |
+|---|---|
+| **Entry point** | `init.sh` → `r_env_manager.sh` |
+| **Logs** | `/var/log/biome-log/core/r_env_manager.sh.log` |
+| **State (idempotency)** | `/var/lib/r_env_manager/r_env_state` |
+| **Config backups** | `/var/backups/r_env_manager/files/` |
 
-```bash
-sudo bash setup_r_env.sh install_all
-# Or for guided setup:
-sudo bash setup_r_env.sh
-```
-
-#### 3. Script Actions & Configuration
-
-* **Interactive Menu:** Will guide you through pre-flight checks, CRAN repo, R, OpenBLAS/OpenMP, BSPM, R packages, RStudio Server, and Nginx/SSSD setup.
-* **Logging:** Logs are saved to `/var/log/r_setup/`.
-* **Backups:** Critical config files are backed up to `/opt/r_setup_backups/`.
-* **Environment Variables:** Advanced users can override key paths and settings via environment variables. See the script's `usage()` for details.
-
-#### 4. Verify Installation
-
-* RStudio Server should be available at: `http://<YOUR_SERVER_IP>:8787`
-* Nginx (if enabled) will proxy to RStudio and potentially serve SSL if configured.
-* Domain logins (via SSSD) should work for authorized users.
+> **Site-local secrets (since 2026-06-19).** Files carrying AD topology / PII
+> are **not committed** — they ship as `*.example` and are sourced from a
+> gitignored `config/site/` overlay with a fail-fast `__FILL_ME__` gate. Create
+> the overlay once before deploying — see
+> [`config/SITE_OVERRIDE.md`](config/SITE_OVERRIDE.md) and the
+> [Installation Guide §4](docs/deployment/INSTALLATION_GUIDE.md).
 
 ---
 
-## Part 2: Component Scripts & Advanced Usage
+## Repository layout (what the operator touches)
 
-### install/common_utils.sh
-
-* Shared library of Bash utility functions, logging, error handling, etc.
-* Used by all major scripts for safety and DRY principles.
-
-### install/nginx_setup.sh
-
-* Automates installation and configuration of Nginx as a reverse proxy to RStudio Server.
-* Supports SSL, custom domains, HTTP → HTTPS redirection, and basic hardening.
-* Templates for Nginx config and SSL deployment are in `install/templates/`.
-
-### install/rstudio_setup.sh
-
-* Stand-alone installer for RStudio Server (auto-detects latest version for Ubuntu).
-* Handles removal of old versions, service enablement, and logs all actions.
-
-### install/sssd_kerberos_setup.sh
-
-* Automates SSSD and Kerberos configuration for Active Directory or LDAP domain login.
-* Manages `/etc/sssd/sssd.conf`, Kerberos keytabs, and PAM/NSS integration.
-* Backs up previous configs, verifies domain join, and can be re-run safely.
-
-### install/optimize_vm.sh
-
-* Applies best practices for VM performance (swappiness, noatime, overcommit, etc).
-* Optionally prepares disks, tunes memory, and documents VM hardware.
-
-### install/conf/ and install/templates/
-
-* Place your custom config templates (SSL certs, Nginx sites, SSSD, etc) here for overrides.
-* The scripts will use these if present, supporting site-specific customization.
-
----
-
-## Post-Deployment Management
-
-### Updating or Expanding
-
-* **Re-run scripts:** All scripts are idempotent; re-running updates or repairs components without breaking existing configs.
-* **Edit templates/configs:** Adjust files under `install/conf/` or `install/templates/` and re-run setup scripts for changes.
-* **Add more R packages:** Edit the package lists in `setup_r_env.sh` and re-run the package install step.
-
-### Uninstallation
-
-The main script supports full uninstall:
-
-```bash
-sudo bash setup_r_env.sh uninstall_all
+```
+R-studioConf/
+├── init.sh                 # bootstrap entry point
+├── r_env_manager.sh        # idempotent orchestrator (v2.0.0)
+├── Makefile                # `make audit` constraint gate, `make doc-coherence`
+├── lib/common_utils.sh     # shared bash utilities (logging, backup, templating)
+├── scripts/                # numbered phase scripts (01..50) + 99_* diagnostics + tools/
+├── config/                 # *.vars.conf + r_env_manager.conf (+ *.example site overlay)
+├── templates/              # rendered configs: Rprofile_site.d/, nginx_*, sssd/smb/krb5, portal HTML
+├── docker-deploy/          # T2 — Docker Compose mirror (migration in progress)
+├── kubernetes-deploy/      # T3 — manifests skeleton (not production-ready)
+└── docs/                   # authoritative documentation library (start at docs/README.md)
 ```
 
-* Removes R, RStudio Server, Nginx, SSSD configs, CRAN/R2U repos, and user data (with confirmation).
-* Backs up configs before removal and logs all actions.
+Full inventories: [`docs/reference/SCRIPT_CATALOG.md`](docs/reference/SCRIPT_CATALOG.md),
+[`docs/reference/CONFIGURATION_MAP.md`](docs/reference/CONFIGURATION_MAP.md),
+[`docs/reference/TEMPLATE_GALLERY.md`](docs/reference/TEMPLATE_GALLERY.md).
+
+### Deployment phases (run via the menu)
+
+| Phase | Scripts | Purpose |
+|------|---------|---------|
+| 0 — System & time | `01_optimize_system.sh`, `02_configure_time_sync.sh` | VM tuning, ≤5 min Kerberos skew |
+| 1 — Identity | `12_lib_kerberos_setup.sh`, `10_join_domain_sssd.sh` **or** `11_join_domain_samba.sh`, `13_harden_pam_password.sh` | AD join (pick one backend), PAM segfault fix |
+| 2 — RStudio | `20_configure_rstudio.sh`, `21_helper_rstudio_version.sh` | RStudio Server + version pin |
+| 3 — Web tier | `31_optimize_system.sh`, `30_install_nginx.sh`, `03_install_secure_access.sh`, `31_setup_web_portal.sh`, `32_setup_letsencrypt.sh` | Nginx, ttyd, portal, TLS |
+| 4 — Telemetry & R runtime | `40_install_telemetry.sh`, `50_setup_nodes.sh` | Telemetry API + R runtime / Rprofile chain / `/Rtmp` |
+| 5 — Verify | `99_health_check.sh`, `99_audit_r_environment.sh`, `test_rstudio_login.sh` | Smoke + audit |
 
 ---
 
-## Architectural Decisions
+## Engineering leverage — why this exists (infrastructure + R runtime)
 
-* **Modularity:** Each system (R, RStudio, Nginx, SSSD) is handled by a dedicated script, all sharing utilities and logging.
-* **Binary Package Management:** Uses BSPM/R2U to allow fast, system-level R package installation.
-* **Domain Security:** SSSD and Kerberos allow enterprise-grade authentication for multi-user RStudio deployments.
-* **Reverse Proxy:** Nginx adds security, SSL, and production-readiness to RStudio Server.
-* **Safe Defaults:** The scripts use `set -euo pipefail`, backup all files before editing, and provide logs for all actions.
+The platform's value is not "installs R" — it is a set of deliberate
+infrastructure and R-runtime decisions that make *portable, unmodified* user
+code fast and crash-resistant on a contended multi-user host. The system adapts;
+the researcher's `.R` is never edited (**HC-13**).
+
+### Infrastructure choices
+
+| Decision | Research / ops advantage | Reference |
+|---|---|---|
+| **cgroup user slices** (systemd) | Per-user CPU/RAM bounds enforced by the kernel — one runaway job cannot starve the host; OOM is contained, not catastrophic. | [`USER_QUOTAS_AND_RESOURCES.md`](docs/operations/USER_QUOTAS_AND_RESOURCES.md), [`architecture_analysis.md`](docs/architecture/architecture_analysis.md) |
+| **`/Rtmp` 400 GB local ext4 scratch** (not `/tmp`, not NFS) | Spatial/MCMC temp I/O stays on fast local disk; `/tmp` overflow and NFS scratch latency disappear. | [`SYSTEM_OVERVIEW.md §7`](docs/architecture/SYSTEM_OVERVIEW.md), [`large_spatial_matrices.md`](docs/user_guides/large_spatial_matrices.md) |
+| **Per-user local R-libs** `/var/lib/biome-Rlibs/<user>/<R-ver>/` (v12.4) | Kills the NFS lookup-storm when many PSOCK workers `library()` at once — measurable session-startup and parallel-launch speedup. | [`UPGRADE_TO_v12.4.md`](docs/operations/UPGRADE_TO_v12.4.md) |
+| **OpenBLAS *serial*** (never `pthread`) | `pthread` BLAS forks unsafely under RStudio sessions → SIGSEGV; serial BLAS + explicit thread caps is correct *and* predictable. | [`INSTALLATION_GUIDE.md §6`](docs/deployment/INSTALLATION_GUIDE.md) |
+| **Nginx TLS gateway + oauth2-proxy (OIDC)** | Auth delegated to an audited proxy; no credentials in JS; long-lived RStudio sessions get tuned proxy buffers/timeouts. | [`NGINX_GATEWAY.md`](docs/components/NGINX_GATEWAY.md), [`SECURITY_MODEL.md`](docs/architecture/SECURITY_MODEL.md) |
+| **SSSD *XOR* Samba** AD backend per host | One identity path per node — no half-converted NSS/PAM stacks. | [`NGINX_AUTH_BACKENDS.md`](docs/reference/NGINX_AUTH_BACKENDS.md) |
+| **Bind mounts only, pinned upstreams** (T2) | No Docker-managed volume lifecycle surprises; reproducible images. | [`COMPOSE_OPERATOR_RUNBOOK.md`](docs/deployment/COMPOSE_OPERATOR_RUNBOOK.md) |
+
+### Modular Rprofile_site.d/ — the R-runtime "kernel" (v12.10)
+
+`50_setup_nodes.sh` deploys a thin dispatcher (`/etc/R/Rprofile.site`) that
+sources independent, versioned, `tryCatch`-isolated fragments in lexical order.
+Each fragment is a safety/optimization guard that can be disabled per-session
+(`BIOME_DISABLE_FRAGMENTS=45`) without touching user code — making it both an
+operational kill-switch and a clean A/B surface for performance triage.
+
+| Fragment | Optimization / research advantage |
+|---|---|
+| `05_thread_guard.R` | Cgroup-aware `detectCores()`; prevents BLAS thread-pool exhaustion from `mclapply`. |
+| `20_cgroup_reader.R` | Reads real cgroup v1/v2 quota → R sees its *effective* core/RAM budget, not the host's. |
+| `30_psock_factory.R` | `biome_make_cluster()` — NFS-safe, `MALLOC_ARENA_MAX`-aware PSOCK clusters. |
+| `35_compile_routing.R` | Routes NIMBLE/TMB compile scratch to `/Rtmp` (`safe_compileNimble`). |
+| `45_memory_guards.R` | Pre-flight RAM guards on `solve`/`dist`/`outer`/`expand.grid` — fail *before* OOM, not after. |
+| `50_pkg_hooks.R` | Deferred per-package tuning (terra `todisk=TRUE`, cgroup-aware `terraOptions`, sf/stan/arrow/future…). |
+| `52_mclapply_guard.R` | **Fork Guard** — auto-reroutes `mclapply` → PSOCK when fork-unsafe packages (terra/sf/GDAL) are loaded; PKG-SYNC + GLOBAL-SYNC replicate state to workers. |
+| `55_options_guard.R` | Clamps `options(mc.cores)` to the slice's vcores — prevents oversubscription. |
+| `60_safe_setwd.R` | Hard-fails `setwd()` on a missing path (the "Martina-gate" class of silent bug). |
+| `04_user_lib_bootstrap.R` | Auto-creates + prepends the per-user local R-lib (the NFS-storm fix, runtime side). |
+
+Authoring contract, load order, disable mechanisms and rollback:
+[`templates/Rprofile_site.d/README.md`](templates/Rprofile_site.d/README.md).
+Version history (HC-14, changelog-coupled):
+[`docs/reference/Rprofile_site.CHANGELOG.md`](docs/reference/Rprofile_site.CHANGELOG.md).
+Safe parallel patterns for users:
+[`docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md`](docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md).
+
+### HC-13 diagnostic harness — adapt the system, not the script
+
+When a user job fails, `scripts/99_diagnose_user_script.sh` bisects the failure
+across **L0** (minimal forensic profile, `r_minimal`) → **L2** (all fragments
+off) → **L3** (full profile). A verdict of *"L3 FAILED, L2 PASSED"* pinpoints the
+guilty fragment, which is patched and redeployed — the researcher re-runs their
+**unchanged** `.R`. Worked example: [`LUSSU_HANG_BISECTION.md`](docs/operations/LUSSU_HANG_BISECTION.md).
+
+---
+
+## Documentation map
+
+Start at **[`docs/README.md`](docs/README.md)** — it is role-indexed. Highlights:
+
+| Audience | Entry point |
+|---|---|
+| Sysadmin (deploy/upgrade) | [`deployment/INSTALLATION_GUIDE.md`](docs/deployment/INSTALLATION_GUIDE.md) |
+| Operator (day-2) | [`operations/OPERATOR_QUICKSTART.md`](docs/operations/OPERATOR_QUICKSTART.md), [`operations/TROUBLESHOOTING.md`](docs/operations/TROUBLESHOOTING.md) |
+| On-call / incident | [`operations/DIAGNOSTICS_INDEX.md`](docs/operations/DIAGNOSTICS_INDEX.md) |
+| Architect | [`architecture/SYSTEM_OVERVIEW.md`](docs/architecture/SYSTEM_OVERVIEW.md), [`architecture/architecture_analysis.md`](docs/architecture/architecture_analysis.md) |
+| Developer | [`developer/README.md`](docs/developer/README.md), [`reference/SCRIPT_CATALOG.md`](docs/reference/SCRIPT_CATALOG.md) |
+| End-user / botanist | [`user_guides/BOTANIST_CHEATSHEET.md`](docs/user_guides/BOTANIST_CHEATSHEET.md) |
+
+Repo-wide change history: [`CHANGELOG.md`](CHANGELOG.md). Roadmap (OIDC,
+Kubernetes, Open OnDemand, Positron): [`docs/FUTURE_MIGRATION.md`](docs/FUTURE_MIGRATION.md).
+
+---
+
+## Hard rules (excerpt)
+
+Full list in `.clinerules` / `.cursorrules` / `.windsurfrules` and `.ai/project.yml`.
+The most consequential:
+
+- **HC-13** — Adapt the system to portable user R code; **never silently patch user scripts.**
+- **HC-03** — Fix in T1 first, then port forward; no T2/T3 workaround masks a T1 defect.
+- **HC-08** — `.env` / secret files are never committed; templates use placeholders only.
+- **HC-14** — `RPROFILE_VERSION` bumps land with a matching CHANGELOG section + cross-doc refs in the same commit.
+- R runtime invariants — BLAS = `libopenblas0-serial`; R temp = `/Rtmp` (never `/tmp`).
 
 ---
 
 ## License
 
-This project is licensed under the GPL-3.0 License. See the [`LICENSE`](https://github.com/gsamuele78/R-studioConf/blob/main/LICENSE) file for details.
-
----
-
-## Acknowledgements
-
-* Uses open source best practices from the R and Linux system administration communities.
+GPL-3.0 — see [`LICENSE`](LICENSE).
