@@ -50,7 +50,7 @@ BASELINE="${BASELINE_DIR}/pkg_baseline.rds"
 REPORT_DIR="${BIOME_STATE_DIR:-/var/lib/biome-calc}/drift_reports"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 JSON_OUT="${REPORT_DIR}/drift_${TIMESTAMP}.json"
-ADMIN_RECIPIENTS="${WORKSPACE_ROOT}/config/admin_recipients.txt"
+ADMIN_RECIPIENTS="$(resolve_site_config "admin_recipients.txt" "${WORKSPACE_ROOT}/config")"
 
 UPDATE_BASELINE=false
 SEND_EMAIL=false

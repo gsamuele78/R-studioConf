@@ -565,10 +565,12 @@ threading.Thread(
 
 def _load_admin_recipients() -> list[str]:
     recipients = []
-    paths = [
-        "/etc/biome-calc/conf/admin_recipients.txt",
-        "/home/administrator/configServices/R-studioConf/config/admin_recipients.txt"
-    ]
+    # Mirrors T1 (scripts/telemetry/telemetry_api.py): deployed path is
+    # authoritative; an extra path may be supplied via BIOME_ADMIN_RECIPIENTS_PATH.
+    paths = ["/etc/biome-calc/conf/admin_recipients.txt"]
+    extra = os.environ.get("BIOME_ADMIN_RECIPIENTS_PATH")
+    if extra:
+        paths.append(extra)
     for p in paths:
         if os.path.exists(p):
             try:
@@ -583,7 +585,9 @@ def _load_admin_recipients() -> list[str]:
                 print(f"Error loading {p}: {e}")
     
     if not recipients:
-        recipients.append("Lifewatch_Biome_internal@live.unibo.it")
+        fallback = os.environ.get("BIOME_ADMIN_FALLBACK_EMAIL")
+        if fallback:
+            recipients.append(fallback)
     return recipients
 
 @app.post("/api/v1/report-problem", tags=["Support"], summary="Send a problem report via email")

@@ -6,7 +6,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-CONF_VARS_FILE="${SCRIPT_DIR}/../config/join_domain_samba.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 SMB_CONF_PATH_DEFAULT="/etc/samba/smb.conf"
 
@@ -28,40 +27,42 @@ else
     exit 1
 fi
 
-# === SET EMBEDDED DEFAULTS FIRST ===
-# These defaults are always set; config file can override them
-AD_DOMAIN_LOWER="${AD_DOMAIN_LOWER:-personale.dir.unibo.it}"
-AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER:-PERSONALE.DIR.UNIBO.IT}"
-COMPUTER_OU_BASE="${COMPUTER_OU_BASE:-OU=Servizi_Informatici,OU=Dip-BIGEA,OU=Dsa.Auto}"
-COMPUTER_OU_CUSTOM_PART="${COMPUTER_OU_CUSTOM_PART:-OU=ServerFarm_Navile}"
-OS_NAME="${OS_NAME:-Linux}"
+# === SOURCE CONFIG FILE (site-local overlay) ===
+# Real values live in config/site/ (gitignored); the repo ships a sanitized
+# .example template. lib_kerberos_setup.vars.conf was already sourced (and its
+# realm asserted) via 12_lib_kerberos_setup.sh above, so DEFAULT_* topology
+# values are populated here without any host-specific data baked into this script.
+CONF_VARS_FILE="$(resolve_site_config "join_domain_samba.vars.conf" "${SCRIPT_DIR}/../config")"
+log "Sourcing Samba Kerberos configuration variables from $CONF_VARS_FILE"
+# shellcheck source=../config/join_domain_samba.vars.conf.example disable=SC1091
+source "$CONF_VARS_FILE"
+assert_site_configured "AD realm (DEFAULT_AD_DOMAIN_UPPER)" "${DEFAULT_AD_DOMAIN_UPPER:-}"
+
+# === MAP OVERLAY DEFAULTS → RUNTIME VARS ===
+# No host-specific fallbacks here: topology comes from the asserted overlay.
+# Generic, non-sensitive example fallbacks only, for code that runs pre-config.
+AD_DOMAIN_LOWER="${AD_DOMAIN_LOWER:-${DEFAULT_AD_DOMAIN_LOWER:-ad.example.com}}"
+AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER:-${DEFAULT_AD_DOMAIN_UPPER:-AD.EXAMPLE.COM}}"
+COMPUTER_OU_BASE="${COMPUTER_OU_BASE:-${DEFAULT_COMPUTER_OU_BASE:-OU=LinuxSystems,DC=ad,DC=example,DC=com}}"
+COMPUTER_OU_CUSTOM_PART="${COMPUTER_OU_CUSTOM_PART:-${DEFAULT_COMPUTER_OU_CUSTOM_PART:-OU=Servers}}"
+OS_NAME="${OS_NAME:-${DEFAULT_OS_NAME:-Linux}}"
 SMB_CONF_PATH="${SMB_CONF_PATH:-$SMB_CONF_PATH_DEFAULT}"
-IDMAP_PERSONALE_RANGE_LOW="${IDMAP_PERSONALE_RANGE_LOW:-163600000}"
-IDMAP_PERSONALE_RANGE_HIGH="${IDMAP_PERSONALE_RANGE_HIGH:-263600000}"
-IDMAP_STAR_RANGE_LOW="${IDMAP_STAR_RANGE_LOW:-10000}"
-IDMAP_STAR_RANGE_HIGH="${IDMAP_STAR_RANGE_HIGH:-999999}"
-TEMPLATE_HOMEDIR="${TEMPLATE_HOMEDIR:-/nfs/home/%U}"
-REALM="${REALM:-PERSONALE.DIR.UNIBO.IT}"
-WORKGROUP="${WORKGROUP:-PERSONALE}"
-SIMPLE_ALLOW_GROUPS="${SIMPLE_ALLOW_GROUPS:-}"
+IDMAP_PERSONALE_RANGE_LOW="${IDMAP_PERSONALE_RANGE_LOW:-${DEFAULT_IDMAP_PERSONALE_RANGE_LOW:-163600000}}"
+IDMAP_PERSONALE_RANGE_HIGH="${IDMAP_PERSONALE_RANGE_HIGH:-${DEFAULT_IDMAP_PERSONALE_RANGE_HIGH:-263600000}}"
+IDMAP_STAR_RANGE_LOW="${IDMAP_STAR_RANGE_LOW:-${DEFAULT_IDMAP_STAR_RANGE_LOW:-10000}}"
+IDMAP_STAR_RANGE_HIGH="${IDMAP_STAR_RANGE_HIGH:-${DEFAULT_IDMAP_STAR_RANGE_HIGH:-999999}}"
+TEMPLATE_HOMEDIR="${TEMPLATE_HOMEDIR:-${DEFAULT_TEMPLATE_HOMEDIR:-${DEFAULT_HOME_TEMPLATE:-/nfs/home/%U}}}"
+REALM="${REALM:-${DEFAULT_REALM:-${DEFAULT_AD_DOMAIN_UPPER}}}"
+WORKGROUP="${WORKGROUP:-${DEFAULT_WORKGROUP:-${DEFAULT_AD_DOMAIN_UPPER%%.*}}}"
+SIMPLE_ALLOW_GROUPS="${SIMPLE_ALLOW_GROUPS:-${DEFAULT_SIMPLE_ALLOW_GROUPS:-}}"
 DEFAULT_OS_NAME="${DEFAULT_OS_NAME:-Linux}"
 DEFAULT_MEMBERSHIP_SOFTWARE="${DEFAULT_MEMBERSHIP_SOFTWARE:-samba}"
 DEFAULT_CLIENT_SOFTWARE="${DEFAULT_CLIENT_SOFTWARE:-winbind}"
-DEFAULT_AD_ADMIN_USER_EXAMPLE="${DEFAULT_AD_ADMIN_USER_EXAMPLE:-gianfranco.samuele2@PERSONALE.DIR.UNIBO.IT}"
 DEFAULT_SAMBA_LOG_LEVEL="${DEFAULT_SAMBA_LOG_LEVEL:-1}"
 DEFAULT_SAMBA_MAX_LOG_SIZE="${DEFAULT_SAMBA_MAX_LOG_SIZE:-50}"
 DEFAULT_SAMBA_SMB_CONF_PATH="${DEFAULT_SAMBA_SMB_CONF_PATH:-/etc/samba/smb.conf}"
 # If true, prefer Samba/winbind for membership (pre-install samba & winbind)
 USE_WINBIND="${USE_WINBIND:-false}"
-
-# === SOURCE CONFIG FILE (overlays defaults) ===
-if [[ -f "$CONF_VARS_FILE" ]]; then
-    log "Sourcing Samba Kerberos configuration variables from $CONF_VARS_FILE"
-    # shellcheck source=../config/join_domain_samba.vars.conf disable=SC1091
-    source "$CONF_VARS_FILE"
-else
-    log "Warning: Samba Kerberos vars file not found; using embedded defaults."
-fi
 
 # Map DEFAULT_ config variables (from config file) into runtime IDMAP_ variables
 # This allows config files to set DEFAULT_IDMAP_* while the script uses IDMAP_* names
@@ -80,13 +81,13 @@ fi
 
 
 # === VERIFY ALL CRITICAL VARIABLES ARE SET ===
-# If config file didn't set them or they're empty, use defaults (second pass)
-COMPUTER_OU_BASE="${COMPUTER_OU_BASE:-OU=Servizi_Informatici,OU=Dip-BIGEA,OU=Dsa.Auto}"
-COMPUTER_OU_CUSTOM_PART="${COMPUTER_OU_CUSTOM_PART:-OU=ServerFarm_Navile}"
-AD_DOMAIN_LOWER="${AD_DOMAIN_LOWER:-personale.dir.unibo.it}"
-AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER:-PERSONALE.DIR.UNIBO.IT}"
-REALM="${REALM:-PERSONALE.DIR.UNIBO.IT}"
-WORKGROUP="${WORKGROUP:-PERSONALE}"
+# Second pass: fall back to the asserted overlay DEFAULT_* values (no host data baked here).
+COMPUTER_OU_BASE="${COMPUTER_OU_BASE:-${DEFAULT_COMPUTER_OU_BASE:-OU=LinuxSystems,DC=ad,DC=example,DC=com}}"
+COMPUTER_OU_CUSTOM_PART="${COMPUTER_OU_CUSTOM_PART:-${DEFAULT_COMPUTER_OU_CUSTOM_PART:-OU=Servers}}"
+AD_DOMAIN_LOWER="${AD_DOMAIN_LOWER:-${DEFAULT_AD_DOMAIN_LOWER:-ad.example.com}}"
+AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER:-${DEFAULT_AD_DOMAIN_UPPER:-AD.EXAMPLE.COM}}"
+REALM="${REALM:-${DEFAULT_REALM:-${DEFAULT_AD_DOMAIN_UPPER:-AD.EXAMPLE.COM}}}"
+WORKGROUP="${WORKGROUP:-${DEFAULT_WORKGROUP:-${DEFAULT_AD_DOMAIN_UPPER%%.*}}}"
 
 log "DEBUG" "Loaded configuration: AD_DOMAIN_LOWER=$AD_DOMAIN_LOWER, COMPUTER_OU_BASE=$COMPUTER_OU_BASE, COMPUTER_OU_CUSTOM_PART=$COMPUTER_OU_CUSTOM_PART"
 
@@ -531,7 +532,7 @@ perform_realm_join() {
         # Show net ads join command for manual debugging
         log "INFO" "For manual debugging with verbose output, try:"
         log "INFO" "  kinit ${admin_user}"
-        log "INFO" "  net ads join -U ${admin_user} -c /var/cache/realmd/realmd-smb-conf.XXXXX createcomputer=Dsa.Auto/Dip-BIGEA/Servizi_Informatici/ServerFarm_Navile osName=Linux -d3"
+        log "INFO" "  net ads join -U ${admin_user} -c /var/cache/realmd/realmd-smb-conf.XXXXX createcomputer=<OU-path-from-COMPUTER_OU_BASE> osName=${OS_NAME} -d3"
         
         # Check if net command exists and try to run it directly with debug output
         if command -v net &>/dev/null; then

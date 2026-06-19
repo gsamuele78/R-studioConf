@@ -2,7 +2,14 @@
 # test_rstudio_login.sh
 # Tests RStudio plaintext login using curl with multiple variations
 
-USERNAME="gianfranco.samuele2"
+# Username from arg 1 or RSTUDIO_TEST_USER env; prompt if neither given.
+# (No AD username is hardcoded — this is a public repo.) Mirrors T1.
+USERNAME="${1:-${RSTUDIO_TEST_USER:-}}"
+if [[ -z "$USERNAME" ]]; then
+    read -r -p "AD username to test: " USERNAME
+fi
+# External Nginx base URL (override per host); no real IP baked in.
+NGINX_BASE="${NGINX_EXTERNAL_BASE:-http://nginx.example.org}"
 # Ask for password safely
 read -s -p "Enter Password for $USERNAME: " PASSWORD
 echo ""
@@ -154,12 +161,12 @@ sleep 5
 echo ""
 echo "=========================================="
 echo "TEST 8: Referer with EXTERNAL IP (Simulating Nginx current spoof)"
-echo "Referer: http://137.204.119.225/rstudio-inner/auth-sign-in"
+echo "Referer: ${NGINX_BASE}/rstudio-inner/auth-sign-in"
 echo "=========================================="
 response=$(curl -s -i -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -H "Origin: $URL_BASE" \
-    -H "Referer: http://137.204.119.225/rstudio-inner/auth-sign-in" \
+    -H "Referer: ${NGINX_BASE}/rstudio-inner/auth-sign-in" \
     -d "username=$USERNAME" \
     -d "password=$PASSWORD" \
     -d "persist=1" \
@@ -191,9 +198,9 @@ echo "$response" | grep -E "HTTP/|Location"
 sleep 5
 echo ""
 echo "=========================================="
-echo "TEST 10: Login THROUGH NGINX (http://137.204.119.225/rstudio-inner/)"
+echo "TEST 10: Login THROUGH NGINX (${NGINX_BASE}/rstudio-inner/)"
 echo "=========================================="
-NGINX_BASE="http://137.204.119.225"
+# NGINX_BASE already set above from $NGINX_EXTERNAL_BASE
 COOKIE_JAR_NGINX="/tmp/rstudio_cookies_nginx.txt"
 rm -f "$COOKIE_JAR_NGINX"
 

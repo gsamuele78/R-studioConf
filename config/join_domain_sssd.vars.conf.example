@@ -1,0 +1,36 @@
+#!/bin/bash
+# config/join_domain_sssd.vars.conf.example
+# SANITIZED TEMPLATE — no real site values (see config/SITE_OVERRIDE.md).
+# Real copy: config/site/join_domain_sssd.vars.conf (gitignored).
+#
+# Common domain/OU/NTP settings come from lib_kerberos_setup.vars.conf, sourced below.
+
+# Determine config directory for sourcing (works from config/ or config/site/).
+_CONF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+
+# Source the common Kerberos vars: prefer a real file sitting next to this one
+# (config/site/), then config/, then the sanitized .example fallback.
+if [[ -f "${_CONF_DIR}/lib_kerberos_setup.vars.conf" ]]; then
+    # shellcheck source=lib_kerberos_setup.vars.conf.example disable=SC1091
+    source "${_CONF_DIR}/lib_kerberos_setup.vars.conf"
+elif [[ -f "${_CONF_DIR}/../lib_kerberos_setup.vars.conf" ]]; then
+    source "${_CONF_DIR}/../lib_kerberos_setup.vars.conf"
+elif [[ -f "${_CONF_DIR}/lib_kerberos_setup.vars.conf.example" ]]; then
+    source "${_CONF_DIR}/lib_kerberos_setup.vars.conf.example"
+fi
+
+# =============================================================================
+# SSSD-SPECIFIC SETTINGS
+# =============================================================================
+
+# Home directory template (SSSD format: %u shortname, %d lowercase domain).
+DEFAULT_FALLBACK_HOMEDIR_TEMPLATE="${DEFAULT_HOME_TEMPLATE:-/nfs/home/%U}"
+
+# Login style. "false": shortname (e.g. 'jdoe'). "true": full UPN.
+DEFAULT_USE_FQNS="false"
+
+# GPO mapping for services (e.g. "+rstudio, +nginx"). Empty to disable.
+DEFAULT_AD_GPO_MAP_SERVICE="+rstudio, +nginx"
+
+# Uncomment to override the common DEFAULT_OS_NAME for SSSD.
+# DEFAULT_OS_NAME="Linux Server"

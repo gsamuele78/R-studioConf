@@ -45,6 +45,18 @@ fi
 # shellcheck source=../config/setup_nodes.vars.conf disable=SC1091
 source "${VARS_CONF}"
 
+# Site-local override (HC-12): real SMTP host / mail domains / DNS / contact live
+# in config/site/setup_nodes.site.vars.conf (gitignored). The committed
+# setup_nodes.vars.conf carries only sanitized example values for these keys.
+SITE_VARS_CONF="${WORKSPACE_ROOT}/config/site/setup_nodes.site.vars.conf"
+if [[ -f "${SITE_VARS_CONF}" ]]; then
+  log "INFO" "Applying site-local override: ${SITE_VARS_CONF}"
+  # shellcheck source=/dev/null
+  source "${SITE_VARS_CONF}"
+else
+  log "WARN" "No site-local override at ${SITE_VARS_CONF}; using sanitized example mail/SMTP defaults from setup_nodes.vars.conf."
+fi
+
 # ── Template paths ──
 RPROFILE_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site.R.template"
 AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v28.R.template"
@@ -1645,17 +1657,21 @@ test_ollama    <- $([ "${SKIP_OLLAMA}" = true ] && echo "FALSE" || echo "TRUE")
 ACONF
   run_cmd chmod 644 "${BIOME_CONF}/audit.conf"
 
-  # Deploy admin recipients
+  # Deploy admin recipients (site-local overlay; placeholder .example on fresh clone)
   mkdir -p "${BIOME_CONF}/core"
-  if [[ -f "${WORKSPACE_ROOT}/config/admin_recipients.txt" ]]; then
-    run_cmd cp "${WORKSPACE_ROOT}/config/admin_recipients.txt" "${BIOME_CONF}/core/admin_recipients.txt"
+  local _admin_recipients_src
+  _admin_recipients_src="$(resolve_site_config "admin_recipients.txt" "${WORKSPACE_ROOT}/config")"
+  if [[ -f "${_admin_recipients_src}" ]]; then
+    run_cmd cp "${_admin_recipients_src}" "${BIOME_CONF}/core/admin_recipients.txt"
     run_cmd chmod 644 "${BIOME_CONF}/core/admin_recipients.txt"
   fi
 
-  # Deploy archiver known projects config
+  # Deploy archiver known projects config (site-local overlay)
   mkdir -p "${BIOME_CONF}/archiver"
-  if [[ -f "${WORKSPACE_ROOT}/config/scopri_progetti_known.conf" ]]; then
-    run_cmd cp "${WORKSPACE_ROOT}/config/scopri_progetti_known.conf" "${BIOME_CONF}/archiver/scopri_progetti_known.conf"
+  local _scopri_src
+  _scopri_src="$(resolve_site_config "scopri_progetti_known.conf" "${WORKSPACE_ROOT}/config")"
+  if [[ -f "${_scopri_src}" ]]; then
+    run_cmd cp "${_scopri_src}" "${BIOME_CONF}/archiver/scopri_progetti_known.conf"
     run_cmd chmod 644 "${BIOME_CONF}/archiver/scopri_progetti_known.conf"
   fi
 
@@ -2118,8 +2134,11 @@ setup_nodes_orphan_cleanup() {
   # 2. Deploy configs
   log_info "Deploying email maps, admin recipients and main configuration..."
   run_cmd mkdir -p "${BIOME_CONF}/conf"
-  run_cmd cp -f "${WORKSPACE_ROOT}/config/admin_recipients.txt" "${BIOME_CONF}/conf/admin_recipients.txt"
-  run_cmd cp -f "${WORKSPACE_ROOT}/config/user_email_map.txt" "${BIOME_CONF}/conf/user_email_map.txt"
+  local _ar_src _uem_src
+  _ar_src="$(resolve_site_config "admin_recipients.txt" "${WORKSPACE_ROOT}/config")"
+  _uem_src="$(resolve_site_config "user_email_map.txt" "${WORKSPACE_ROOT}/config")"
+  run_cmd cp -f "${_ar_src}" "${BIOME_CONF}/conf/admin_recipients.txt"
+  run_cmd cp -f "${_uem_src}" "${BIOME_CONF}/conf/user_email_map.txt"
   
   run_cmd cp -f "${VARS_CONF}" "${BIOME_CONF}/conf/setup_nodes.vars.conf"
   run_cmd chmod 600 "${BIOME_CONF}/conf/setup_nodes.vars.conf"
@@ -2131,9 +2150,10 @@ setup_nodes_orphan_cleanup() {
     local dns_csv
     dns_csv=$(echo "${SMTP_DNS_SERVERS}" | tr ' ' ',')
     
-    # Derive dynamic node sender (e.g. noreply-biome-calc02@unibo.it)
+    # Derive dynamic node sender from the configured mail domain
+    # (e.g. noreply-<host>@${MAIL_DOMAIN}); MAIL_DOMAIN comes from the site overlay.
     local node_sender
-    node_sender="noreply-$(hostname -s)@unibo.it"
+    node_sender="noreply-$(hostname -s)@${MAIL_DOMAIN}"
     
     export SMTP_HOST SMTP_PORT SENDER_EMAIL="${node_sender}" MAIL_DOMAIN MAIL_DOMAINS_USER SMTP_DNS_SERVERS="${dns_csv}" KILL_TIMEOUT BIOME_CONF
     envsubst "\${SMTP_HOST} \${SMTP_PORT} \${SENDER_EMAIL} \${MAIL_DOMAIN} \${MAIL_DOMAINS_USER} \${SMTP_DNS_SERVERS} \${KILL_TIMEOUT} \${BIOME_CONF}" < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
@@ -2211,8 +2231,13 @@ setup_nodes_project_archiver() {
     # 2. Deploy configs
     log_info "Deploying archiver configuration files..."
     run_cmd mkdir -p "${BIOME_CONF}/conf"
-    run_cmd cp -f "${WORKSPACE_ROOT}/config/scopri_progetti_known.conf" "${BIOME_CONF}/conf/"
-    
+    local _scopri_src _theme_src
+    _scopri_src="$(resolve_site_config "scopri_progetti_known.conf" "${WORKSPACE_ROOT}/config")"
+    run_cmd cp -f "${_scopri_src}" "${BIOME_CONF}/conf/scopri_progetti_known.conf"
+    # Theme→supervisor map (site-local; placeholder .example on fresh clone)
+    _theme_src="$(resolve_site_config "scopri_theme_map.conf" "${WORKSPACE_ROOT}/config")"
+    run_cmd cp -f "${_theme_src}" "${BIOME_CONF}/conf/scopri_theme_map.conf"
+
     log_info "Generating archiver config..."
     if [[ "${DRY_RUN}" == "true" ]]; then
         log_info "[DRY-RUN] envsubst on archiver config templates"

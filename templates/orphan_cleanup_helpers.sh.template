@@ -3,7 +3,7 @@
 # orphan_cleanup_helpers.sh
 # Funzioni condivise per il sistema di cleanup worker R orfani
 #
-# Per BIOME-CALC - 137.204.21.170
+# Per BIOME-CALC
 # ============================================================================
 
 # ── Risolvi ADMIN_EMAIL in lista CSV di indirizzi ─────────────

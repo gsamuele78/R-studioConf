@@ -1,0 +1,16 @@
+# ============================================================================
+# admin_recipients.txt.example
+# SANITIZED TEMPLATE — no real emails/IPs (see config/SITE_OVERRIDE.md).
+# Real copy: config/site/admin_recipients.txt (gitignored).
+#
+# Deployed to: /etc/biome-calc/conf/admin_recipients.txt
+# One email address per row. Blank lines and lines starting with '#' are ignored.
+# Replaces sending to a Microsoft Teams group (those reject external senders).
+# ============================================================================
+
+# ── Sysadmin ──────────────────────────────────────────────────
+sysadmin@example.org
+
+# ── PI / group leads (uncomment in config/site/ the ones who should be notified) ──
+# pi-one@example.org
+# pi-two@example.org

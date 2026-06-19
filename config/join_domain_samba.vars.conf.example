@@ -1,0 +1,55 @@
+#!/bin/bash
+# config/join_domain_samba.vars.conf.example
+# SANITIZED TEMPLATE — no real site values (see config/SITE_OVERRIDE.md).
+# Real copy: config/site/join_domain_samba.vars.conf (gitignored).
+#
+# Common domain/OU/NTP settings come from lib_kerberos_setup.vars.conf, sourced below.
+
+# Determine config directory for sourcing (works from config/ or config/site/).
+_CONF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+
+if [[ -f "${_CONF_DIR}/lib_kerberos_setup.vars.conf" ]]; then
+    # shellcheck source=lib_kerberos_setup.vars.conf.example disable=SC1091
+    source "${_CONF_DIR}/lib_kerberos_setup.vars.conf"
+elif [[ -f "${_CONF_DIR}/../lib_kerberos_setup.vars.conf" ]]; then
+    source "${_CONF_DIR}/../lib_kerberos_setup.vars.conf"
+elif [[ -f "${_CONF_DIR}/lib_kerberos_setup.vars.conf.example" ]]; then
+    source "${_CONF_DIR}/lib_kerberos_setup.vars.conf.example"
+fi
+
+# =============================================================================
+# SAMBA/WINBIND-SPECIFIC SETTINGS
+# =============================================================================
+
+# Where to write the generated smb.conf (can be overridden by script args).
+DEFAULT_SAMBA_SMB_CONF_PATH="/etc/samba/smb.conf"
+
+## ID Mapping Ranges — must not overlap local users or other idmap backends.
+DEFAULT_IDMAP_PERSONALE_RANGE_LOW=163600000
+DEFAULT_IDMAP_PERSONALE_RANGE_HIGH=263600000
+DEFAULT_IDMAP_STAR_RANGE_LOW=10000
+DEFAULT_IDMAP_STAR_RANGE_HIGH=999999
+
+# Samba home directory template (%U = username).
+DEFAULT_TEMPLATE_HOMEDIR="${DEFAULT_HOME_TEMPLATE:-/nfs/home/%U}"
+
+# Realm / workgroup derived from the common settings (override if needed).
+DEFAULT_REALM="${DEFAULT_AD_DOMAIN_UPPER:-__FILL_ME__.EXAMPLE.ORG}"
+DEFAULT_WORKGROUP="${DEFAULT_AD_DOMAIN_UPPER%%.*}"
+
+DEFAULT_SSSD_COMPAT="false"
+DEFAULT_SAMBA_LOG_LEVEL=1
+DEFAULT_SAMBA_MAX_LOG_SIZE=50
+DEFAULT_MEMBERSHIP_SOFTWARE="samba"
+DEFAULT_CLIENT_SOFTWARE="winbind"
+USE_WINBIND=true
+
+# Backend domain for IDMAP config (replaces %%IDMAP_BACKEND_DOMAIN%%).
+DEFAULT_IDMAP_BACKEND_DOMAIN="${DEFAULT_WORKGROUP:-__FILL_ME__}"
+
+# Valid users pattern for [homes] (replaces %%VALID_USERS_PATTERN%%).
+# Replace the group names with your real AD allow-groups in config/site/.
+DEFAULT_VALID_USERS_PATTERN='+__FILL_ME__\__FILL_ME__-group1 +__FILL_ME__\__FILL_ME__-group2'
+
+# Invalid users pattern for [homes] (replaces %%INVALID_USERS_PATTERN%%).
+DEFAULT_INVALID_USERS_PATTERN='+__FILL_ME__\"Domain Users"'

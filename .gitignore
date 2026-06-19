@@ -10,3 +10,19 @@ node_modules/
 *.env
 !.env.example
 !*.env.sandbox.example
+
+# Site-local config overlay (HC-12 pattern) — real site values, NEVER committed.
+# Only the sanitized *.example templates are tracked. See config/SITE_OVERRIDE.md.
+config/site/
+config/admin_recipients.txt
+config/user_email_map.txt
+config/scopri_progetti_known.conf
+config/scopri_theme_map.conf
+config/lib_kerberos_setup.vars.conf
+config/join_domain_sssd.vars.conf
+config/join_domain_samba.vars.conf
+config/setup_nodes.site.vars.conf
+
+# Python bytecode
+__pycache__/
+*.pyc

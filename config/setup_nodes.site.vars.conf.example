@@ -1,0 +1,26 @@
+#!/bin/bash
+# config/setup_nodes.site.vars.conf.example
+# SANITIZED TEMPLATE — site-local override for the 6 sensitive keys that were
+# redacted out of the committed setup_nodes.vars.conf (see config/SITE_OVERRIDE.md).
+# Real copy: config/site/setup_nodes.site.vars.conf (gitignored).
+#
+# 50_setup_nodes.sh sources setup_nodes.vars.conf first (sanitized defaults),
+# then sources this file if present, so these values win on the live host.
+
+# Outbound SMTP relay host for admin/user notifications.
+SMTP_HOST="smtp.example.org"
+
+# Envelope sender for system notifications.
+SENDER_EMAIL="noreply@example.org"
+
+# Primary institutional mail domain.
+MAIL_DOMAIN="example.org"
+
+# Space-separated list of user mail domains (staff + students, etc.).
+MAIL_DOMAINS_USER="example.org students.example.org"
+
+# Space-separated internal DNS resolvers used for SMTP MX lookups.
+SMTP_DNS_SERVERS="192.0.2.10 192.0.2.11"
+
+# Contact address shown in notifications / portal footer.
+BIOME_CONTACT="ops@example.org"

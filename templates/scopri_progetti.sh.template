@@ -39,7 +39,7 @@ PROD_CSV="${ARCHIVE_CSV_FILE}"
 NOISE_PATTERN="Recall|Privacy|PwdPolicy|Exchange|RemotePowerShell|convenzionicubo|OptBase|IncaricoAA|ScelteFinanz|Blocco|Event|competenze|presentazione|seminario|invio|ListaCaric|ListaNuova|doppioCorso|ListaDottor|GrpDsa|CUSBRic|benvenuti|QualificaAggregata|VPN|AbilitatiNAS|dottorandi_italiani|pnrr|VQR|MFA|sertasso|stream|swopt|PRIN2022_Firma|firma-titolare|mailBasic|O365|Speex|cicloseminari|invio14|SegreterieStud|ScelteFinanz|ListaNuova|ListaCaric|Recall|recallunibomodulo|recallprivacy|Cessati|dcnavile|sistemi.cesia|tecnici.inform|sviluppo"
 
 # Prefissi gruppi da rimuovere per nome progetto leggibile
-# es: Str00968-PRIN2022 → PRIN2022
+# es: Str<NNNNN>-PRIN2022 → PRIN2022
 PROJECT_PREFIX_STRIP="^Str[0-9]+-|^Dsa\.|^GrpDsa|^Ruolo\.|^Qualifica\."
 
 # Gruppi generici che non identificano un progetto specifico
@@ -67,7 +67,7 @@ fi
 
 # =============================================================================
 # FUNZIONE: Estrae nome progetto dai gruppi AD
-# Ritorna il primo gruppo specifico trovato, pulito dal prefisso Str00968-
+# Ritorna il primo gruppo specifico trovato, pulito dal prefisso Str<NNNNN>-
 # =============================================================================
 extract_project_from_groups() {
     local groups_raw="$1"
@@ -87,10 +87,10 @@ extract_project_from_groups() {
         return 0
     fi
 
-    # Fallback: primo gruppo Str00968-NOME non generico
+    # Fallback: primo gruppo Str<NNNNN>-NOME non generico
     proj=$(echo "$groups_raw" \
         | grep -oP '(?<=CN=)[^,]+' \
-        | grep -iE "^Str00968-" \
+        | grep -iE "^Str[0-9]+-" \
         | grep -vE "$GENERIC_GROUPS" \
         | head -1 \
         | sed -E "s/$PROJECT_PREFIX_STRIP//")
@@ -105,39 +105,36 @@ extract_project_from_groups() {
 
 # =============================================================================
 # FUNZIONE: Inferenza supervisor da gruppi AD per tema
-# managedBy non è popolato in AD UniBo
+# managedBy non è popolato in AD UniBo.
+#
+# La mappa tema→supervisor NON è hardcoded (conterrebbe PII reali in un repo
+# pubblico): viene letta da ${ARCHIVE_CONF_DIR}/scopri_theme_map.conf, file
+# site-local (gitignored) deployato da 50_setup_nodes.sh.
+# Formato per riga (separatore ';' — i pattern grep usano già '|' come alternativa):
+#   <pattern_grep_iE>;<username_supervisor>;<tema>
+#   es:  \bflor\b|\blifewatch\b;jdoe;floristica-macroecologia
+# Righe vuote e che iniziano con '#' ignorate.
+# Senza il file (o nessun match) ritorna _UNKNOWN_ → risoluzione manuale dei PI.
 # =============================================================================
+THEME_MAP_FILE="${ARCHIVE_CONF_DIR}/scopri_theme_map.conf"
+
 infer_supervisor_from_groups() {
     local groups="$1"
 
-    if echo "$groups" | grep -qiE "\bflor\b|\blifewatch\b|\bBIOMAC\b|\bSGBGA\b"; then
-        echo "alessandro.chiarucci|tema:floristica-macroecologia"
-        return 0
+    if [[ ! -f "$THEME_MAP_FILE" ]]; then
+        echo "_UNKNOWN_|no_pattern"
+        return 1
     fi
-    if echo "$groups" | grep -qiE "\bremote\b|\bspatial\b|\bteleril\b"; then
-        echo "duccio.rocchini|tema:telerilevamento"
-        return 0
-    fi
-    if echo "$groups" | grep -qiE "\blichen\b|\blicen\b"; then
-        echo "juri.nascimbene|tema:lichenologia"
-        return 0
-    fi
-    if echo "$groups" | grep -qiE "\balghe\b|\balgae\b|\bciano\b"; then
-        echo "marco.cantonati|tema:alghe-cianobatteri"
-        return 0
-    fi
-    if echo "$groups" | grep -qiE "\bconserv\b"; then
-        echo "roberto.cazzolla|tema:conservazione"
-        return 0
-    fi
-    if echo "$groups" | grep -qiE "\bpaesagg\b|\blandscape\b"; then
-        echo "giovanna.pezzi|tema:paesaggio"
-        return 0
-    fi
-    if echo "$groups" | grep -qiE "\bPRIN2022\b"; then
-        echo "francesco.sabatini4|tema:PRIN2022"
-        return 0
-    fi
+
+    local pattern supervisor theme
+    while IFS=';' read -r pattern supervisor theme; do
+        [[ "$pattern" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${pattern// }" ]] && continue
+        if echo "$groups" | grep -qiE "$pattern"; then
+            echo "${supervisor}|tema:${theme}"
+            return 0
+        fi
+    done < "$THEME_MAP_FILE"
 
     echo "_UNKNOWN_|no_pattern"
     return 1
@@ -164,7 +161,7 @@ cat > "$OUTPUT_CSV" << 'CSVHEADER'
 # username   = sAMAccountName (non modificare)
 # supervisor = username PI oppure: _PI_ _ADMIN_ _SKIP_ _CESSATA_ _UNKNOWN_
 # project    = nome cartella progetto in ProjectStorage (EDITABILE LIBERAMENTE)
-#              Esempi: PRIN2022-Sabatini, Lichenologia, PNRR-Conservazione
+#              Esempi: PRIN2022-ProjA, Lichenologia, PNRR-Conservazione
 #              Default automatico: BIOME_General
 # source     = manual | inferred_theme | pi | admin | expired | unknown
 # note       = testo libero (ignorato dallo script)

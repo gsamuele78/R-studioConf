@@ -1,0 +1,21 @@
+# config/scopri_theme_map.conf.example
+# SANITIZED TEMPLATE — no real PI names (see config/SITE_OVERRIDE.md).
+# Real copy: config/site/scopri_theme_map.conf (gitignored).
+# Deployed to: ${ARCHIVE_CONF_DIR}/scopri_theme_map.conf (=${BIOME_CONF}/conf/).
+#
+# Theme→supervisor inference map for scopri_progetti.sh.
+# Format per row (separator ';' — grep patterns already use '|' for alternation):
+#   <grep_-iE_pattern>;<supervisor_username>;<theme>
+#   - pattern is matched against the user's cleaned AD group names (grep -iE)
+#   - first matching row wins
+#   - blank rows and rows starting with '#' are ignored
+#   - no file (or no match) → supervisor resolves to _UNKNOWN_ (manual PI check)
+#
+# Examples (replace usernames/themes with your real values in config/site/):
+\bflor\b|\blifewatch\b|\bBIOMAC\b|\bSGBGA\b;pi.username.one;floristica-macroecologia
+\bremote\b|\bspatial\b|\bteleril\b;pi.username.two;telerilevamento
+\blichen\b|\blicen\b;pi.username.three;lichenologia
+\balghe\b|\balgae\b|\bciano\b;pi.username.four;alghe-cianobatteri
+\bconserv\b;pi.username.five;conservazione
+\bpaesagg\b|\blandscape\b;pi.username.six;paesaggio
+\bPRIN2022\b;pi.username.seven;PRIN2022

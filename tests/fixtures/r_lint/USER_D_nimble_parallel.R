@@ -1,5 +1,5 @@
-# tests/fixtures/r_lint/USER_D_bazzichetto_mod7.R
-# Anonymized fixture: USER_A — synthetic NIMBLE+parLapply with extra anti-patterns.
+# tests/fixtures/r_lint/USER_D_nimble_parallel.R
+# Anonymized fixture: USER_D — synthetic NIMBLE+parLapply with extra anti-patterns.
 # Expected findings: R009 (rm-list-ls), R012 (compileNimble+parLapply), R014 (cross-user save),
 #                    R015 (function depends on globalenv 'init_list'), R016 (relative load),
 #                    R017 (makeCluster no type)

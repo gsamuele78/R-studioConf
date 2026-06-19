@@ -11,7 +11,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 # Define paths relative to SCRIPT_DIR
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-CONF_VARS_FILE="${SCRIPT_DIR}/../config/join_domain_sssd.vars.conf"
 SSSD_CONF_TEMPLATE_PATH="${SCRIPT_DIR}/../templates/sssd.conf.template"
 KERBEROS_SETUP_SCRIPT="${SCRIPT_DIR}/12_lib_kerberos_setup.sh"
 
@@ -32,25 +31,13 @@ else
     exit 1
 fi
 
-# Source configuration variables if file exists
-if [[ -f "$CONF_VARS_FILE" ]]; then
-    log "Sourcing SSSD/Kerberos configuration variables from $CONF_VARS_FILE"
-    # shellcheck source=../config/join_domain_sssd.vars.conf disable=SC1091
-    source "$CONF_VARS_FILE"
-else
-    log "Warning: SSSD/Kerberos configuration file $CONF_VARS_FILE not found. Using script internal defaults."
-    # Define crucial defaults here if the .conf file is missing
-    DEFAULT_AD_DOMAIN_LOWER="ad.example.com"
-    DEFAULT_AD_DOMAIN_UPPER="AD.EXAMPLE.COM"
-    DEFAULT_AD_ADMIN_USER_EXAMPLE="administrator@${DEFAULT_AD_DOMAIN_UPPER}"
-    DEFAULT_COMPUTER_OU_BASE="OU=LinuxSystems,DC=ad,DC=example,DC=com"
-    DEFAULT_COMPUTER_OU_CUSTOM_PART="OU=Servers"
-    DEFAULT_OS_NAME="Linux Server"
-    DEFAULT_FALLBACK_HOMEDIR_TEMPLATE="/home/%d/%u"
-    DEFAULT_USE_FQNS="true"
-    DEFAULT_SIMPLE_ALLOW_GROUPS=""
-    DEFAULT_AD_GPO_MAP_SERVICE=""
-fi
+# Source SSSD/Kerberos configuration variables via the site-local overlay
+# (real values in config/site/, sanitized placeholders in the .example template).
+CONF_VARS_FILE="$(resolve_site_config "join_domain_sssd.vars.conf" "${SCRIPT_DIR}/../config")"
+log "Sourcing SSSD/Kerberos configuration variables from $CONF_VARS_FILE"
+# shellcheck source=../config/join_domain_sssd.vars.conf.example disable=SC1091
+source "$CONF_VARS_FILE"
+assert_site_configured "AD realm (DEFAULT_AD_DOMAIN_UPPER)" "${DEFAULT_AD_DOMAIN_UPPER:-}"
 
 # --- Global Variables ---
 AD_DOMAIN_LOWER=""

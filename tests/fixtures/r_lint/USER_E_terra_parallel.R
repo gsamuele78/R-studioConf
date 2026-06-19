@@ -1,5 +1,5 @@
-# tests/fixtures/r_lint/USER_E_lussu_block1.R
-# Anonymized fixture: USER_A — synthetic Lussu-style block.
+# tests/fixtures/r_lint/USER_E_terra_parallel.R
+# Anonymized fixture: USER_E — synthetic parallel/terra block.
 # Expected findings: R001 (makeCluster + no clusterExport), R006 (terra::values in loop)
 
 library(terra)

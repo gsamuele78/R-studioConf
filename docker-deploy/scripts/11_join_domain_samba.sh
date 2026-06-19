@@ -53,10 +53,11 @@ fi
 
 # === SET EMBEDDED DEFAULTS FIRST ===
 # These defaults are always set; config file can override them
-AD_DOMAIN_LOWER="${AD_DOMAIN_LOWER:-personale.dir.unibo.it}"
-AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER:-PERSONALE.DIR.UNIBO.IT}"
-COMPUTER_OU_BASE="${COMPUTER_OU_BASE:-OU=Servizi_Informatici,OU=Dip-BIGEA,OU=Dsa.Auto}"
-COMPUTER_OU_CUSTOM_PART="${COMPUTER_OU_CUSTOM_PART:-OU=ServerFarm_Navile}"
+# Generic example fallbacks only — real values come from docker-deploy/.env (DEFAULT_*).
+AD_DOMAIN_LOWER="${AD_DOMAIN_LOWER:-ad.example.com}"
+AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER:-AD.EXAMPLE.COM}"
+COMPUTER_OU_BASE="${COMPUTER_OU_BASE:-OU=LinuxSystems,DC=ad,DC=example,DC=com}"
+COMPUTER_OU_CUSTOM_PART="${COMPUTER_OU_CUSTOM_PART:-OU=Servers}"
 OS_NAME="${OS_NAME:-Linux}"
 SMB_CONF_PATH="${SMB_CONF_PATH:-$SMB_CONF_PATH_DEFAULT}"
 IDMAP_PERSONALE_RANGE_LOW="${IDMAP_PERSONALE_RANGE_LOW:-163600000}"
@@ -64,13 +65,13 @@ IDMAP_PERSONALE_RANGE_HIGH="${IDMAP_PERSONALE_RANGE_HIGH:-263600000}"
 IDMAP_STAR_RANGE_LOW="${IDMAP_STAR_RANGE_LOW:-10000}"
 IDMAP_STAR_RANGE_HIGH="${IDMAP_STAR_RANGE_HIGH:-999999}"
 TEMPLATE_HOMEDIR="${TEMPLATE_HOMEDIR:-/nfs/home/%U}"
-REALM="${REALM:-PERSONALE.DIR.UNIBO.IT}"
-WORKGROUP="${WORKGROUP:-PERSONALE}"
+REALM="${REALM:-${AD_DOMAIN_UPPER}}"
+WORKGROUP="${WORKGROUP:-${AD_DOMAIN_UPPER%%.*}}"
 SIMPLE_ALLOW_GROUPS="${SIMPLE_ALLOW_GROUPS:-}"
 DEFAULT_OS_NAME="${DEFAULT_OS_NAME:-Linux}"
 DEFAULT_MEMBERSHIP_SOFTWARE="${DEFAULT_MEMBERSHIP_SOFTWARE:-samba}"
 DEFAULT_CLIENT_SOFTWARE="${DEFAULT_CLIENT_SOFTWARE:-winbind}"
-DEFAULT_AD_ADMIN_USER_EXAMPLE="${DEFAULT_AD_ADMIN_USER_EXAMPLE:-gianfranco.samuele2@PERSONALE.DIR.UNIBO.IT}"
+DEFAULT_AD_ADMIN_USER_EXAMPLE="${DEFAULT_AD_ADMIN_USER_EXAMPLE:-administrator@AD.EXAMPLE.COM}"
 DEFAULT_SAMBA_LOG_LEVEL="${DEFAULT_SAMBA_LOG_LEVEL:-1}"
 DEFAULT_SAMBA_MAX_LOG_SIZE="${DEFAULT_SAMBA_MAX_LOG_SIZE:-50}"
 DEFAULT_SAMBA_SMB_CONF_PATH="${DEFAULT_SAMBA_SMB_CONF_PATH:-/etc/samba/smb.conf}"
@@ -99,13 +100,13 @@ if [[ -n "${DEFAULT_IDMAP_BACKEND_DOMAIN:-}" ]]; then
 fi
 
 # === VERIFY ALL CRITICAL VARIABLES ARE SET ===
-# If config file didn't set them or they're empty, use defaults (second pass)
-COMPUTER_OU_BASE="${COMPUTER_OU_BASE:-OU=Servizi_Informatici,OU=Dip-BIGEA,OU=Dsa.Auto}"
-COMPUTER_OU_CUSTOM_PART="${COMPUTER_OU_CUSTOM_PART:-OU=ServerFarm_Navile}"
-AD_DOMAIN_LOWER="${AD_DOMAIN_LOWER:-personale.dir.unibo.it}"
-AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER:-PERSONALE.DIR.UNIBO.IT}"
-REALM="${REALM:-PERSONALE.DIR.UNIBO.IT}"
-WORKGROUP="${WORKGROUP:-PERSONALE}"
+# Second pass: generic example fallbacks only (real values from .env DEFAULT_*).
+COMPUTER_OU_BASE="${COMPUTER_OU_BASE:-OU=LinuxSystems,DC=ad,DC=example,DC=com}"
+COMPUTER_OU_CUSTOM_PART="${COMPUTER_OU_CUSTOM_PART:-OU=Servers}"
+AD_DOMAIN_LOWER="${AD_DOMAIN_LOWER:-ad.example.com}"
+AD_DOMAIN_UPPER="${AD_DOMAIN_UPPER:-AD.EXAMPLE.COM}"
+REALM="${REALM:-${AD_DOMAIN_UPPER}}"
+WORKGROUP="${WORKGROUP:-${AD_DOMAIN_UPPER%%.*}}"
 
 log "DEBUG" "Loaded configuration: AD_DOMAIN_LOWER=$AD_DOMAIN_LOWER, COMPUTER_OU_BASE=$COMPUTER_OU_BASE, COMPUTER_OU_CUSTOM_PART=$COMPUTER_OU_CUSTOM_PART"
 
@@ -550,7 +551,7 @@ perform_realm_join() {
         # Show net ads join command for manual debugging
         log "INFO" "For manual debugging with verbose output, try:"
         log "INFO" "  kinit ${admin_user}"
-        log "INFO" "  net ads join -U ${admin_user} -c /var/cache/realmd/realmd-smb-conf.XXXXX createcomputer=Dsa.Auto/Dip-BIGEA/Servizi_Informatici/ServerFarm_Navile osName=Linux -d3"
+        log "INFO" "  net ads join -U ${admin_user} -c /var/cache/realmd/realmd-smb-conf.XXXXX createcomputer=<OU-path-from-COMPUTER_OU_BASE> osName=${OS_NAME} -d3"
         
         # Check if net command exists and try to run it directly with debug output
         if command -v net &>/dev/null; then

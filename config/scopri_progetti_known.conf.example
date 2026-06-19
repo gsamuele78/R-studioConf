@@ -1,0 +1,20 @@
+# ==============================================================================
+# scopri_progetti_known.conf.example
+# SANITIZED TEMPLATE — no real researcher PII (see config/SITE_OVERRIDE.md).
+# Real copy: config/site/scopri_progetti_known.conf (gitignored).
+#
+# Override map for scopri_progetti.sh.
+# Format: username:supervisor:project
+# Dates optional, appended if needed (es. username:supervisor:project:start:end)
+# Use _SKIP_ as supervisor to exclude an account.
+# ==============================================================================
+
+# Confirmed assignees/PhD students (certain supervisor)
+# jdoe:supervisor.one:PROJECT-A
+# asmith:supervisor.two:PROJECT-B
+
+# Inferred from specific AD groups
+# bjones:supervisor.one:PROJECT-A
+
+# Explicit accounts to skip
+# svc-account:_SKIP_:GENERAL

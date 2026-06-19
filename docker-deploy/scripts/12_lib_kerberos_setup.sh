@@ -45,14 +45,11 @@ if [[ -n "$DEFAULT_DOMAIN_REALM_MAPPINGS" ]]; then
         IFS=' ' read -r -a DEFAULT_DOMAIN_REALM_MAPPINGS_ARRAY <<< "$DEFAULT_DOMAIN_REALM_MAPPINGS"
     fi
 else
-    # Default fallback if missing from .env
+    # Default fallback if missing from .env (generic example values; set real
+    # mappings via DEFAULT_DOMAIN_REALM_MAPPINGS in docker-deploy/.env).
     DEFAULT_DOMAIN_REALM_MAPPINGS_ARRAY=(
-        ".dir.unibo.it=DIR.UNIBO.IT"
-        "dir.unibo.it=DIR.UNIBO.IT"
-        ".personale.dir.unibo.it=PERSONALE.DIR.UNIBO.IT"
-        "personale.dir.unibo.it=PERSONALE.DIR.UNIBO.IT"
-        ".studenti.dir.unibo.it=STUDENTI.DIR.UNIBO.IT"
-        "studenti.dir.unibo.it=STUDENTI.DIR.UNIBO.IT"
+        ".ad.example.com=AD.EXAMPLE.COM"
+        "ad.example.com=AD.EXAMPLE.COM"
     )
 fi
 
