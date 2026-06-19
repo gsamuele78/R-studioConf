@@ -8,7 +8,7 @@
 # 2. ALIGNED SAFETY LOGIC: PPID=1 processes are reported as "OK (Detached/Safe)"
 #    if the user has an active session. They are only "ORPHAN" if no session exists.
 #
-# Per BIOME-CALC - 137.204.21.170
+# Per BIOME-CALC
 # ============================================================================
 
 CONF_FILE="/etc/biome-calc/conf/r_orphan_cleanup.conf"

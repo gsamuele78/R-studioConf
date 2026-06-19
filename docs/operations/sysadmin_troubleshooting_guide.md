@@ -1090,7 +1090,7 @@ passwd[12345]: segfault at 0 ip 00007f... in pam_krb5.so[...]
 
 Ubuntu's `libpam-krb5` package installs a `pam-auth-update` profile named **krb5**
 that inserts `pam_krb5.so` into `/etc/pam.d/common-password`. With our multi-realm
-`/etc/krb5.conf` (`DIR.UNIBO.IT` default + `PERSONALE.DIR.UNIBO.IT` +
+`/etc/krb5.conf` (`DIR.UNIBO.IT` default + `AD.EXAMPLE.COM` +
 `STUDENTI.DIR.UNIBO.IT` sub-realms and the capaths matrix), `pam_krb5.so` dereferences
 a NULL realm pointer when the target principal does not exist in the default realm —
 which is **always** the case for local accounts (uid < 10000 per

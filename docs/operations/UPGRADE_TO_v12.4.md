@@ -321,8 +321,8 @@ Esempio output reale (biome-calc03, R 4.5.3):
 
 ```
 | user                   |  ln | variable      | value                                                   | flags
-| gianfranco.samuele2    |   4 | R_LIBS_USER   | /nfs/home/gianfranco.samuele2/R/.../library/4.6         | OVERRIDES-SYSTEM;STALE-VERSION:4.6≠4.5
-| michele.lussu          |   3 | R_LIBS_USER   | /nfs/home/michele.lussu/R/.../library/4.6               | OVERRIDES-SYSTEM;STALE-VERSION:4.6≠4.5
+| sysadmin.user    |   4 | R_LIBS_USER   | /nfs/home/sysadmin.user/R/.../library/4.6         | OVERRIDES-SYSTEM;STALE-VERSION:4.6≠4.5
+| user.one          |   3 | R_LIBS_USER   | /nfs/home/user.one/R/.../library/4.6               | OVERRIDES-SYSTEM;STALE-VERSION:4.6≠4.5
 ```
 
 ### 10.2 Spiegazione tecnica
@@ -668,14 +668,14 @@ tier host; nessun port forward necessario.
 
 ### 13.1 Cosa risolve
 
-Sintomo (biome-calc03, 2026-05-10) per `gianfranco.samuele2`
-(UID 163718183, gid 163600513 `domain_users`):
+Sintomo (biome-calc03, 2026-05-10) per `sysadmin.user`
+(UID 100000002, gid 100000513 `domain_users`):
 
 ```bash
 $ ls /var/lib/biome-Rlibs/
 ladmin/  lost+found/        # ← nessuna dir per utenti AD
 $ R --vanilla -e '.libPaths()'
-[1] "/nfs/home/gianfranco.samuele2/R/x86_64-pc-linux-gnu-library/4.5"   # solo NFS
+[1] "/nfs/home/sysadmin.user/R/x86_64-pc-linux-gnu-library/4.5"   # solo NFS
 [2] "/usr/lib/R/site-library"
 [3] "/usr/lib/R/library"
 ```
@@ -745,8 +745,8 @@ prima del prossimo full deploy, comando one-shot:
 
 ```bash
 sudo install -d -m 0755 \
-  -o gianfranco.samuele2 -g domain_users \
-  /var/lib/biome-Rlibs/gianfranco.samuele2/4.5
+  -o sysadmin.user -g domain_users \
+  /var/lib/biome-Rlibs/sysadmin.user/4.5
 ```
 
 Adattare username, gruppo primario (vedi `id <user>`) e versione R
@@ -761,11 +761,11 @@ sudo bash scripts/50_setup_nodes.sh   # selezione L
 # Atteso: "warmed=N skipped=M failed=0" con N che include gli utenti AD
 
 # (b) Fragment crea dir alla prima sessione utente
-sudo -u gianfranco.samuele2 R --vanilla -e '.libPaths()'
-# Atteso prima entry: /var/lib/biome-Rlibs/gianfranco.samuele2/4.5
+sudo -u sysadmin.user R --vanilla -e '.libPaths()'
+# Atteso prima entry: /var/lib/biome-Rlibs/sysadmin.user/4.5
 
-ls -ld /var/lib/biome-Rlibs/gianfranco.samuele2/4.5
-# Atteso: drwxr-xr-x gianfranco.samuele2 domain_users
+ls -ld /var/lib/biome-Rlibs/sysadmin.user/4.5
+# Atteso: drwxr-xr-x sysadmin.user domain_users
 
 # (c) Audit log breadcrumb
 grep 'UserLibBootstrap' /var/log/biome-log/r_biome_system.log | tail
@@ -804,7 +804,7 @@ sudo systemctl restart rstudio-server
 
 > **Status:** v12.9 (2026-05-10) — `RPROFILE_VERSION="12.9"`. Hotfix
 > chirurgico che chiude tre defect residui di v12.8 dimostrati su
-> `michele.lussu` (UID 164186128) e `gianfranco.samuele2` (UID 163718183).
+> `user.one` (UID 100000001) e `sysadmin.user` (UID 100000002).
 
 ### 14.1 Cosa risolve
 
@@ -932,8 +932,8 @@ grep -F 'Warm-up:' /var/log/biome-log/r_biome_system.log | tail -1
 # Atteso: warmed=N con N ≈ |/nfs/home/*| + |local accounts validi|
 
 # (b) Utente vede il path locale come [1] — usare --no-save, NON --vanilla
-sudo -u michele.lussu -i R --no-save -e '.libPaths()'
-# Atteso prima entry: /var/lib/biome-Rlibs/michele.lussu/4.5
+sudo -u user.one -i R --no-save -e '.libPaths()'
+# Atteso prima entry: /var/lib/biome-Rlibs/user.one/4.5
 # DO NOT use --vanilla: salta Renviron.site + Rprofile.site = bypassa il fix.
 
 # (c) Self-heal a runtime per un utente nuovo
@@ -1411,8 +1411,8 @@ sudo systemctl restart rstudio-server
 
 > **Status:** v12.9.2 (2026-05-10) — `RPROFILE_VERSION="12.9.2"`. Hotfix
 > strutturale per chiudere una multi-writer race su `~/.Renviron`
-> dimostrata su biome-calc03 per tre utenti AD (rocio.corteslobos2,
-> michele.dimusciano, arianna.ferrara4).
+> dimostrata su biome-calc03 per tre utenti AD (user.two,
+> user.three, user.four).
 
 ### 15.1 Cosa risolve
 

@@ -28,7 +28,7 @@ End users: researchers doing NIMBLE MCMC, geospatial analysis, large-scale matri
 
 - Single sysadmin (LPIC-3). No babysitting capacity.
 - Network: constrained university uplink. RFC-1918 private inter-host network.
-- AD domain: `*.personale.dir.unibo.it`.
+- AD domain: `*.ad.example.com`.
 - Branding: Unibo Red `#C80E0F`, Inter/system-ui fonts, glassmorphism UI — local assets only, zero CDN.
 - Funded projects: PNRR LifeWatch-Plus, PON LifeWatch-Plus, Life4Pollinators.
 

@@ -217,6 +217,39 @@ handle_error() {
     log "ERROR" "An error occurred: ${message} (Exit Code: ${exit_code})"
 }
 
+# ── Site-local config overlay (HC-12 pattern, see config/SITE_OVERRIDE.md) ──
+# Real, site-specific values live in config/site/ (gitignored, never committed).
+# The repo ships sanitized <name>.example templates carrying the __FILL_ME__
+# sentinel. Resolution order: config/site/<name>  →  config/<name>.example (warn).
+#
+# Usage:
+#   f="$(resolve_site_config "lib_kerberos_setup.vars.conf" "${SCRIPT_DIR}/../config")"
+resolve_site_config() {
+    local name="$1" base_dir="$2"
+    if [[ -f "${base_dir}/site/${name}" ]]; then
+        printf '%s\n' "${base_dir}/site/${name}"
+        return 0
+    fi
+    # NOTE: warn to stderr only — this function's stdout is captured via $(...),
+    # so any stdout noise would corrupt the returned path.
+    log "WARN" "Site config '${name}' not found in ${base_dir}/site/ — falling back to '${name}.example' (placeholder data)." >&2
+    printf '%s\n' "${base_dir}/${name}.example"
+}
+
+# Fail-fast gate: abort if a required site value is empty or still a placeholder.
+# Pessimistic by design — a fresh clone must stop here, never half-configure.
+#
+# Usage (after sourcing the config chain):
+#   assert_site_configured "AD realm (DEFAULT_AD_DOMAIN_UPPER)" "${DEFAULT_AD_DOMAIN_UPPER:-}"
+assert_site_configured() {
+    local label="$1" value="${2:-}"
+    if [[ -z "${value}" || "${value}" == *__FILL_ME__* ]]; then
+        log "ERROR" "Site config not populated: ${label}."
+        log "ERROR" "Copy the matching config/*.example into config/site/ and fill in real values (see config/SITE_OVERRIDE.md)."
+        exit 1
+    fi
+}
+
 
 # Function to run commands with automatic error handling and retries
 # ENHANCED v1.4: Corrected with VALID dpkg options only

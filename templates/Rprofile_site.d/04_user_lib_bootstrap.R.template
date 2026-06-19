@@ -90,8 +90,8 @@
 # returns the *already-cached, already-filtered* list R computed at
 # startup; passing it back does not re-read R_LIBS_USER. So even after
 # dir.create() succeeded, the running session kept showing the NFS
-# fallback as entry [1]. Confirmed on biome-calc03 (michele.lussu, uid
-# 164186128): audit log proved dir.create succeeded yet .libPaths()[1]
+# fallback as entry [1]. Confirmed on biome-calc03 (an AD user account):
+# audit log proved dir.create succeeded yet .libPaths()[1]
 # remained the NFS path.
 #
 # Compounding factor: /etc/R/Renviron.site uses literal `%u` in
@@ -212,7 +212,7 @@ local({
   #   $R_HOME/etc/Renviron → /etc/R/Renviron.site → ~/.Renviron  (LAST WINS)
   # so a single `R_LIBS_USER="..."` line in ~/.Renviron silently defeats
   # the local-disk policy. Observed on biome-calc03 (2026-05-10) for AD
-  # users rocio.corteslobos2 / michele.dimusciano / arianna.ferrara4: a
+  # multiple AD users: a
   # third writer in the deploy chain re-appended R_LIBS_USER=NFS at line
   # 13 of each ~/.Renviron AFTER scripts/99_check_user_renviron_overrides.sh
   # had already commented out the original override. Result:

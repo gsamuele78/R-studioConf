@@ -236,19 +236,20 @@ _cache = _Cache()
 
 def _load_setup_config() -> dict[str, str]:
     """Dynamically parses setup_nodes.vars.conf for all system vars."""
+    mail_domain = os.environ.get("BIOME_MAIL_DOMAIN", "example.org")
     config = {
         "SMTP_HOST": "localhost",
         "SMTP_PORT": "25",
-        "SENDER_EMAIL": f"{socket.gethostname()}@unibo.it",
+        "SENDER_EMAIL": f"{socket.gethostname()}@{mail_domain}",
         "BIOME_CONTACT": "support@localhost",
         "SMTP_DNS_SERVERS": "8.8.8.8",
         "NFS_HOME": "/nfs/home",
         "CIFS_ARCHIVE": "/mnt/ProjectStorage",
     }
-    cfg_paths = [
-        "/etc/biome-calc/conf/setup_nodes.vars.conf",
-        "/home/administrator/configServices/R-studioConf/config/setup_nodes.vars.conf"
-    ]
+    cfg_paths = ["/etc/biome-calc/conf/setup_nodes.vars.conf"]
+    extra_cfg = os.environ.get("BIOME_SETUP_VARS_PATH")
+    if extra_cfg:
+        cfg_paths.append(extra_cfg)
     
     for cfg_path in cfg_paths:
         if os.path.exists(cfg_path):
@@ -265,8 +266,10 @@ def _load_setup_config() -> dict[str, str]:
             except Exception as e:
                 print(f"Error loading {cfg_path}: {e}")
                 
-    # Always ensure the sender reflects the current server hostname
-    config["SENDER_EMAIL"] = f"{socket.gethostname()}@unibo.it"
+    # Always ensure the sender reflects the current server hostname.
+    # Domain comes from the parsed MAIL_DOMAIN, else BIOME_MAIL_DOMAIN env.
+    sender_domain = config.get("MAIL_DOMAIN") or mail_domain
+    config["SENDER_EMAIL"] = f"{socket.gethostname()}@{sender_domain}"
     return config
 
 def _count_procs(name_sub: str) -> int:
@@ -565,10 +568,12 @@ threading.Thread(
 
 def _load_admin_recipients() -> list[str]:
     recipients = []
-    paths = [
-        "/etc/biome-calc/conf/admin_recipients.txt",
-        "/home/administrator/configServices/R-studioConf/config/admin_recipients.txt"
-    ]
+    # Mirrors T1 (scripts/telemetry/telemetry_api.py): deployed path is
+    # authoritative; an extra path may be supplied via BIOME_ADMIN_RECIPIENTS_PATH.
+    paths = ["/etc/biome-calc/conf/admin_recipients.txt"]
+    extra = os.environ.get("BIOME_ADMIN_RECIPIENTS_PATH")
+    if extra:
+        paths.append(extra)
     for p in paths:
         if os.path.exists(p):
             try:
@@ -583,7 +588,9 @@ def _load_admin_recipients() -> list[str]:
                 print(f"Error loading {p}: {e}")
     
     if not recipients:
-        recipients.append("Lifewatch_Biome_internal@live.unibo.it")
+        fallback = os.environ.get("BIOME_ADMIN_FALLBACK_EMAIL")
+        if fallback:
+            recipients.append(fallback)
     return recipients
 
 @app.post("/api/v1/report-problem", tags=["Support"], summary="Send a problem report via email")

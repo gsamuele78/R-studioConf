@@ -32,7 +32,7 @@ Abbiamo provato a esportare variabili `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_S
 
 ### Tentativo 2 — Iniezione via script di login (`/etc/profile.d/`)
 
-Abbiamo creato uno script di test (`/etc/profile.d/00_rstudio_user_logins.sh`) che esportava le variabili XDG con percorsi nodo-specifici per l'utente di test `gianfranco.samuele2`.
+Abbiamo creato uno script di test (`/etc/profile.d/00_rstudio_user_logins.sh`) che esportava le variabili XDG con percorsi nodo-specifici per l'utente di test `sysadmin.user`.
 
 - **Risultato:** Fallito. Le variabili erano visibili nel terminale (`env` le mostrava correttamente), ma dentro R (`Sys.getenv()`) risultavano vuote. RStudio scriveva ancora nei percorsi condivisi.
 

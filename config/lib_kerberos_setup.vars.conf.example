@@ -1,0 +1,83 @@
+#!/bin/bash
+# config/lib_kerberos_setup.vars.conf.example
+# SANITIZED TEMPLATE — contains NO real site values (HC-12 / config/SITE_OVERRIDE.md).
+#
+# DO NOT put real data here. Instead:
+#   cp config/lib_kerberos_setup.vars.conf.example config/site/lib_kerberos_setup.vars.conf
+#   $EDITOR config/site/lib_kerberos_setup.vars.conf   # replace every __FILL_ME__
+# config/site/ is gitignored and is never committed. The consuming scripts
+# resolve config/site/<name> first and abort (assert_site_configured) if any
+# __FILL_ME__ sentinel survives.
+
+## =============================================================================
+## COMMON ACTIVE DIRECTORY SETTINGS
+## =============================================================================
+
+# The lowercase name of your Active Directory domain.
+DEFAULT_AD_DOMAIN_LOWER="__FILL_ME__.example.org"
+
+# The uppercase Kerberos Realm name (typically the uppercase domain).
+DEFAULT_AD_DOMAIN_UPPER="__FILL_ME__.EXAMPLE.ORG"
+
+# An EXAMPLE User Principal Name (UPN) of an AD account allowed to join machines.
+# Shown in prompts only.
+DEFAULT_AD_ADMIN_USER_EXAMPLE="__FILL_ME__@__FILL_ME__.EXAMPLE.ORG"
+
+## -----------------------------------------------------------------------------
+## Computer Object Settings in Active Directory
+## -----------------------------------------------------------------------------
+
+# Base Distinguished Name (DN) / OU where this machine's computer object is created.
+DEFAULT_COMPUTER_OU_BASE="OU=__FILL_ME__,OU=__FILL_ME__,OU=__FILL_ME__"
+
+# Customizable OU part, prepended to the base OU.
+DEFAULT_COMPUTER_OU_CUSTOM_PART="OU=__FILL_ME__"
+
+# 'OperatingSystem' attribute of the computer object. SSSD uses "Linux Server", Samba "Linux".
+DEFAULT_OS_NAME="Linux"
+
+## -----------------------------------------------------------------------------
+## Access Control Settings
+## -----------------------------------------------------------------------------
+
+# Comma-separated AD group names; only members may log in. Empty = all domain users.
+DEFAULT_SIMPLE_ALLOW_GROUPS="__FILL_ME__-group1,__FILL_ME__-group2"
+
+## -----------------------------------------------------------------------------
+## Home Directory Template (Common Default)
+## -----------------------------------------------------------------------------
+DEFAULT_HOME_TEMPLATE="/nfs/home/%U"
+
+## -----------------------------------------------------------------------------
+## Time Synchronization (NTP) Settings
+## -----------------------------------------------------------------------------
+NTP_PREFERRED_CLIENT="chrony"
+
+DEFAULT_NTP_FALLBACK_POOLS_CHRONY_NTP=(
+    "pool 2.debian.pool.ntp.org iburst"
+)
+DEFAULT_NTP_FALLBACK_POOLS_SYSTEMD="0.debian.pool.ntp.org 1.debian.pool.ntp.org 2.debian.pool.ntp.org 3.debian.pool.ntp.org"
+
+## =============================================================================
+## KERBEROS REALM CONFIGURATION (replace with your KDC/admin-server hostnames)
+## =============================================================================
+
+DEFAULT_DIR_UNIBO_REALM="__FILL_ME__.EXAMPLE.ORG"
+DEFAULT_DIR_UNIBO_KDC="kdc1.__FILL_ME__.example.org"
+DEFAULT_DIR_UNIBO_ADMIN_SERVER="kdc1.__FILL_ME__.example.org"
+
+DEFAULT_PERSONALE_UNIBO_REALM="__FILL_ME__.EXAMPLE.ORG"
+DEFAULT_PERSONALE_UNIBO_KDC="kdc2.__FILL_ME__.example.org"
+DEFAULT_PERSONALE_UNIBO_ADMIN_SERVER="kdc3.__FILL_ME__.example.org"
+
+DEFAULT_STUDENTI_UNIBO_REALM="__FILL_ME__.EXAMPLE.ORG"
+DEFAULT_STUDENTI_UNIBO_KDC="kdc4.__FILL_ME__.example.org"
+DEFAULT_STUDENTI_UNIBO_ADMIN_SERVER="kdc5.__FILL_ME__.example.org"
+
+## -----------------------------------------------------------------------------
+## Domain Mappings for [domain_realm]
+## -----------------------------------------------------------------------------
+DEFAULT_DOMAIN_REALM_MAPPINGS=(
+    ".__FILL_ME__.example.org=__FILL_ME__.EXAMPLE.ORG"
+    "__FILL_ME__.example.org=__FILL_ME__.EXAMPLE.ORG"
+)

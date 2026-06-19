@@ -1,0 +1,24 @@
+# config/user_email_map.txt.example
+# SANITIZED TEMPLATE (see config/SITE_OVERRIDE.md).
+# Real copy: config/site/user_email_map.txt (gitignored).
+# Deployed to: /etc/biome-calc/conf/user_email_map.txt
+# ============================================================================
+# USER EMAIL OVERRIDE MAP
+# ============================================================================
+# Format: <username>  <email>   (one per row; separator = spaces/tabs)
+# Blank lines and lines starting with '#' are ignored.
+#
+# DEFAULT BEHAVIOUR (no entry here):
+#   resolve_user_email() uses MAIL_DOMAINS_USER (setup_nodes.vars.conf) and
+#   notifies every active domain. The relay silently absorbs bounces.
+#
+# ADD AN OVERRIDE WHEN:
+#   - the AD username != the email local-part (service accounts, legacy aliases)
+#   - you want to force a SINGLE address
+#   - a user asks not to receive copies on multiple domains
+#
+# EXAMPLES:
+#   jdoe                  j.doe@example.org
+#   astudent              astudent@students.example.org
+#   svc-bot               ops@example.org
+# ============================================================================

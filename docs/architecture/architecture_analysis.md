@@ -20,7 +20,7 @@ From `00_Installazione_workstation_luchetti.txt`:
 | **Authentication** | Manual `pam_mkhomedir.so` insertion, manual `sssd.conf` edits | Non-idempotent; copy-paste errors across machines |
 | **R packages** | Manual `install.packages()` from CRAN source | 30+ minutes to compile `sf`/`terra`; requires manual `libgdal-dev` setup |
 | **bspm** | Installed but `bspm::enable()` only; no sudo config for domain users | Fails silently in RStudio web console (no polkit agent) |
-| **Network edge** | Direct RStudio port 8787, `www-address=137.204.142.248` | No TLS, no reverse proxy, no session iframe isolation |
+| **Network edge** | Direct RStudio port 8787, `www-address=192.0.2.20` | No TLS, no reverse proxy, no session iframe isolation |
 | **User .Renviron** | `config_rstudio.sh` in `/etc/profile.d/` overrides `HOME=$RUSERPATH` | Breaks `~` expansion; conflicts with NFS home patterns |
 
 ### 1.2 The New Architecture (BIOME-CALC v10.0 — Proxmox + NFS)

@@ -9,7 +9,6 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UTILS_SCRIPT_PATH="${SCRIPT_DIR}/../lib/common_utils.sh"
-KERBEROS_VARS_FILE="${SCRIPT_DIR}/../config/lib_kerberos_setup.vars.conf"
 TEMPLATE_DIR="${SCRIPT_DIR}/../templates"
 
 # Source common utils
@@ -21,13 +20,12 @@ else
     exit 1
 fi
 
-# Source common Kerberos variables
-if [[ -f "$KERBEROS_VARS_FILE" ]]; then
-    # shellcheck source=../config/lib_kerberos_setup.vars.conf disable=SC1091
-    source "$KERBEROS_VARS_FILE"
-else
-    log "WARN" "Kerberos configuration file not found at $KERBEROS_VARS_FILE. Using internal defaults if available, or failing."
-fi
+# Source common Kerberos variables via the site-local overlay (real values in
+# config/site/, sanitized placeholders in config/lib_kerberos_setup.vars.conf.example).
+KERBEROS_VARS_FILE="$(resolve_site_config "lib_kerberos_setup.vars.conf" "${SCRIPT_DIR}/../config")"
+# shellcheck source=../config/lib_kerberos_setup.vars.conf.example disable=SC1091
+source "$KERBEROS_VARS_FILE"
+assert_site_configured "AD realm (DEFAULT_AD_DOMAIN_UPPER)" "${DEFAULT_AD_DOMAIN_UPPER:-}"
 
 install_kerberos_packages() {
     log "Installing Kerberos client packages..."
