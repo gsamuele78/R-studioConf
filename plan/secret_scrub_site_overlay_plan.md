@@ -64,23 +64,29 @@ resolve_site_config() {
     printf '%s\n' "${base_dir}/${name}.example"
 }
 
-# source_site_config <basename> <config_base_dir>
-#   sources the resolved vars file; ABORTS if the placeholder sentinel survived (pessimistic gate).
-source_site_config() {
-    local f; f="$(resolve_site_config "$1" "$2")"
-    # shellcheck disable=SC1090
-    source "$f"
-    if grep -q '__FILL_ME__' "$f"; then
-        log "ERROR" "Unconfigured site value in $f. Copy ${1}.example to config/site/${1} and fill real values."
+# assert_site_configured <label> <value>
+#   ABORTS if a required value is empty or still holds the __FILL_ME__ sentinel
+#   (pessimistic gate). Call AFTER sourcing the resolved file.
+assert_site_configured() {
+    local label="$1" value="${2:-}"
+    if [[ -z "${value}" || "${value}" == *__FILL_ME__* ]]; then
+        log "ERROR" "Site config not populated: ${label}. Copy config/*.example into config/site/ and fill real values."
         exit 1
     fi
 }
 ```
 
+> **As shipped** (`lib/common_utils.sh`): the helpers are **`resolve_site_config`**
+> and **`assert_site_configured`** — there is no single `source_site_config`.
+> `resolve_site_config`'s warn is routed to **stderr** so its captured stdout
+> (the path) stays clean inside `$(...)`.
+
 ### Adapter A — sourced files (S2 + S3 override)
-Replace `source "$VARS_FILE"` with:
+Resolve the path, source it, then assert (replaces a bare `source "$VARS_FILE"`):
 ```bash
-source_site_config "lib_kerberos_setup.vars.conf" "${SCRIPT_DIR}/../config"
+VARS_FILE="$(resolve_site_config "lib_kerberos_setup.vars.conf" "${SCRIPT_DIR}/../config")"
+source "$VARS_FILE"
+assert_site_configured "AD realm (DEFAULT_AD_DOMAIN_UPPER)" "${DEFAULT_AD_DOMAIN_UPPER:-}"
 ```
 For S3: keep `source setup_nodes.vars.conf` as-is (committed defaults), then layer the override:
 ```bash
@@ -104,7 +110,7 @@ cp -f "$(resolve_site_config "admin_recipients.txt" "${WORKSPACE_ROOT}/config")"
 1. Generate the 7 `.example` files from the real ones (sanitize values, keep structure + comments; insert `__FILL_ME__` sentinels in S2).
 2. `git rm --cached` the 6 S1/S2 real files (S3 stays committed; only the new `setup_nodes.site.vars.conf` is gitignored).
 3. `.gitignore`: add `config/site/` plus the 6 real S1/S2 filenames (belt + suspenders).
-4. Add `resolve_site_config` / `source_site_config` to `lib/common_utils.sh`.
+4. Add `resolve_site_config` / `assert_site_configured` to `lib/common_utils.sh`.
 5. Patch consumers: `12_lib_kerberos_setup.sh`, `10_join_domain_sssd.sh`, `11_join_domain_samba.sh`, `50_setup_nodes.sh` (3 copy sites + S3 override line), `99_check_pkg_drift.sh`, `telemetry/telemetry_api.py`.
 6. Docs: `config/SITE_OVERRIDE.md` runbook; update `docs/reference/CONFIGURATION_MAP*`.
 7. Grep guard — confirm nothing else reads the old paths:
@@ -133,6 +139,9 @@ done
 { grep -E '^(SMTP_HOST|SENDER_EMAIL|MAIL_DOMAIN|MAIL_DOMAINS_USER|SMTP_DNS_SERVERS|BIOME_CONTACT)=' \
     config/setup_nodes.vars.conf; } > config/site/setup_nodes.site.vars.conf
 
+# S3.1 
+  The theme map: copy config/site/scopri_theme_map.conf from this workstation, or recreate from the .example.)
+  
 # 2. NOW pull. The scrub commit deletes the tracked config/X from the working tree —
 #    harmless: real values already live in config/site/ (never tracked).
 git pull --ff-only
@@ -141,10 +150,14 @@ git pull --ff-only
 grep -L __FILL_ME__ config/site/*.conf config/site/*.txt   # must list ALL; none with sentinel
 
 # 4. Dry-run a consumer (no domain mutation) to prove sourcing works
+export LOG_FILE=/dev/null   # avoid tee perm-warning when not root
 bash -n scripts/12_lib_kerberos_setup.sh && \
   ( source lib/common_utils.sh
-    source_site_config lib_kerberos_setup.vars.conf "$PWD/config" && \
-    echo "OK realm=$DEFAULT_PERSONALE_UNIBO_REALM" )
+    f="$(resolve_site_config lib_kerberos_setup.vars.conf "$PWD/config")"
+    echo "using: $f"
+    source "$f"
+    assert_site_configured "AD realm" "${DEFAULT_AD_DOMAIN_UPPER:-}"
+    echo "OK realm=$DEFAULT_AD_DOMAIN_UPPER" )
 ```
 
 **Rollback:** `tar xzf /var/backups/r_env_manager/config_pre_scrub_*.tgz` restores the pre-scrub tree. Nothing irreversible happened on the host.
