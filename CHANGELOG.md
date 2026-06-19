@@ -37,6 +37,18 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
     runbook: [`plan/secret_scrub_site_overlay_plan.md`](plan/secret_scrub_site_overlay_plan.md);
     overlay reference: [`config/SITE_OVERRIDE.md`](config/SITE_OVERRIDE.md).
 
+### Changed
+
+- **Root `README.md` rewritten as an accurate thin landing page** (audit Phase 0.1).
+  Replaced the stale `setup_r_env.sh` + `install/` + `/var/log/r_setup/` + `:8787`
+  description (a layout that no longer exists) with the real `init.sh` →
+  `r_env_manager.sh` entry point, the actual `scripts/`/`config/`/`templates/`/`lib/`
+  layout and phase order, the T1/T2/T3 tier model, the `config/site/` overlay note,
+  and an engineering-leverage section (cgroup slices, `/Rtmp`, local R-libs, BLAS-serial,
+  OIDC gateway + the modular `Rprofile_site.d/` fragment kernel) linking to the deep
+  docs. Audit markers in `docs/audits/T1_HOST_DEPLOYMENT_AUDIT.md` §5 / Phase 0.1
+  flipped to `[FIXED]`.
+
 ### Added
 
 - `CHANGELOG.md` (this file) — repo-wide change history.

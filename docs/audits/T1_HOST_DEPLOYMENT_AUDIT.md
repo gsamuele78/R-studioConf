@@ -13,8 +13,9 @@
 > overlay* work — see [`../../CHANGELOG.md`](../../CHANGELOG.md),
 > [`../../config/SITE_OVERRIDE.md`](../../config/SITE_OVERRIDE.md),
 > [`../reference/CONFIGURATION_MAP.md`](../reference/CONFIGURATION_MAP.md) §0, and
-> `plan/secret_scrub_site_overlay_plan.md`. The CRITICAL correctness defects in
-> §1 and most of §3/§4/§5 remain **OPEN**.
+> `plan/secret_scrub_site_overlay_plan.md`. The root **README.md** rewrite
+> (§5 / Phase 0.1) is now **[FIXED]**. The CRITICAL correctness defects in
+> §1 and most of §3/§4 and the rest of §5 remain **OPEN**.
 
 ---
 
@@ -146,8 +147,12 @@ user→project map are the spear-phishing assets).
 
 ## 5. Documentation drift
 
-- **[OPEN]** Root `README.md` is **WRONG** — describes a `setup_r_env.sh` +
-  `install/` layout, `/var/log/r_setup/` logs, `:8787` access, none of which exist.
+- **[FIXED]** Root `README.md` is now an accurate thin landing page (real
+  `init.sh`→`r_env_manager.sh` entry point, real `scripts/`/`config/`/`templates/`
+  layout, tier model, engineering-leverage section) pointing to
+  [`docs/README.md`](../README.md) + [`INSTALLATION_GUIDE.md`](../deployment/INSTALLATION_GUIDE.md).
+  *The prior `setup_r_env.sh` + `install/` + `/var/log/r_setup/` + `:8787` content
+  is gone.*
 - **[OPEN]** `.github/workflows/test_setup_r_env.yml` tests that ghost layout with
   `|| true` everywhere → permanent false green.
 - **[OPEN]** `.ai/agents.md §5` is stale — missing 10+ scripts, 3 wrong
@@ -173,7 +178,7 @@ then features. Each phase is independently shippable.
 
 **Phase 0 — Stop the bleeding (docs front door + false-green CI)**
 1. Rewrite root `README.md` as a thin accurate landing page → point to
-   `docs/README.md` + `INSTALLATION_GUIDE.md`. **[OPEN]**
+   `docs/README.md` + `INSTALLATION_GUIDE.md`. **[FIXED]**
 2. Fix or delete `.github/workflows/test_setup_r_env.yml` (remove `|| true`
    masking; test real entrypoints). **[OPEN]**
 3. Introduce a repo-root `CHANGELOG.md` (Keep-a-Changelog); add `[Unreleased]`. **[FIXED]**
