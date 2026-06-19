@@ -205,5 +205,5 @@ If you see this error, contact the admin with:
 
 For technical issues or server problems:
 
-- **Email:** <Lifewatch_Biome_internal@live.unibo.it>
+- **Email:** <biome-internal@example.org>
 - **Subject line:** Include "BIOME-CALC" and a brief description

@@ -46,9 +46,9 @@ Surface diagnosis (before running the harness):
 
 ```bash
 # Run as the user, not root, so NFS perms match production
-sudo -u gianfranco.samuele2 \
+sudo -u sysadmin.user \
   /usr/local/bin/99_diagnose_lussu_hang.sh \
-  /nfs/home/gianfranco.samuele2/test_Michele/.../block1_aoh_to_rij.R
+  /nfs/home/sysadmin.user/test_user/.../block1_aoh_to_rij.R
 ```
 
 Outputs land in `/tmp/lussu_diag_<ts>/`:
@@ -186,7 +186,7 @@ After landing the system-side fix:
 sudo bash scripts/50_setup_nodes.sh   # menu option H or full deploy
 
 # Re-run only the production-baseline layer
-sudo -u gianfranco.samuele2 Rscript /path/to/block1_aoh_to_rij.R
+sudo -u sysadmin.user Rscript /path/to/block1_aoh_to_rij.R
 ```
 
 Expected: chunk progress lines stream past, no `D`-state workers,

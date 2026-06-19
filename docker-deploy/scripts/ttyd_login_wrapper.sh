@@ -42,8 +42,8 @@ echo "Attempting login for: '$REMOTE_USER'" >> "$LOG_FILE"
 # WORKAROUND: TTYD 32-char limit bypass.
 # Nginx strips the domain. We re-append it here.
 if [[ "$REMOTE_USER" != *"@"* ]]; then
-    # Default domain fallback
-    DOMAIN_SUFFIX="@unibo.it"
+    # Default domain fallback (override via TTYD_DOMAIN_SUFFIX env per host)
+    DOMAIN_SUFFIX="${TTYD_DOMAIN_SUFFIX:-@example.org}"
     echo "Appending domain suffix: $DOMAIN_SUFFIX" >> "$LOG_FILE"
     REMOTE_USER="${REMOTE_USER}${DOMAIN_SUFFIX}"
 fi

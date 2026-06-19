@@ -12,12 +12,12 @@
 | Tier | File | Sensitive content | How it is consumed |
 |---|---|---|---|
 | **S1 — third-party PII** | `config/scopri_progetti_known.conf` | researcher → supervisor → funded-project map | **copied** at deploy: `50_setup_nodes.sh:1657-1659`, `:2214` |
-| **S1** | `config/admin_recipients.txt` | sysadmin + PI emails, prod IP `137.204.21.170`, Teams group | **copied**: `50_setup_nodes.sh:1650-1652`, `:2121`; read by `99_check_pkg_drift.sh:53`, `telemetry/telemetry_api.py:566-570` |
+| **S1** | `config/admin_recipients.txt` | sysadmin + PI emails, prod IP ``, Teams group | **copied**: `50_setup_nodes.sh:1650-1652`, `:2121`; read by `99_check_pkg_drift.sh:53`, `telemetry/telemetry_api.py:566-570` |
 | **S1** | `config/user_email_map.txt` | currently only examples; PII surface going forward | **copied**: `50_setup_nodes.sh:2122` |
 | **S2 — AD/infra topology** | `config/lib_kerberos_setup.vars.conf` | realm, KDC hostnames, OU DNs, allow-groups, admin UPN | **sourced**: `12_lib_kerberos_setup.sh:25-27` |
 | **S2** | `config/join_domain_sssd.vars.conf` | realm/OU/home template w/ real username example | **sourced** by `10_join_domain_sssd.sh` |
 | **S2** | `config/join_domain_samba.vars.conf` | realm/OU/groups | **sourced** by `11_join_domain_samba.sh` |
-| **S3 — institutional, low** | `config/setup_nodes.vars.conf` | `SMTP_HOST=smtp.unibo.it` (50), `SENDER_EMAIL` (52), `MAIL_DOMAIN` (54), `MAIL_DOMAINS_USER` (61), `SMTP_DNS_SERVERS=137.204.25.x` (62), `BIOME_CONTACT=…@live.unibo.it` (305) | sourced; 16 KB, rest is generic tuning |
+| **S3 — institutional, low** | `config/setup_nodes.vars.conf` | `SMTP_HOST=smtp.example.org` (50), `SENDER_EMAIL` (52), `MAIL_DOMAIN` (54), `MAIL_DOMAINS_USER` (61), `SMTP_DNS_SERVERS` (62, internal DNS IPs), `BIOME_CONTACT` (305) | sourced; 16 KB, rest is generic tuning |
 
 **S3 decision (locked): redact only lines 50/52/54/61/62/305 into the override. The remaining ~16 KB of tuning stays committed.** Full-file overlay was rejected as higher-risk than the data is sensitive.
 
@@ -174,7 +174,7 @@ Recommended sequence:
 
 ## 7. Verification gates (definition of done)
 
-- [ ] `git grep -nE 'chiarucci|sabatini|nascimbene|cazzolla|lussu|137\.204\.21\.170|dcrpersonale|Dip-BIGEA|Str00968'` on the scrub branch returns **nothing** in tracked files.
+- [ ] `git grep` for the real PI surnames, the AD realm, KDC hostnames, the production IPs, the AD group prefix, and the AD OU names returns **nothing** in tracked files. (Keep the actual token list out of this committed doc — run it from your shell history / the scrub branch notes.)
 - [ ] Fresh clone (no `config/site/`) → `12_lib_kerberos_setup.sh` aborts with the `__FILL_ME__` error, does not proceed.
 - [ ] Live host after runbook → step 3 lists all site files, step 4 prints the real realm.
 - [ ] `grep` guard (§3.7) shows zero stale references to old paths.

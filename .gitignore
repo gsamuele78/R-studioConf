@@ -26,3 +26,6 @@ config/setup_nodes.site.vars.conf
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Real user research/test code — not for the public repo
+plan/Test/

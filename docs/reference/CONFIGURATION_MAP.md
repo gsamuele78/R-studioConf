@@ -122,7 +122,7 @@ are bash-style `KEY=VALUE` and are sourced — never `eval`'d.
 | `DEFAULT_HOME_TEMPLATE` | Home-dir template fed to PAM `mkhomedir`. |
 | `NTP_PREFERRED_CLIENT`, `DEFAULT_NTP_FALLBACK_POOLS_CHRONY_NTP`, `DEFAULT_NTP_FALLBACK_POOLS_SYSTEMD` | Time-sync fallback (Kerberos requires ≤5 min skew). |
 | `DEFAULT_DIR_UNIBO_REALM` / `_KDC` / `_ADMIN_SERVER` | DIR.UNIBO.IT realm. |
-| `DEFAULT_PERSONALE_UNIBO_REALM` / `_KDC` / `_ADMIN_SERVER` | PERSONALE.DIR.UNIBO.IT realm. |
+| `DEFAULT_PERSONALE_UNIBO_REALM` / `_KDC` / `_ADMIN_SERVER` | AD.EXAMPLE.COM realm. |
 | `DEFAULT_STUDENTI_UNIBO_REALM` / `_KDC` / `_ADMIN_SERVER` | STUDENTI.DIR.UNIBO.IT realm. |
 | `DEFAULT_DOMAIN_REALM_MAPPINGS` | `[domain_realm]` block lines. |
 

@@ -967,7 +967,7 @@ setup_nodes_local_rlibs() {
   #
   # v12.8 fix: gate is now [uid >= 1000 && uid != 65534]. The previous
   # ceiling of 65000 silently excluded SSSD/Samba AD users, whose UIDs
-  # are SID-mapped into the 100M+ range (e.g. 163718183).
+  # are SID-mapped into the 100M+ range (e.g. ~1.6e8).
   #
   # v12.9 fix: ENUMERATION SOURCE was `getent passwd` (bulk). On
   # SSSD-joined hosts the default is `enumerate=false` (Debian/RHEL),

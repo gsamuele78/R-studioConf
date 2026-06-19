@@ -15,11 +15,11 @@ The settings for the cleanup subsystem must be edited in the main `setup_nodes.v
 
 ```bash
 # Email threshold and tracking settings
-SMTP_HOST="smtp.unibo.it"
+SMTP_HOST="smtp.example.org"
 SMTP_PORT="25"
-SENDER_EMAIL="noreply-biome@unibo.it"
-MAIL_DOMAIN="studio.unibo.it"
-SMTP_DNS_SERVERS="137.204.25.10 137.204.25.11"
+SENDER_EMAIL="noreply-biome@example.org"
+MAIL_DOMAIN="students.example.org"
+SMTP_DNS_SERVERS="192.0.2.10 192.0.2.11"
 KILL_TIMEOUT="30"
 
 # Cron scheduling parameters
@@ -32,8 +32,8 @@ ORPHAN_CRON_REPORT="00 08 * * 1"
 
 Administrative recipients and specific user domain overrides are controlled by text files injected during node setup:
 
-1. **`config/admin_recipients.txt`**: A line-by-line list of administrative email addresses (e.g., `gianfranco.samuele2@unibo.it`) that receive the weekly system `r_orphan_report.sh` summary.
-2. **`config/user_email_map.txt`**: Overrides `MAIL_DOMAIN` for specific users that maintain non-standard domain addresses (e.g. `duccio.rocchini duccio.rocchini@unibo.it`).
+1. **`config/admin_recipients.txt`**: A line-by-line list of administrative email addresses (e.g., `sysadmin.user@example.org`) that receive the weekly system `r_orphan_report.sh` summary.
+2. **`config/user_email_map.txt`**: Overrides `MAIL_DOMAIN` for specific users that maintain non-standard domain addresses (e.g. `pi.two pi.two@example.org`).
 
 ## Automated Deployment Process
 
@@ -83,4 +83,4 @@ sudo /etc/biome-calc/script/r_orphan_report.sh
 
 ## Legacy Support Notes
 
-If integrating with strict external mailing platforms like Microsoft Teams groups (e.g., `Lifewatch_Biome_internal@live.unibo.it`), external senders inherently trigger rejection traps. The `admin_recipients.txt` design mitigates this by allowing discrete target broadcasting, but administrators can alternatively whitelist the BIOME-CALC sender natively within the M365 console.
+If integrating with strict external mailing platforms like Microsoft Teams groups (e.g., `biome-internal@example.org`), external senders inherently trigger rejection traps. The `admin_recipients.txt` design mitigates this by allowing discrete target broadcasting, but administrators can alternatively whitelist the BIOME-CALC sender natively within the M365 console.

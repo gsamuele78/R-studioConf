@@ -552,10 +552,10 @@ ownership:
 
 | user                | leaf exists | leaf writable | `.libPaths()[1]`        |
 |---------------------|-------------|---------------|-------------------------|
-| rocio.corteslobos2  | yes         | yes           | NFS ❌                  |
-| michele.dimusciano  | yes         | yes           | NFS ❌                  |
-| arianna.ferrara4    | yes         | yes           | NFS ❌                  |
-| gianfranco.samuele2 | yes         | yes           | local ✅                |
+| user.two  | yes         | yes           | NFS ❌                  |
+| user.three  | yes         | yes           | NFS ❌                  |
+| user.four    | yes         | yes           | NFS ❌                  |
+| sysadmin.user | yes         | yes           | local ✅                |
 | martina.livornese2  | yes         | yes           | local ✅                |
 
 ### Root cause: `~/.Renviron` multi-writer race
@@ -641,8 +641,8 @@ sudo /opt/R-studioConf/scripts/99_check_user_renviron_overrides.sh \
   --fix --commit -y
 ```
 
-Run on biome-calc03 (2026-05-10): patched 3 files (rocio.corteslobos2,
-michele.dimusciano, arianna.ferrara4); post-patch `.libPaths()[1]` is
+Run on biome-calc03 (2026-05-10): patched 3 files (user.two,
+user.three, user.four); post-patch `.libPaths()[1]` is
 local-disk for all three. Recommend running the same on
 biome-calc01/02/04 as a sweep.
 
@@ -662,7 +662,7 @@ up the fragment automatically.
 ### Verification (post-deploy)
 
 ```bash
-for u in rocio.corteslobos2 michele.dimusciano arianna.ferrara4; do
+for u in user.two user.three user.four; do
   sudo -u "$u" -i Rscript -e '
     cat(.libPaths()[1L], "\n")
   '
@@ -690,7 +690,7 @@ Two regressions surfaced after the initial v12.9 deploy:
 2. **Step 7c warmup created `/var/lib/biome-Rlibs/<u>/` parent dirs as
    `root:root`.** GNU `install -d -m PERM -o U -g G LEAF` only applies
    `-o/-g` to the LEAF (`<v>/`), not to the auto-created parent
-   (`<u>/`). On biome-calc03, every AD user except `michele.lussu`
+   (`<u>/`). On biome-calc03, every AD user except `user.one`
    (whose parent was created by his own R session via fragment 04
    `dir.create(recursive=TRUE)`) ended up with a root-owned subtree —
    meaning `install.packages()` from RStudio would fail with
@@ -712,7 +712,7 @@ CONTEXT. v12.8 shipped three fixes (UID gate widened to `>=1000 && !=65534`,
 fragment 04 reads RAW `R_LIBS_USER`, expand_one resolves `%u %v %V %p %o %a`
 
 * shell-style `$HOME/$USER/~`). On `biome-calc03`, post-deploy reproduction
-on `michele.lussu` (UID 164186128) and `gianfranco.samuele2` (UID 163718183)
+on `user.one` (UID 100000001) and `sysadmin.user` (UID 100000002)
 showed v12.8 **did not fix the symptom**: `.libPaths()` still returned only
 the NFS fallback. Step 7c warmup logged `warmed=1 skipped=40` — only
 `ladmin` was warmed; every AD user fell off the bottom of the loop. v12.8
@@ -737,8 +737,8 @@ ROOT CAUSE — THREE INDEPENDENT v12.8 RESIDUAL DEFECTS.
    *already dropped* the non-existent local entry, and getting+setting
    the same cache cannot re-introduce it. To make R re-scan, you must
    pass an explicit list that *includes* the new path. Audit log on
-   michele.lussu confirmed: `[2026-05-10 ...] 04_user_lib_bootstrap (v12.8):
-   created /var/lib/biome-Rlibs/michele.lussu/4.5` followed seconds later
+   user.one confirmed: `[2026-05-10 ...] 04_user_lib_bootstrap (v12.8):
+   created /var/lib/biome-Rlibs/user.one/4.5` followed seconds later
    by `.libPaths()` still showing only NFS.
 
 2. **R does NOT expand `%u` in `Renviron.site`.**
@@ -767,7 +767,7 @@ ROOT CAUSE — THREE INDEPENDENT v12.8 RESIDUAL DEFECTS.
    therefore returns ONLY `/etc/passwd` entries — every AD user is
    invisible. Per-name `getent passwd <name>` *does* hit SSSD and
    resolves correctly. Confirmed empirically on biome-calc03:
-   `getent passwd michele.lussu` returns the full passwd line;
+   `getent passwd user.one` returns the full passwd line;
    `getent passwd | grep michele` returns nothing.
 
 WHY v12.8 PASSED LOCAL TESTS. The v12.8 dev path validated against
@@ -903,8 +903,8 @@ grep -F 'Warm-up:' /var/log/biome-log/r_biome_system.log | tail -1
 (b) Affected user sees the local lib **without** --vanilla
 
 ```bash
-sudo -u michele.lussu -i R --no-save -e '.libPaths()'
-# Expect /var/lib/biome-Rlibs/michele.lussu/4.5 as [1].
+sudo -u user.one -i R --no-save -e '.libPaths()'
+# Expect /var/lib/biome-Rlibs/user.one/4.5 as [1].
 # DO NOT use --vanilla — it bypasses Renviron.site + Rprofile.site.
 ```
 
@@ -931,7 +931,7 @@ sudo find /nfs/home/<test_user> -newer /var/lib/biome-Rlibs/<test_user>/4.5
 ## v12.8 (2026-05-10) — "User-lib bootstrap fix for AD/SSSD high-UID users"
 
 CONTEXT. On `biome-calc03` AD-joined users authenticated via SSSD/Samba
-(example: `gianfranco.samuele2`, UID 163718183, gid 163600513
+(example: `sysadmin.user`, UID 100000002, gid 100000513
 `domain_users`) reported that `R -e '.libPaths()'` showed only the NFS
 fallback `/nfs/home/<user>/R/x86_64-pc-linux-gnu-library/4.5` — the
 local-disk first entry `/var/lib/biome-Rlibs/<user>/4.5` from the v12.4
@@ -950,7 +950,7 @@ ROOT CAUSE — TWO INDEPENDENT DEFECTS, SAME VICTIM (high-UID AD users).
    [[ ${uid} -ge 1000 && ${uid} -lt 65000 ]] || continue
    ```
 
-   SSSD/Samba SID-map AD users into the 100M+ range (UID 163718183 in
+   SSSD/Samba SID-map AD users into the 100M+ range (UID 100000002 in
    our case), so every single AD user fell off the upper edge of the
    gate and was silently `continue`-d. The "warmed=N" log line at the
    end of Step 7c showed N = number of *local* accounts only, never AD.
@@ -1018,8 +1018,8 @@ without waiting for redeploy:
 
 ```bash
 # Per affected user (substitute login + gid + R short version):
-sudo install -d -m 0755 -o gianfranco.samuele2 -g domain_users \
-  /var/lib/biome-Rlibs/gianfranco.samuele2/4.5
+sudo install -d -m 0755 -o sysadmin.user -g domain_users \
+  /var/lib/biome-Rlibs/sysadmin.user/4.5
 ```
 
 After v12.8 deploy + Step 7c re-run, every existing AD user is
@@ -1044,8 +1044,8 @@ grep -F 'Warm-up:' /var/log/biome-log/r_biome_system.log | tail -1
 (b) Affected user can now see the local lib without the manual chown
 
 ```
-sudo -u gianfranco.samuele2 -i R --vanilla -e '.libPaths()'
-# Expect /var/lib/biome-Rlibs/gianfranco.samuele2/4.5 as [1].
+sudo -u sysadmin.user -i R --vanilla -e '.libPaths()'
+# Expect /var/lib/biome-Rlibs/sysadmin.user/4.5 as [1].
 ```
 
 (c) Runtime fragment self-heals on a fresh user (delete + relog)

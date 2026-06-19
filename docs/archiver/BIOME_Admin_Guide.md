@@ -1,7 +1,7 @@
 # BIOME Archive Infrastructure — Admin Guide
 
 > **Versione:** 1.0 · **Server:** biome-calc01 · **OS:** Ubuntu 24.04 LTS  
-> **Realm AD:** `PERSONALE.DIR.UNIBO.IT` · **Storage:** `/mnt/ProjectStorage` · **Home NFS:** `/nfs/home`
+> **Realm AD:** `AD.EXAMPLE.COM` · **Storage:** `/mnt/ProjectStorage` · **Home NFS:** `/nfs/home`
 
 ---
 
@@ -163,8 +163,8 @@ sudo /usr/local/custom/script/scopri_progetti_v5.sh
 
 # Output atteso:
 # === BIOME AD GROUP INSPECTOR V5 (multi-project) - ...
-# [MATCH]   manuele.bazzichetto         → supervisor:francesco.sabatini4  ...
-# [PI]      duccio.rocchini             | ...
+# [MATCH]   researcher.one         → supervisor:pi.one  ...
+# [PI]      pi.two             | ...
 # [?????]   diletta.santovito2          | ...
 # ...
 # CSV draft: /usr/local/custom/biome_supervisor_map_20250219.csv
@@ -177,7 +177,7 @@ sudo /usr/local/custom/script/scopri_progetti_v5.sh
 sudo nano /usr/local/custom/biome_supervisor_map_YYYYMMDD.csv
 
 # Operazioni tipiche:
-# 1. Rinomina colonna project con nomi reali (es. BIOME_General → PRIN2022-Sabatini)
+# 1. Rinomina colonna project con nomi reali (es. BIOME_General → PRIN2022-PiOne)
 # 2. Risolvi righe _UNKNOWN_ dopo conferma dai PI
 # 3. Aggiungi colonna type se necessario (default ACTIVE se omessa)
 # 4. Aggiungi righe extra per utenti multi-progetto
@@ -215,10 +215,10 @@ sudo /usr/local/custom/script/unibo_archive_manager_v23.sh
 # Output atteso (dry-run):
 # [DRY-RUN] Nessuna modifica...
 #
-# [USER]    manuele.bazzichetto
-#           [active]  PRIN2022-Sabatini    supervisor:francesco.sabatini4  [attivo]
-#                     target: /mnt/ProjectStorage/francesco.sabatini4/PRIN2022-Sabatini/manuele.bazzichetto
-#             [link-new] PRIN2022-Sabatini → /mnt/.../manuele.bazzichetto
+# [USER]    researcher.one
+#           [active]  PRIN2022-PiOne    supervisor:pi.one  [attivo]
+#                     target: /mnt/ProjectStorage/pi.one/PRIN2022-PiOne/researcher.one
+#             [link-new] PRIN2022-PiOne → /mnt/.../researcher.one
 # ...
 # RIEPILOGO
 #   Utenti ACTIVE    :  8
@@ -303,7 +303,7 @@ Visibile all'utente stesso. Utile in caso di domande ("perché ho due cartelle?"
 # 2. Aggiorna KNOWN_ENTRIES in scopri_progetti_v5.sh
 # 3. Aggiungi riga al CSV di produzione direttamente (più veloce che rigenerare)
 
-echo "mario.rossi,ACTIVE,prof.bianchi,PRIN2022-Sabatini,2025-03-01,,manual,\"nuovo dottorando\"" \
+echo "mario.rossi,ACTIVE,prof.bianchi,PRIN2022-PiOne,2025-03-01,,manual,\"nuovo dottorando\"" \
     | sudo tee -a /usr/local/custom/biome_supervisor_map.csv
 
 # 4. Dry-run puntuale (filtra solo l'utente)
@@ -313,7 +313,7 @@ sudo /usr/local/custom/script/unibo_archive_manager_v23.sh 2>&1 | grep -A5 "mari
 sudo /usr/local/custom/script/unibo_archive_manager_v23.sh --apply
 
 # 6. Verifica
-ls -la /mnt/ProjectStorage/prof.bianchi/PRIN2022-Sabatini/mario.rossi/
+ls -la /mnt/ProjectStorage/prof.bianchi/PRIN2022-PiOne/mario.rossi/
 ls -la /nfs/home/mario.rossi/ARCHIVE_STORAGE/
 ```
 
@@ -352,13 +352,13 @@ grep "mario.rossi" /usr/local/custom/logs/biome_audit.log | tail -5
 
 ```bash
 # Aggiorna date_end nel CSV (il system applicherà suffisso -CONCLUSO al symlink)
-sudo sed -i 's/mario.rossi,ACTIVE,prof.bianchi,PRIN2022-Sabatini,2025-03-01,,/mario.rossi,ACTIVE,prof.bianchi,PRIN2022-Sabatini,2025-03-01,2025-12-31,/' \
+sudo sed -i 's/mario.rossi,ACTIVE,prof.bianchi,PRIN2022-PiOne,2025-03-01,,/mario.rossi,ACTIVE,prof.bianchi,PRIN2022-PiOne,2025-03-01,2025-12-31,/' \
     /usr/local/custom/biome_supervisor_map.csv
 
 # Apply
 sudo /usr/local/custom/script/unibo_archive_manager_v23.sh --apply
 
-# Verifica: il symlink deve ora chiamarsi PRIN2022-Sabatini-CONCLUSO
+# Verifica: il symlink deve ora chiamarsi PRIN2022-PiOne-CONCLUSO
 ls /nfs/home/mario.rossi/ARCHIVE_STORAGE/
 ```
 
@@ -373,10 +373,10 @@ sudo sed -i 's/^mario.rossi,ACTIVE/mario.rossi,SKIP/' \
 # I dati rimangono in ProjectStorage intatti
 
 # 3. Verifica che i dati siano accessibili al supervisor
-ls -la /mnt/ProjectStorage/prof.bianchi/PRIN2022-Sabatini/mario.rossi/
+ls -la /mnt/ProjectStorage/prof.bianchi/PRIN2022-PiOne/mario.rossi/
 
 # 4. Annotare sul CSV la data di fine
-# mario.rossi,SKIP,prof.bianchi,PRIN2022-Sabatini,2025-03-01,2026-02-19,manual,"fine dottorato"
+# mario.rossi,SKIP,prof.bianchi,PRIN2022-PiOne,2025-03-01,2026-02-19,manual,"fine dottorato"
 ```
 
 ### 5.5 Rinnovo annuale CSV (consigliato ogni anno accademico)
@@ -403,21 +403,21 @@ cat /usr/local/custom/biome_email_pi.txt
 ### 6.1 Cambio nome progetto (rinomina)
 
 ```bash
-# Scenario: PRIN2022-Sabatini → PRIN2022-Sabatini-WP2
+# Scenario: PRIN2022-PiOne → PRIN2022-PiOne-WP2
 
 # 1. Aggiorna CSV
-sudo sed -i 's/PRIN2022-Sabatini,/PRIN2022-Sabatini-WP2,/g' \
+sudo sed -i 's/PRIN2022-PiOne,/PRIN2022-PiOne-WP2,/g' \
     /usr/local/custom/biome_supervisor_map.csv
 
 # 2. Rinomina directory fisica (opzionale, solo se dati già presenti)
-sudo mv /mnt/ProjectStorage/prof.bianchi/PRIN2022-Sabatini \
-        /mnt/ProjectStorage/prof.bianchi/PRIN2022-Sabatini-WP2
+sudo mv /mnt/ProjectStorage/prof.bianchi/PRIN2022-PiOne \
+        /mnt/ProjectStorage/prof.bianchi/PRIN2022-PiOne-WP2
 
 # 3. Apply: i symlink vengono aggiornati automaticamente
 sudo /usr/local/custom/script/unibo_archive_manager_v23.sh --apply
 
 # 4. Verifica
-sudo /usr/local/custom/script/unibo_archive_manager_v23.sh --status | grep "Sabatini"
+sudo /usr/local/custom/script/unibo_archive_manager_v23.sh --status | grep "PiOne"
 ```
 
 ### 6.2 Collaborazione multi-supervisore (progetto parallelo)
@@ -427,15 +427,15 @@ sudo /usr/local/custom/script/unibo_archive_manager_v23.sh --status | grep "Saba
 # Aggiungere semplicemente una seconda riga ACTIVE nel CSV
 
 cat >> /usr/local/custom/biome_supervisor_map.csv << 'EOF'
-mario.rossi,ACTIVE,duccio.rocchini,RemoteSensing-Collab,2025-01-01,,manual,"collaborazione con Rocchini"
+mario.rossi,ACTIVE,pi.two,RemoteSensing-Collab,2025-01-01,,manual,"collaborazione con PiTwo"
 EOF
 
 sudo /usr/local/custom/script/unibo_archive_manager_v23.sh --apply
 
 # Risultato in home utente:
 # ~/ARCHIVE_STORAGE/
-#   PRIN2022-Sabatini       → .../prof.bianchi/...
-#   RemoteSensing-Collab    → .../duccio.rocchini/...
+#   PRIN2022-PiOne       → .../prof.bianchi/...
+#   RemoteSensing-Collab    → .../pi.two/...
 ```
 
 ### 6.3 Report trasferimenti storici
@@ -465,7 +465,7 @@ sudo net ads testjoin
 # Expected: Join is OK
 
 # Query utente campione
-sudo net ads search "(sAMAccountName=manuele.bazzichetto)" \
+sudo net ads search "(sAMAccountName=researcher.one)" \
     displayName title memberOf -P 2>/dev/null | head -20
 
 # Verifica che keytab funzioni (non chiede password)
@@ -473,8 +473,8 @@ sudo net ads search "(sAMAccountName=test)" displayName -P
 # Non deve restituire "kinit failed" o "NT_STATUS_ACCESS_DENIED"
 
 # Winbind: risoluzione username
-wbinfo -i manuele.bazzichetto
-# Expected: manuele.bazzichetto:*:UIDNUMBER:GIDNUMBER:displayName:/nfs/home/...:/bin/bash
+wbinfo -i researcher.one
+# Expected: researcher.one:*:UIDNUMBER:GIDNUMBER:displayName:/nfs/home/...:/bin/bash
 ```
 
 ### 7.2 Test generazione CSV
@@ -526,14 +526,14 @@ done
 sudo -u mario.rossi ls -la ~/ARCHIVE_STORAGE/
 
 # Verifica che l'utente possa scrivere nella propria directory
-sudo -u mario.rossi touch ~/ARCHIVE_STORAGE/PRIN2022-Sabatini/test_write_$(date +%s)
+sudo -u mario.rossi touch ~/ARCHIVE_STORAGE/PRIN2022-PiOne/test_write_$(date +%s)
 # Expected: file creato senza errori
 
 # Cleanup
-sudo -u mario.rossi rm ~/ARCHIVE_STORAGE/PRIN2022-Sabatini/test_write_*
+sudo -u mario.rossi rm ~/ARCHIVE_STORAGE/PRIN2022-PiOne/test_write_*
 
 # Verifica che l'utente NON possa scrivere nella directory di un altro utente
-sudo -u mario.rossi ls /mnt/ProjectStorage/prof.bianchi/PRIN2022-Sabatini/altro.utente/
+sudo -u mario.rossi ls /mnt/ProjectStorage/prof.bianchi/PRIN2022-PiOne/altro.utente/
 # Expected: Permission denied (grazie ai permessi 750)
 ```
 
@@ -619,11 +619,11 @@ sudo net ads testjoin
 sudo net ads kerberos renew -P
 
 # Verifica raggiungibilità DC
-ping 137.204.25.214
-ldapsearch -H ldap://137.204.25.214 -x -s base "(objectClass=*)" 2>&1 | head -5
+ping 192.0.2.30
+ldapsearch -H ldap://192.0.2.30 -x -s base "(objectClass=*)" 2>&1 | head -5
 
 # Se il join è rotto
-sudo net ads join -U admin_unibo@PERSONALE.DIR.UNIBO.IT
+sudo net ads join -U admin_unibo@AD.EXAMPLE.COM
 sudo systemctl restart winbind
 ```
 
@@ -634,7 +634,7 @@ sudo systemctl restart winbind
 sudo klist -k /etc/krb5.keytab
 
 # Test autenticazione con keytab
-sudo kinit -k -t /etc/krb5.keytab "BIOME-CALC01$@PERSONALE.DIR.UNIBO.IT"
+sudo kinit -k -t /etc/krb5.keytab "BIOME-CALC01$@AD.EXAMPLE.COM"
 sudo klist  # verifica ticket ottenuto
 
 # Se scaduto o corrotto: rifare il join AD
@@ -659,7 +659,7 @@ sudo net ads search "(sAMAccountName=USERNAME)" memberOf -P 2>/dev/null \
     | grep "^memberOf:" \
     | grep -oP '(?<=CN=)[^,]+'
 
-# Se i gruppi sono troppo generici (solo Str00968-biome)
+# Se i gruppi sono troppo generici (solo Str00000-biome)
 # → aggiungere manualmente l'utente a KNOWN_ENTRIES in scopri_progetti_v5.sh
 ```
 
@@ -859,7 +859,7 @@ sudo mkhomedir_helper USERNAME
 ```bash
 # Verifica symlink rotti (da cron)
 sudo /usr/local/custom/script/unibo_archive_manager_v23.sh --status \
-    | grep -E "BROKEN|LEGACY" | mail -s "[BIOME] Symlink anomalie" admin@biome.unibo.it
+    | grep -E "BROKEN|LEGACY" | mail -s "[BIOME] Symlink anomalie" admin@biome.example.org
 ```
 
 ### Mensile
@@ -915,10 +915,10 @@ find /usr/local/custom/ -name "biome_supervisor_map_*.csv" \
 # /etc/cron.d/biome-archive
 
 # Verifica giornaliera symlink rotti — ore 07:00
-0 7 * * * root /usr/local/custom/script/unibo_archive_manager_v23.sh --status 2>&1 | grep -E "BROKEN|LEGACY" | mail -s "[BIOME] Symlink check" admin@biome.unibo.it
+0 7 * * * root /usr/local/custom/script/unibo_archive_manager_v23.sh --status 2>&1 | grep -E "BROKEN|LEGACY" | mail -s "[BIOME] Symlink check" admin@biome.example.org
 
 # Report mensile spazio — primo del mese ore 08:00
-0 8 1 * * root du -sh /mnt/ProjectStorage/*/ | sort -rh | mail -s "[BIOME] Report spazio" admin@biome.unibo.it
+0 8 1 * * root du -sh /mnt/ProjectStorage/*/ | sort -rh | mail -s "[BIOME] Report spazio" admin@biome.example.org
 ```
 
 ---
