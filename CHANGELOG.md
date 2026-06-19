@@ -49,7 +49,51 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   docs. Audit markers in `docs/audits/T1_HOST_DEPLOYMENT_AUDIT.md` §5 / Phase 0.1
   flipped to `[FIXED]`.
 
+### CI / Testing
+
+- **Replaced the false-green CI** (audit Phase 0.2). Deleted
+  `.github/workflows/test_setup_r_env.yml` — it drove the deleted `setup_r_env.sh`
+  layout and wrapped every step in `|| true` (permanent false green). New
+  `.github/workflows/ci.yml` runs 7 real jobs, no `|| true`:
+  - `t1-static` — `make validate` (HC-01..HC-11) + `make doc-coherence` (HC-14) +
+    `bash -n` on every script + exec-bit guard + the `r_env_manager.sh` root-guard
+    contract. (`generate-check` runs **informational**, see Fixed below.)
+  - `t1-bash-unit` — `bats tests/unit/test_common_utils.bats`.
+  - `r-runtime-static` — Rprofile dispatcher/fragment **parse gate** +
+    `tests/r_lint_test.sh` HC-13 linter oracle.
+  - `nginx-config` — renders the nginx templates and runs `nginx -t`.
+  - `t2-validate` — `docker compose config` + `hadolint` (all 6 Dockerfiles) +
+    builds the **light** images (nginx, telemetry) on every PR.
+  - `t2-build-monsters` — **nightly 01:00** canary that builds the heavy images
+    (rstudio-sssd/samba, ollama) to answer "do they still build?".
+  - `pkg-manifest` — lints the `R_USER_PACKAGES_{CRAN,GITHUB}` arrays.
+  - Explicitly **not** tested (unrealistic in CI): AD/Kerberos join, live systemd
+    services, full CRAN/RStudio install.
+- New local-runnable helpers: `tests/check_exec_bits.sh`, `tests/templates_parse.sh`,
+  `tests/nginx_render_check.sh`.
+
+### Fixed
+
+- **`scripts/` exec bits** (audit §3): `15_setup_nginx_cleanup.sh`,
+  `40_install_telemetry.sh`, `99_health_check.sh`, `99_postmortem_forensics.sh`,
+  `99_troubleshoot_env.sh`, `pin_r_version.sh` were committed `100644`, making
+  `15_`/`40_` invisible in the launcher menu. Now `100755`, locked by
+  `tests/check_exec_bits.sh` in CI.
+- **`.ai/generate.sh` `set -u` crash** (bash 5.2): `${#arr[@]}`/`${!arr[@]}` on the
+  always-empty `LOCAL_IMAGES` associative array raised `unbound variable`, silently
+  aborting `make audit` everywhere. Guarded the empty-assoc reads. *Note:* with the
+  crash gone, `generate-check` now reveals pre-existing IDE-rule drift (date stamp +
+  `${IMAGE_TAG}` image misclassification) — tracked OPEN in the audit; the check is
+  wired informational, not blocking.
+
 ### Added
 
 - `CHANGELOG.md` (this file) — repo-wide change history.
 - `config/SITE_OVERRIDE.md` — site-local overlay reference + first-time/migration steps.
+
+### Follow-up (recommended)
+
+- **Deterministic package-drift detection.** Package sets live as bash arrays in
+  `config/r_env_manager.conf` with no pin, so CI can only lint their *shape*. The
+  real fix is a pinned **Posit Package Manager dated CRAN snapshot** (or `renv.lock`)
+  as SSOT, plus a nightly job diffing the resolved set against it.

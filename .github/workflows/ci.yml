@@ -1,0 +1,222 @@
+# .github/workflows/ci.yml
+# Meaningful CI for R-studioConf — replaces the deleted, false-green
+# test_setup_r_env.yml (which drove a setup_r_env.sh layout that no longer
+# exists and masked every step with `|| true`).
+#
+# Principle: assert only what CI can prove deterministically WITHOUT an AD
+# domain, live systemd services, /Rtmp disk, cgroups, or a full package
+# install. Static + structural + unit checks on every PR; heavy T2 image
+# builds on a nightly schedule. No `|| true` anywhere.
+#
+# NOT tested here (unrealistic in CI, by design): AD/Kerberos join, live
+# rstudio-server/nginx/ttyd services, full CRAN/RStudio .deb install.
+name: CI
+
+on:
+  push:
+    paths:
+      - 'scripts/**'
+      - 'lib/**'
+      - 'templates/**'
+      - 'config/**'
+      - 'r_env_manager.sh'
+      - 'init.sh'
+      - 'Makefile'
+      - '.ai/**'
+      - 'tests/**'
+      - 'docker-deploy/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'lib/**'
+      - 'templates/**'
+      - 'config/**'
+      - 'r_env_manager.sh'
+      - 'init.sh'
+      - 'Makefile'
+      - '.ai/**'
+      - 'tests/**'
+      - 'docker-deploy/**'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 1 * * *'   # 01:00 UTC — only trigger that runs t2-build-monsters
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── T1: static + structural gate (constraints, syntax, exec bits) ──────────
+  t1-static:
+    name: T1 static (constraints + syntax + exec bits)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Constraint compliance (HC-01..HC-11)
+        run: make validate
+
+      - name: Doc coherence (HC-14 — RPROFILE_VERSION ↔ CHANGELOG)
+        run: make doc-coherence
+
+      - name: IDE-rule freshness (informational — known generator drift)
+        continue-on-error: true
+        run: make generate-check
+
+      - name: Bash syntax (bash -n) on every shell script
+        run: |
+          set -euo pipefail
+          rc=0
+          while IFS= read -r f; do
+            bash -n "$f" || { echo "::error file=$f::bash -n failed"; rc=1; }
+          done < <(git ls-files '*.sh' 'init.sh' 'r_env_manager.sh')
+          exit "$rc"
+
+      - name: Exec-bit guard (launcher visibility)
+        run: bash tests/check_exec_bits.sh
+
+      - name: Root-guard contract (non-root must refuse, not silently run)
+        run: |
+          set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then echo "runner is root — skipping non-root assertion"; exit 0; fi
+          if timeout 30 ./r_env_manager.sh </dev/null; then
+            echo "::error::r_env_manager.sh exited 0 as non-root (root-guard broken)"
+            exit 1
+          fi
+          echo "OK — r_env_manager.sh refuses to run without root."
+
+  # ── T1: shared-library unit tests ─────────────────────────────────────────
+  t1-bash-unit:
+    name: T1 bash unit (bats — lib/common_utils.sh)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends bats
+      - name: Run bats unit tests
+        run: bats tests/unit/test_common_utils.bats
+
+  # ── R runtime: template parse gate + HC-13 linter oracle ───────────────────
+  r-runtime-static:
+    name: R runtime static (Rprofile parse + r_lint oracle)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.1'
+          use-public-rspm: true
+      - name: Rprofile fragment + dispatcher parse gate
+        run: bash tests/templates_parse.sh
+      - name: r_lint oracle differ (HC-13 linter stability)
+        run: bash tests/r_lint_test.sh
+
+  # ── Nginx: render templates and validate with `nginx -t` ───────────────────
+  nginx-config:
+    name: Nginx config (render + nginx -t)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nginx + openssl
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends nginx-core openssl
+      - name: Render nginx templates and test
+        run: bash tests/nginx_render_check.sh
+
+  # ── T2 (docker): validate compose + Dockerfiles, build the LIGHT images ────
+  t2-validate:
+    name: T2 validate (compose config + hadolint + light build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write CI env (supplies the no-default compose vars)
+        run: |
+          set -euo pipefail
+          cat > docker-deploy/.env.ci <<'EOF'
+          IMAGE_TAG=ci
+          HOST_DOMAIN=localhost
+          HOST_HOME_DIR=/tmp/biome-home
+          HOST_PROJECT_ROOT=/tmp/biome-projects
+          HTTPS_PORT=8443
+          RSTUDIO_PORT=8787
+          SSL_CERT_PATH=/tmp/ci-cert.pem
+          SSL_KEY_PATH=/tmp/ci-key.pem
+          EOF
+
+      - name: Validate compose (syntax + interpolation + resource limits render)
+        run: docker compose -f docker-deploy/docker-compose.yml --env-file docker-deploy/.env.ci config -q
+
+      - name: Hadolint Dockerfiles (fail on error severity only)
+        run: |
+          set -euo pipefail
+          for df in docker-deploy/Dockerfile docker-deploy/Dockerfile.*; do
+            echo "── hadolint ${df} ──"
+            docker run --rm -i hadolint/hadolint:v2.12.0 hadolint --failure-threshold error - < "${df}"
+          done
+
+      - name: Build LIGHT images (nginx, telemetry) — fast, every PR
+        run: docker compose -f docker-deploy/docker-compose.yml --env-file docker-deploy/.env.ci build nginx-portal telemetry-api
+
+  # ── T2 (docker): nightly "do the monsters still build?" canary ─────────────
+  t2-build-monsters:
+    name: T2 monster build (nightly canary)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [rstudio-sssd, rstudio-samba, ollama-ai]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write CI env
+        run: |
+          set -euo pipefail
+          cat > docker-deploy/.env.ci <<'EOF'
+          IMAGE_TAG=ci
+          HOST_DOMAIN=localhost
+          HOST_HOME_DIR=/tmp/biome-home
+          HOST_PROJECT_ROOT=/tmp/biome-projects
+          HTTPS_PORT=8443
+          RSTUDIO_PORT=8787
+          SSL_CERT_PATH=/tmp/ci-cert.pem
+          SSL_KEY_PATH=/tmp/ci-key.pem
+          EOF
+      - name: Free runner disk (monster images are large)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          df -h /
+      - name: Build ${{ matrix.service }}
+        run: docker compose -f docker-deploy/docker-compose.yml --env-file docker-deploy/.env.ci build ${{ matrix.service }}
+
+  # ── R package manifest shape (cheap drift guard) ───────────────────────────
+  pkg-manifest:
+    name: Package manifest lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate CRAN/GitHub package arrays
+        run: |
+          set -euo pipefail
+          # Source in a subshell — config/r_env_manager.conf is pure assignments.
+          # shellcheck disable=SC1091
+          source config/r_env_manager.conf
+          : "${R_USER_PACKAGES_CRAN?CRAN package array missing}"
+          : "${R_USER_PACKAGES_GITHUB?GitHub package array missing}"
+          echo "CRAN packages:   ${#R_USER_PACKAGES_CRAN[@]}"
+          echo "GitHub packages: ${#R_USER_PACKAGES_GITHUB[@]}"
+          rc=0
+          for spec in "${R_USER_PACKAGES_GITHUB[@]}"; do
+            # owner/repo with optional @ref, #pr, or subdir
+            if [[ ! "${spec}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+([@#/].+)?$ ]]; then
+              echo "::error::malformed GitHub package spec: '${spec}' (expected owner/repo[@ref])"
+              rc=1
+            fi
+          done
+          exit "$rc"

@@ -115,6 +115,11 @@ for df in "$PROJECT_ROOT"/docker-deploy/Dockerfile "$PROJECT_ROOT"/docker-deploy
     done < "$df"
 done
 
+# bash 5.2 regression: ${arr[@]} / ${#arr[@]} / ${!arr[@]} on an EMPTY associative
+# array raise "unbound variable" under `set -u` (LOCAL_IMAGES is empty whenever the
+# compose pins local images via ${IMAGE_TAG} rather than a literal :latest tag).
+# Reads below only enumerate arrays we fully control, so relax nounset for the block.
+set +u
 echo "  Extracted ${#UPSTREAM_IMAGES[@]} upstream images (compose), ${#LOCAL_IMAGES[@]} locally-built, ${#DOCKERFILE_FROM[@]} Dockerfile FROMs"
 VERSIONS_FILE="$AI_DIR/extracted_versions.env"
 : > "$VERSIONS_FILE"
@@ -136,6 +141,7 @@ for base in $(echo "${!LOCAL_IMAGES[@]}" | tr ' ' '\n' | sort); do
     key=$(echo "$base" | sed 's/[^A-Za-z0-9]/_/g' | tr '[:lower:]' '[:upper:]')
     echo "${key}=${LOCAL_IMAGES[$base]}" >> "$VERSIONS_FILE"
 done
+set -u  # end empty-associative-array guard
 
 # 1b. Extract script inventory
 echo ""
