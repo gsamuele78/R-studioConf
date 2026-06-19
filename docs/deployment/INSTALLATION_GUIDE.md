@@ -78,17 +78,25 @@ Edit the `.vars.conf` files for the components you intend to run.
 GitHub PATs, and SMTP credentials to `0600` files outside the repo
 (HR-8, HR-12).
 
+> **Site-local overlay (since 2026-06-19):** files marked ★ below carry AD
+> topology / PII and are **not committed** — they ship as `<name>.example`.
+> Before deploying, create the overlay once:
+> `mkdir -p config/site && for f in lib_kerberos_setup.vars.conf join_domain_sssd.vars.conf join_domain_samba.vars.conf admin_recipients.txt user_email_map.txt scopri_progetti_known.conf scopri_theme_map.conf setup_nodes.site.vars.conf; do cp config/$f.example config/site/$f; done`
+> then fill in every `__FILL_ME__` in `config/site/`. A missing/placeholder value
+> makes the AD-join scripts **abort** (fail-fast). Full reference:
+> [`../../config/SITE_OVERRIDE.md`](../../config/SITE_OVERRIDE.md).
+
 | You will edit | If you are deploying |
 |---|---|
 | `config/optimize_system_proxmox.vm.vars.conf` | Proxmox-side VM tuning |
 | `config/configure_time_sync.vars.conf` | Any node (Kerberos requires ≤5 min skew) |
-| `config/lib_kerberos_setup.vars.conf` | All AD-joined nodes |
-| `config/join_domain_sssd.vars.conf` **OR** `config/join_domain_samba.vars.conf` | Pick **one** auth backend |
+| `config/site/lib_kerberos_setup.vars.conf` ★ | All AD-joined nodes |
+| `config/site/join_domain_sssd.vars.conf` **OR** `config/site/join_domain_samba.vars.conf` ★ | Pick **one** auth backend |
 | `config/configure_rstudio.vars.conf` | RStudio Server hosts |
 | `config/install_nginx.vars.conf` | Public-facing portal node |
 | `config/install_secure_access.vars.conf` | ttyd terminal node |
 | `config/optimize_system.vars.conf` | Same node as Nginx |
-| `config/setup_nodes.vars.conf` | All compute nodes (R runtime, /Rtmp, mail relay, orphan cron) |
+| `config/setup_nodes.vars.conf` + `config/site/setup_nodes.site.vars.conf` ★ | All compute nodes (R runtime, /Rtmp; mail/SMTP/contact keys live in the ★ overlay) |
 | `config/r_env_manager.conf` | CRAN mirror, baseline R packages, GitHub PAT, min resources |
 
 Per-variable explanation: [`../reference/CONFIGURATION_MAP.md`](../reference/CONFIGURATION_MAP.md).
