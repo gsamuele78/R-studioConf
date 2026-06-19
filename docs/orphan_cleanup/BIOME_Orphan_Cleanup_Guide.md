@@ -30,10 +30,12 @@ ORPHAN_CRON_REPORT="00 08 * * 1"
 
 ### Recipient and Mapping Dictionaries
 
-Administrative recipients and specific user domain overrides are controlled by text files injected during node setup:
+Administrative recipients and specific user domain overrides are controlled by text files injected during node setup.
 
-1. **`config/admin_recipients.txt`**: A line-by-line list of administrative email addresses (e.g., `sysadmin.user@example.org`) that receive the weekly system `r_orphan_report.sh` summary.
-2. **`config/user_email_map.txt`**: Overrides `MAIL_DOMAIN` for specific users that maintain non-standard domain addresses (e.g. `pi.two pi.two@example.org`).
+> **Site-local overlay (since 2026-06-19):** these files are PII and are **not committed**. The repo ships `*.example` templates; real values live in the gitignored `config/site/` and are resolved at deploy by `resolve_site_config`. See [`../../config/SITE_OVERRIDE.md`](../../config/SITE_OVERRIDE.md).
+
+1. **`config/site/admin_recipients.txt`**: A line-by-line list of administrative email addresses (e.g., `sysadmin.user@example.org`) that receive the weekly system `r_orphan_report.sh` summary.
+2. **`config/site/user_email_map.txt`**: Overrides `MAIL_DOMAIN` for specific users that maintain non-standard domain addresses (e.g. `pi.two pi.two@example.org`).
 
 ## Automated Deployment Process
 

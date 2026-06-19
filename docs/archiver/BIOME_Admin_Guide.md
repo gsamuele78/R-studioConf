@@ -83,6 +83,13 @@ username,type,supervisor,project,date_start,date_end,source,note
 
 **Compatibilità:** il formato a 7 colonne (V22, senza `type`) è ancora supportato — `type` viene inferito dal valore di `supervisor` (`_PI_`, `_ADMIN_`, ecc.).
 
+> **Overlay site-local (dal 2026-06-19):** la mappa manuale `scopri_progetti_known.conf`
+> e la mappa tema→supervisor `scopri_theme_map.conf` contengono PII e **non sono
+> committate**. Il repo fornisce i template `*.example`; i valori reali vivono in
+> `config/site/` e sono deployati in `${ARCHIVE_CONF_DIR}` da `50_setup_nodes.sh`.
+> Senza la theme map (o senza match) l'inferenza ritorna `_UNKNOWN_` → risoluzione
+> manuale con i PI. Vedi [`../../config/SITE_OVERRIDE.md`](../../config/SITE_OVERRIDE.md).
+
 ---
 
 ## 2. Prerequisiti e dipendenze

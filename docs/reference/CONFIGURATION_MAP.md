@@ -2,20 +2,47 @@
 # Configuration Map (T1 Host)
 
 > **Tier:** T1 host configuration. Authoritative.  
-> **Last updated:** 2026-05-09.
+> **Last updated:** 2026-06-19 (site-local overlay introduced; see §0 + CHANGELOG).
 
 Every numbered phase script in `scripts/` reads exactly one
 `config/<name>.vars.conf` (plus, optionally, `lib_kerberos_setup.vars.conf`
 for Kerberos-aware scripts). The table below is the complete map. Variables
 are bash-style `KEY=VALUE` and are sourced — never `eval`'d.
 
-> **Hard rule (HR-12):** `.env` files and any concrete secret values **MUST
-> NOT** be committed. The repo ships `*.vars.conf` with placeholders or
-> sensible defaults; production values are filled by the operator.
+> **Hard rule (HR-12):** `.env` files and any concrete secret/PII values **MUST
+> NOT** be committed. The repo ships sanitized `*.example` templates; real site
+> values live in the gitignored `config/site/` overlay (see §0 and
+> [`../../config/SITE_OVERRIDE.md`](../../config/SITE_OVERRIDE.md)).
+
+---
+
+## 0. Site-local config overlay (since 2026-06-19)
+
+Files carrying AD topology, third-party PII, or institutional contacts are **not
+committed**. The repo ships `<name>.example`; the live host keeps real values in
+`config/site/<name>` (gitignored, immune to `git pull` / history rewrites).
+
+* `lib/common_utils.sh` provides **`resolve_site_config <name> <config_dir>`** —
+  returns `config/site/<name>` if present, else `config/<name>.example` (warns to
+  stderr) — and **`assert_site_configured <label> <value>`**, which aborts if a
+  required value is empty or still holds the `__FILL_ME__` sentinel. A fresh clone
+  therefore **fails fast** instead of half-joining a domain with placeholder data.
+* Overlaid files (★ in §1): `lib_kerberos_setup.vars.conf`,
+  `join_domain_sssd.vars.conf`, `join_domain_samba.vars.conf` (sourced + asserted);
+  `admin_recipients.txt`, `user_email_map.txt`, `scopri_progetti_known.conf`,
+  `scopri_theme_map.conf` (copied at deploy); plus `setup_nodes.site.vars.conf`,
+  which overrides the 6 sanitized mail/SMTP/contact keys in the still-committed
+  `setup_nodes.vars.conf` (`SMTP_HOST`, `SENDER_EMAIL`, `MAIL_DOMAIN`,
+  `MAIL_DOMAINS_USER`, `SMTP_DNS_SERVERS`, `BIOME_CONTACT`).
+* First-time setup and the live-host migration runbook:
+  [`../../config/SITE_OVERRIDE.md`](../../config/SITE_OVERRIDE.md) and
+  `plan/secret_scrub_site_overlay_plan.md`.
 
 ---
 
 ## 1. File-to-script binding
+
+> ★ = site-local overlay (real values in `config/site/`; repo ships `<name>.example`).
 
 | Config file | Consumed by | Purpose |
 |---|---|---|
@@ -23,19 +50,21 @@ are bash-style `KEY=VALUE` and are sourced — never `eval`'d.
 | `configure_time_sync.vars.conf` | `scripts/02_configure_time_sync.sh` | NTP backend selection + fallback pools. |
 | `install_nginx.vars.conf` | `scripts/30_install_nginx.sh`, `scripts/32_setup_letsencrypt.sh` | Nginx layout, SSL/Let's-Encrypt, auth backend, AD domain, upstream ports. |
 | `install_secure_access.vars.conf` | `scripts/03_install_secure_access.sh` | ttyd port + Nextcloud upstream URL. |
-| `join_domain_samba.vars.conf` | `scripts/11_join_domain_samba.sh` | Samba/Winbind defaults: idmap ranges, realm, workgroup, log policy. |
-| `join_domain_sssd.vars.conf` | `scripts/10_join_domain_sssd.sh` | SSSD defaults: home-dir template, FQNS, GPO map service. |
-| `lib_kerberos_setup.vars.conf` | `scripts/12_lib_kerberos_setup.sh` (sourced by 10/11) | Multi-realm krb5: DIR/PERSONALE/STUDENTI KDCs + admin servers + domain→realm map. |
+| `join_domain_samba.vars.conf` ★ | `scripts/11_join_domain_samba.sh` | Samba/Winbind defaults: idmap ranges, realm, workgroup, log policy. |
+| `join_domain_sssd.vars.conf` ★ | `scripts/10_join_domain_sssd.sh` | SSSD defaults: home-dir template, FQNS, GPO map service. |
+| `lib_kerberos_setup.vars.conf` ★ | `scripts/12_lib_kerberos_setup.sh` (sourced by 10/11) | Multi-realm krb5: KDCs + admin servers + domain→realm map. **Asserted** non-placeholder. |
 | `optimize_system_proxmox.vm.vars.conf` | `scripts/01_optimize_system.sh` | Proxmox VM identity (VMID, cores, storage pool, target disk, bridge). |
 | `optimize_system.vars.conf` | `scripts/31_optimize_system.sh` | Nginx-side kernel/sysctl tuning. |
 | `r_env_manager.conf` | `r_env_manager.sh` | CRAN mirror + APT key, RStudio fallback version/arch, R user packages, GitHub PAT, min memory/disk. |
-| `setup_nodes.vars.conf` | `scripts/50_setup_nodes.sh`, `scripts/40_install_telemetry.sh` | Authoritative node-side config: hostnames, NFS/CIFS mounts, RAM/Tmp disk sizes, `BIOME_CONF`, mail relay, orphan-cleanup cron, archive paths. |
-| `scopri_progetti_known.conf` | `templates/scopri_progetti.sh.template` (deployed) | Known-project allowlist for the project-discovery helper. Free-form. |
+| `setup_nodes.vars.conf` | `scripts/50_setup_nodes.sh`, `scripts/40_install_telemetry.sh` | Node-side config: hostnames, NFS/CIFS mounts, RAM/Tmp disk sizes, `BIOME_CONF`, orphan-cleanup cron, archive paths. Mail/SMTP/contact keys are sanitized here and overridden by `setup_nodes.site.vars.conf` ★. |
+| `setup_nodes.site.vars.conf` ★ | `scripts/50_setup_nodes.sh` (sourced after `setup_nodes.vars.conf`) | Real `SMTP_HOST` / `SENDER_EMAIL` / `MAIL_DOMAIN` / `MAIL_DOMAINS_USER` / `SMTP_DNS_SERVERS` / `BIOME_CONTACT`. |
+| `scopri_progetti_known.conf` ★ | `templates/scopri_progetti.sh.template` (deployed) | Known-project allowlist (`username:supervisor:project`) for project-discovery. |
+| `scopri_theme_map.conf` ★ | `templates/scopri_progetti.sh.template` (deployed) | Theme→supervisor inference map (`pattern;supervisor;theme`). Externalized from the template; no match → `_UNKNOWN_`. |
 
 | Auxiliary file | Consumed by | Purpose |
 |---|---|---|
-| `admin_recipients.txt` | `templates/send_email.sh.template` | One email/line — recipients of admin notifications (orphan reports, drift alerts, postmortem dumps). |
-| `user_email_map.txt` | `templates/send_email.sh.template`, `templates/notify_r_orphans.sh.template` | `username:email` map for per-user notifications when AD lookup is unavailable. |
+| `admin_recipients.txt` ★ | `50_setup_nodes.sh` (deploy), `99_check_pkg_drift.sh`, `telemetry_api.py` | One email/line — recipients of admin notifications (orphan reports, drift alerts, postmortem dumps). |
+| `user_email_map.txt` ★ | `50_setup_nodes.sh` (deploy), `resolve_user_email()` | `username  email` map for per-user notifications when AD lookup is unavailable. |
 
 ---
 
@@ -204,7 +233,7 @@ deployment chain and must stay coherent:
 
 1. **HR-7** Every `.sh` that consumes a `.vars.conf` already starts with `set -euo pipefail`. Do not weaken this.
 2. **HR-8** Passwords (Kerberos admin, GitHub PAT, SMTP) MUST be written to files with `0600` perms — never passed on the CLI.
-3. **HR-12** `.env`, populated `.vars.conf` with real secrets, and `~/.config/biome-calc/secrets/` are **not committed**. The repo only carries placeholder defaults.
+3. **HR-12** `.env`, real secret/PII values, and `~/.config/biome-calc/secrets/` are **not committed**. The repo carries sanitized `*.example` templates; real site values live in the gitignored `config/site/` overlay (§0). Add new sensitive files to both `.gitignore` and `config/SITE_OVERRIDE.md`.
 4. **HR-15** R-runtime BLAS must remain `libopenblas0-serial` — `libopenblas0-pthread` causes SIGSEGV on RStudio fork.
 5. **HR-16** Any JSON manipulation in scripts must use `jq`, not `sed`/`awk`.
 6. **HR-17** Adapt the system to portable user R code — never silently patch user scripts.
