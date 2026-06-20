@@ -67,7 +67,7 @@ scripts from an interactive menu.
 | **State (idempotency)** | `/var/lib/r_env_manager/r_env_state` |
 | **Config backups** | `/var/backups/r_env_manager/files/` |
 
-> **Site-local secrets (since 2026-06-19).** Files carrying AD topology / PII
+> **Site-local secrets.** Files carrying AD topology / PII
 > are **not committed** — they ship as `*.example` and are sourced from a
 > gitignored `config/site/` overlay with a fail-fast `__FILL_ME__` gate. Create
 > the overlay once before deploying — see
