@@ -57,7 +57,16 @@ fi
 rm -f "$dest"
 printf 'n\n' | restore_config >/dev/null 2>&1
 [[ ! -e "$dest" ]] && ok "declining the prompt restores nothing" || no "restore ran despite 'n'"
-# 3d: no backup dir → non-zero
+# 3d: large backup — streaming restore handles many files; listing is capped
+BACKUP_DIR_BASE="${TMP}/backups_big"
+bkb="${BACKUP_DIR_BASE}/run_20260102_000000"
+mkdir -p "${bkb}/${TMP#/}/big/etc"
+for i in $(seq 1 25); do printf 'c%s\n' "$i" > "${bkb}/${TMP#/}/big/etc/f${i}.conf"; done
+out="$(printf 'y\n' | restore_config 2>&1)"
+n=$(find "${TMP}/big/etc" -type f 2>/dev/null | wc -l)
+[[ "$n" -eq 25 ]] && ok "streaming restore handled all 25 files" || no "expected 25 restored, got ${n}"
+grep -q 'and 5 more' <<<"$out" && ok "target listing capped (shows '… and 5 more')" || no "sample cap not applied"
+# 3e: no backup dir → non-zero
 BACKUP_DIR_BASE="${TMP}/does_not_exist"; restore_config <<<"y" >/dev/null 2>&1 && rc=0 || rc=$?
 [[ "$rc" -ne 0 ]] && ok "missing backup returns non-zero" || no "missing backup returned success"
 unset -f command

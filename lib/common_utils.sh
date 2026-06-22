@@ -642,7 +642,10 @@ _restore_item() {
 restore_config() {
     log "INFO" "Attempting to restore configuration files from backup..."
     local latest_backup
-    # find -> safer than ls for odd names; newest run_* dir under BACKUP_DIR_BASE.
+    # Newest backup. The directories are named run_<YYYYMMDD_HHMMSS> (zero-padded,
+    # fixed width), so lexicographic order == chronological order; selecting by
+    # name is intentional and is MORE robust than mtime, which `cp -a`/`touch`/
+    # rsync can perturb. (find > ls for odd characters in BACKUP_DIR_BASE.)
     latest_backup=$(find "${BACKUP_DIR_BASE}" -maxdepth 1 -type d -name 'run_*' 2>/dev/null \
         | sort | tail -1)
 
@@ -651,46 +654,50 @@ restore_config() {
         return 1
     fi
 
-    # Enumerate exactly what would be restored BEFORE touching the live system.
     # The backup tree mirrors '/', so a file at <backup>/etc/x maps to /etc/x.
-    local -a backup_files=()
-    local f
-    while IFS= read -r -d '' f; do
-        backup_files+=("$f")
-    done < <(find "$latest_backup" -type f -print0)
-
-    if [[ ${#backup_files[@]} -eq 0 ]]; then
+    # Count cheaply (one streamed pass, one byte per file → newline-safe) instead
+    # of materializing the whole list; the restore loop below also streams `find`,
+    # so memory stays flat regardless of backup size.
+    local file_count
+    file_count=$(find "$latest_backup" -type f -printf '.' 2>/dev/null | wc -c)
+    if [[ "$file_count" -eq 0 ]]; then
         log "WARN" "Backup '$latest_backup' contains no files. Nothing to restore."
         return 1
     fi
 
-    log "INFO" "Backup '$latest_backup' holds ${#backup_files[@]} file(s); targets:"
-    for f in "${backup_files[@]}"; do
-        log "INFO" "    → /${f#"${latest_backup}"/}"
-    done
+    # Show a BOUNDED sample of targets for an informed confirmation (a huge
+    # backup must not flood the console/log).
+    local sample_cap=20
+    log "INFO" "Backup '$latest_backup' holds ${file_count} file(s); targets (first ${sample_cap}):"
+    find "$latest_backup" -type f -printf '    → /%P\n' 2>/dev/null | head -n "$sample_cap" \
+        | while IFS= read -r _line; do log "INFO" "$_line"; done
+    if (( file_count > sample_cap )); then
+        log "INFO" "    … and $((file_count - sample_cap)) more"
+    fi
 
-    # Informed confirmation (DRY_RUN short-circuits any system write).
+    # DRY_RUN short-circuits any system write.
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
-        log "INFO" "[DRY-RUN] Would restore ${#backup_files[@]} file(s); no changes made."
+        log "INFO" "[DRY-RUN] Would restore ${file_count} file(s); no changes made."
         return 0
     fi
-    read -r -p "Restore these ${#backup_files[@]} file(s) over the LIVE system? (y/n): " confirm
+    read -r -p "Restore these ${file_count} file(s) over the LIVE system? (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         log "INFO" "Restore cancelled."
         return 0
     fi
 
     log "INFO" "Restoring from $latest_backup..."
-    local restored=0 dest
-    for f in "${backup_files[@]}"; do
+    # Stream the listing (no array retained); restore each file to its '/' target.
+    local restored=0 f dest
+    while IFS= read -r -d '' f; do
         dest="/${f#"${latest_backup}"/}"
         if _restore_item "$f" "$dest"; then
             restored=$((restored + 1))
         else
             log "WARN" "Failed to restore: $dest"
         fi
-    done
-    log "INFO" "Restored ${restored}/${#backup_files[@]} file(s) from $latest_backup."
+    done < <(find "$latest_backup" -type f -print0)
+    log "INFO" "Restored ${restored}/${file_count} file(s) from $latest_backup."
 
     if [[ "$restored" -eq 0 ]]; then
         log "ERROR" "Nothing was restored; leaving services untouched."
