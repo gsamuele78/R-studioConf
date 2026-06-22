@@ -76,6 +76,11 @@ jobs:
       - name: Exec-bit guard (launcher visibility)
         run: bash tests/check_exec_bits.sh
 
+      - name: §1 silent-failure regressions (run_command mask/pipefail, restore_config, uninstall)
+        # Deterministic; writes only under mktemp, stubs service detection — no
+        # apt/systemd/AD needed. Guards T1 audit §1 items 1-4 against regression.
+        run: bash tests/test_pr1_critical_fixes.sh
+
       - name: Root-guard contract (non-root must refuse, not silently run)
         run: |
           set -euo pipefail

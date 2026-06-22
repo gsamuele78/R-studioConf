@@ -16,8 +16,15 @@
 > `plan/secret_scrub_site_overlay_plan.md`. The root **README.md** rewrite
 > (§5 / Phase 0.1), the **false-green CI** rewrite (§5 / Phase 0.2 — now
 > [`ci.yml`](../../.github/workflows/ci.yml)) and the **script exec-bit** hygiene
-> (§3) are now **[FIXED]**. The CRITICAL correctness defects in §1 and most of
-> §3/§4 and the rest of §5 remain **OPEN**.
+> (§3) are now **[FIXED]**.
+>
+> **Update (PR-1, `fix/critical-silent-failures`):** 3 of the 4 §1 CRITICAL
+> silent-failure defects are now **[FIXED]** — apt-masking, `pipefail`-stripping,
+> and `restore_config()` (in `lib/common_utils.sh`), plus the uninstall crash (in
+> `r_env_manager.sh`) — guarded by `tests/test_pr1_critical_fixes.sh` (wired into
+> the `t1-static` CI job). Only **AD-backend XOR** (§1) remains OPEN, scheduled as
+> PR-2. Most of §3/§4 and the rest of §5 remain **OPEN**. See
+> [`T1_REMEDIATION_TRIAGE.md`](T1_REMEDIATION_TRIAGE.md).
 
 ---
 
@@ -38,24 +45,27 @@ Original totals: **4 CRITICAL, ~19 HIGH, ~21 MEDIUM** findings.
 
 ## 1. Critical defects (silent-failure class — worst under the pessimistic ethos)
 
-- **[OPEN] `lib/common_utils.sh:591-624` — `restore_config()` is a no-op that reports success.**
-  It prompts, logs "Restoring…", logs "restored", restarts sssd/rstudio/nginx — and
-  never copies a single file back (`_restore_item` at `:562` is dead code). An
-  operator rolling back a botched deploy gets services restarted over broken
-  configs and a green message.
-- **[OPEN] `r_env_manager.sh:1042-1078` — menu option 10 (Uninstall) crashes on arrival.**
-  `INSTALLED_CRAN_PACKAGES`, `INSTALLED_GITHUB_PACKAGES`, `R_ENV_STATE_FILE` are
-  never defined anywhere; under `set -u` the function aborts at the first expansion.
+- **[FIXED — PR-1] `lib/common_utils.sh` — `restore_config()` was a no-op that reported success.**
+  It prompted, logged "Restoring…/restored", restarted sssd/rstudio/nginx — and
+  never copied a single file back (`_restore_item` was dead code). *Now: walks the
+  newest backup tree (mirrors `/`) and restores each file via `_restore_item` after
+  an informed confirm that lists targets; honors `DRY_RUN`; restarts services only
+  if ≥1 file restored. `_restore_item` returns non-zero on `cp` failure.*
+- **[FIXED — PR-1] `r_env_manager.sh` — menu option 10 (Uninstall) crashed on arrival.**
+  `INSTALLED_CRAN_PACKAGES`, `INSTALLED_GITHUB_PACKAGES`, `R_ENV_STATE_FILE` were
+  never defined; under `set -u` the function aborted at the first expansion. *Now:
+  `R_ENV_STATE_FILE` defined; arrays defaulted empty and the inventory sourced
+  before use → no crash; R-package removal is a safe no-op when no inventory exists.*
 - **[OPEN] AD backend XOR not enforced.** The skill mandates SSSD XOR Samba per host,
   but neither `10_join_domain_sssd.sh` nor `11_join_domain_samba.sh` checks for the
   other backend before converting the NSS/PAM stack. Running both leaves a
-  half-converted auth stack.
-- **[OPEN] `lib/common_utils.sh:270-272` — apt failures converted to success.**
-  `if ! run_command …; then return $?; fi` returns the status of the negated
-  condition (0). A failed `apt-get install` propagates as success to `set -e`
-  callers. Related: every `run_command` exit path does a bare `set +o pipefail`,
-  permanently stripping pipefail from the calling script — the library defeats
-  HC-03 for everyone who uses it.
+  half-converted auth stack. *(Scheduled: PR-2.)*
+- **[FIXED — PR-1] `lib/common_utils.sh` — apt failures converted to success + `pipefail` stripped.**
+  The composite-apt recursion used `if ! run_command …; then return $?` which
+  returned the negated test's status (0), masking failures as success; and
+  `run_command` left `pipefail` disabled in every sourcing script. *Now: `|| return $?`
+  propagates the real code, and `run_command` is wrapped to save/restore the
+  caller's `pipefail` (the 200-line body, renamed `__run_command_impl`, is unchanged).*
 
 ---
 

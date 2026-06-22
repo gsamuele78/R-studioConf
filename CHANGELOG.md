@@ -74,6 +74,27 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ### Fixed
 
+- **§1 silent-failure CRITICAL defects** (`lib/common_utils.sh`, `r_env_manager.sh`;
+  branch `fix/critical-silent-failures`). Guarded against regression by
+  `tests/test_pr1_critical_fixes.sh` (14 assertions, wired into the `t1-static`
+  CI job). Audit §1 markers flipped to `[FIXED]` (AD-backend XOR still `[OPEN]`).
+  - **apt failures masked as success**: the composite-`apt` recursion used
+    `if ! run_command …; then return $?`, which returned the *negated test's*
+    status (`0`). Now `|| return $?` propagates the real exit code.
+  - **`pipefail` stripped from callers**: `run_command` toggled `pipefail` off
+    internally and never restored it, silently disabling it in every script that
+    sources the library (HC-03 hazard). `run_command` is now a thin wrapper that
+    saves/restores the caller's `pipefail`; the 200-line body is unchanged
+    (renamed `__run_command_impl`).
+  - **`restore_config()` was a silent no-op**: it logged "restored" and restarted
+    services without copying anything back. Now streams the newest backup tree
+    (`run_<timestamp>`, mirrors `/`) and restores each file via `_restore_item`
+    after an informed, `DRY_RUN`-aware confirm; restarts services only if ≥1 file
+    was restored. `_restore_item` now returns non-zero on `cp` failure.
+  - **Uninstall (menu 10) crashed on arrival**: referenced undefined
+    `INSTALLED_CRAN_PACKAGES`/`INSTALLED_GITHUB_PACKAGES`/`R_ENV_STATE_FILE`
+    (abort under `set -u`). Defined `R_ENV_STATE_FILE`, defaulted the arrays empty,
+    source-before-use; with no inventory the R-package removal is a safe no-op.
 - **`scripts/` exec bits** (audit §3): `15_setup_nginx_cleanup.sh`,
   `40_install_telemetry.sh`, `99_health_check.sh`, `99_postmortem_forensics.sh`,
   `99_troubleshoot_env.sh`, `pin_r_version.sh` were committed `100644`, making

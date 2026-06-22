@@ -29,6 +29,10 @@ readonly BACKUP_DIR="/var/backups/r_env_manager"
 readonly CONFIG_DIR="${SCRIPT_DIR}/config"
 readonly STATE_DIR="/var/lib/r_env_manager"
 readonly STATE_FILE="${STATE_DIR}/r_env_state"
+# Optional inventory of user-installed R packages, sourced (if present) by
+# uninstall() to define INSTALLED_CRAN_PACKAGES / INSTALLED_GITHUB_PACKAGES.
+# Previously referenced but never defined → uninstall crashed under `set -u`.
+readonly R_ENV_STATE_FILE="${STATE_DIR}/installed_packages.state"
 readonly LOG_FILE="${LOG_DIR}/${SCRIPT_NAME}.log"
 readonly LOCK_FILE="/var/run/${SCRIPT_NAME}.lock"
 readonly PID_FILE="/var/run/${SCRIPT_NAME}.pid"
@@ -1031,25 +1035,31 @@ backup_all() {
 
 uninstall() {
     log "INFO" "--- Starting Uninstall Process ---"
-        log "INFO" "--- Starting Uninstall Process ---"
     save_state "uninstall" "starting"
-    
+
     if [[ -f "$STATE_FILE" ]]; then
         log "INFO" "Loading state for uninstall..."
         load_state
     fi
-    # Uninstall R packages
+
+    # Package inventory: empty unless a prior run recorded it in R_ENV_STATE_FILE.
+    # Declaring the arrays here guards `set -u` (they were referenced but never
+    # defined → crash on arrival) and makes the R-package removal a safe no-op
+    # when no inventory exists. A future writer of R_ENV_STATE_FILE populates them.
+    local -a INSTALLED_CRAN_PACKAGES=() INSTALLED_GITHUB_PACKAGES=()
+    if [[ -f "$R_ENV_STATE_FILE" ]]; then
+        log "INFO" "Reloading environment state from $R_ENV_STATE_FILE..."
+        # shellcheck disable=SC1090,SC1091
+        source "$R_ENV_STATE_FILE"
+    fi
+
+    # Uninstall R packages (only if an inventory was loaded)
     if [[ ${#INSTALLED_CRAN_PACKAGES[@]} -gt 0 ]] || [[ ${#INSTALLED_GITHUB_PACKAGES[@]} -gt 0 ]]; then
         log "INFO" "The following R packages will be uninstalled:"
         [[ ${#INSTALLED_CRAN_PACKAGES[@]} -gt 0 ]] && echo "  CRAN:" && printf "    - %s\n" "${INSTALLED_CRAN_PACKAGES[@]}"
         [[ ${#INSTALLED_GITHUB_PACKAGES[@]} -gt 0 ]] && echo "  GitHub:" && printf "    - %s\n" "${INSTALLED_GITHUB_PACKAGES[@]}"
         read -r -p "Are you sure you want to uninstall these packages? [y/N] " choice
         if [[ "$choice" =~ ^[Yy]$ ]]; then
-            if [[ -f "$R_ENV_STATE_FILE" ]]; then
-                log "INFO" "Reloading environment state from $R_ENV_STATE_FILE..."
-                # shellcheck disable=SC1090,SC1091
-                source "$R_ENV_STATE_FILE"
-            fi
             if [[ ${#INSTALLED_CRAN_PACKAGES[@]} -gt 0 ]]; then
                 local pkg_list
                 pkg_list=$(printf "'%s', " "${INSTALLED_CRAN_PACKAGES[@]}")
