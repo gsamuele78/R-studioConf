@@ -253,7 +253,21 @@ assert_site_configured() {
 
 # Function to run commands with automatic error handling and retries
 # ENHANCED v1.4: Corrected with VALID dpkg options only
+# Public wrapper: preserves the CALLER's `pipefail` option across the call.
+# The implementation toggles pipefail internally (needed to read PIPESTATUS of
+# `cmd | tee`); without this wrapper that toggle leaks and silently disables
+# pipefail in every script that sources this library — an HC-03 hazard
+# (T1 audit §1). The wrapper leaves the impl untouched and restores caller state.
 run_command() {
+    local __rc_had_pipefail=0
+    [[ -o pipefail ]] && __rc_had_pipefail=1
+    __run_command_impl "$@"
+    local __rc_status=$?
+    if (( __rc_had_pipefail )); then set -o pipefail; else set +o pipefail; fi
+    return "$__rc_status"
+}
+
+__run_command_impl() {
     local description
     local cmd
     if [[ $# -gt 1 ]]; then
@@ -300,9 +314,10 @@ run_command() {
                     continue
                 fi
                 log "DEBUG" "Running composite part: $part"
-                if ! run_command "${description}" "$part"; then
-                    return $?
-                fi
+                # NB: `if ! run_command …; then return $?` returned the status of
+                # the NEGATED test (0), masking apt failures as success. Use `||`
+                # so the failing exit code propagates (T1 audit §1).
+                run_command "${description}" "$part" || return $?
             done
             log "INFO" "SUCCESS: ${description}"
             return 0
@@ -613,34 +628,77 @@ _restore_item() {
         fi
         if ! cp -a "$backup_src_path" "$dest_target" 2>/dev/null; then
              log "WARN" "Could not restore directory '$backup_src_path' to '$dest_target'"
+             return 1
         fi
     else
         if ! cp -a "$backup_src_path" "$dest_target" 2>/dev/null; then
             log "WARN" "Could not restore file '$backup_src_path' to '$dest_target'"
+            return 1
         fi
     fi
+    return 0
 }
 
 restore_config() {
     log "INFO" "Attempting to restore configuration files from backup..."
     local latest_backup
-    latest_backup=$(ls -td "${BACKUP_DIR_BASE}"/run_* 2>/dev/null | head -1)
+    # find -> safer than ls for odd names; newest run_* dir under BACKUP_DIR_BASE.
+    latest_backup=$(find "${BACKUP_DIR_BASE}" -maxdepth 1 -type d -name 'run_*' 2>/dev/null \
+        | sort | tail -1)
 
-    if [[ -z "$latest_backup" ]]; then
+    if [[ -z "$latest_backup" || ! -d "$latest_backup" ]]; then
         log "ERROR" "No backup found in ${BACKUP_DIR_BASE}/run_*. Nothing to restore."
         return 1
     fi
 
-    read -r -p "Restore from most recent backup: $latest_backup? (y/n): " confirm
+    # Enumerate exactly what would be restored BEFORE touching the live system.
+    # The backup tree mirrors '/', so a file at <backup>/etc/x maps to /etc/x.
+    local -a backup_files=()
+    local f
+    while IFS= read -r -d '' f; do
+        backup_files+=("$f")
+    done < <(find "$latest_backup" -type f -print0)
+
+    if [[ ${#backup_files[@]} -eq 0 ]]; then
+        log "WARN" "Backup '$latest_backup' contains no files. Nothing to restore."
+        return 1
+    fi
+
+    log "INFO" "Backup '$latest_backup' holds ${#backup_files[@]} file(s); targets:"
+    for f in "${backup_files[@]}"; do
+        log "INFO" "    → /${f#"${latest_backup}"/}"
+    done
+
+    # Informed confirmation (DRY_RUN short-circuits any system write).
+    if [[ "${DRY_RUN:-false}" == "true" ]]; then
+        log "INFO" "[DRY-RUN] Would restore ${#backup_files[@]} file(s); no changes made."
+        return 0
+    fi
+    read -r -p "Restore these ${#backup_files[@]} file(s) over the LIVE system? (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         log "INFO" "Restore cancelled."
         return 0
     fi
 
     log "INFO" "Restoring from $latest_backup..."
-    log "INFO" "Configuration files restored from $latest_backup."
+    local restored=0 dest
+    for f in "${backup_files[@]}"; do
+        dest="/${f#"${latest_backup}"/}"
+        if _restore_item "$f" "$dest"; then
+            restored=$((restored + 1))
+        else
+            log "WARN" "Failed to restore: $dest"
+        fi
+    done
+    log "INFO" "Restored ${restored}/${#backup_files[@]} file(s) from $latest_backup."
+
+    if [[ "$restored" -eq 0 ]]; then
+        log "ERROR" "Nothing was restored; leaving services untouched."
+        return 1
+    fi
+
     log "INFO" "Restarting services if they are installed..."
-    
+
     local -a services_to_restart=()
     if command -v sssd &>/dev/null && systemctl list-units --full -all | grep -q 'sssd.service'; then services_to_restart+=("sssd"); fi
     if command -v rstudio-server &>/dev/null && systemctl list-units --full -all | grep -q 'rstudio-server.service'; then services_to_restart+=("rstudio-server"); fi
