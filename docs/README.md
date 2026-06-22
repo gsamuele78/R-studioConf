@@ -72,7 +72,11 @@ authoritative deployment of the *botanical big-data calculus* platform.
 - [`CONFIGURATION_MAP.md`](reference/CONFIGURATION_MAP.md) — every `*.vars.conf` + `r_env_manager.conf` + `scopri_progetti_known.conf` + admin/email maps.
 - [`TEMPLATE_GALLERY.md`](reference/TEMPLATE_GALLERY.md) — current vs. legacy templates, modular `Rprofile_site.d/` chain, nginx, identity, orphan-cleanup, Proxmox.
 - [`NGINX_AUTH_BACKENDS.md`](reference/NGINX_AUTH_BACKENDS.md) — SSSD vs. Samba PAM integration deep-dive.
-- [`Rprofile_site.CHANGELOG.md`](reference/Rprofile_site.CHANGELOG.md) — `Rprofile_site` version history.
+- [`Rprofile_site.CHANGELOG.md`](reference/Rprofile_site.CHANGELOG.md) — `Rprofile_site` version history (R-runtime profile only).
+
+> **Repo-wide changelog:** the general change history lives at the repository root,
+> [`../CHANGELOG.md`](../CHANGELOG.md) (Keep a Changelog). The `Rprofile_site` log
+> above is scoped to `RPROFILE_VERSION` bumps only (HC-14 / rule 18).
 
 ### 6. Developer (`developer/`)
 
