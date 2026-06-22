@@ -49,6 +49,7 @@ This is the most critical function in the repository. **Raw execution of system 
   3. **Pipeline Preservation**: Critically, the execution routes standard input (`< /dev/null`) to prevent commands (like `ssh` or certain `apt` prompts) from swallowing the caller's `while read` loops.
   4. **Output Capture**: Output is captured to a temporary file. On success, it's silently logged. On failure, the exact error output is dumped to the screen to aid debugging.
   5. **Dpkg Sanitization**: If the command contains `apt`, `apt-get`, or `dpkg`, the function automatically injects extreme non-interactive flags (e.g., `-o Dpkg::Options::="--force-confdef"`) into the subshell environment.
+  6. **Exit-code fidelity & `pipefail` safety** (T1 audit §1): a failed command — including any part of a composite `apt-get update && apt-get install …` — propagates its real non-zero exit code to the caller (it is never masked as success). `run_command` is a thin wrapper that **saves and restores the caller's `pipefail` option**, so the internal `pipefail` toggling it needs to read `PIPESTATUS` of `cmd | tee` never leaks into the sourcing script. The implementation lives in `__run_command_impl`; call `run_command` (the wrapper), never the impl directly.
 
 ---
 
@@ -75,6 +76,11 @@ This is the most critical function in the repository. **Raw execution of system 
 
 * **Signature**: `ensure_dir "/path/to/dir" "owner:group" "perms"`
 - **Behavior**: Atomically creates a directory, sets ownership, and enforces UNIX permissions (`chmod`). Returns silent success if the directory is already perfectly configured.
+
+#### `restore_config()`
+
+* **Signature**: `restore_config` (no args; honors `DRY_RUN`)
+- **Behavior** (T1 audit §1): rolls back the most recent config backup. Selects the newest `${BACKUP_DIR_BASE}/run_<YYYYMMDD_HHMMSS>` directory (lexicographic == chronological by the zero-padded name — deliberately not mtime), lists a bounded sample of targets, and — after an interactive confirm (or a no-write summary under `DRY_RUN=true`) — restores each file to its `/`-rooted path via `_restore_item`, streaming `find` so memory stays flat. Restarts `sssd`/`rstudio-server`/`nginx` **only if ≥1 file was restored**. Returns non-zero on "no backup found" or "nothing restored". (Previously this function was a no-op that reported success — see CHANGELOG.)
 
 ---
 
