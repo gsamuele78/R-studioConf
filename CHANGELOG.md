@@ -5,6 +5,16 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (planning)
+
+- `docs/planning/ROADMAP_EXECUTION_PLAN.md`: ordered work streams (WS-0 hygiene,
+  WS-1 live T1 defects, WS-2 T2 parity, WS-3 consolidation, WS-4 T3 deferred), each
+  with audit / implement / validate phases. Also ADR-style decisions, the open-PR
+  triage record, and the contradictions found (CI tests R 4.4.1 while T1 pins 4.6.0;
+  stale `open_gaps`; T2 has no `/Rtmp` equivalent and no recorded delta for it).
+- `docs/planning/PROJECT_MAP_CONSOLIDATION_PLAN.md` ported from PR #13 (closed as
+  superseded), status re-verified against `main`; it is WS-3 of the plan.
+
 ### Fixed (Rprofile v12.11-fix — wrappers survive `rm(list = ls(all.names = TRUE))`)
 
 Ported from the unmerged `setwd_safe_regression` branch (PR #14 / #12) onto the
