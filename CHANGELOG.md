@@ -5,6 +5,48 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Fixed (Rprofile v12.11-fix — wrappers survive `rm(list = ls(all.names = TRUE))`)
+
+Ported from the unmerged `setwd_safe_regression` branch (PR #14 / #12) onto the
+current `main`; those PRs are closed as superseded.
+
+- **R runtime: `setwd()` / wrapper delegation broke after a researcher's
+  `rm(list = ls(all.names = TRUE))`.** Symptom reported from `biome-calc01`:
+  `Error in .biome_original_setwd(dir) : could not find function ".biome_original_setwd"`
+  on an ordinary `write.csv(...)` line (the implicit `setwd()` RStudio issues
+  around project/source operations hit the stale guard). Root cause + the
+  `60_safe_setwd.R` `original_fn(dir)` fix and the `35_compile_routing.R`
+  closure-capture hardening are detailed in
+  [`Rprofile_site.CHANGELOG.md` v12.11-fix](docs/reference/Rprofile_site.CHANGELOG.md).
+  **Operator action:** the running host still executes the pre-fix deployed
+  fragment — re-render and re-deploy via `scripts/50_setup_nodes.sh` to clear
+  the error in live sessions.
+
+- **`safe_setwd` rm-survival regression suite.** Added
+  `tests/test_safe_setwd_rm_regression.sh` (A–D groups: parse gate, static
+  `original_fn` check, R runtime T1–T9, full template parse gate) and
+  `tests/fixtures/test_safe_setwd_rm_regression.R`. Guards the
+  `60_safe_setwd.R` fix (runtime detail in
+  [`Rprofile_site.CHANGELOG.md` v12.11-fix](docs/reference/Rprofile_site.CHANGELOG.md)):
+  `setwd()` must survive `rm(list=ls(all.names=TRUE))` while preserving the
+  Martina-gate hard-fail and the `.biome_original_setwd` globalenv export.
+  Test infrastructure is stored via `options()` (base namespace) so it
+  survives the simulated globalenv purges. Review fixes applied before merge:
+  - R error reporting: replaced the dead `conditionMessage(attr(ok, "condition"))`
+    pattern (T1/T3/T4/T7) — `tryCatch` returns a bare scalar, so the condition
+    is never attached as an attribute and the old form threw
+    `conditionMessage(NULL)` on a *real* failure, masking the diagnostic. Now
+    captures the message inside the handler via `err_msg <<- conditionMessage(e)`.
+  - Bash harness: unified all three R invocations on a single
+    `R_BIN="${RSCRIPT:-Rscript}"` (was a mix of bare `Rscript` and inline
+    `${RSCRIPT:-Rscript}`) so the interpreter override applies consistently.
+- **Cross-fragment wrapper rm-survival suite.** Added
+  `tests/fixtures/test_wrapper_rm_survival.R` (W1–W4, wired into the harness as
+  group E): asserts every base/package wrapper the `Rprofile_site.d/` kernel
+  installs (`setwd`, `detectCores`, `options`, `compileNimble`) survives
+  `rm(list = ls(all.names = TRUE))`. Confirmed `05`/`50`/`55` were already
+  closure-safe and guards the hardened `35` (above).
+
 ### Added (home quota view: multi-node runbook)
 
 - `docs/operations/HOME_QUOTA_VIEW_SETUP.md`: step-by-step setup for TrueNAS SCALE
@@ -307,7 +349,6 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
     services, full CRAN/RStudio install.
 - New local-runnable helpers: `tests/check_exec_bits.sh`, `tests/templates_parse.sh`,
   `tests/nginx_render_check.sh`.
-
 ### Fixed
 
 - **The RStudio login script re-added `R_LIBS_USER` to every `~/.Renviron`.**

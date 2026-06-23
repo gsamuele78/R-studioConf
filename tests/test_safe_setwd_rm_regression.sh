@@ -21,15 +21,17 @@ fail() { printf "  ${C_RED}FAIL${C_RST}  %s\n" "$1"; EXIT_CODE=1; }
 info() { printf "  ${C_YELLOW}INFO${C_RST}  %s\n" "$1"; }
 
 # ── Pre-flight checks ──────────────────────────────────────────────────────
-if ! command -v Rscript &>/dev/null; then
-    echo "${C_RED}ERROR${C_RST}  Rscript not found on PATH" >&2
+R_BIN="${RSCRIPT:-Rscript}"
+if ! command -v "${R_BIN}" &>/dev/null; then
+    echo "${C_RED}ERROR${C_RST}  ${R_BIN} not found on PATH" >&2
     exit 2
 fi
 
 FRAGMENT="${REPO}/templates/Rprofile_site.d/60_safe_setwd.R.template"
 TEST_R="${REPO}/tests/fixtures/test_safe_setwd_rm_regression.R"
+TEST_WRAP_R="${REPO}/tests/fixtures/test_wrapper_rm_survival.R"
 
-for f in "${FRAGMENT}" "${TEST_R}"; do
+for f in "${FRAGMENT}" "${TEST_R}" "${TEST_WRAP_R}"; do
     [[ -f "${f}" ]] || { echo "${C_RED}ERROR${C_RST}  missing file: ${f}" >&2; exit 2; }
 done
 
@@ -42,7 +44,7 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
 rendered="${tmpdir}/60_safe_setwd.R"
 sed -E 's/%%[A-Z0-9_]+%%/1/g' "${FRAGMENT}" > "${rendered}"
-if Rscript -e "tryCatch({parse(file='${rendered}');cat('PARSE_OK')}, error=function(e){cat('PARSE_FAIL:',conditionMessage(e));quit(status=1)})" &>/dev/null; then
+if "${R_BIN}" -e "tryCatch({parse(file='${rendered}');cat('PARSE_OK')}, error=function(e){cat('PARSE_FAIL:',conditionMessage(e));quit(status=1)})" &>/dev/null; then
     ok "A1: Fragment parses with neutralized placeholders"
 else
     fail "A1: Fragment parse FAILED"
@@ -67,7 +69,7 @@ fi
 info "C: R runtime regression suite (T1-T9)"
 # Run from repo root so relative path to template resolves
 cd "${REPO}"
-if "${RSCRIPT:-Rscript}" "${TEST_R}" 2>&1; then
+if "${R_BIN}" "${TEST_R}" 2>&1; then
     ok "C1: All R runtime tests passed"
 else
     rc=$?
@@ -80,6 +82,15 @@ if bash "${REPO}/tests/templates_parse.sh" 2>&1; then
     ok "D1: All templates parse cleanly"
 else
     fail "D1: Template parse gate found errors"
+fi
+
+# ── Test E: Cross-fragment wrapper rm-survival (W1-W4) ──────────────────────
+info "E: Cross-fragment wrapper rm-survival (setwd/detectCores/options/compileNimble)"
+if "${R_BIN}" "${TEST_WRAP_R}" 2>&1; then
+    ok "E1: All wrapper rm-survival tests passed"
+else
+    rc=$?
+    fail "E1: Wrapper rm-survival tests FAILED (exit ${rc})"
 fi
 
 echo
