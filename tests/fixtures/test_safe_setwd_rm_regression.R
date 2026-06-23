@@ -35,12 +35,16 @@ options(biome.test.tpl_path = file.path(getwd(), "templates/Rprofile_site.d/60_s
 options(biome.test.add_result = .add_result_toplevel)
 
 # ── T1: Template parses cleanly ─────────────────────────────────────────────
+t1_err <- NA_character_
 t1_ok <- tryCatch({
   exprs <- parse(file = getOption("biome.test.tpl_path"))
   length(exprs) >= 1L
-}, error = function(e) FALSE)
+}, error = function(e) {
+  t1_err <<- conditionMessage(e)
+  FALSE
+})
 .add_result_toplevel("T1", if (t1_ok) "PASS" else "FAIL",
-                     if (!t1_ok) sprintf("parse failed: %s", conditionMessage(attr(t1_ok, "condition"))) else "")
+                     if (!t1_ok) sprintf("parse failed: %s", t1_err) else "")
 
 # ── Helper: source fragment from template ────────────────────────────────────
 # Uses literal relative path (from repo root) — independent of globalenv vars.
@@ -88,13 +92,17 @@ local({
   d <- mk("t3_")
   rm(list = ls(envir = globalenv(), all.names = FALSE), envir = globalenv())
   sys_log <- function(...) invisible(NULL)
+  err_msg <- NA_character_
   ok <- tryCatch({
     setwd(d)
     identical(getwd(), d)
-  }, error = function(e) FALSE)
+  }, error = function(e) {
+    err_msg <<- conditionMessage(e)
+    FALSE
+  })
   unlink(d, recursive = TRUE)
   ar("T3", if (ok) "PASS" else "FAIL",
-     if (!ok) sprintf("setwd failed after rm(): %s", conditionMessage(attr(ok, "condition"))) else "")
+     if (!ok) sprintf("setwd failed after rm(): %s", err_msg) else "")
 })
 
 # ── T4: setwd() works after rm(list=ls(all.names=TRUE))  (THE BUG) ──────────
@@ -104,13 +112,17 @@ local({
   d <- mk("t4_")
   rm(list = ls(envir = globalenv(), all.names = TRUE), envir = globalenv())
   sys_log <- function(...) invisible(NULL)
+  err_msg <- NA_character_
   ok <- tryCatch({
     setwd(d)
     identical(getwd(), d)
-  }, error = function(e) FALSE)
+  }, error = function(e) {
+    err_msg <<- conditionMessage(e)
+    FALSE
+  })
   unlink(d, recursive = TRUE)
   ar("T4", if (ok) "PASS" else "FAIL",
-     if (!ok) sprintf("setwd failed after rm(all.names=TRUE): %s", conditionMessage(attr(ok, "condition"))) else "")
+     if (!ok) sprintf("setwd failed after rm(all.names=TRUE): %s", err_msg) else "")
 })
 
 # ── T5: Guard still hard-fails on bad path after rm (Martina-gate) ──────────
@@ -145,12 +157,16 @@ local({
 local({
   ar <- getOption("biome.test.add_result")
   src <- getOption("biome.test.source_frag")
+  err_msg <- NA_character_
   ok <- tryCatch({
     capture.output(src())
     TRUE
-  }, error = function(e) FALSE)
+  }, error = function(e) {
+    err_msg <<- conditionMessage(e)
+    FALSE
+  })
   ar("T7", if (ok) "PASS" else "FAIL",
-     if (!ok) sprintf("re-source threw: %s", conditionMessage(attr(ok, "condition"))) else "")
+     if (!ok) sprintf("re-source threw: %s", err_msg) else "")
 })
 
 # ── T8: Extreme — opt-out after rm(all.names=TRUE) ──────────────────────────
