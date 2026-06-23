@@ -108,7 +108,11 @@ authoritative deployment of the *botanical big-data calculus* platform.
 
 - [`FUTURE_MIGRATION.md`](FUTURE_MIGRATION.md) — OIDC, Kubernetes, Ansible adoption path.
 
-### 10. Meta
+### 10. Planning (`planning/`)
+
+- [`planning/PROJECT_MAP_CONSOLIDATION_PLAN.md`](planning/PROJECT_MAP_CONSOLIDATION_PLAN.md) — approved, self-contained execution brief: archive `next_gen/`, reconcile the map to the PAM/AD topology, stand up the MADR ADR system, triage-prune dead code, fix CI + deepen tests. Records the "do NOT rewrite T1 to Python" verdict.
+
+### 11. Meta
 
 - [`DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md) — central audit register tracking documentation status and remediation actions.
 
