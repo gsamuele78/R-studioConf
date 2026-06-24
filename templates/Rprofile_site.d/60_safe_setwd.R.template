@@ -74,7 +74,7 @@ local({
         }
       }
     }
-    .biome_original_setwd(dir)
+    original_fn(dir)
   }
 
   was_locked <- tryCatch(bindingIsLocked("setwd", base_ns),
