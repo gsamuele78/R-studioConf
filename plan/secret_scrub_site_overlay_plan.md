@@ -127,7 +127,7 @@ Run **on the deployed host, BEFORE pulling the scrub commit.** Until you next ru
 cd /path/to/R-studioConf                       # the live checkout
 
 # 0. Full safety net
-tar czf /var/backups/r_env_manager/config_pre_scrub_$(date +%F).tgz config/
+sudo tar czf /var/backups/r_env_manager/config_pre_scrub_$(date +%F).tgz config/
 
 # 1. Stage real data into the untracked overlay BEFORE git can touch it
 mkdir -p config/site
