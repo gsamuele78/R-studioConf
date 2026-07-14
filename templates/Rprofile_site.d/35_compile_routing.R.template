@@ -98,26 +98,52 @@ if (exists(".biome_env", envir = globalenv(), inherits = FALSE)) {
   current <- get("compileNimble", envir = ns_env, inherits = FALSE)
   if (isTRUE(attr(current, "biome_wrapper"))) return(invisible(TRUE))
 
-  # Save original via .biome_env if present, else in a hidden global.
+  # Save original via .biome_env if present, else in a hidden global — kept
+  # for forensic recovery ONLY. Delegation does NOT read it back (see below).
   save_store <- if (exists(".biome_env", envir = globalenv(), inherits = FALSE))
                   get(".biome_env", envir = globalenv())
                 else globalenv()
   assign(".biome_original_compileNimble", current, envir = save_store)
 
-  safe_compileNimble <- function(..., dirName = NULL,
-                                  showCompilerOutput = FALSE,
-                                  resetFunctions = FALSE) {
-    if (is.null(dirName)) {
-      dirName <- .biome_get_compile_dir("nimble")
-      if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
-        message(sprintf("BIOME-CALC: routing nimble compile -> %s", dirName))
+  # Capture the compile-dir resolver too, so the wrapper never depends on the
+  # globalenv binding (fragment 78 assigns it there, but a researcher's
+  # rm(list=ls(all.names=TRUE)) would remove it). Fall back to the live
+  # globalenv lookup only if the capture is somehow unavailable.
+  .compile_dir_fn <- if (exists(".biome_get_compile_dir", inherits = TRUE))
+                       get(".biome_get_compile_dir", inherits = TRUE)
+                     else NULL
+
+  safe_compileNimble <- local({
+    # Originals captured by CLOSURE — cannot be lost to rm() on globalenv.
+    # Mirrors the Smart I/O wrapper contract in 50_pkg_hooks.R (v11.3).
+    .ref          <- current
+    .resolve_dir  <- .compile_dir_fn
+    function(..., dirName = NULL,
+             showCompilerOutput = FALSE,
+             resetFunctions = FALSE) {
+      if (is.null(dirName)) {
+        resolver <- if (!is.null(.resolve_dir) && is.function(.resolve_dir)) {
+          .resolve_dir
+        } else if (exists(".biome_get_compile_dir", inherits = TRUE)) {
+          get(".biome_get_compile_dir", inherits = TRUE)
+        } else {
+          stop("BIOME-CALC: compileNimble wrapper cannot resolve compile dir; ",
+               "fragment 35_compile_routing.R not fully loaded.", call. = FALSE)
+        }
+        dirName <- resolver("nimble")
+        if (interactive() && !nzchar(Sys.getenv("BIOME_WORKER_MODE", ""))) {
+          message(sprintf("BIOME-CALC: routing nimble compile -> %s", dirName))
+        }
       }
+      if (is.null(.ref) || !is.function(.ref)) {
+        stop("BIOME-CALC: compileNimble wrapper lost its original reference; ",
+             "cannot delegate. Reinstall the profile.", call. = FALSE)
+      }
+      .ref(..., dirName = dirName,
+           showCompilerOutput = showCompilerOutput,
+           resetFunctions     = resetFunctions)
     }
-    orig <- get(".biome_original_compileNimble", envir = save_store)
-    orig(..., dirName = dirName,
-         showCompilerOutput = showCompilerOutput,
-         resetFunctions     = resetFunctions)
-  }
+  })
   attr(safe_compileNimble, "biome_wrapper") <- TRUE
 
   was_locked <- tryCatch(bindingIsLocked("compileNimble", ns_env),

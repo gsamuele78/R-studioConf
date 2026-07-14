@@ -8,6 +8,99 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.10-fix (2026-06-23) — "safe_setwd survives rm(list=ls(all.names=TRUE))"
+
+### Trigger
+
+A researcher cleaning their session with `rm(list = ls(all.names = TRUE))`
+followed by any `setwd(...)` hit:
+
+```
+Error in setwd(dir) : could not find function ".biome_original_setwd"
+```
+
+The `60_safe_setwd.R` guard wraps `base::setwd`. The wrapper's success path
+called `.biome_original_setwd(dir)` as a **bare symbol resolved through
+globalenv**. `.biome_original_setwd` is `assign()`-ed into globalenv (line 32)
+so the cross-fragment consumer `80_tools_ext.R` can read it — but a user
+purging globalenv with `all.names = TRUE` removes the dot-prefixed binding,
+and the wrapper then cannot resolve its own delegate.
+
+### Root cause
+
+The closure captured a perfectly good local binding `original_fn`
+(`get("setwd", envir = asNamespace("base"))`, line 31) but never used it on
+the success path, reaching into globalenv instead. This is an implementation
+defect, not a documented design choice — it diverges from the
+`.biome_env` + closure-capture pattern used by the Smart I/O wrappers in
+`50_pkg_hooks.R`.
+
+### Fix
+
+`templates/Rprofile_site.d/60_safe_setwd.R.template` line 77:
+
+```r
+-    .biome_original_setwd(dir)
++    original_fn(dir)
+```
+
+`original_fn` is captured in the `safe_setwd` closure at definition time and
+cannot be removed by `rm()` on globalenv. The globalenv `assign()` of
+`.biome_original_setwd` is **retained** for the `80_tools_ext.R` consumer,
+which already degrades gracefully (`setwd(compile_dir)` fallback) when the
+binding is absent. No RPROFILE_VERSION bump: behaviour-restoring fix to an
+existing fragment; no version-drift assertion triggered.
+
+### Verification
+
+New regression suite `tests/test_safe_setwd_rm_regression.sh` (harness) +
+`tests/fixtures/test_safe_setwd_rm_regression.R` (T1–T9):
+
+* T3 — `setwd()` after `rm(list=ls())` (non-dot) → PASS
+* T4 — `setwd()` after `rm(list=ls(all.names=TRUE))` (the bug) → PASS
+* T5 — Martina-gate still hard-fails on missing path in batch mode → PASS
+* T6 — `.biome_original_setwd` still present in globalenv for `80_tools_ext` → PASS
+* T9 — `80_tools_ext` fallback works after `rm(all.names=TRUE)` → PASS
+
+All 9 runtime tests + the 16-template parse gate green.
+
+### Deployment gap (operator action required)
+
+The fix is committed to the template but the **running host(s) still execute the
+stale `/etc/R/Rprofile_site.d/60_safe_setwd.R`** (verified on `biome-calc01`:
+`grep` shows the deployed file still calls `.biome_original_setwd(dir)` on the
+success path). Until the fragment is re-rendered and re-deployed via
+`scripts/50_setup_nodes.sh`, researchers who `rm(list = ls(all.names = TRUE))`
+will keep hitting the error on the next `setwd()` (including the implicit
+`setwd()` RStudio issues around project/source operations, which is why it
+surfaced on a `write.csv(...)` line). **Redeploy fragment 60 to clear it.**
+
+### Defense-in-depth: same bug class swept across the kernel
+
+A full audit of `Rprofile_site.d/` for the "wrapper delegates through a
+globalenv `.biome_*` binding" pattern (the exact failure mode) found:
+
+* `05_thread_guard.R` (`detectCores`), `55_options_guard.R` (`options`),
+  `50_pkg_hooks.R` (`read.csv`/`fread`) — **already safe**: each captures its
+  original via a `local()` closure and only copies to globalenv for forensics.
+  Verified empirically (`tests/fixtures/test_wrapper_rm_survival.R` W2/W3).
+* `35_compile_routing.R` (`compileNimble`) — **was conditionally vulnerable**:
+  the wrapper read the original back with
+  `get(".biome_original_compileNimble", envir = save_store)` where `save_store`
+  falls back to `globalenv()` when `.biome_env` is absent, and resolved
+  `.biome_get_compile_dir` as a bare globalenv symbol. Both would break after
+  `rm(all.names = TRUE)` in a profile without `.biome_env`. **Hardened** to
+  closure-capture (`.ref` + `.resolve_dir`) mirroring the 50/60 contract, with
+  an `exists()`-guarded live-lookup fallback and a fail-fast `stop()` if the
+  reference is genuinely lost. The globalenv `assign()` is retained for
+  forensic recovery only.
+
+Empirical proof of the pattern (isolated repro): a closure-captured original
+survives `rm(list = ls(all.names = TRUE))`; a `get(..., envir = globalenv())`
+delegate raises `object '...' not found`.
+
+---
+
 ## v12.10-doc (2026-06-05) — "RStudioGD plot-pane diagnostics + runbook"
 
 ### Trigger
