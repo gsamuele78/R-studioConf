@@ -114,6 +114,35 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
     daily. `generate-check` is therefore a **blocking** CI gate (`t1-static`),
     and all 6 IDE-rule files were regenerated in sync.
 
+- **Problem Reporter SMTP delivery silently used sanitized placeholders**
+  (`scripts/50_setup_nodes.sh`, `lib/common_utils.sh`; user report — 🐞 Report
+  Problem in `templates/{terminal,rstudio,nextcloud}_wrapper.html.template`
+  failing with `Failed to send email: [Errno -5] No address associated with
+  hostname`).
+  - `setup_nodes_orphan_cleanup()` deployed the committed, sanitized
+    `config/setup_nodes.vars.conf` (`SMTP_HOST="smtp.example.org"`,
+    `SMTP_DNS_SERVERS="192.0.2.10 192.0.2.11"` — RFC 5737 TEST-NET,
+    unreachable) straight to `/etc/biome-calc/conf/setup_nodes.vars.conf` via
+    a plain `cp`, never folding in the `config/site/setup_nodes.site.vars.conf`
+    overlay that this same script already sources into its own shell env.
+    `telemetry_api.py::_load_setup_config()` parses that deployed file
+    directly (not the shell env), so the Problem Reporter — and every other
+    T1 consumer reading that path directly (`unibo_archive_manager.sh`,
+    `scopri_progetti.sh`) — always resolved the placeholder SMTP host, which
+    has no A/AAAA record (`EAI_NODATA`, errno -5).
+  - Added `patch_deployed_mail_overrides()` to `lib/common_utils.sh`:
+    idempotently rewrites the 6 sensitive keys (`SMTP_HOST`, `SENDER_EMAIL`,
+    `MAIL_DOMAIN`, `MAIL_DOMAINS_USER`, `SMTP_DNS_SERVERS`, `BIOME_CONTACT`)
+    in an already-deployed `setup_nodes.vars.conf` from the caller's sourced
+    env, with a timestamped backup and atomic replace.
+    `setup_nodes_orphan_cleanup()` now calls it (`DRY_RUN`-aware) right after
+    the `cp`, so fresh/re-deploys self-heal automatically.
+  - New `scripts/tools/hotfix_smtp_site_overrides.sh`: standalone tool that
+    applies the same patch to an already-deployed production host without
+    re-running the full node setup (kernel tuning, R packages, Ollama, cron).
+    No service restart needed — `telemetry_api.py` re-reads its config file
+    on every `/api/v1/report-problem` request.
+
 ### Added
 
 - `CHANGELOG.md` (this file) — repo-wide change history.

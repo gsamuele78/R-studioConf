@@ -82,6 +82,12 @@ This is the most critical function in the repository. **Raw execution of system 
 * **Signature**: `restore_config` (no args; honors `DRY_RUN`)
 - **Behavior** (T1 audit §1): rolls back the most recent config backup. Selects the newest `${BACKUP_DIR_BASE}/run_<YYYYMMDD_HHMMSS>` directory (lexicographic == chronological by the zero-padded name — deliberately not mtime), lists a bounded sample of targets, and — after an interactive confirm (or a no-write summary under `DRY_RUN=true`) — restores each file to its `/`-rooted path via `_restore_item`, streaming `find` so memory stays flat. Restarts `sssd`/`rstudio-server`/`nginx` **only if ≥1 file was restored**. Returns non-zero on "no backup found" or "nothing restored". (Previously this function was a no-op that reported success — see CHANGELOG.)
 
+#### `patch_deployed_mail_overrides()`
+
+* **Signature**: `patch_deployed_mail_overrides "/path/to/deployed/setup_nodes.vars.conf"`
+- **Behavior** (see CHANGELOG — Problem Reporter SMTP fix): call after sourcing `setup_nodes.vars.conf` then its site override, so the 6 sensitive mail/SMTP keys (`SMTP_HOST`, `SENDER_EMAIL`, `MAIL_DOMAIN`, `MAIL_DOMAINS_USER`, `SMTP_DNS_SERVERS`, `BIOME_CONTACT` — see `config/SITE_OVERRIDE.md`) are live in the shell env. Takes a timestamped backup of the target, rewrites just those 6 lines from the env (idempotent — regenerated from scratch each call), atomically replaces the file via `mktemp`+`mv`, and restores the original owner/mode. Returns non-zero (without touching the target) if any of the 6 env vars is empty, or if the backup/write/chown step fails.
+- **Callers**: `setup_nodes_orphan_cleanup()` in `scripts/50_setup_nodes.sh` (every deploy/re-deploy) and the standalone `scripts/tools/hotfix_smtp_site_overrides.sh` (patch an already-deployed production host without a full re-run). Single source of truth for both — do not re-inline this logic elsewhere.
+
 ---
 
 ### 3.5 The Template Engine: `__process_template()`
