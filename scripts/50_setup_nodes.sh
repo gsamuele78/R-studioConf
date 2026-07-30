@@ -2141,6 +2141,32 @@ setup_nodes_orphan_cleanup() {
   run_cmd cp -f "${_uem_src}" "${BIOME_CONF}/conf/user_email_map.txt"
   
   run_cmd cp -f "${VARS_CONF}" "${BIOME_CONF}/conf/setup_nodes.vars.conf"
+
+  # HC-12 site overlay: VARS_CONF is the committed, sanitized template — the
+  # `cp` above deploys placeholder SMTP_HOST/SMTP_DNS_SERVERS/etc. verbatim.
+  # telemetry_api.py and other T1 consumers parse this deployed file directly
+  # (not this script's shell env), so if a site override is present, patch
+  # its 6 sensitive keys into the deployed copy using the values already
+  # sourced from SITE_VARS_CONF above — otherwise SMTP delivery (Problem
+  # Reporter, orphan notifications) silently falls back to example.org and
+  # fails with "No address associated with hostname".
+  if [[ -f "${SITE_VARS_CONF}" ]]; then
+    log_info "Patching deployed setup_nodes.vars.conf with site-local SMTP/mail overrides..."
+    local _deployed_conf="${BIOME_CONF}/conf/setup_nodes.vars.conf"
+    local _tmp_conf
+    _tmp_conf="$(mktemp)"
+    grep -vE '^(SMTP_HOST|SENDER_EMAIL|MAIL_DOMAIN|MAIL_DOMAINS_USER|SMTP_DNS_SERVERS|BIOME_CONTACT)=' "${_deployed_conf}" > "${_tmp_conf}"
+    {
+      printf 'SMTP_HOST="%s"\n' "${SMTP_HOST}"
+      printf 'SENDER_EMAIL="%s"\n' "${SENDER_EMAIL}"
+      printf 'MAIL_DOMAIN="%s"\n' "${MAIL_DOMAIN}"
+      printf 'MAIL_DOMAINS_USER="%s"\n' "${MAIL_DOMAINS_USER}"
+      printf 'SMTP_DNS_SERVERS="%s"\n' "${SMTP_DNS_SERVERS}"
+      printf 'BIOME_CONTACT="%s"\n' "${BIOME_CONTACT}"
+    } >> "${_tmp_conf}"
+    run_cmd mv -f "${_tmp_conf}" "${_deployed_conf}"
+  fi
+
   run_cmd chmod 600 "${BIOME_CONF}/conf/setup_nodes.vars.conf"
   
   log_info "Generating r_orphan_cleanup.conf..."
