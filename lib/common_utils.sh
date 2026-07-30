@@ -250,6 +250,71 @@ assert_site_configured() {
     fi
 }
 
+# Patch the 6 sensitive mail/SMTP keys (see config/SITE_OVERRIDE.md) into an
+# already-deployed setup_nodes.vars.conf copy, using values held in the
+# caller's shell environment. Call after sourcing setup_nodes.vars.conf then
+# its site override — a straight `cp` of the committed file deploys sanitized
+# placeholders (SMTP_HOST=smtp.example.org) verbatim, which is what broke the
+# Problem Reporter's SMTP delivery (T1 audit, 2026-07-30).
+#
+# Idempotent: regenerates the 6 lines from scratch each call. Non-destructive:
+# builds a scratch file first, takes a timestamped backup, then atomically
+# replaces the target and restores its original owner/mode.
+#
+# Usage:
+#   source "${VARS_CONF}"; source "${SITE_VARS_CONF}"
+#   patch_deployed_mail_overrides "/etc/biome-calc/conf/setup_nodes.vars.conf"
+patch_deployed_mail_overrides() {
+    local target="$1"
+    if [[ ! -f "${target}" ]]; then
+        log "ERROR" "patch_deployed_mail_overrides: target not found: ${target}"
+        return 1
+    fi
+
+    local -a keys=(SMTP_HOST SENDER_EMAIL MAIL_DOMAIN MAIL_DOMAINS_USER SMTP_DNS_SERVERS BIOME_CONTACT)
+    local k
+    for k in "${keys[@]}"; do
+        if [[ -z "${!k:-}" ]]; then
+            log "ERROR" "patch_deployed_mail_overrides: \$${k} is empty — source setup_nodes.vars.conf and its site override first."
+            return 1
+        fi
+    done
+
+    local backup
+    backup="${target}.bak.$(date +%Y%m%d%H%M%S)"
+    if ! cp -f "${target}" "${backup}"; then
+        log "ERROR" "Backup of ${target} failed — aborting patch."
+        return 1
+    fi
+
+    local orig_owner orig_mode
+    orig_owner="$(stat -c '%U:%G' "${target}")"
+    orig_mode="$(stat -c '%a' "${target}")"
+
+    local tmp
+    tmp="$(mktemp)"
+    grep -vE '^(SMTP_HOST|SENDER_EMAIL|MAIL_DOMAIN|MAIL_DOMAINS_USER|SMTP_DNS_SERVERS|BIOME_CONTACT)=' "${target}" > "${tmp}"
+    {
+        printf 'SMTP_HOST="%s"\n' "${SMTP_HOST}"
+        printf 'SENDER_EMAIL="%s"\n' "${SENDER_EMAIL}"
+        printf 'MAIL_DOMAIN="%s"\n' "${MAIL_DOMAIN}"
+        printf 'MAIL_DOMAINS_USER="%s"\n' "${MAIL_DOMAINS_USER}"
+        printf 'SMTP_DNS_SERVERS="%s"\n' "${SMTP_DNS_SERVERS}"
+        printf 'BIOME_CONTACT="%s"\n' "${BIOME_CONTACT}"
+    } >> "${tmp}"
+
+    if ! mv -f "${tmp}" "${target}"; then
+        log "ERROR" "Writing patched ${target} failed — original untouched, scratch file left at ${tmp}."
+        return 1
+    fi
+    if ! chown "${orig_owner}" "${target}" || ! chmod "${orig_mode}" "${target}"; then
+        log "ERROR" "chown/chmod restore on ${target} failed after patch — verify ownership manually (backup: ${backup})."
+        return 1
+    fi
+
+    log "INFO" "Patched mail/SMTP overrides into ${target} (backup: ${backup})"
+}
+
 
 # Function to run commands with automatic error handling and retries
 # ENHANCED v1.4: Corrected with VALID dpkg options only

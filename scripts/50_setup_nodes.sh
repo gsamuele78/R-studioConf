@@ -2149,22 +2149,15 @@ setup_nodes_orphan_cleanup() {
   # its 6 sensitive keys into the deployed copy using the values already
   # sourced from SITE_VARS_CONF above — otherwise SMTP delivery (Problem
   # Reporter, orphan notifications) silently falls back to example.org and
-  # fails with "No address associated with hostname".
+  # fails with "No address associated with hostname". Shared with
+  # scripts/tools/hotfix_smtp_site_overrides.sh (see lib/common_utils.sh).
   if [[ -f "${SITE_VARS_CONF}" ]]; then
     log_info "Patching deployed setup_nodes.vars.conf with site-local SMTP/mail overrides..."
-    local _deployed_conf="${BIOME_CONF}/conf/setup_nodes.vars.conf"
-    local _tmp_conf
-    _tmp_conf="$(mktemp)"
-    grep -vE '^(SMTP_HOST|SENDER_EMAIL|MAIL_DOMAIN|MAIL_DOMAINS_USER|SMTP_DNS_SERVERS|BIOME_CONTACT)=' "${_deployed_conf}" > "${_tmp_conf}"
-    {
-      printf 'SMTP_HOST="%s"\n' "${SMTP_HOST}"
-      printf 'SENDER_EMAIL="%s"\n' "${SENDER_EMAIL}"
-      printf 'MAIL_DOMAIN="%s"\n' "${MAIL_DOMAIN}"
-      printf 'MAIL_DOMAINS_USER="%s"\n' "${MAIL_DOMAINS_USER}"
-      printf 'SMTP_DNS_SERVERS="%s"\n' "${SMTP_DNS_SERVERS}"
-      printf 'BIOME_CONTACT="%s"\n' "${BIOME_CONTACT}"
-    } >> "${_tmp_conf}"
-    run_cmd mv -f "${_tmp_conf}" "${_deployed_conf}"
+    if [[ "${DRY_RUN}" == true ]]; then
+      log_info "[DRY-RUN] patch_deployed_mail_overrides ${BIOME_CONF}/conf/setup_nodes.vars.conf"
+    else
+      patch_deployed_mail_overrides "${BIOME_CONF}/conf/setup_nodes.vars.conf" || exit 1
+    fi
   fi
 
   run_cmd chmod 600 "${BIOME_CONF}/conf/setup_nodes.vars.conf"
