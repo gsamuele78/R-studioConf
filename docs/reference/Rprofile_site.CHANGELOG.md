@@ -121,6 +121,42 @@ sudo bash scripts/50_setup_nodes.sh
 sudo systemctl restart rstudio-server
 ```
 
+### Field verification (2026-07-30)
+
+Follow-up after the second plot-pane report on biome-calc01 (2026-06-18).
+
+**Finding:** All three production nodes were already running the fixed fragment
+when verified on 2026-07-30. The planned `50_setup_nodes.sh` + restart from the
+operator remediation above was not required.
+
+```bash
+# Verified on calc01, calc02, calc03 — all returned:
+grep -n 'ragg::agg_png' /etc/R/Rprofile_site.d/50_pkg_hooks.R
+# 164:      if (has_ragg && !is_interactive_rstudio) options(device = ragg::agg_png)
+```
+
+**Root cause of the second report:** The researcher's RStudio session on calc01
+was started before the fixed fragment was deployed. `Rprofile.site` is sourced
+once at session start — the stale `options(device = ragg::agg_png)` persisted in
+memory for the lifetime of that session. Resolution: researcher closes and
+reopens the RStudio session (or applies the per-session workaround from §1.7).
+No server restart required.
+
+**Diagnostic false-positive documented:**
+`RSTUDIO=1 Rscript -e 'library(ggplot2); cat(is.null(getOption("device")))'`
+returns `FALSE` on **all** nodes, fixed and broken alike. `Rscript` always
+evaluates `interactive()` as `FALSE`, so `is_interactive_rstudio` is `FALSE`
+regardless of the `RSTUDIO` env var, and the guard correctly sets
+`ragg::agg_png` for the batch context. This makes `getOption("device")` non-NULL
+on every node — not evidence of a broken fix. **Do not use this test.**
+
+The only valid shell-side verification is the direct grep:
+
+```bash
+grep -c '!is_interactive_rstudio' /etc/R/Rprofile_site.d/50_pkg_hooks.R
+# Fixed: 1   Broken: 0
+```
+
 ---
 
 ## v12.10 (2026-05-11) — "install-storm safety valve (opt-in) + R010 doc reconciliation"
