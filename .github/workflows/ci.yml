@@ -102,9 +102,9 @@ jobs:
       - name: Run bats unit tests
         run: bats tests/unit/test_common_utils.bats
 
-  # ── R runtime: template parse gate + HC-13 linter oracle ───────────────────
+  # ── R runtime: template parse gate + HC-13 linter oracle + health checker ──
   r-runtime-static:
-    name: R runtime static (Rprofile parse + r_lint oracle)
+    name: R runtime static (Rprofile parse + r_lint oracle + health checker)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -117,6 +117,10 @@ jobs:
         run: bash tests/templates_parse.sh
       - name: r_lint oracle differ (HC-13 linter stability)
         run: bash tests/r_lint_test.sh
+      - name: 99_check_rprofile_health.sh regression (mktemp fixture trees, real R)
+        # Deterministic: BIOME_HEALTH_ROOT points the checker at synthetic and
+        # real-render deployed trees under mktemp; never touches /etc or /Rtmp.
+        run: bash tests/rprofile_health_test.sh
 
   # ── Nginx: render templates and validate with `nginx -t` ───────────────────
   nginx-config:

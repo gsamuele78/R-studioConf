@@ -1,7 +1,15 @@
 #!/bin/bash
 # scripts/99_diagnose_lussu_hang.sh — Lussu-specific overlay over the generic
 # HC-13 user-script triage harness (99_diagnose_user_script.sh).
-# HARNESS_VERSION="1.5"  (script-level only — does NOT bump RPROFILE_VERSION)
+# HARNESS_VERSION="1.6"  (script-level only — does NOT bump RPROFILE_VERSION)
+# v1.6 (2026-09-23): the overlay now survives to its verdict. v1.5 died 143
+#                    right after step 1: the exported setsid flag kept the
+#                    generic harness in this process group and its cleanup
+#                    killed the overlay, so probes E/F/G never ran; this
+#                    overlay's own cleanup also killed itself. Hypotheses now
+#                    fire only when generic L3 did not pass (exit 4 = L3 PASS).
+#                    run_probe no longer re-arms `set -e`, which made the first
+#                    failing probe abort the overlay before its verdict.
 # v1.5 (2026-05-11): forwards new generic-harness flags --no-lint and --smoke
 #                    so that L0a (static lint) and L0b (smoke run) participate
 #                    in the Lussu overlay verdict. No probe semantics change.
@@ -64,12 +72,12 @@ fi
 
 print_usage() {
     cat <<EOF >&2
-${BOLD}99_diagnose_lussu_hang.sh${NC} — Lussu overlay (HC-13, v1.5)
+${BOLD}99_diagnose_lussu_hang.sh${NC} — Lussu overlay (HC-13, v1.6)
 Usage: $0 [--timeout SECONDS] [--progress-window SECONDS] [--no-lint] [--smoke] <user_script.R> [args...]
 
-Runs the generic L0..L3 harness (incl. v1.3 L0a static_lint and optional
-L0b smoke_run), then three Lussu-specific probes (E, F, G) that source
-the unmodified user script through diagnostic shims.
+Runs the generic L0..L3 harness (v1.4: L0a static_lint, optional L0b
+smoke_run, L3s system profile), then three Lussu-specific probes (E, F, G)
+that source the unmodified user script through diagnostic shims.
 
 CLI flags (forwarded to the generic harness via env; CLI overrides env):
   --timeout SECONDS         per-layer/per-probe wall-clock timeout (default 600)
@@ -153,15 +161,24 @@ export BIOME_DIAG_TIMEOUT_S="$TIMEOUT_S"
 __HARNESS_PGID=$$
 cleanup_pgid() {
     local rc=$?
-    trap - EXIT INT TERM
+    local -a __stragglers=()
+    # The overlay is itself in the group it signals: ignore its own TERM and
+    # leave itself out of the KILL, else it dies 143/137 (v1.5 bug).
+    trap - EXIT INT
+    trap '' TERM
     kill -TERM -- "-${__HARNESS_PGID}" 2>/dev/null || true
     sleep 1
-    kill -KILL -- "-${__HARNESS_PGID}" 2>/dev/null || true
+    mapfile -t __stragglers < <(ps -e -o pid=,pgid= 2>/dev/null \
+        | awk -v g="$__HARNESS_PGID" -v me="$$" '$2 == g && $1 != me {print $1}')
+    if [[ ${#__stragglers[@]} -gt 0 ]]; then
+        kill -KILL "${__stragglers[@]}" 2>/dev/null || true
+    fi
     exit "$rc"
 }
 trap cleanup_pgid EXIT INT TERM
-if command -v setsid >/dev/null 2>&1 && [[ -z "${__HARNESS_SETSID:-}" ]]; then
-    export __HARNESS_SETSID=1
+# Session test, not an exported flag: the v1.5 flag leaked into the generic
+# harness, which then ran inside this group and killed the overlay on exit.
+if command -v setsid >/dev/null 2>&1 && [[ "$(ps -o sid= -p $$ | tr -d ' ')" != "$$" ]]; then
     exec setsid -w "$0" "$USER_SCRIPT" "${USER_ARGS[@]}"
 fi
 __HARNESS_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
@@ -342,12 +359,10 @@ run_probe() {
     echo "${CYAN}── [$tag] $rfile ──${NC}"
     local t0 t1 ec status
     t0=$(date +%s)
-    set +e
+    ec=0
     timeout --kill-after=10s "${TIMEOUT_S}s" \
         "$R_BIN" "$rfile" "$USER_SCRIPT" "${USER_ARGS[@]}" \
-        >"$logf" 2>"$errf"
-    ec=$?
-    set -e
+        >"$logf" 2>"$errf" || ec=$?
     t1=$(date +%s)
     local dt=$(( t1 - t0 ))
     status="FAIL"
@@ -417,12 +432,12 @@ if [[ $G_EC -ne 0 ]]; then
 fi
 
 
-if [[ $E_EC -eq 0 && $GENERIC_EC -ne 0 ]]; then
+if [[ $E_EC -eq 0 && $GENERIC_EC -ne 0 && $GENERIC_EC -ne 4 ]]; then
     echo "  ${BOLD}HYPOTHESIS:${NC} fork-inherited terra/GDAL state on NFS deadlocks under mclapply."
     echo "  ${BOLD}SYSTEM-SIDE FIX:${NC} document PSOCK launcher OR add fragment that swaps mclapply"
     echo "  for users whose code matches the pattern. DO NOT edit user .R files."
 fi
-if [[ $F_EC -eq 0 && $GENERIC_EC -ne 0 ]]; then
+if [[ $F_EC -eq 0 && $GENERIC_EC -ne 0 && $GENERIC_EC -ne 4 ]]; then
     echo "  ${BOLD}HYPOTHESIS:${NC} terra in-RAM raster under fork() exhausts memfrac and stalls on NFS writes."
     echo "  ${BOLD}SYSTEM-SIDE FIX:${NC} land terraOptions(todisk=TRUE) default in templates/Rprofile_site.d/50_pkg_hooks.R.template."
 fi
@@ -448,8 +463,8 @@ if [[ $GENERIC_EC -eq 4 && $E_EC -eq 0 && $F_EC -eq 0 && $G_EC -eq 0 ]]; then
 fi
 __has_progressing=0
 __has_genuine_fail=0
-# Generic harness: 0=pass, 3=progressing-only, 4=infra-green-but-L0a-HIGH,
-# anything else=genuine fail
+# Generic harness v1.4 (keyed on its production layer L3): 0=L3 PASS,
+# 3=L3 PROGRESSING, 4=L3 PASS + L0a HIGH, anything else=genuine fail
 case "$GENERIC_EC" in
     0|4) ;;
     3)   __has_progressing=1 ;;

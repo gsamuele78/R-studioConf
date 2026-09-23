@@ -240,9 +240,10 @@ constraints:
       this L0..L4 ladder before proposing any user-script edit; AI-generated
       output that rewrites a user-supplied .R file without explicit consent
       in the same prompt is INVALID. Triage scripts MUST emit a verdict line
-      naming the responsible layer (L0 OS, L1 pure-R, L2 fragment, L3 full
-      profile, L4 clean-VM, L5 user-script-or-upstream) so reports remain
-      defensible when handed back to the user.
+      naming the responsible layer (L0 OS, L1 pure-R, L2 fragment, L3s system
+      profile, L3 full profile incl. the user's startup files, L4 clean-VM,
+      L5 user-script-or-upstream) so reports remain defensible when handed
+      back to the user.
 
       ORDERING INVARIANT (added 2026-05-09):
       A user-script modification suggestion is admissible ONLY AFTER triage

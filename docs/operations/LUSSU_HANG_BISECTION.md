@@ -51,22 +51,25 @@ sudo -u sysadmin.user \
   /nfs/home/sysadmin.user/test_user/.../block1_aoh_to_rij.R
 ```
 
-Outputs land in `/tmp/lussu_diag_<ts>/`:
+Outputs land in `/tmp/lussu_diag_<user>_<ts>/`:
 
 ```
-/tmp/lussu_diag_20260509_091500/
+/tmp/lussu_diag_sysadmin.user_20260509_091500/
 ├── report.md                  # generic L0..L3 verdict
 ├── summary.tsv                # generic per-layer status
-├── lussu_overlay.tsv          # E, F status
+├── lussu_overlay.tsv          # E, F, G status
 ├── L0_infra_health.{log,err}
 ├── L1_pure_R_minimal.{log,err}
 ├── L2_all_fragments_off.{log,err}
+├── L3s_system_profile.{log,err}
 ├── L3_full_profile.{log,err}
 ├── probe_E_psock.{log,err}
 ├── probe_F_terra_todisk.{log,err}
+├── probe_G_malloc_envprop.{log,err}
 └── shims/
     ├── probe_E_psock.R
-    └── probe_F_terra_todisk.R
+    ├── probe_F_terra_todisk.R
+    └── probe_G_malloc_envprop.R
 ```
 
 The shims `source(USER_SCRIPT, echo=FALSE)` — the user file is read but
@@ -84,13 +87,19 @@ The expected matrix for the Lussu pattern is:
 | L0 infra_health | PASS | NFS healthy, fork ok at small scale |
 | L1 pure_R_minimal | **FAIL/TIMEOUT** | hang reproduces under pure R → not a profile issue |
 | L2 all_fragments_off | **FAIL/TIMEOUT** | confirms fragments are blameless |
+| L3s system_profile | **FAIL/TIMEOUT** | reproduces without the user's startup files → they are blameless too |
 | L3 full_profile | **FAIL/TIMEOUT** | production reference |
 | Probe E (PSOCK swap) | **PASS** | mclapply→PSOCK fixes it → fork+terra+NFS is the surface |
 | Probe F (terra todisk) | partial PASS | reduces RAM pressure under fork but may still hang on the NFS-driver path |
+| Probe G (allocator caps) | PASS | `MALLOC_ARENA_MAX` & co. reach PSOCK workers (system-side smoke test) |
 
-Verdict line from the generic harness:
+Verdict line from the generic harness (v1.4):
 
-> `LAYERS L1+L3 BOTH FAILED: NOT a profile issue → infra+terra+NFS or user-script bug`
+> `LAYERS L1, L2, L3s, L3 ALL FAILED: NOT a profile issue → infra+terra+NFS or user-script bug`
+
+A layer that is still writing output when the timeout fires is reported
+PROGRESSING, not TIMEOUT; if that happens to L3 the verdict is
+`INCONCLUSIVE` (exit `3`): re-run with `--timeout` doubled.
 
 Combined with `Probe E PASS`, the diagnosis is **Surface 3 — Fork + NFS / terra**.
 

@@ -13,7 +13,7 @@ the dispatcher's `local({...})` closure (`.biome_env`, `sys_log`,
 > **Role under HC-13 (Adapt System, Not User Script).** This directory is
 > the primary place where system-side fixes for user-script incidents
 > land. When the triage harness `scripts/99_diagnose_user_script.sh`
-> reports *"L3 FAILED but L2 (fragments-off) PASSED"*, the offending
+> reports *"L3s FAILED but L2 (all fragments off) PASSED"*, the offending
 > fragment here is patched and redeployed via `scripts/50_setup_nodes.sh`;
 > the researcher then re-runs their **unchanged** `.R`. User scripts are
 > never modified. See `docs/operations/OPERATOR_QUICKSTART.md`,
@@ -76,7 +76,7 @@ new fragments can be inserted between existing ones without renumbering.
    fragment depends on symbols created by a later-numbered fragment, it is a
    design bug; fix the numbering.
 7. **Fragment authors are the front-line of HC-13.** When a user-script
-   incident's verdict points at a specific fragment (`L3 FAILED, L2
+   incident's verdict points at a specific fragment (`L3s FAILED, L2
    PASSED`), the fix lands here — never in the user's `.R`. Keep
    fragments resilient to portable user code (cf. `safe_makeCluster`,
    `safe_setwd`, memory guards) so the system absorbs the variability.
@@ -129,10 +129,14 @@ Skipped fragments are logged as `FragLoader SKIP <file> (BIOME_DISABLE_FRAGMENTS
 This mechanism never touches the filesystem and is safe for end users.
 
 The HC-13 diagnostic harness `scripts/99_diagnose_user_script.sh` drives
-this variable automatically at **L2** (all fragments off) and emits the
-verdict to `/tmp/user_diag_<ts>/report.md`. When triaging by hand, use
-`BIOME_DISABLE_FRAGMENTS="45,50"` (etc.) to binary-bisect a guilty
-fragment between L2 (all-off, PASS) and L3 (full profile, FAIL).
+this variable automatically at **L2**: it disables every two-digit prefix
+deployed in `/etc/R/Rprofile_site.d` (a new fragment is covered without
+editing the harness) and emits the verdict to
+`/tmp/user_diag_<user>_<ts>/report.md`. When triaging by hand, use
+`BIOME_DISABLE_FRAGMENTS="45,50"` (etc.) with `R_ENVIRON_USER=` and
+`Rscript --no-init-file`, so the user's startup files stay out, to
+binary-bisect a guilty fragment between L2 (all-off, PASS) and L3s (full
+system profile, FAIL).
 
 ### 2. Per-component feature flags
 
@@ -183,12 +187,13 @@ The byte-identical v12.1 monolith is preserved at
   launched via `r_minimal` / `r_minimal_rscript`). Does **not** load
   these fragments, by design.
 * `scripts/99_diagnose_user_script.sh` — generic L0..L3 triage harness
-  that drives `BIOME_DISABLE_FRAGMENTS` at L2.
+  (v1.4, incl. L3s) that drives `BIOME_DISABLE_FRAGMENTS` at L2.
 * `scripts/99_diagnose_lussu_hang.sh` — pattern overlay (mclapply +
-  terra + NFS); probe E (PSOCK swap), probe F (terra todisk).
+  terra + NFS); probe E (PSOCK swap), probe F (terra todisk), probe G
+  (allocator caps reach PSOCK workers).
 * `docs/operations/OPERATOR_QUICKSTART.md` — three-mode sysadmin runbook.
 * `docs/operations/USER_SCRIPT_TROUBLESHOOTING.md` — verdict → action
-  mapping; explicit cross-link from "L3 FAILED but L2 PASSED" back to
+  mapping; explicit cross-link from "L3s FAILED but L2 PASSED" back to
   this directory.
 * `docs/operations/LUSSU_HANG_BISECTION.md` — worked example.
 * `docs/operations/CLEAN_VM_BASELINE.md` — L4 reference VM SOP.

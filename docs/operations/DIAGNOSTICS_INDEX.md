@@ -3,7 +3,7 @@
 
 > **Audience:** sysadmins / on-call.  
 > **Tier:** T1 host.  
-> **Last updated:** 2026-06-12.
+> **Last updated:** 2026-09-23.
 
 Every diagnostic and one-shot fix script in `scripts/` mapped to:
 **when to run / what it produces / where logs land / what to do next.**
@@ -11,7 +11,10 @@ Cross-linked from [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 > **Pessimistic-engineering rule.** None of these scripts mutate state
 > by default unless explicitly named `fix_*` or invoked with a
-> destructive flag. They are safe on production hosts.
+> destructive flag. They are safe on production hosts. One nuance:
+> the runtime tier of `99_check_rprofile_health.sh` loads the real
+> profile as the probed user, so it creates the same per-user dirs a
+> login does (see its entry; `--static-only` avoids it).
 
 ---
 
@@ -67,7 +70,9 @@ or pin the drifting package(s) in
 **Run when:** user reports environment variable mismatch; after
 `50_setup_nodes.sh` deploy; when debugging `~/.Renviron` overrides that
 shadow system defaults.
-**Mutates:** no.
+**Mutates:** only with `--fix --commit`: comments out `R_LIBS_USER` /
+`R_LIBS_SITE` / `R_LIBS` lines after a timestamped backup (`--fix` alone
+is a dry-run).
 **What it checks:** scans all user home directories for `~/.Renviron`
 files that override system-set variables (`R_LIBS_SITE`, `R_LIBS_USER`,
 `TMPDIR`, `RSTUDIO_WHICH_R`, OpenBLAS/OMP thread vars). Flags any
@@ -78,6 +83,75 @@ sensitive variables (`RSTUDIO_WHICH_R`, `TMPDIR`).
 **Next step on conflict:** notify user; if override is malicious or
 accidentally breaks the platform, escalate to sysadmin to audit the
 user's `.Renviron`.
+
+### `scripts/99_check_rprofile_health.sh`  *(v2.0 — check + per-user repair)*
+
+**Run when:** after any `50_setup_nodes.sh` deploy; the welcome banner is
+missing or guards look inactive; one user's sessions fail or crawl while
+others are fine; `99_diagnose_user_script.sh` reports **L3s PASS + L3 FAIL**
+(the user's own startup files); routine weekly ops (`--static-only`).
+**Mutates:** user files only with `--commit`. `--static-only` is read-only.
+The default run adds a runtime tier that loads the real dispatcher **as the
+probed user** (never as root), so it leaves what a login leaves:
+`/Rtmp/biome_<user>/…`, `/var/lib/biome-Rlibs/<user>/<Rver>`. As root without
+`--user` that tier is skipped rather than creating root-owned dirs
+(`--allow-root-probes` overrides). `--fix --commit`, `--reset-profile --commit`
+and `--undo-reset --commit` touch only that user's files: each change is
+backed up (`<file>.bak.<UTC stamp>`) or moved to
+`~/.biome-profile-quarantine/<STAMP>/`, never deleted. System files are never
+modified; findings print the redeploy command instead.
+**What it checks (10 sections; runtime ones marked):**
+
+1. **Dispatcher deployment** — presence, unsubstituted `%%PLACEHOLDERS%%`,
+   R syntax, deployed version vs `config/setup_nodes.vars.conf`, version age,
+   `sys_log` target, and that the R RStudio launches reads the deployed file.
+2. **Fragment chain** — inventory against the expected 14 fragments (v12.10),
+   missing/unexpected fragments, shared-prefix load-order hazards,
+   per-fragment syntax, template vs deployed count.
+3. **Byte-compiled bundle** (v12.3) — `bundle.Rc` + `manifest.txt` presence,
+   manifest md5 freshness vs on-disk fragments, bundle age vs newest fragment.
+4. **Guard installation** *(runtime)* — `solve()`, `dist()`, `outer()`,
+   `expand.grid()` guards, `.biome_env`, `tools:biome_calc` attachment,
+   critical tools (`biome_make_cluster`, `status`).
+5. **BLAS & threading** — `libopenblas0-serial` vs `pthread`, active BLAS
+   alternative, CORETYPE wrappers; *(runtime)* BLAS + thread caps in-session.
+6. **Renviron.site contract** — required vars, last `TMPDIR` definition on
+   `/Rtmp`, local-disk `R_LIBS_USER` (v12.4+), login scripts that rewrite
+   users' `~/.Renviron`; *(runtime)* the file actually reaches the session.
+7. **Per-user startup** (`--user NAME`) — home, `~/.Renviron`, `~/.Rprofile`,
+   workspace restore (`~/.RData`), RStudio session state, per-user system
+   dirs, and *(runtime)* an A/B run: system baseline vs the same R with the
+   user's own startup files, executed as that user.
+8. **Worker survival** *(runtime)* — PSOCK fast path (v10.0 `return()` regression).
+9. **Runtime profile load** *(runtime)* — dispatcher entered, MAIN block
+   completed, load time, fragment error logs.
+10. **Forensic tools** — `r_minimal` launcher + minimal profile availability.
+
+```bash
+sudo bash scripts/99_check_rprofile_health.sh --static-only                  # node integrity (cron)
+sudo bash scripts/99_check_rprofile_health.sh --user researcher1             # full check as that user
+sudo bash scripts/99_check_rprofile_health.sh --user researcher1 --fix       # repair plan (dry-run)
+sudo bash scripts/99_check_rprofile_health.sh --user researcher1 --fix --commit
+sudo bash scripts/99_check_rprofile_health.sh --user researcher1 --reset-profile --commit
+sudo bash scripts/99_check_rprofile_health.sh --user researcher1 --undo-reset list
+```
+
+Runs from the repo checkout (not deployed to `/usr/local/bin`). A non-root
+caller may only name themselves in `--user`. `-y` skips the confirmation
+prompt (required without a TTY). `R_LIBS_*` lines in `~/.Renviron` are
+reported but not changed here: `50_setup_nodes.sh` option 4 and
+`99_check_user_renviron_overrides.sh --fix --commit` own them.
+
+**Output:** stdout PASS/WARN/FAIL/CRIT per check; summary with verdict.
+**Exit codes:** `0` all clear · `1` CRIT/FAIL · `2` warnings only (or runtime
+tier skipped) · `3` invocation error / refused · `4` a requested fix, reset or
+undo was not (fully) applied.
+**Next step on FAIL:** each finding prints its fix. System findings usually
+point to `sudo bash scripts/50_setup_nodes.sh` option 3 (config files only),
+then `sudo systemctl restart rstudio-server`; section 7 findings feed the
+`--fix` plan.
+**Regression test:** `tests/rprofile_health_test.sh` (fixture trees via
+`BIOME_HEALTH_ROOT`, real R; CI job `r-runtime-static`).
 
 ### `scripts/99_diagnose_rstudio_plot_pane.R`  *(R script, not bash)*
 
@@ -161,14 +235,17 @@ Rprofile state).
 
 ## 4. User-script triage (HC-13 ladder)
 
-### `scripts/99_diagnose_user_script.sh`  *(generic harness, v1.3)*
+### `scripts/99_diagnose_user_script.sh`  *(generic harness, v1.4)*
 
 **Run when:** a user reports their `.R` script reproducibly fails on
-this server.
+this server. Run it **as that user** (`su - <user>`); it refuses root
+unless `BIOME_DIAG_ALLOW_ROOT=1` (forensic only).
 **Mutates:** no — **never** modifies the user's `.R` (HC-13).
-**What it does:** L0..L4 infrastructure ladder + L0a/L0b user-code layer:
+**What it does:** an infra probe and a user-code layer, then the same
+unmodified script through four system layers:
 
-* **L0:** `r_minimal_rscript` — pure R, no Rprofile.
+* **L0:** `biome_diag()`, `biome_nfs_check()`, `biome_fork_probe()` under
+  `r_minimal` — OS / NFS / fork health. The user script does not run yet.
 * **L0a (NEW v1.3):** static lint over the user's `.R` via
   `scripts/lib/r_lint.R` + `scripts/lib/r_lint_rules.tsv` (22 rules,
   HIGH/MED/LOW). **Gated by `L0==PASS`** — only runs once infra is
@@ -182,49 +259,94 @@ this server.
   `BIOME_SMOKE_N_CHAINS`, `BIOME_SMOKE_N_CHUNKS`, `BIOME_SMOKE_CHUNK_SIZE`).
   Enable with `--smoke` or `BIOME_DIAG_SMOKE=1`. Default timeout
   `BIOME_DIAG_SMOKE_TIMEOUT_S=300`.
-* **L1:** R with `Rprofile_minimal.R` — minimal forensic profile.
-* **L2:** R with full dispatcher BUT `.d/` fragments off.
-* **L3:** R with full dispatcher + all fragments.
-* **L4:** RStudio session emulation.
+* **L1:** `r_minimal_rscript` — minimal forensic profile, no `Rprofile.site`.
+* **L2:** dispatcher with **every deployed fragment disabled**. The
+  `BIOME_DISABLE_FRAGMENTS` list is built from the fragments in
+  `BIOME_DIAG_FRAG_DIR` (default `/etc/R/Rprofile_site.d`), so a fragment
+  added later cannot stay on (v1.3's hardcoded list left 04/05/42/52
+  active). SKIPPED if no fragment is deployed.
+* **L3s (v1.4):** full system profile (dispatcher + all fragments).
+* **L3:** production — the full system profile **plus** the user's
+  `~/.Renviron` and `~/.Rprofile`.
 
-**Output:** verdict L0..L5 + per-layer summary table in `report.md` +
-**`old_vs_new` appendix** (NEW v1.3) reading `/sys/fs/cgroup/$cgroup/{memory.max,
+L1, L2 and L3s read **no** user startup files: `R_ENVIRON_USER=` (set but
+empty) skips `./.Renviron` and `~/.Renviron`, `--no-init-file` skips both
+`.Rprofile`s. L3s differs from L3 only by those files, so **L3s PASS +
+L3 FAIL** blames the user's startup files: a config-layer repair with
+`99_check_rprofile_health.sh --user <them> --fix`, never a code change.
+L4 (clean-VM baseline, [`CLEAN_VM_BASELINE.md`](CLEAN_VM_BASELINE.md)) is
+manual; the harness recommends it when every layer fails.
+
+**Output:** `/tmp/user_diag_<user>_<TS>/` (or `BIOME_DIAG_OUT_DIR`) with
+`report.md` (verdict, recommended next step, notes, per-layer table),
+`summary.tsv` and per-layer `.log`/`.err`. `report.md` ends with the
+**`old_vs_new` appendix** (v1.3) reading `/sys/fs/cgroup/$cgroup/{memory.max,
 memory.current,cpu.max}` and contrasting actual cgroup limits against
 the legacy "16 vCPU / 512 GB / 2 TB no-cgroup" VM — counters the
 "sul vecchio server funzionava" deflection with hard numbers.
 
-**Exit codes:**
+**Attribution when L3 fails:**
 
-* `0` — ALL LAYERS PASSED.
-* `3` — PROGRESSING-only (some layer hit timeout but none failed).
-* `4` (NEW v1.3) — **INFRASTRUCTURE GREEN — user code has HIGH-severity
-  lint finding(s).** L1/L3 pass, but L0a flagged HIGH issues. The
+| L3s | L2 | L1 | Verdict → where the fix lands |
+|---|---|---|---|
+| PASS | any | any | the user's `~/.Renviron` / `~/.Rprofile` → `99_check_rprofile_health.sh --user <u> --fix` |
+| FAIL | PASS | any | a fragment → bisect `BIOME_DISABLE_FRAGMENTS` without user startup files, patch it |
+| FAIL | FAIL | PASS | dispatcher core or fragment-load contract (`templates/Rprofile_site.R.template`) |
+| FAIL | FAIL | FAIL | not a profile issue → L4 clean VM, then L5 |
+| other (SKIPPED / PROGRESSING) | | | "cause not attributable" → deploy what is missing, or re-run with a longer `--timeout` |
+
+FAIL in this table also covers KILLED and TIMEOUT; for those two the report
+adds a note to confirm with a second run, because they vary with load.
+
+**Exit codes (v1.4 — keyed on the production layer L3):**
+
+* `0` — L3 passed. Reduced-layer differences become notes (e.g. L3s FAIL +
+  L3 PASS: the script only works with this user's startup files).
+* `1` — L0 infra failed, or L3 failed (FAIL / KILLED / TIMEOUT).
+* `2` — invocation error (missing script, bad flag, run as root).
+* `3` — inconclusive: L3 was PROGRESSING when the timeout fired; re-run
+  with `--timeout` doubled.
+* `4` (v1.3) — **INFRASTRUCTURE GREEN — user code has HIGH-severity
+  lint finding(s).** L3 passes, but L0a flagged HIGH issues. The
   research script is the bug; share `report.md` and the user-guide
   anchors with the researcher.
-* `1` — actual failure somewhere in L0..L4.
+
+Up to v1.3 every run actually exited `143` (the cleanup trap killed the
+harness itself), so nothing could rely on these codes.
 
 Lint rule catalogue and good-vs-bad worked examples:
 [`../user_guides/PARALLEL_R_DOS_AND_DONTS.md`](../user_guides/PARALLEL_R_DOS_AND_DONTS.md).
 
 → Full method: [`USER_SCRIPT_TROUBLESHOOTING.md`](USER_SCRIPT_TROUBLESHOOTING.md).
 
-### `scripts/99_diagnose_lussu_hang.sh`  *(Lussu-specific overlay, v1.5)*
+### `scripts/99_diagnose_lussu_hang.sh`  *(Lussu-specific overlay, v1.6)*
 
 **Run when:** the user is "Lussu" or the symptom matches: long
 `mclapply` over `terra::rast` stalls forever.
-**Forwards** `--no-lint` / `--smoke` flags and exit code `4` to/from
-the generic harness (v1.5).
-**Adds two probes** to the generic harness, both UNINTRUSIVE:
+**Runs** the generic harness first (forwards `--timeout`,
+`--progress-window`, `--no-lint`, `--smoke`; its exit code feeds the
+overlay verdict), then three probes, all UNINTRUSIVE:
 
 * **(E)** PSOCK swap — same code, but `mclapply → parLapply` on a
-  PSOCK cluster. Done in a sibling `.R` that `source()`s the user file
+  PSOCK cluster, after a self-test that master globals reach the
+  workers. Done in a sibling `.R` that `source()`s the user file
   via `local()` shim. The user's file is untouched.
 * **(F)** terra todisk — preloads `terraOptions(todisk=TRUE,memfrac=0.2)`
   before sourcing.
+* **(G)** allocator caps — asserts `MALLOC_ARENA_MAX`,
+  `MALLOC_TRIM_THRESHOLD_` and `R_GC_MEM_GROW` reach PSOCK workers
+  (v12.9.4). Does not source the user script.
 
-**Output:** which probe makes the hang go away → tells you whether the
-fix lands in `Rprofile_site.d/30_psock_factory.R.template` or
-`35_compile_routing.R.template`.
+**Output:** when the generic L3 did not pass, which probe makes the hang
+go away: E → a PSOCK launcher or an mclapply-swap fragment; F →
+`terraOptions(todisk=TRUE)` default in `50_pkg_hooks.R.template`. A failing
+G points at `env_vec` in `30_psock_factory.R.template`. Files land in
+`/tmp/lussu_diag_<user>_<TS>/` (generic `report.md`, `lussu_overlay.tsv`,
+`shims/`).
+**Exit codes:** `0` generic and all probes pass · `1` a genuine failure ·
+`2` invocation error · `3` PROGRESSING only · `4` generic exit 4 and all
+probes pass. Up to v1.5 the overlay died with `143` right after the generic
+harness and never ran the probes (fixed in v1.6).
 
 → Full method: [`LUSSU_HANG_BISECTION.md`](LUSSU_HANG_BISECTION.md).
 
@@ -391,11 +513,12 @@ severity: HIGH (base/recommended packages), MEDIUM (CRAN packages in
 |---|---|
 | All numbered phase scripts | `/var/log/biome-log/core/<script>.log` |
 | `99_postmortem_forensics.sh` | `--output` arg or `/tmp/postmortem_<user>_<TS>.txt` |
-| `99_diagnose_lussu_hang.sh` | `/tmp/lussu_diag_<TS>/` |
-| `99_diagnose_user_script.sh` | `/tmp/user_script_diag_<user>_<TS>/` |
+| `99_diagnose_lussu_hang.sh` | `/tmp/lussu_diag_<user>_<TS>/` (generic `report.md` lands here too) |
+| `99_diagnose_user_script.sh` | `/tmp/user_diag_<user>_<TS>/` (override: `BIOME_DIAG_OUT_DIR`) |
 | `99_check_pkg_drift.sh` | `${BIOME_CONF}/pkg_drift/baseline.csv` + stdout |
 | `99_audit_r_environment.sh` | `${BIOME_CONF}/audit/` |
 | `99_health_check.sh` | stdout (intended for cron + email) |
+| `99_check_rprofile_health.sh` | stdout (operator captures) |
 | `99_troubleshoot_env.sh` | stdout (operator captures) |
 | `13_harden_pam_password.sh` / `fix_pam_segfault_inplace.sh` | `/var/log/biome-log/core/` |
 | RStudio | `/var/log/rstudio-server/` |
@@ -452,7 +575,9 @@ Did the user say "it crashed" / "it broke"?
   └─► 99_postmortem_forensics.sh --user <them>
 
 Does a specific .R reproducibly fail?
-  ├─► Generic:  99_diagnose_user_script.sh
+  ├─► Generic:  99_diagnose_user_script.sh   (run as the user)
+  │     ├─► L3s PASS + L3 FAIL = the user's ~/.Renviron / ~/.Rprofile
+  │     │     → 99_check_rprofile_health.sh --user <them> --fix
   │     ├─► add --smoke to actually execute a shrunk run (L0b)
   │     ├─► exit 4 = infra green, user code has HIGH lint findings
   │     │     → hand researcher PARALLEL_R_DOS_AND_DONTS.md anchors
@@ -468,6 +593,16 @@ Are nodes diverging on R packages?
 Is the system "weird" but you can't pinpoint it?
   └─► 99_troubleshoot_env.sh --rprofile
 
+Welcome banner missing / guards inactive / Rprofile parse error?
+  └─► 99_check_rprofile_health.sh
+        ├─► CRIT on dispatcher → redeploy: 50_setup_nodes.sh (option 3)
+        ├─► FAIL on fragments  → redeploy: 50_setup_nodes.sh (option 3)
+        ├─► FAIL on bundle     → redeploy: 50_setup_nodes.sh (option 3)
+        ├─► FAIL on guards     → check fragment 45_memory_guards.R
+        ├─► CRIT on BLAS       → apt-get remove pthread, install serial
+        └─► FAIL/WARN in section 7 (--user) → --fix (plan) → --fix --commit,
+              or --reset-profile --commit (reversible: --undo-reset)
+
 Routine pre-deploy / post-deploy gate?
-  └─► 99_health_check.sh + 99_audit_r_environment.sh
+  └─► 99_health_check.sh + 99_check_rprofile_health.sh + 99_audit_r_environment.sh
 ```

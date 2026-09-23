@@ -233,16 +233,18 @@ These architectural decisions are not obvious from code alone. Agents MUST respe
 | Layer | Test | If PASS | If FAIL |
 |-------|------|---------|---------|
 | **L0** OS / NFS / fork health | `r_minimal` + `biome_diag()` / `biome_nfs_check()` / `biome_fork_probe()` | infra healthy → continue | fix infra (NFS mount opts, kernel, cgroup); user blameless |
-| **L1** User script under pure R (no profile) | `r_minimal Rscript user.R` | profile is the cause → L2 | infra-vs-script — continue to L4 |
-| **L2** Selective fragment disable | `BIOME_DISABLE_FRAGMENTS="…" Rscript user.R` (binary bisection) | pinpoints the failing fragment → patch it | not a fragment problem |
-| **L3** Full profile baseline | normal `Rscript user.R` | reference for regression | reference for regression |
+| **L1** User script under pure R (no profile, no user startup files) | `R_ENVIRON_USER= r_minimal_rscript user.R` | profile is the cause → L2 | infra-vs-script — continue to L4 |
+| **L2** Selective fragment disable (no user startup files) | `R_ENVIRON_USER= BIOME_DISABLE_FRAGMENTS="…" Rscript --no-init-file user.R` (all deployed prefixes, then binary bisection) | pinpoints the failing fragment → patch it | not a fragment problem |
+| **L3s** Full system profile, no user startup files | `R_ENVIRON_USER= Rscript --no-init-file user.R` | if L3 fails: the user's `~/.Renviron` / `~/.Rprofile` is the cause (config layer, not code) → `99_check_rprofile_health.sh --user <u> --fix` | the system profile reproduces it |
+| **L3** Full profile baseline (system + user startup files) | normal `Rscript user.R` | reference for regression | reference for regression |
 | **L4** Clean-VM baseline (1 disk, no NFS, no domain) | run on reference VM | production-VM-specific (NFS / fragment / cgroup) | L5 |
 | **L5** User-script or upstream package bug | report to user with kernel-stack evidence | n/a | document, do not silently patch |
 
 **Triage tooling (admin-facing, not user-facing):**
 
-- `scripts/99_diagnose_user_script.sh <user.R>` — generic 4-layer harness with 20-min timeouts; emits `/tmp/user_diag_<ts>/report.md` with a verdict line `LAYER X FAILED: <reason>`.
-- `scripts/99_diagnose_lussu_hang.sh` — Lussu-specific overlay (adds runs E: PSOCK swap, F: terra todisk).
+- `scripts/99_diagnose_user_script.sh <user.R>` — generic harness (v1.4: L0 infra probe + L1/L2/L3s/L3, run as the affected user, 10-min default per-layer timeout); emits `/tmp/user_diag_<user>_<ts>/report.md` with a verdict line naming the layer, and an exit code keyed on the production layer L3 (0 pass · 1 fail · 3 still progressing · 4 pass with HIGH lint findings).
+- `scripts/99_diagnose_lussu_hang.sh` — Lussu-specific overlay (v1.6; adds probes E: PSOCK swap, F: terra todisk, G: allocator caps reach PSOCK workers).
+- `scripts/99_check_rprofile_health.sh --user <u>` — system profile health + that user's startup files, with an A/B run against the system baseline; `--fix` / `--reset-profile` repair the user's files only with `--commit` (backed up / reversible).
 - `templates/Rprofile_site.minimal.R.template` → `/etc/R/Rprofile_minimal.R` + `/usr/local/bin/r_minimal` wrapper for layer-0/1 isolation.
 
 **Responsibility boundaries (encoded in every troubleshooting doc):**
@@ -255,7 +257,7 @@ These architectural decisions are not obvious from code alone. Agents MUST respe
 A patch to the user's `.R` is admissible **only after** triage has positively excluded **all three** of the following surfaces, **in order**:
 
 1. **System bug** — L0 cleared (OS / NFS / fork / cgroup / kernel / BLAS).
-2. **Configuration bug** — L1 + L2 + L3 cleared (Renviron, fragments, dispatcher).
+2. **Configuration bug** — L1 + L2 + L3s + L3 cleared (Renviron, fragments, dispatcher, the user's own `~/.Renviron` / `~/.Rprofile`).
 3. **Unchecked case** — L4 clean-VM reproduces the failure with no NFS / no domain / no profile, AND a ≤30-line minimal reproducer with `sessionInfo()` + kernel-stack evidence has been captured.
 
 Skipping any of (1), (2), (3) before suggesting a user-script change is an HC-13 violation. AI output that proposes a user patch **must cite** the layer it cleared (e.g. `"L4 PASS, evidence at /tmp/L4_clean_vm_<TS>/"`); proposals without that citation MUST be rejected on review. The verdict line emitted by `99_diagnose_user_script.sh` is the auditable proof that the ordering was followed.

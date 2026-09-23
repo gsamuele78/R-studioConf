@@ -5,6 +5,11 @@ mcp-servers/
 # Node modules
 node_modules/
 
+# Local AI-agent tool state (oh-my-openagent, Serena MCP)
+.omo
+*.omo/
+.serena/
+
 # Environment files (HC-08)
 .env
 *.env

@@ -158,11 +158,15 @@ Safe parallel patterns for users:
 
 ### HC-13 diagnostic harness — adapt the system, not the script
 
-When a user job fails, `scripts/99_diagnose_user_script.sh` bisects the failure
-across **L0** (minimal forensic profile, `r_minimal`) → **L2** (all fragments
-off) → **L3** (full profile). A verdict of *"L3 FAILED, L2 PASSED"* pinpoints the
-guilty fragment, which is patched and redeployed — the researcher re-runs their
-**unchanged** `.R`. Worked example: [`LUSSU_HANG_BISECTION.md`](docs/operations/LUSSU_HANG_BISECTION.md).
+When a user job fails, `scripts/99_diagnose_user_script.sh` (run as that user)
+bisects the failure across **L1** (minimal forensic profile, `r_minimal`) →
+**L2** (all deployed fragments off) → **L3s** (full system profile) → **L3**
+(production: system profile + the user's `~/.Renviron` / `~/.Rprofile`). A
+verdict of *"L3s FAILED but L2 PASSED"* pinpoints the guilty fragment, which is
+patched and redeployed; *"L3 FAILED but L3s PASSED"* points at the user's own
+startup files, repaired with `scripts/99_check_rprofile_health.sh --user <u> --fix`.
+Either way the researcher re-runs their **unchanged** `.R`. Worked example:
+[`LUSSU_HANG_BISECTION.md`](docs/operations/LUSSU_HANG_BISECTION.md).
 
 ---
 

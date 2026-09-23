@@ -39,6 +39,32 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ### Changed
 
+- **HC-13 triage harness v1.4** (`scripts/99_diagnose_user_script.sh`).
+  - New layer **L3s** (full system profile, no user startup files). L1, L2 and
+    L3s run with `R_ENVIRON_USER=` (set but empty: neither `./.Renviron` nor
+    `~/.Renviron` is read) and `--no-init-file`, so **L3s PASS + L3 FAIL** names
+    the user's `~/.Renviron` / `~/.Rprofile` as the cause, repaired with
+    `scripts/99_check_rprofile_health.sh --user <u> --fix`. Until v1.3 L1-L3 all
+    read `~/.Renviron` (L2/L3 also `~/.Rprofile`), so a broken user profile was
+    reported as "dispatcher core" or "not a profile issue".
+  - L2 builds its `BIOME_DISABLE_FRAGMENTS` list from the fragments actually
+    deployed (`BIOME_DIAG_FRAG_DIR`, default `/etc/R/Rprofile_site.d`). The
+    hardcoded v1.3 list left `04`, `05`, `42` and `52` active, so a bug in one
+    of them was blamed on the dispatcher core.
+  - Exit code keyed on the production layer L3: `0` L3 passed (reduced-layer
+    failures become NOTE lines; the v1.3 mapping gave `1` for e.g. L1 FAIL +
+    L3 PASS), `1` L0 or L3 failed, `3` L3 PROGRESSING, `4` L3 passed with HIGH
+    lint findings. An L3 failure that a SKIPPED/PROGRESSING layer leaves
+    unattributable is labelled as such; SKIPPED is a documented status.
+  - New overrides `BIOME_DIAG_R_MIN` and `BIOME_DIAG_FRAG_DIR`.
+- **Docs follow the v1.4 ladder**: `DIAGNOSTICS_INDEX.md` (§1 + §4 + log table +
+  decision tree), `USER_SCRIPT_TROUBLESHOOTING.md` (L3s row, surface 7 "user
+  startup files", verdict table, user-message template), `OPERATOR_QUICKSTART.md`,
+  `SCRIPT_CATALOG.md`, `LUSSU_HANG_BISECTION.md`, `README.md`,
+  `templates/Rprofile_site.d/README.md`, `.ai/agents.md` §6.6 and the HC-13
+  rationale in `.ai/project.yml`.
+- `.gitignore`: local AI-agent tool state (`.omo`, `.serena/`).
+
 - **Root `README.md` rewritten as an accurate thin landing page** (audit Phase 0.1).
   Replaced the stale `setup_r_env.sh` + `install/` + `/var/log/r_setup/` + `:8787`
   description (a layout that no longer exists) with the real `init.sh` →
@@ -50,6 +76,9 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   flipped to `[FIXED]`.
 
 ### CI / Testing
+
+- `r-runtime-static` also runs `tests/rprofile_health_test.sh` (regression gate
+  for `99_check_rprofile_health.sh`; mktemp fixture trees, real R).
 
 - **Replaced the false-green CI** (audit Phase 0.2). Deleted
   `.github/workflows/test_setup_r_env.yml` — it drove the deleted `setup_r_env.sh`
@@ -73,6 +102,26 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   `tests/nginx_render_check.sh`.
 
 ### Fixed
+
+- **The HC-13 triage harnesses never returned their exit code.** `cleanup_pgid`
+  in `99_diagnose_user_script.sh` and `99_diagnose_lussu_hang.sh` sent TERM, then
+  KILL, to its own process group, which contains the harness itself: every run
+  ended with `143`, whatever the verdict. Both now ignore their own TERM and
+  leave themselves out of the KILL.
+- **The Lussu overlay never ran its probes** (`99_diagnose_lussu_hang.sh` v1.6).
+  The exported `__HARNESS_SETSID` guard leaked into the generic harness, which
+  then stayed in the overlay's process group and killed it right after step 1:
+  probes E/F/G never ran. Both harnesses now re-exec under `setsid` unless they
+  already lead their session. `run_probe` also re-armed `set -e`, so the first
+  failing probe aborted the overlay before its verdict; and the E/F hypotheses
+  fired on generic exit `4`, where L3 had passed.
+- `99_diagnose_user_script.sh`: the `setsid` re-exec recomputed the timestamp and
+  left an empty `/tmp/user_diag_*` dir behind; `BIOME_DIAG_OUT_DIR` is now
+  exported before the re-exec.
+- Docs: `OPERATOR_QUICKSTART.md` ran both harnesses with `sudo`, which their
+  root guard refuses (now `sudo su - <user> -c …`); `DIAGNOSTICS_INDEX.md` listed
+  wrong output dirs (`/tmp/user_script_diag_*`, `/tmp/lussu_diag_<TS>`) and
+  called `99_check_user_renviron_overrides.sh` read-only (it has `--fix --commit`).
 
 - **§1 silent-failure CRITICAL defects** (`lib/common_utils.sh`, `r_env_manager.sh`;
   branch `fix/critical-silent-failures`). Guarded against regression by
@@ -145,10 +194,32 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ### Added
 
+- `scripts/99_check_rprofile_health.sh` (v2.0) — health check of the startup
+  chain every RStudio session runs (dispatcher, fragments, bundle, guards, BLAS,
+  `Renviron.site`, runtime load, PSOCK worker survival) and, with `--user NAME`,
+  of that user's startup files and session state, incl. an A/B run against the
+  system baseline. Runtime probes run as the probed user, never as root.
+  Per-user repair only on request: `--fix [--commit]`, `--reset-profile
+  [--commit]`, `--undo-reset` (backups / reversible quarantine; system files
+  are never modified). Exit `0` clear, `1` CRIT/FAIL, `2` warnings, `3`
+  invocation error, `4` requested change not applied.
+- `tests/rprofile_health_test.sh` — its regression gate: synthetic and
+  real-render deployed trees under mktemp (`BIOME_HEALTH_ROOT`), real R.
+
 - `CHANGELOG.md` (this file) — repo-wide change history.
 - `config/SITE_OVERRIDE.md` — site-local overlay reference + first-time/migration steps.
 
 ### Follow-up (recommended)
+
+- **Regression test for the HC-13 harnesses.** The `143` exit bug survived
+  because nothing runs `99_diagnose_user_script.sh` / `99_diagnose_lussu_hang.sh`
+  in CI. v1.4/v1.6 were verified with a fake `Rscript` / `r_minimal` on `PATH`
+  (13 verdict/exit cases + overlay end-to-end); committed as a test, that needs
+  no R and fits `t1-static`.
+- **Harness process cleanup is weaker than its comments claim.** `timeout`
+  moves each layer into its own process group, so the harness's group kill
+  never reaches R workers left behind by a layer; and after `setsid` a terminal
+  Ctrl-C stops `setsid -w`, not the harness. Found by reading, not tested.
 
 - **Deterministic package-drift detection.** Package sets live as bash arrays in
   `config/r_env_manager.conf` with no pin, so CI can only lint their *shape*. The

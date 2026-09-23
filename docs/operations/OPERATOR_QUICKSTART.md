@@ -66,8 +66,8 @@ r_minimal -e 'biome_diag()'                           # smoke-test
 | `/Rtmp` | 400 GB ext4 — large R temp |
 | `/usr/local/bin/r_minimal` | runs `R` with `R_PROFILE_USER=Rprofile_minimal.R --no-site-file` |
 | `/usr/local/bin/r_minimal_rscript` | same, for `Rscript` |
-| `/usr/local/bin/99_diagnose_user_script.sh` | generic L0..L3 harness |
-| `/usr/local/bin/99_diagnose_lussu_hang.sh` | Lussu pattern overlay (probes E/F) |
+| `/usr/local/bin/99_diagnose_user_script.sh` | generic L0..L3 harness (v1.4: L3s isolates the user's startup files) |
+| `/usr/local/bin/99_diagnose_lussu_hang.sh` | Lussu pattern overlay (probes E/F/G) |
 
 After this, you do **not** redeploy unless a fragment changes.
 
@@ -83,24 +83,27 @@ inside RStudio). It works. **You do nothing.** No per-script step.
 ### Mode B — Incident ticket: "my script hangs / crashes"
 
 ```bash
-# 1. Run the generic harness against the user's UNMODIFIED .R
-sudo /usr/local/bin/99_diagnose_user_script.sh /path/to/user.R
+# 1. Run the generic harness AS THE USER against their UNMODIFIED .R
+#    (it refuses root: cgroup slice, HOME and R_LIBS_USER must be theirs)
+sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh /path/to/user.R'
 
 # 2. Read the verdict
-less /tmp/user_diag_<ts>/report.md          # ends with: LAYER X FAILED: <reason>
+less /tmp/user_diag_<user>_<ts>/report.md   # "## Verdict" names the layer + next step
 ```
 
 Map the verdict to action via the table in
 `docs/operations/USER_SCRIPT_TROUBLESHOOTING.md` ("Verdict → action mapping").
-The fix lands **system-side**:
+The fix lands **system-side**, or in the user's startup files, never in
+their `.R`:
 
 | Verdict | Where the fix lands |
 |---|---|
 | `L0 FAILED` (infra) | NFS mount opts, kernel/cgroup, BLAS pkg → re-run `50_setup_nodes.sh` for the affected step |
-| `L3 FAILED but L2 (fragments-off) PASSED` | a fragment in `templates/Rprofile_site.d/` → patch + redeploy that fragment |
-| `L1+L3 FAILED, L2 PASSED` | dispatcher core in `templates/Rprofile_site.R.template` |
-| `L1+L3 BOTH FAILED` | escalate to L4 (`CLEAN_VM_BASELINE.md`) |
-| `ALL PASSED` | ask user for exact reproduction (inputs/args/env/exit code) |
+| `L3 FAILED but L3s (…) PASSED` | the user's `~/.Renviron` / `~/.Rprofile` → `sudo bash scripts/99_check_rprofile_health.sh --user <user> --fix` (backed up, reversible) |
+| `L3s FAILED but L2 (all fragments off) PASSED` | a fragment in `templates/Rprofile_site.d/` → patch + redeploy that fragment |
+| `L3s+L2 FAILED, L1 PASSED` | dispatcher core in `templates/Rprofile_site.R.template` |
+| `L1, L2, L3s, L3 ALL FAILED` | escalate to L4 (`CLEAN_VM_BASELINE.md`) |
+| `ALL LAYERS PASSED` / `PRODUCTION LAYER L3 PASSED` | ask user for exact reproduction (inputs/args/env/exit code) |
 
 Then the user **re-runs their unchanged `.R`** and the ticket closes. No
 script edit was suggested.
@@ -112,15 +115,17 @@ runs additional probes (PSOCK swap, `terraOptions(todisk=TRUE)`, …)
 against the **same unmodified** user script:
 
 ```bash
-sudo /usr/local/bin/99_diagnose_lussu_hang.sh /path/to/user.R
+sudo su - <user> -c '/usr/local/bin/99_diagnose_lussu_hang.sh /path/to/user.R'
 # probe E = PSOCK swap of mclapply
 # probe F = terra todisk
-# all probes leave the user's .R untouched (LD_PRELOAD / R_PROFILE_USER shims only)
+# probe G = allocator caps reach PSOCK workers (does not run the user script)
+# the user's .R is untouched: sibling .R shims source() it
 ```
 
-If probe E or F passes, the system-side fix is to default that behaviour
-in a fragment (`50_pkg_hooks.R.template` for terra; documented PSOCK
-launcher for fork+NFS) — never to ask the researcher to rewrite their code.
+If probe E or F passes while the generic L3 fails, the system-side fix is
+to default that behaviour in a fragment (`50_pkg_hooks.R.template` for
+terra; documented PSOCK launcher for fork+NFS) — never to ask the
+researcher to rewrite their code.
 
 ---
 
@@ -132,7 +137,7 @@ mid-run."
 **Step 0 — do NOT touch the script.** Run the generic harness:
 
 ```bash
-sudo /usr/local/bin/99_diagnose_user_script.sh /home/martina/run_chains.R
+sudo su - martina -c '/usr/local/bin/99_diagnose_user_script.sh /home/martina/run_chains.R'
 ```
 
 While it runs, the likely surfaces map to **existing** system knobs:
@@ -146,15 +151,21 @@ While it runs, the likely surfaces map to **existing** system knobs:
 | `parallel::detectCores()` returns hyperthreads → too many chains | `45_memory_guards` / NIMBLE conventions: use `parallel::detectCores(logical=FALSE)` (HC-§6.5) |
 | Forked workers + NFS lock contention | overlay probe E (`99_diagnose_lussu_hang.sh`) — PSOCK swap |
 
-**If verdict says `L3 FAILED but L2 (fragments-off) PASSED`:**
-Bisect with `BIOME_DISABLE_FRAGMENTS="45"` then `"05"` then `"50"`, etc.
+**If verdict says `L3s FAILED but L2 (all fragments off) PASSED`:**
+Bisect with `BIOME_DISABLE_FRAGMENTS="45"` then `"05"` then `"50"`, etc.,
+keeping the L3s isolation (`R_ENVIRON_USER=` + `Rscript --no-init-file`).
 The guilty fragment gets patched in `templates/Rprofile_site.d/`,
 redeployed via `50_setup_nodes.sh`, and Martina re-runs her **unchanged**
 script.
 
-**If verdict says `ALL PASSED` but Martina still reports an issue:**
+**If verdict says `L3 FAILED but L3s (…) PASSED`:** the culprit is in
+Martina's own `~/.Renviron` / `~/.Rprofile` (e.g. a thread or `mc.cores`
+override). `sudo bash scripts/99_check_rprofile_health.sh --user martina --fix`
+shows the repair plan; apply it with her OK. Her `.R` stays untouched.
+
+**If verdict says `ALL LAYERS PASSED` but Martina still reports an issue:**
 Ask her for exact inputs (seed, N chains, iterations, model file) so the
-harness can reproduce. *Then* — only if L0+L1+L2+L3+L4 all clear — is a
+harness can reproduce. *Then* — only if L0+L1+L2+L3s+L3+L4 all clear — is a
 user-script suggestion admissible per the HC-13 ordering invariant, and
 **only with cited evidence** (`.ai/agents.md` §6.6).
 
@@ -167,6 +178,11 @@ Templates from `USER_SCRIPT_TROUBLESHOOTING.md`:
 - **System-side fix landed (L0..L3):**
   *"Your script ran into a system-level issue (`<short reason>`). We have
   adapted the system. Please re-run; no changes to your code are needed."*
+
+- **The user's startup files (L3s PASS + L3 FAIL):**
+  *"Your script works with the server's standard configuration and fails
+  only with your personal startup files (`<setting>`). With your OK we will
+  fix or set them aside — backed up, reversible. Your `.R` is not touched."*
 
 - **Clean-VM reproduces (L4):**
   *"We reproduced your failure on a clean reference VM. Minimal reproducer
@@ -193,14 +209,17 @@ pgrep -f 'user.R' | head
 r_minimal -e 'biome_hang_diag(c(<pid1>,<pid2>))'
 r_minimal -e 'biome_worker_tail()'
 
-# generic harness on a ticket
-sudo /usr/local/bin/99_diagnose_user_script.sh /path/to/user.R
+# generic harness on a ticket (as the user — it refuses root)
+sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh /path/to/user.R'
 
 # pattern overlay (mclapply + terra + NFS)
-sudo /usr/local/bin/99_diagnose_lussu_hang.sh /path/to/user.R
+sudo su - <user> -c '/usr/local/bin/99_diagnose_lussu_hang.sh /path/to/user.R'
 
-# binary bisection of fragments by hand
-BIOME_DISABLE_FRAGMENTS="45,50" Rscript /path/to/user.R
+# binary bisection of fragments by hand (same isolation as L2/L3s)
+R_ENVIRON_USER= BIOME_DISABLE_FRAGMENTS="45,50" Rscript --no-init-file /path/to/user.R
+
+# the user's own startup files (verdict L3s PASS + L3 FAIL)
+sudo bash scripts/99_check_rprofile_health.sh --user <user> --fix
 
 # package drift (surface 6)
 Rscript scripts/tools/r_pkg_drift_detector.R

@@ -89,15 +89,17 @@ deferred), source `lib/common_utils.sh`, read their own
 ## 3. Diagnostic & forensic toolbox (`scripts/99_*.sh`)
 
 These do **not** mutate system state by default and are safe to run on
-a production host. They are documented in detail in
+a production host (the runtime tier of `99_check_rprofile_health.sh`
+leaves the same per-user dirs a login does). They are documented in detail in
 `docs/operations/DIAGNOSTICS_INDEX.md`.
 
 | Script | Purpose | Output |
 |---|---|---|
 | `99_audit_r_environment.sh` | Deploys `templates/00_audit_v28.R.template` and runs it via `Rscript`, or prints the deploy path for in-RStudio sourcing. | Markdown audit report under `${BIOME_CONF}/audit/`. |
 | `99_check_pkg_drift.sh` | Wraps `scripts/tools/r_pkg_drift_detector.R`. Detects silent drift between baseline and live `installed.packages()`. PSE-mode: exit-code-meaningful, baseline on local disk. | Diff report + non-zero exit on drift. |
-| `99_diagnose_lussu_hang.sh` | Lussu-specific overlay over the generic HC-13 harness. Adds (E) PSOCK swap probe and (F) `terra::terraOptions(todisk=TRUE,memfrac=0.2)` probe. **Does NOT modify the user's `.R` file.** | Per-probe stdout + crash dumps under `/tmp/lussu_diag_<TS>/`. |
-| `99_diagnose_user_script.sh` | Generic HC-13 L0..L4 escalation harness. Runs the user script unmodified through 4 system layers (R minimal / Rprofile-only / fragments-off / full). | Verdict L0..L5; only L5 implies the user's script is at fault. |
+| `99_check_rprofile_health.sh` | v2.0. Health of the startup chain every RStudio session runs (dispatcher, fragments, bundle, guards, BLAS, `Renviron.site`) and, with `--user NAME`, that user's startup files and session state, incl. an A/B run against the system baseline. Runtime probes run as the probed user, never as root. Repairs only with `--fix --commit` / `--reset-profile --commit` (backups, reversible quarantine). Runs from the repo checkout. Tested by `tests/rprofile_health_test.sh`. | PASS/WARN/FAIL/CRIT per check; exit `0` clear, `1` CRIT/FAIL, `2` warnings only, `3` invocation error, `4` requested change not applied. |
+| `99_diagnose_lussu_hang.sh` | v1.6. Lussu-specific overlay over the generic HC-13 harness. Adds (E) PSOCK swap probe, (F) `terra::terraOptions(todisk=TRUE,memfrac=0.2)` probe and (G) allocator-cap propagation probe. **Does NOT modify the user's `.R` file.** | Per-probe logs + generic `report.md` under `/tmp/lussu_diag_<user>_<TS>/`. |
+| `99_diagnose_user_script.sh` | v1.4. Generic HC-13 escalation harness: L0 infra probe, then the user script unmodified through 4 system layers (L1 minimal profile / L2 all deployed fragments off / L3s full system profile / L3 production incl. the user's `~/.Renviron` + `~/.Rprofile`). L1–L3s never read the user's startup files, so L3s PASS + L3 FAIL blames them. Run as the affected user. | Verdict + `report.md` under `/tmp/user_diag_<user>_<TS>/`; exit code keyed on L3 (`0`/`1`/`3`/`4`). Only L5 implies the user's script is at fault. |
 | `99_health_check.sh` | v1.1.0. End-to-end service + config + AD reachability check, extended with BIOME-CALC v11+ Rprofile and audit v28 infrastructure assertions. | Pass/fail per check, exit-code-meaningful. |
 | `99_postmortem_forensics.sh` | Crash-after-the-fact collector. `--user <name> [--hours N] [--output FILE]`. Classifies crash type, checks guard coverage, identifies unguarded edge cases, recommends fixes. | Structured diagnosis text report. |
 | `99_troubleshoot_env.sh` | v1.3.0. Aggregates logs, system state, integration tests. `--rprofile` subsystem deep-check for Rprofile v11+ + audit v28. | Consolidated diagnostic dump. |

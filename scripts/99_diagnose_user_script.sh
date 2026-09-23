@@ -1,13 +1,14 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 # scripts/99_diagnose_user_script.sh — GENERIC HC-13 user-script triage harness
-# HARNESS_VERSION="1.3"  (script-level only — does NOT bump RPROFILE_VERSION)
+# HARNESS_VERSION="1.4"  (script-level only — does NOT bump RPROFILE_VERSION)
 # ==============================================================================
 # Implements the operator-perspective L0..L4 escalation ladder defined in
 # .ai/agents.md §6.6 (HC-13) and docs/operations/USER_SCRIPT_TROUBLESHOOTING.md.
 #
 # RESPONSIBILITY BOUNDARIES (HC-13):
-#   * This tool runs the USER'S R SCRIPT UNMODIFIED through 4 system layers.
+#   * After the L0 infra probe, this tool runs the USER'S R SCRIPT UNMODIFIED
+#     through 4 system layers (L1, L2, L3s, L3).
 #   * It DOES NOT edit, patch, rewrite, or transform the user's .R file.
 #   * It tells the sysadmin which layer is responsible for the failure so the
 #     fix can land on the SYSTEM side (Renviron / fragment / mount / cgroup)
@@ -39,6 +40,27 @@ set -euo pipefail
 #   BIOME_DIAG_NO_LINT            set to 1 to disable L0a (static lint) — same as --no-lint
 #   BIOME_DIAG_SMOKE              set to 1 to enable L0b (smoke run)    — same as --smoke
 #   BIOME_DIAG_SMOKE_TIMEOUT_S    smoke wall-clock cap (default 300s)
+#   BIOME_DIAG_R_MIN              minimal-profile Rscript (default /usr/local/bin/r_minimal_rscript)
+#   BIOME_DIAG_FRAG_DIR           deployed fragment dir the L2 disable list is read from
+#                                 (default /etc/R/Rprofile_site.d)
+#
+# LAYERS (v1.4 — user startup files are isolated, so they can be blamed):
+#   L1   pure_R_minimal     minimal profile, NO ~/.Renviron / ~/.Rprofile
+#   L2   all_fragments_off  dispatcher only: every DEPLOYED fragment prefix is
+#                           disabled (list read from BIOME_DIAG_FRAG_DIR, not
+#                           hardcoded), NO user startup files
+#   L3s  system_profile     full system profile, NO user startup files
+#   L3   full_profile       production: system profile + ~/.Renviron + ~/.Rprofile
+#   "No user startup files" = R_ENVIRON_USER= (set but empty: neither ./.Renviron
+#   nor ~/.Renviron is read) + --no-init-file (no ./.Rprofile, no ~/.Rprofile).
+#   L1 only needs the environ half: r_minimal already replaces the user profile
+#   with its own via R_PROFILE_USER. Before v1.4, L1-L3 all read ~/.Renviron
+#   (and L2/L3 ~/.Rprofile), so a broken user profile was reported as
+#   "dispatcher core" or "not a profile issue → L4/L5". L3s PASS + L3 FAIL now
+#   names the user's startup files — a CONFIG-layer cause (HC-13 ordering),
+#   repaired with scripts/99_check_rprofile_health.sh --user <u> [--fix |
+#   --reset-profile] (repo checkout; dry-run unless --commit), never by editing
+#   the .R script.
 #
 # NEW LAYERS (v1.3, gated by L0_STATUS==PASS so infra is proven first):
 #   L0a static_lint   scripts/lib/r_lint.R  — describes user-code smells (HC-13).
@@ -66,12 +88,19 @@ set -euo pipefail
 #                the legitimate workload exceeds the diagnostic window.
 #                (HC-13: long compute is not a system bug — refusing to
 #                 misclassify it as TIMEOUT==FAIL preserves operator trust.)
+#   SKIPPED      (listed since v1.4) layer not run because its prerequisite is
+#                missing: r_minimal not deployed (L0/L1), no fragment deployed
+#                (L2), L0 not green (L0a/L0b). Never counted as PASS; an L3
+#                failure that needs the skipped layer is reported unattributed.
 #
-# Exit codes:
-#   0 — all layers passed (script is healthy in production)
-#   1 — at least one layer FAIL/KILLED/TIMEOUT (genuine stall); verdict in report.md
+# Exit codes (v1.4) — keyed on the PRODUCTION layer L3. L1/L2/L3s withhold
+# configuration on purpose, so a script that needs it fails there legitimately;
+# they attribute an L3 failure, they never fail a script that passes in L3.
+#   0 — production layer L3 passed (other-layer anomalies are notes, not failures)
+#   1 — L0 infra failed, or L3 failed (FAIL/KILLED/TIMEOUT); verdict in report.md
 #   2 — invocation error (missing script, bad args, run-as-root refused)
-#   3 — at least one layer PROGRESSING (inconclusive; re-run with longer --timeout)
+#   3 — inconclusive: production layer L3 was PROGRESSING (re-run with longer --timeout)
+#   4 — L3 passed but L0a flagged HIGH-severity lint findings in the user .R file
 # ==============================================================================
 
 # ── Color vars (PSE convention — HC-03) ───────────────────────────────────
@@ -105,11 +134,17 @@ fi
 # ── Args ──────────────────────────────────────────────────────────────────
 print_usage() {
     cat <<EOF >&2
-${BOLD}99_diagnose_user_script.sh${NC} — HC-13 generic user-script triage harness (v1.3)
+${BOLD}99_diagnose_user_script.sh${NC} — HC-13 generic user-script triage harness (v1.4)
 Usage: $0 [--timeout SECONDS] [--progress-window SECONDS] [--no-lint] [--smoke] <user_script.R> [args...]
 
-Per HC-13 we run YOUR SCRIPT UNMODIFIED through 4 system layers and
-tell you which layer is responsible. We do not edit your code.
+Per HC-13 we probe the infrastructure (L0), then run YOUR SCRIPT UNMODIFIED
+through 4 system layers and tell you which one is responsible. We do not
+edit your code.
+  L1 minimal profile · L2 dispatcher, all fragments off · L3s full system
+  profile · L3 production (system profile + your ~/.Renviron/~/.Rprofile).
+  L1, L2 and L3s never read your startup files, so L3s PASS + L3 FAIL
+  points at them (repair, from the R-studioConf checkout:
+  scripts/99_check_rprofile_health.sh --user <you> --fix).
 
 CLI flags (override env):
   --timeout SECONDS         per-layer wall-clock timeout (default 600 = 10 min)
@@ -120,9 +155,9 @@ CLI flags (override env):
   --smoke                   enable L0b (in-process smoke run with BIOME_SMOKE_* knobs)
   -h | --help               this help and exit
 
-Verdict statuses: PASS / FAIL / KILLED / TIMEOUT (silent stall) / PROGRESSING.
-Exit codes: 0=all-pass, 1=genuine-fail, 2=invocation-error,
-            3=PROGRESSING-only, 4=infra-green-but-L0a-HIGH-findings.
+Verdict statuses: PASS / FAIL / KILLED / TIMEOUT (silent stall) / PROGRESSING / SKIPPED.
+Exit codes: 0=production(L3)-pass, 1=genuine-fail, 2=invocation-error,
+            3=inconclusive(PROGRESSING), 4=infra-green-but-L0a-HIGH-findings.
 EOF
 }
 
@@ -188,10 +223,13 @@ TS="$(date +%Y%m%d_%H%M%S)"
 
 RUN_USER="${USER:-$(id -un)}"
 OUT_DIR="${BIOME_DIAG_OUT_DIR:-/tmp/user_diag_${RUN_USER}_${TS}}"
+# Exported so the setsid re-exec below reuses the SAME directory (it used to
+# recompute TS and leave an empty /tmp/user_diag_* behind).
+export BIOME_DIAG_OUT_DIR="$OUT_DIR"
 R_BIN="${BIOME_DIAG_R_BIN:-Rscript}"
-R_MIN="/usr/local/bin/r_minimal_rscript"
+R_MIN="${BIOME_DIAG_R_MIN:-/usr/local/bin/r_minimal_rscript}"
+FRAG_DIR="${BIOME_DIAG_FRAG_DIR:-/etc/R/Rprofile_site.d}"
 
-mkdir -p "$OUT_DIR"
 REPORT="$OUT_DIR/report.md"
 SUMMARY="$OUT_DIR/summary.tsv"
 
@@ -201,22 +239,34 @@ SUMMARY="$OUT_DIR/summary.tsv"
 __HARNESS_PGID=$$
 cleanup_pgid() {
     local rc=$?
+    local -a __stragglers=()
     # Kill the whole process group (negative PID = pgid). Ignore errors —
     # most children will already be gone by the time we get here.
-    trap - EXIT INT TERM
+    # The harness is itself in that group: it must ignore its own TERM and be
+    # left out of the KILL, else it dies 143/137 and the verdict exit code
+    # never reaches the caller (v1.3 bug: every run exited 143).
+    trap - EXIT INT
+    trap '' TERM
     kill -TERM -- "-${__HARNESS_PGID}" 2>/dev/null || true
     sleep 1
-    kill -KILL -- "-${__HARNESS_PGID}" 2>/dev/null || true
+    mapfile -t __stragglers < <(ps -e -o pid=,pgid= 2>/dev/null \
+        | awk -v g="$__HARNESS_PGID" -v me="$$" '$2 == g && $1 != me {print $1}')
+    if [[ ${#__stragglers[@]} -gt 0 ]]; then
+        kill -KILL "${__stragglers[@]}" 2>/dev/null || true
+    fi
     exit "$rc"
 }
 trap cleanup_pgid EXIT INT TERM
 # Promote ourselves to a session leader so the negative-pgid kill above
-# only targets *our* descendants, never the parent shell.
-if command -v setsid >/dev/null 2>&1 && [[ -z "${__HARNESS_SETSID:-}" ]]; then
-    export __HARNESS_SETSID=1
+# only targets *our* descendants, never the parent shell. Test the session,
+# not an exported flag: a flag is inherited by nested harnesses (the Lussu
+# overlay exported one), which then stayed in the caller's group and killed
+# the caller on exit. A successful setsid makes us the leader → no re-exec loop.
+if command -v setsid >/dev/null 2>&1 && [[ "$(ps -o sid= -p $$ | tr -d ' ')" != "$$" ]]; then
     exec setsid -w "$0" "$USER_SCRIPT" "${USER_ARGS[@]}"
 fi
 __HARNESS_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
+mkdir -p "$OUT_DIR"
 
 # ── Header ────────────────────────────────────────────────────────────────
 echo "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════${NC}"
@@ -241,7 +291,7 @@ cat > "$REPORT" <<EOF
 | Started | \`$(date '+%Y-%m-%d %H:%M:%S %Z')\` |
 | Per-layer timeout | ${TIMEOUT_S}s |
 | Progress window | ${PROGRESS_WINDOW_S}s |
-| Harness version | 1.3 |
+| Harness version | 1.4 |
 | Lint (L0a) | $( [[ "${BIOME_DIAG_NO_LINT:-0}" == "1" ]] && echo "disabled" || echo "enabled" ) |
 | Smoke (L0b) | $( [[ "${BIOME_DIAG_SMOKE:-0}" == "1" ]] && echo "enabled" || echo "disabled (opt-in via --smoke)" ) |
 
@@ -448,24 +498,60 @@ else
     L0B_STATUS=$(awk -F'\t' '$1=="L0b"{print $3; exit}' "$SUMMARY")
 fi
 
-# ── L1: User script under PURE R (minimal profile) ────────────────────────
+# ── L1: User script under PURE R (minimal profile, no user startup files) ──
+# R_ENVIRON_USER set-but-empty is NOT a no-op: R then skips ./.Renviron and
+# ~/.Renviron. r_minimal already swaps the user profile for its own.
 L1_STATUS=SKIPPED
 if [[ -x "$R_MIN" ]]; then
-    run_layer "L1" "pure_R_minimal" "$R_MIN" "$USER_SCRIPT" "${USER_ARGS[@]}"
+    run_layer "L1" "pure_R_minimal" \
+        env R_ENVIRON_USER= "$R_MIN" "$USER_SCRIPT" "${USER_ARGS[@]}"
     L1_STATUS=$(awk -F'\t' '$1=="L1"{print $3; exit}' "$SUMMARY")
+else
+    echo "${YELLOW}── [L1] pure_R_minimal ── SKIPPED ($R_MIN not deployed)${NC}"
+    cat >> "$REPORT" <<EOF
+
+### Layer L1 — pure_R_minimal: **SKIPPED**
+
+\`$R_MIN\` not deployed. Run \`scripts/50_setup_nodes.sh\` to install.
+EOF
 fi
 
-# ── L2: Selective fragment disable (only meaningful if L1 PASSED & L3 FAILS) ─
-# Run with all fragments disabled — if THIS passes but L3 fails, the bug is
-# inside one of the fragments; sysadmin then bisects manually with smaller
-# BIOME_DISABLE_FRAGMENTS values. We pick the all-off run as the L2 probe
-# because it's the most informative single run.
-run_layer "L2" "all_fragments_off" \
-    env BIOME_DISABLE_FRAGMENTS="20,30,35,40,45,50,55,60,70,80" \
-    "$R_BIN" "$USER_SCRIPT" "${USER_ARGS[@]}"
-L2_STATUS=$(awk -F'\t' '$1=="L2"{print $3; exit}' "$SUMMARY")
+# ── L2: dispatcher only — every DEPLOYED fragment off, no user startup files ─
+# The disable list is built from what the dispatcher would load (^[0-9]{2}_.*\.R$),
+# so a fragment added later can never stay ON here (the v1.3 hardcoded list
+# silently kept 04/05/42/52 active). L3s FAIL + L2 PASS → bisect the list.
+FRAG_PREFIXES=""
+for __frag in "$FRAG_DIR"/[0-9][0-9]_*.R; do
+    [[ -f "$__frag" ]] || continue
+    __pref="$(basename -- "$__frag")"; __pref="${__pref:0:2}"
+    [[ ",$FRAG_PREFIXES," == *",$__pref,"* ]] || FRAG_PREFIXES="${FRAG_PREFIXES:+$FRAG_PREFIXES,}$__pref"
+done
+L2_STATUS=SKIPPED
+if [[ -n "$FRAG_PREFIXES" ]]; then
+    run_layer "L2" "all_fragments_off" \
+        env R_ENVIRON_USER= BIOME_DISABLE_FRAGMENTS="$FRAG_PREFIXES" \
+        "$R_BIN" --no-init-file "$USER_SCRIPT" "${USER_ARGS[@]}"
+    L2_STATUS=$(awk -F'\t' '$1=="L2"{print $3; exit}' "$SUMMARY")
+else
+    echo "${YELLOW}── [L2] all_fragments_off ── SKIPPED (no fragment deployed in $FRAG_DIR)${NC}"
+    cat >> "$REPORT" <<EOF
 
-# ── L3: Full profile baseline (production reference) ──────────────────────
+### Layer L2 — all_fragments_off: **SKIPPED**
+
+No \`[0-9][0-9]_*.R\` fragment found in \`$FRAG_DIR\`: nothing to switch off, so
+fragments cannot be separated from the dispatcher core. Deploy via
+\`scripts/50_setup_nodes.sh\`.
+EOF
+fi
+
+# ── L3s: full system profile, no user startup files (v1.4) ────────────────
+# Differs from L3 ONLY by the user's startup files (home or cwd), so
+# L3s PASS + L3 FAIL puts the cause in ~/.Renviron / ~/.Rprofile.
+run_layer "L3s" "system_profile" \
+    env R_ENVIRON_USER= "$R_BIN" --no-init-file "$USER_SCRIPT" "${USER_ARGS[@]}"
+L3S_STATUS=$(awk -F'\t' '$1=="L3s"{print $3; exit}' "$SUMMARY")
+
+# ── L3: production reference (system profile + user startup files) ────────
 run_layer "L3" "full_profile" "$R_BIN" "$USER_SCRIPT" "${USER_ARGS[@]}"
 L3_STATUS=$(awk -F'\t' '$1=="L3"{print $3; exit}' "$SUMMARY")
 
@@ -477,54 +563,61 @@ echo "${BOLD}══════════════════════�
 
 VERDICT_LINE=""
 RECOMMENDED=""
+NOTES=()
+EXIT_CODE=1
 
-# v1.2: PROGRESSING means the layer hit timeout while still emitting log
-# output → script alive (long compute), not a system bug. Surface this
-# *before* the failure tree because it changes the verdict semantics:
-# we do NOT blame any layer, we tell the operator to extend --timeout.
-__has_progressing=0
-for __s in "$L0_STATUS" "$L1_STATUS" "$L2_STATUS" "$L3_STATUS"; do
-    [[ "$__s" == "PROGRESSING" ]] && __has_progressing=1
-done
-__has_genuine_fail=0
-for __s in "$L0_STATUS" "$L1_STATUS" "$L2_STATUS" "$L3_STATUS"; do
-    [[ "$__s" == "FAIL" || "$__s" == "TIMEOUT" || "$__s" == "KILLED" ]] && __has_genuine_fail=1
-done
+is_bad_status() { [[ "$1" == "FAIL" || "$1" == "TIMEOUT" || "$1" == "KILLED" ]]; }
 
-if [[ "$L0_STATUS" == "FAIL" || "$L0_STATUS" == "TIMEOUT" || "$L0_STATUS" == "KILLED" ]]; then
+if is_bad_status "$L0_STATUS"; then
     VERDICT_LINE="LAYER L0 FAILED: infra (NFS/fork/cgroup)"
     RECOMMENDED="Fix system infrastructure. Check biome_nfs_check() output; user script blameless."
-elif [[ $__has_progressing -eq 1 && $__has_genuine_fail -eq 0 ]]; then
-    VERDICT_LINE="INCONCLUSIVE: at least one layer was PROGRESSING when timeout fired (long compute, not a stall)"
+elif [[ "$L3_STATUS" == "PASS" ]]; then
+    EXIT_CODE=0
+    if [[ "$L0A_STATUS" == "HIGH" ]]; then
+        EXIT_CODE=4
+        VERDICT_LINE="INFRASTRUCTURE GREEN — user .R file has ${L0A_HIGH} HIGH-severity lint finding(s)"
+        RECOMMENDED="Read 'Layer L0a — static_lint' in the report and docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md. The system is not the bottleneck."
+    elif [[ "$L1_STATUS" == "PASS" && "$L2_STATUS" == "PASS" && "$L3S_STATUS" == "PASS" ]]; then
+        VERDICT_LINE="ALL LAYERS PASSED: script is healthy in production"
+        RECOMMENDED="If user reports a bug, ask for exact reproduction (inputs, args, env)."
+    else
+        VERDICT_LINE="PRODUCTION LAYER L3 PASSED: script is healthy in production for this user"
+        RECOMMENDED="No system fix needed. If user reports a bug, ask for exact reproduction (inputs, args, env)."
+    fi
+    if is_bad_status "$L3S_STATUS"; then
+        NOTES+=("L3s=$L3S_STATUS but L3=PASS: the script only works WITH this user's ~/.Renviron / ~/.Rprofile (a path, token or option set there); it will not reproduce for other users or batch jobs without them.")
+    fi
+    if [[ "$L1_STATUS" != "PASS" || "$L2_STATUS" != "PASS" ]]; then
+        NOTES+=("L1=$L1_STATUS, L2=$L2_STATUS: these layers withhold part of the system profile by design and only attribute L3 failures; a non-PASS there is not a defect of a script that passes L3.")
+    fi
+elif [[ "$L3_STATUS" == "PROGRESSING" ]]; then
+    EXIT_CODE=3
+    VERDICT_LINE="INCONCLUSIVE: production layer L3 was PROGRESSING when the timeout fired (long compute, not a stall)"
     RECOMMENDED="Re-run with --timeout doubled (e.g. --timeout $((TIMEOUT_S*2))). Script is alive; no layer blamed. HC-13: long compute is not a system bug."
-elif [[ "$L3_STATUS" == "PASS" && "$L1_STATUS" == "PASS" && "$L0A_STATUS" == "HIGH" ]]; then
-    # v1.3: infra+production both green BUT static lint surfaced HIGH-severity
-    # smells in the user .R file. Don't blame infra; tell the operator that
-    # the system is doing its job and the user code has issues to address.
-    VERDICT_LINE="INFRASTRUCTURE GREEN — user .R file has ${L0A_HIGH} HIGH-severity lint finding(s)"
-    RECOMMENDED="Read 'Layer L0a — static_lint' in the report and docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md. The system is not the bottleneck."
-elif [[ "$L3_STATUS" == "PASS" && "$L1_STATUS" == "PASS" ]]; then
-
-    VERDICT_LINE="ALL LAYERS PASSED: script is healthy in production"
-    RECOMMENDED="If user reports a bug, ask for exact reproduction (inputs, args, env)."
-elif [[ "$L3_STATUS" != "PASS" && "$L2_STATUS" == "PASS" ]]; then
-    VERDICT_LINE="LAYER L3 FAILED but L2 (fragments-off) PASSED: a profile fragment is the cause"
-    RECOMMENDED="Bisect manually: BIOME_DISABLE_FRAGMENTS=\"50\" → 45 → 40 → ... until pass. Patch the offending fragment."
-elif [[ "$L3_STATUS" != "PASS" && "$L1_STATUS" == "PASS" ]]; then
-    VERDICT_LINE="LAYER L3 FAILED, L1 PASSED, L2 FAILED: dispatcher itself or fragment-load contract"
+elif [[ "$L3S_STATUS" == "PASS" ]]; then
+    VERDICT_LINE="LAYER L3 FAILED but L3s (system profile, no user startup files) PASSED: the user's ~/.Renviron / ~/.Rprofile is the cause"
+    RECOMMENDED="CONFIG-layer fix; the .R script is not edited (HC-13). From the R-studioConf checkout: sudo bash scripts/99_check_rprofile_health.sh --user ${RUN_USER} --fix (repair plan; add --commit to apply). Last resort: --reset-profile --commit quarantines the startup state."
+elif is_bad_status "$L3S_STATUS" && [[ "$L2_STATUS" == "PASS" ]]; then
+    VERDICT_LINE="LAYER L3s FAILED but L2 (all fragments off) PASSED: a profile fragment is the cause"
+    RECOMMENDED="Bisect without user startup files: R_ENVIRON_USER= BIOME_DISABLE_FRAGMENTS=<half of: ${FRAG_PREFIXES}> ${R_BIN} --no-init-file ${USER_SCRIPT} — halve the list until one fragment is left, then patch it."
+elif is_bad_status "$L3S_STATUS" && is_bad_status "$L2_STATUS" && [[ "$L1_STATUS" == "PASS" ]]; then
+    VERDICT_LINE="LAYERS L3s+L2 FAILED, L1 PASSED: dispatcher itself or fragment-load contract"
     RECOMMENDED="Inspect dispatcher main local({}) in templates/Rprofile_site.R.template. The bug survives \"all fragments off\" → it's in the dispatcher core."
-elif [[ "$L1_STATUS" != "PASS" && "$L3_STATUS" != "PASS" ]]; then
-    VERDICT_LINE="LAYERS L1+L3 BOTH FAILED: NOT a profile issue → infra+terra+NFS or user-script bug"
+elif is_bad_status "$L3S_STATUS" && is_bad_status "$L2_STATUS" && is_bad_status "$L1_STATUS"; then
+    VERDICT_LINE="LAYERS L1, L2, L3s, L3 ALL FAILED: NOT a profile issue → infra+terra+NFS or user-script bug"
     RECOMMENDED="Escalate to L4 (clean-VM baseline). See docs/operations/CLEAN_VM_BASELINE.md. If L4 also fails → L5 (user-script or upstream package bug)."
-elif [[ "$L1_STATUS" == "PASS" && "$L3_STATUS" == "PASS" && "$L2_STATUS" != "PASS" ]]; then
-    VERDICT_LINE="L2 FAILED but L1+L3 PASSED: spurious — investigate run-to-run variance"
-    RECOMMENDED="Re-run with BIOME_DIAG_TIMEOUT_S doubled. Check for transient NFS contention."
 else
-    VERDICT_LINE="MIXED RESULT — see per-layer status in $REPORT"
-    RECOMMENDED="Manual review."
+    VERDICT_LINE="LAYER L3 FAILED — cause not attributable (L1=$L1_STATUS L2=$L2_STATUS L3s=$L3S_STATUS)"
+    RECOMMENDED="A layer needed for attribution was SKIPPED or PROGRESSING: deploy what is missing (scripts/50_setup_nodes.sh) or re-run with --timeout $((TIMEOUT_S*2))."
+fi
+if ! is_bad_status "$L0_STATUS" && [[ "$L3_STATUS" == "KILLED" || "$L3_STATUS" == "TIMEOUT" ]]; then
+    NOTES+=("L3 was $L3_STATUS (resource limit or stall, not an R error): such outcomes vary with load, so confirm the attribution with a second run before patching.")
 fi
 
 echo "  ${BOLD}${VERDICT_LINE}${NC}"
+for __note in "${NOTES[@]}"; do
+    echo "  ${YELLOW}NOTE:${NC} $__note"
+done
 echo
 echo "  Per-layer status:"
 echo "    L0  infra_health     : $L0_STATUS"
@@ -532,6 +625,7 @@ echo "    L0a static_lint      : $L0A_STATUS  (HIGH=$L0A_HIGH MED=$L0A_MED LOW=$
 echo "    L0b smoke_run        : $L0B_STATUS"
 echo "    L1  pure_R_minimal   : $L1_STATUS"
 echo "    L2  all_fragments_off: $L2_STATUS"
+echo "    L3s system_profile   : $L3S_STATUS"
 echo "    L3  full_profile     : $L3_STATUS"
 echo
 echo "  Recommended next step:"
@@ -550,6 +644,7 @@ cat >> "$REPORT" <<EOF
 **$VERDICT_LINE**
 
 **Recommended next step:** $RECOMMENDED
+$(for __note in "${NOTES[@]}"; do printf -- '\n- **Note:** %s' "$__note"; done)
 
 | Layer | Name | Status |
 |-------|------|--------|
@@ -558,12 +653,15 @@ cat >> "$REPORT" <<EOF
 | L0b | smoke_run         | $L0B_STATUS |
 | L1  | pure_R_minimal    | $L1_STATUS |
 | L2  | all_fragments_off | $L2_STATUS |
+| L3s | system_profile    | $L3S_STATUS |
 | L3  | full_profile      | $L3_STATUS |
 
 > **Per HC-13:** the user script was run UNMODIFIED in every layer above.
-> If the verdict is L0..L3, the fix lands on the SYSTEM SIDE.
-> Only an L4-clean-VM-passes-but-L3-fails outcome warrants a conversation
-> with the user about their code, and only with kernel-stack evidence.
+> If the verdict is L0..L3, the fix lands on the SYSTEM SIDE — or, when L3s
+> passes and L3 fails, in the user's startup files (99_check_rprofile_health.sh),
+> still never in the .R script. Only an L4-clean-VM-passes-but-L3-fails outcome
+> warrants a conversation with the user about their code, and only with
+> kernel-stack evidence.
 EOF
 
 # ── old_vs_new appendix ───────────────────────────────────────────────────
@@ -625,18 +723,6 @@ cat >> "$REPORT" <<EOF
 > Cgroup path read: \`${__cg_root}\`
 EOF
 
-# Exit code mapping (v1.3):
-#   0 = ALL LAYERS PASSED (and no L0a HIGH)
-#   1 = at least one genuine FAIL/TIMEOUT/KILLED in L0..L3
-#   3 = only PROGRESSING (no genuine fail) — inconclusive
-#   4 = L0..L3 all PASS but L0a flagged HIGH-severity smells in user code
-if [[ "$VERDICT_LINE" == "ALL LAYERS PASSED"* ]]; then
-    exit 0
-elif [[ "$VERDICT_LINE" == "INFRASTRUCTURE GREEN"* ]]; then
-    exit 4
-elif [[ $__has_genuine_fail -eq 0 && $__has_progressing -eq 1 ]]; then
-    exit 3
-else
-    exit 1
-fi
+# Exit code: set by the verdict tree above (contract: "Exit codes (v1.4)" in the header).
+exit "$EXIT_CODE"
 
