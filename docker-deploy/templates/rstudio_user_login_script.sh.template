@@ -95,8 +95,10 @@ _setup_user_r_environment() {
     fi
 
     r_environ_file="${user_actual_home}/.Renviron"
+    # R_LIBS_USER is NOT written here (mirrors T1 templates/rstudio_user_login_script.sh.template):
+    # the system Renviron.site owns it; a copy in ~/.Renviron overrides the system path.
+    # user_r_libs_dir is still created above so R's built-in default user library exists.
     renviron_settings=(
-        ["R_LIBS_USER"]="\"${user_r_libs_dir}\""
         ["XDG_CONFIG_HOME"]="\"${user_r_config_dir}\"" # RStudio Desktop like apps
         ["XDG_DATA_HOME"]="\"${user_r_data_dir}\""   # RStudio Desktop like apps
     )

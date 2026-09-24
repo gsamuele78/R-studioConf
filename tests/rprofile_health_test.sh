@@ -69,8 +69,12 @@ write_renviron() {
     local root="$1" drop="${FX_DROP_RENV_VAR:-}" kv
     {
         printf 'R_LIBS_SITE=/usr/local/lib/R/site-library/:${R_LIBS_SITE}:/usr/lib/R/library\n'
-        for kv in "R_LIBS_USER=/var/lib/biome-Rlibs/%u/%v:\${HOME}/R/x86_64-pc-linux-gnu-library/%v" \
-                  "TMPDIR=${FX_TMPDIR:-$root/Rtmp}" "TMP=$root/Rtmp" "TEMP=$root/Rtmp" "R_TEMPDIR=$root/Rtmp" \
+        if [[ "${FX_LIBS_LOCAL_OFF:-0}" == "1" ]]; then
+            printf '# Per-user local R library DISABLED (ENABLE_R_LIBS_LOCAL=false in setup_nodes.vars.conf).\n'
+        else
+            printf 'R_LIBS_USER=/var/lib/biome-Rlibs/%%u/%%v:${HOME}/R/x86_64-pc-linux-gnu-library/%%v\n'
+        fi
+        for kv in "TMPDIR=${FX_TMPDIR:-$root/Rtmp}" "TMP=$root/Rtmp" "TEMP=$root/Rtmp" "R_TEMPDIR=$root/Rtmp" \
                   "RETICULATE_PYTHON=/opt/r-geospatial/bin/python" "BSPM_SUDO=true" \
                   "FONTCONFIG_PATH=/etc/fonts" "OPENBLAS_NUM_THREADS=1"; do
             if [[ -n "$drop" && "${kv%%=*}" == "$drop" ]]; then continue; fi
@@ -161,6 +165,10 @@ RTOOLS
     if [[ "${FX_LOG_RO:-0}" == "1" ]]; then chmod 644 "$root/var/log/biome-log/r_biome_system.log"; fi
     if [[ "${FX_LOGIN_SCRIPT:-0}" == "1" ]]; then
         printf '#!/bin/bash\n    renviron_settings=(\n        ["R_LIBS_USER"]="\\"${user_r_libs_dir}\\""\n    )\n' \
+            > "$root/etc/profile.d/00_rstudio_user_logins.sh"
+    fi
+    if [[ "${FX_LOGIN_SCRIPT:-0}" == "hotfixed" ]]; then
+        printf '#!/bin/bash\n    renviron_settings=(\n        # [hotfix 2026-09-24] R_LIBS_USER entry removed: /etc/R/Renviron.site owns it (fix_login_script_rlibs_inplace.sh)\n    )\n' \
             > "$root/etc/profile.d/00_rstudio_user_logins.sh"
     fi
     printf 'invisible(NULL)\n' > "$root/etc/R/Rprofile_minimal.R"
@@ -296,7 +304,20 @@ check 'saw_sev FAIL "sys_log target not writable by users"' "non-world-writable 
 
 FIX="$TMPROOT/login"; ( unset "${!FX_@}"; FX_LOGIN_SCRIPT=1 mk_fixture "$FIX" )
 run_check --static-only
-check 'saw_sev WARN "Login script rewrites R_LIBS_USER" && saw "PROPOSED FIX"' "login-script writer conflict → WARN + proposed fix"
+check 'saw_sev WARN "Login script rewrites R_LIBS_USER" && saw "PROPOSED FIX" && saw "fix_login_script_rlibs_inplace.sh --commit"' \
+      "login-script writer conflict → WARN + hotfix as proposed fix"
+
+FIX="$TMPROOT/login_nfs"; ( unset "${!FX_@}"; FX_LOGIN_SCRIPT=1 FX_LIBS_LOCAL_OFF=1 mk_fixture "$FIX" )
+run_check --static-only
+check 'saw_sev PASS "Per-user local R libs disabled by config" && saw_sev PASS "Login script writes R_LIBS_USER — no effect while local R libs are disabled"' \
+      "NFS-only: login script writing R_LIBS_USER → PASS (no effect)"
+check 'saw "Before setting ENABLE_R_LIBS_LOCAL=true: sudo bash scripts/fix_login_script_rlibs_inplace.sh --commit"' \
+      "NFS-only: enable-order hint names the hotfix"
+
+FIX="$TMPROOT/login_hotfixed"; ( unset "${!FX_@}"; FX_LOGIN_SCRIPT=hotfixed mk_fixture "$FIX" )
+run_check --static-only
+check 'saw_sev PASS "Login script does not write R_LIBS_USER (fix_login_script_rlibs_inplace.sh applied)"' \
+      "hotfixed login script recognised"
 
 # =============================================================================
 echo "## 4. per-user static findings (--static-only --user ${ME})"
@@ -328,6 +349,25 @@ check 'saw_sev FAIL "No per-user R library for R ${R_VER_MM}; only: 3.9"' "stale
 check 'saw "RStudio session state:"' "RStudio state size reported"
 check 'saw "[auto]   " && saw "comment out lines " && saw "set load_workspace=false"' "action plan lists automatic repairs"
 check 'printf "%s\n" "$OUT" | grep "comment out lines" | grep -q "lines 9 2 3 4 5 7 of"' "auto comment-out covers lines 9 2 3 4 5 7 — never R_LIBS_USER (line 6)"
+
+FIX="$TMPROOT/rlibs_default"; ( unset "${!FX_@}"; FX_LIBS_LOCAL_OFF=1 FX_LOGIN_SCRIPT=1 mk_fixture "$FIX" )
+printf 'R_LIBS_USER="${HOME}/R/x86_64-pc-linux-gnu-library/%%v"\nXDG_DATA_HOME=/x\n' > "$(UH)/.Renviron"
+run_check --static-only --user "$ME"
+check 'saw_sev PASS "~/.Renviron sets R_LIBS_USER to R'"'"'s own default"' "NFS-only + R_LIBS_USER = R default → PASS"
+check '! saw "[manual] R_LIBS_*" && ! saw_sev WARN "overrides R_LIBS_*"' "NFS-only + R default → no warning, no manual action"
+
+FIX="$TMPROOT/rlibs_other"; ( unset "${!FX_@}"; FX_LIBS_LOCAL_OFF=1 mk_fixture "$FIX" )
+printf 'R_LIBS_USER=/scratch/mylibs\n' > "$(UH)/.Renviron"
+run_check --static-only --user "$ME"
+check 'saw_sev WARN "~/.Renviron overrides R_LIBS_*: L1 R_LIBS_USER=/scratch/mylibs" && saw "instead of its default"' \
+      "NFS-only + non-default R_LIBS_USER → WARN"
+check '! saw "fragment 04 still prepends"' "NFS-only: no fragment-04 claim"
+
+FIX="$TMPROOT/rlibs_login"; ( unset "${!FX_@}"; FX_LOGIN_SCRIPT=1 mk_fixture "$FIX" )
+printf 'R_LIBS_USER="%s/R/x86_64-pc-linux-gnu-library/%s"\n' "$MY_HOME" "$R_VER_MM" > "$(UH)/.Renviron"
+run_check --static-only --user "$ME"
+check 'saw_sev WARN "~/.Renviron overrides R_LIBS_*" && saw "first stop the login script re-adding it: sudo bash scripts/fix_login_script_rlibs_inplace.sh --commit"' \
+      "local libs on + login script writer → manual action starts with the hotfix"
 
 FIX="$TMPROOT/parsefail"; ( unset "${!FX_@}"; mk_fixture "$FIX" )
 printf 'x <- function( {\n' > "$(UH)/.Rprofile"

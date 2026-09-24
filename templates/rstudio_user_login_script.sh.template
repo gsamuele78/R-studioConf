@@ -110,8 +110,15 @@ _setup_user_r_environment() {
     fi
 
     r_environ_file="${user_actual_home}/.Renviron"
+    # R_LIBS_USER is NOT written here: /etc/R/Renviron.site (50_setup_nodes.sh)
+    # owns it. A copy in ~/.Renviron is read after the system file and overrides
+    # the local-disk library path whenever ENABLE_R_LIBS_LOCAL=true; writing it
+    # here also re-added the line Step 9 / 99_check_user_renviron_overrides.sh
+    # remove. user_r_libs_dir is still created above: R only adds its built-in
+    # default user library (~/R/x86_64-pc-linux-gnu-library/<ver>) to .libPaths()
+    # when that directory exists. Same library as before only when
+    # ${USER_PROJECTS_BASE_DIR}/<user> is the user's $HOME (R_PROJECTS_ROOT=/nfs/home).
     renviron_settings=(
-        ["R_LIBS_USER"]="\"${user_r_libs_dir}\""
         ["XDG_CONFIG_HOME"]="\"${user_r_config_dir}\"" # RStudio Desktop like apps
         ["XDG_DATA_HOME"]="\"${user_r_data_dir}\""   # RStudio Desktop like apps
     )

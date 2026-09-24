@@ -121,6 +121,8 @@ jobs:
         # Deterministic: BIOME_HEALTH_ROOT points the checker at synthetic and
         # real-render deployed trees under mktemp; never touches /etc or /Rtmp.
         run: bash tests/rprofile_health_test.sh
+      - name: Login-script R_LIBS_USER hotfix + template (render, execute, patch, rollback)
+        run: bash tests/login_rlibs_hotfix_test.sh
 
   # ── Nginx: render templates and validate with `nginx -t` ───────────────────
   nginx-config:

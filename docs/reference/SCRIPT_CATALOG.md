@@ -66,6 +66,7 @@ deferred), source `lib/common_utils.sh`, read their own
 |---|---|---|
 | `20_configure_rstudio.sh` | `config/configure_rstudio.vars.conf` | Installs RStudio Server, lays out `rserver.conf` / `rsession.conf` / `logging.conf`, sets up `R_PROJECTS_ROOT`, `USER_LOGIN_LOG_ROOT`, `GLOBAL_RSTUDIO_TMP_DIR`, port (`RSERVER_WWW_PORT`), session timeout, OpenBLAS thread pin (`OPENBLAS_NUM_THREADS_RSTUDIO`). |
 | `21_helper_rstudio_version.sh` | — | Detects OS codename + arch, scrapes `posit.co/download` for the latest `.deb` URL. Sourced by `20_configure_rstudio.sh` and by `r_env_manager.sh` upgrade flow. |
+| `fix_login_script_rlibs_inplace.sh` | reads `config/setup_nodes.vars.conf` (`NFS_HOME`) | One-shot hotfix of the deployed `/etc/profile.d/00_rstudio_user_logins.sh`: removes the `R_LIBS_USER` entry it writes into every `~/.Renviron` (overrides `Renviron.site`, undoes Step 9). Dry-run by default, `--commit`, `--rollback DIR`; backup in `/root`, atomic swap, mtime kept, no restart. Use instead of re-running `20_configure_rstudio.sh` option 1/3 (recursive chown of the home root). Tested by `tests/login_rlibs_hotfix_test.sh`. |
 
 ### Phase 3 — Web tier (Nginx / portal / SSL)
 

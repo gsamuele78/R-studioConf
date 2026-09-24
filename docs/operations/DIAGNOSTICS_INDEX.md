@@ -117,7 +117,8 @@ modified; findings print the redeploy command instead.
    alternative, CORETYPE wrappers; *(runtime)* BLAS + thread caps in-session.
 6. **Renviron.site contract** — required vars, last `TMPDIR` definition on
    `/Rtmp`, local-disk `R_LIBS_USER` (v12.4+), login scripts that rewrite
-   users' `~/.Renviron`; *(runtime)* the file actually reaches the session.
+   users' `~/.Renviron` (hotfix: `fix_login_script_rlibs_inplace.sh`, §5);
+   *(runtime)* the file actually reaches the session.
 7. **Per-user startup** (`--user NAME`) — home, `~/.Renviron`, `~/.Rprofile`,
    workspace restore (`~/.RData`), RStudio session state, per-user system
    dirs, and *(runtime)* an A/B run: system baseline vs the same R with the
@@ -374,6 +375,37 @@ sudo bash scripts/fix_pam_segfault_inplace.sh           # apply
 
 **Mutates:** YES (when invoked without `--check`). Idempotent.
 **Doc:** [`../deployment/PAM_HARDENING.md`](../deployment/PAM_HARDENING.md).
+
+### `scripts/fix_login_script_rlibs_inplace.sh`
+
+**Run when:** the deployed login script `/etc/profile.d/00_rstudio_user_logins.sh`
+still writes `R_LIBS_USER` into users' `~/.Renviron` (health check section 6:
+"Login script writes R_LIBS_USER"). Required before `ENABLE_R_LIBS_LOCAL=true`:
+the copy in `~/.Renviron` is read after `Renviron.site` and overrides the
+local-disk path, and it comes back after every Step 9 / cleanup run.
+**Modes:**
+
+```bash
+sudo bash scripts/fix_login_script_rlibs_inplace.sh                 # dry-run: prints the diff
+sudo bash scripts/fix_login_script_rlibs_inplace.sh --commit        # apply
+sudo bash scripts/fix_login_script_rlibs_inplace.sh --rollback /root/login-script-hotfix-<ts>
+```
+
+**Mutates:** only with `--commit` / `--rollback`: the one `R_LIBS_USER` entry of
+the deployed login script becomes a comment. Backup in `/root/login-script-hotfix-<ts>/`,
+atomic swap, owner/mode kept, original mtime kept (the per-user `/tmp` stamps stay
+valid, so nobody re-runs the login script because of it; `--rerun-logins` changes
+that). No restart, no effect on running sessions. Refuses a file not rendered from
+the template, and a login script whose `USER_PROJECTS_BASE_DIR` differs from
+`NFS_HOME` (only then is R's default `~/R/...` library the same directory; `--force`
+after checking). Users' existing `R_LIBS_USER` lines are not touched: with local
+libs disabled they equal R's default; remove them with `50_setup_nodes.sh` option 4
+after the hotfix, never before.
+**Why not `20_configure_rstudio.sh` option 3:** options 1 and 3 run
+`chown -R root:<group>` / `chmod -R g+rwx` on `R_PROJECTS_ROOT` (`/nfs/home`, every
+user's home) — do not run them on a populated node until that is refactored.
+The template carries the same change, so a later redeploy keeps the fix.
+Tested by `tests/login_rlibs_hotfix_test.sh`.
 
 ---
 

@@ -1466,17 +1466,22 @@ if [[ -f "$LOGIN_SCRIPT" ]]; then
         LOGIN_WRITES_RLIBS=true
         if [[ "$LOCAL_LIBS_ON" == true ]]; then
             report WARN "Login script rewrites R_LIBS_USER in every user's ~/.Renviron" \
-                "$(printf '%s\n' "${LOGIN_SCRIPT_PATH} (deployed by 20_configure_rstudio.sh, menu 1/3) appends" \
+                "$(printf '%s\n' "${LOGIN_SCRIPT_PATH} (deployed by 20_configure_rstudio.sh) appends" \
                    "R_LIBS_USER=<home>/R/x86_64-pc-linux-gnu-library/<Rver> on each bash login shell (ssh, ttyd," \
                    "RStudio Terminal) whenever the line is missing: it overrides Renviron.site's local-disk path and" \
                    "re-adds the overrides Step 9 / 99_check_user_renviron_overrides.sh remove. Runtime impact is" \
                    "neutralised by fragment 04 (v12.9.2) while /var/lib/biome-Rlibs/<user>/<Rver> exists and is writable." \
-                   "PROPOSED FIX: drop the R_LIBS_USER entry from renviron_settings in" \
-                   "templates/rstudio_user_login_script.sh.template, redeploy it (20_configure_rstudio.sh menu 3)," \
-                   "then clean existing files: sudo bash scripts/50_setup_nodes.sh (option 4).")"
+                   "PROPOSED FIX: sudo bash scripts/fix_login_script_rlibs_inplace.sh --commit (patches the deployed" \
+                   "file in place; the template is already fixed — do NOT redeploy through 20_configure_rstudio.sh" \
+                   "menu 1/3, they chown -R the home root), then clean existing files: sudo bash scripts/50_setup_nodes.sh (option 4).")"
         else
-            report PASS "Login script writes R_LIBS_USER — consistent with the NFS-only config (local libs disabled)"
+            report PASS "Login script writes R_LIBS_USER — no effect while local R libs are disabled" \
+                "$(printf '%s\n' "the value is R's own default (~/R/x86_64-pc-linux-gnu-library/<Rver>) when R_PROJECTS_ROOT is the home root." \
+                   "Before setting ENABLE_R_LIBS_LOCAL=true: sudo bash scripts/fix_login_script_rlibs_inplace.sh --commit," \
+                   "then sudo bash scripts/50_setup_nodes.sh (option 4) to remove the existing lines, then option L / 3.")"
         fi
+    elif grep -q '# \[hotfix [0-9-]*\] R_LIBS_USER entry removed' "$LOGIN_SCRIPT"; then
+        report PASS "Login script does not write R_LIBS_USER (fix_login_script_rlibs_inplace.sh applied): ${LOGIN_SCRIPT_PATH}"
     else
         report PASS "Login script does not write R_LIBS_USER: ${LOGIN_SCRIPT_PATH}"
     fi
@@ -1571,6 +1576,17 @@ else
                     RC_LINES["$1"]="${RC_LINES[$1]:-}${RC_LINES[$1]:+ }$2"
                     RC_TEXT["$1"]="${RC_TEXT[$1]:-}${RC_TEXT[$1]:+; }L$2 $3"
                 }
+                # R's built-in R_LIBS_USER (R-admin §6.2): ~/R/<platform>-library/<major.minor>
+                rlibs_is_r_default() {
+                    local v="$1" want
+                    [[ -n "$R_VER_MM" ]] || return 1
+                    want="${U_HOME%/}/R/x86_64-pc-linux-gnu-library/${R_VER_MM}"
+                    v="${v//\$\{HOME\}/$U_HOME}"; v="${v//\$HOME/$U_HOME}"
+                    if [[ "$v" == "~/"* ]]; then v="${U_HOME%/}/${v#\~/}"; fi
+                    v="${v//%v/$R_VER_MM}"; v="${v//%p/x86_64-pc-linux-gnu}"
+                    [[ "${v%/}" == "$want" ]]
+                }
+                RL_NONDEFAULT=false
                 ln=0
                 while IFS= read -r rline || [[ -n "$rline" ]]; do
                     ln=$((ln + 1))
@@ -1590,7 +1606,9 @@ else
                         OPENBLAS_CORETYPE) renv_add coretype "$ln" "${rn}=${rv}" ;;
                         OMP_NUM_THREADS|OPENBLAS_NUM_THREADS|MKL_NUM_THREADS|MC_CORES)
                             renv_add threads "$ln" "${rn}=${rv}" ;;
-                        R_LIBS_USER|R_LIBS_SITE|R_LIBS) renv_add rlibs "$ln" "${rn}=${rv}" ;;
+                        R_LIBS_USER|R_LIBS_SITE|R_LIBS)
+                            renv_add rlibs "$ln" "${rn}=${rv}"
+                            if [[ "$rn" != "R_LIBS_USER" ]] || ! rlibs_is_r_default "$rv"; then RL_NONDEFAULT=true; fi ;;
                         RETICULATE_PYTHON|EARTHENGINE_PYTHON)
                             if [[ -n "$rv" && "$rv" != *'$'* ]] && ! user_is -x "$rv"; then
                                 renv_add python "$ln" "${rn}=${rv}"
@@ -1623,16 +1641,32 @@ else
                     "reticulate/rgee fail; Renviron.site already sets the system venv"
                 if [[ -n "${RC_LINES[rlibs]:-}" ]]; then
                     renv_found=true
-                    rl_note=""
+                    rl_note=""; rl_login=false
                     if [[ "$LOGIN_WRITES_RLIBS" == true && "${RC_TEXT[rlibs]}" == *"x86_64-pc-linux-gnu-library"* ]]; then
+                        rl_login=true
                         rl_note=" — re-written by ${LOGIN_SCRIPT_PATH} at every login shell (section 6)"
                     fi
                     if grep -qE '^# \[biome-cleanup [0-9-]+\] disabled \(was: R_LIBS' <<< "$renv_content"; then
                         rl_note="${rl_note} — re-added after an earlier cleanup (writer conflict)"
                     fi
-                    report WARN "~/.Renviron overrides R_LIBS_*: ${RC_TEXT[rlibs]}" \
-                        "R uses this value; fragment 04 still prepends /var/lib/biome-Rlibs/${U_NAME}/<Rver> when that dir is writable${rl_note}"
-                    add_manual "R_LIBS_* in ${U_RENV} (lines ${RC_LINES[rlibs]}): owned by sudo bash scripts/50_setup_nodes.sh (option 4, all users, keeps .bak) or sudo bash scripts/99_check_user_renviron_overrides.sh --fix --commit${rl_note:+ — fix the login script first (section 6)}"
+                    if [[ "$LOCAL_LIBS_ON" != true && "$RL_NONDEFAULT" == false ]]; then
+                        report PASS "~/.Renviron sets R_LIBS_USER to R's own default: ${RC_TEXT[rlibs]}" \
+                            "no effect while local R libs are disabled (ENABLE_R_LIBS_LOCAL=false)${rl_note}; remove it before enabling them (section 6)"
+                    else
+                        if [[ "$LOCAL_LIBS_ON" == true ]]; then
+                            rl_why="R uses this value instead of Renviron.site's local-disk path; fragment 04 still prepends /var/lib/biome-Rlibs/${U_NAME}/<Rver> when that dir is writable"
+                        else
+                            rl_why="R uses this value instead of its default ${U_HOME%/}/R/x86_64-pc-linux-gnu-library/${R_VER_MM:-<Rver>}"
+                        fi
+                        report WARN "~/.Renviron overrides R_LIBS_*: ${RC_TEXT[rlibs]}" "${rl_why}${rl_note}"
+                        rl_first=""
+                        if [[ "$rl_login" == true ]]; then
+                            rl_first=" — first stop the login script re-adding it: sudo bash scripts/fix_login_script_rlibs_inplace.sh --commit"
+                        elif [[ -n "$rl_note" ]]; then
+                            rl_first=" — fix the login script first (section 6)"
+                        fi
+                        add_manual "R_LIBS_* in ${U_RENV} (lines ${RC_LINES[rlibs]}): owned by sudo bash scripts/50_setup_nodes.sh (option 4, all users, keeps .bak) or sudo bash scripts/99_check_user_renviron_overrides.sh --fix --commit${rl_first}"
+                    fi
                 fi
                 if [[ "$renv_found" != true ]]; then
                     report PASS "~/.Renviron: no overrides of system-managed variables"
@@ -2040,7 +2074,14 @@ if runtime_gate "Profile load check"; then
     startup_ms="$(sk STARTUP_MS)"
     if is_num "$startup_ms"; then
         if [[ "$startup_ms" -gt 5000 ]]; then
-            report WARN "Profile load slow: ${startup_ms}ms (>5s)" "check NFS latency and the bundle state (section 3)"
+            slow_hint="check NFS latency and the bundle state (section 3)"
+            if [[ "$BUNDLE_FRESH" == true ]]; then slow_hint="the bundle is fresh (section 3), so the fragment loader is not the cause"; fi
+            if is_num "${base_ms:-}" && [[ $(( base_ms * 2 )) -lt "$startup_ms" ]]; then
+                slow_hint="$(printf '%s\n' "${slow_hint}; the interactive baseline (section 7) then started in ${base_ms} ms." \
+                    "A slow FIRST start with fast later ones is a cold NFS / page cache: run the check again." \
+                    "If it repeats, time the sections: sudo su - ${U_NAME:-<user>} -c 'BIOME_DEBUG=1 Rscript -e 0'")"
+            fi
+            report WARN "Profile load slow: ${startup_ms}ms (>5s)" "$slow_hint"
         elif [[ "$startup_ms" -gt 2000 ]]; then
             report WARN "Profile load moderate: ${startup_ms}ms (>2s)" "a fresh bundle (section 3) usually brings this under 1s"
         else

@@ -39,6 +39,21 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ### Changed
 
+- **`99_check_rprofile_health.sh` R-library and slow-load hints.**
+  - Section 6: a login script that writes `R_LIBS_USER` now points at
+    `fix_login_script_rlibs_inplace.sh --commit` (WARN with local libs on;
+    PASS with an enable-order note when `ENABLE_R_LIBS_LOCAL=false`), warns
+    that `20_configure_rstudio.sh` menu 1/3 chown the home root, and
+    recognises an applied hotfix.
+  - Section 7: with local libs disabled, an `R_LIBS_USER` line equal to R's
+    own default (`~/R/x86_64-pc-linux-gnu-library/<Rver>`) is a PASS with no
+    manual action; other values still WARN. The fragment-04 remark appears
+    only when local libs are on; the manual action starts with the hotfix
+    when the login script is the writer.
+  - Section 9: a slow load no longer blames the bundle when it is fresh, and
+    when the later interactive baseline started much faster it says "cold
+    first start, run again" and gives the `BIOME_DEBUG=1` timing command.
+
 - **HC-13 triage harness v1.4** (`scripts/99_diagnose_user_script.sh`).
   - New layer **L3s** (full system profile, no user startup files). L1, L2 and
     L3s run with `R_ENVIRON_USER=` (set but empty: neither `./.Renviron` nor
@@ -102,6 +117,18 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   `tests/nginx_render_check.sh`.
 
 ### Fixed
+
+- **The RStudio login script re-added `R_LIBS_USER` to every `~/.Renviron`.**
+  `templates/rstudio_user_login_script.sh.template` (T1, and the T2 copy in
+  `docker-deploy/templates/`) appended `R_LIBS_USER=<projects root>/<user>/R/x86_64-pc-linux-gnu-library/<Rver>`
+  whenever the line was missing, so it came back after every
+  `50_setup_nodes.sh` Step 9 / `99_check_user_renviron_overrides.sh` cleanup, and
+  once `ENABLE_R_LIBS_LOCAL=true` it overrides the local-disk path of
+  `Renviron.site` (read before `~/.Renviron`). `Renviron.site` now owns the
+  variable alone; the library directory is still created. Behaviour change only
+  where `R_PROJECTS_ROOT/<user>` is not the user's `$HOME`: users without a line
+  then get R's default `~/R/...` library.
+  Deployed nodes: `scripts/fix_login_script_rlibs_inplace.sh` (below).
 
 - **The HC-13 triage harnesses never returned their exit code.** `cleanup_pgid`
   in `99_diagnose_user_script.sh` and `99_diagnose_lussu_hang.sh` sent TERM, then
@@ -194,6 +221,20 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ### Added
 
+- `scripts/fix_login_script_rlibs_inplace.sh` — one-shot hotfix of the deployed
+  `/etc/profile.d/00_rstudio_user_logins.sh` (same one-line change as the
+  template) without re-running `20_configure_rstudio.sh`. Dry-run by default,
+  `--commit`, `--rollback DIR`; backup in `/root/login-script-hotfix-<ts>/`,
+  atomic swap, owner/mode/mtime kept (per-user `/tmp` stamps stay valid, so no
+  mass re-run; `--rerun-logins` otherwise), no service restart. Refuses a file
+  not rendered from the template and a `USER_PROJECTS_BASE_DIR` ≠ `NFS_HOME`
+  unless `--force`. Exit `0` applied / already applied / dry-run, `1` refused or
+  failed, `2` usage.
+- `tests/login_rlibs_hotfix_test.sh` — renders the real template, executes the
+  login script before/after for a non-existent user (writes stay under mktemp),
+  and covers the hotfix refusals, dry-run, commit, idempotence, rollback and
+  mtime handling. Wired into CI job `r-runtime-static`.
+
 - `scripts/99_check_rprofile_health.sh` (v2.0) — health check of the startup
   chain every RStudio session runs (dispatcher, fragments, bundle, guards, BLAS,
   `Renviron.site`, runtime load, PSOCK worker survival) and, with `--user NAME`,
@@ -210,6 +251,38 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 - `config/SITE_OVERRIDE.md` — site-local overlay reference + first-time/migration steps.
 
 ### Follow-up (recommended)
+
+- **`20_configure_rstudio.sh` refactor (found while tracing the `R_LIBS_USER`
+  writer; not fixed — until then do not run options 1, 3, 4, 5 or 9 on a
+  populated node, use `fix_login_script_rlibs_inplace.sh` instead):**
+  - options 1 and 3 (choice A, and option 1 always) run `chown -R root:<group>`
+    and `chmod -R g+rwx` on `R_PROJECTS_ROOT=/nfs/home`, i.e. every user's home:
+    root-owned files, and group members can write other users' `.Renviron` /
+    `.Rprofile`;
+  - option 4 appends `TMPDIR/TMP/TEMP="/nfs/home/Rtmp"` (NFS) to
+    `Renviron.site`; run after `50_setup_nodes.sh` it becomes the last
+    definition and moves R temp off `/Rtmp`; option 5 appends a welcome block
+    to the dispatcher `Rprofile.site`; both restart rstudio-server. Both files
+    belong to `50_setup_nodes.sh`, which rewrites them;
+  - option 9 restores `Renviron.site` / `Rprofile.site` from 20's last backup,
+    which can undo a later `50_setup_nodes.sh` deploy;
+  - the login script writes the deployed file with a plain `printf >` (a login
+    during the write can source a half-written file);
+  - `python_path` conflict: the login script forces
+    `DEFAULT_PYTHON_PATH_LOGIN_SCRIPT=/usr/bin/python3.8` into
+    `rstudio-prefs.json` at every stamp expiry, while Step 9 and
+    `Renviron.site` use `/opt/r-geospatial/bin/python`.
+- **Silent owner loss in the `~/.Renviron` cleanups.**
+  `99_check_user_renviron_overrides.sh --fix --commit` ignores a failed
+  `chown/chmod --reference` on its temp file (`|| true`) and then `mv`s it into
+  place: on NFS the user's file can end up owned by root (a production user's
+  `~/.Renviron` was found owned by uid 0; cause not confirmed). `50_setup_nodes.sh` Step 9 edits the same files in place as root
+  (`sed -i`) without checking the owner afterwards. Both should verify the
+  owner and fail (HC-14).
+- **Order for enabling local R libraries** (`ENABLE_R_LIBS_LOCAL=true`):
+  hotfix/redeploy the login script first, then remove the existing
+  `R_LIBS_USER` lines (`50_setup_nodes.sh` option 4), then deploy
+  `Renviron.site` (option L / 3). Reversed, the login script re-adds the lines.
 
 - **Regression test for the HC-13 harnesses.** The `143` exit bug survived
   because nothing runs `99_diagnose_user_script.sh` / `99_diagnose_lussu_hang.sh`
