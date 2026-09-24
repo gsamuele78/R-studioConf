@@ -43,10 +43,12 @@ if ! ( export LOG_FILE="$TMPROOT/cu.log"
     echo "FAIL: process_template could not render ${TPL}"; exit 1
 fi
 
-# The pre-fix deployed file: same render, old entry back in place.
+# The pre-fix deployed file: same render, old entry back in place, and no final
+# newline — 20_configure_rstudio.sh writes it with printf "%s".
 mk_old() {
     awk '{ print } /^[[:space:]]*renviron_settings=\($/ { print "        [\"R_LIBS_USER\"]=\"\\\"${user_r_libs_dir}\\\"\"" }' \
         "$rendered" > "$1"
+    truncate -s -1 "$1"
     chmod 0754 "$1"
     touch -d '2026-01-02 03:04:05' "$1"
 }
@@ -123,6 +125,7 @@ check 'bash -n "$T"' "patched file passes bash -n"
 bdir="$(find "$TMPROOT/backup" -maxdepth 1 -name 'login-script-hotfix-*' | sort | tail -n1)"
 check '[[ "$(wc -l < "$T")" -eq "$lc_before" && "$(diff "$bdir/00_rstudio_user_logins.sh" "$T" | grep -c "^[<>]")" -eq 2 ]]' \
       "exactly one line replaced (line count kept)"
+check '[[ -n "$(tail -c1 "$T")" ]]' "no final newline added (matches how 20_configure_rstudio.sh writes it)"
 check '[[ "$(stat -c %Y "$T")" == "$mt_before" ]]' "mtime kept (no mass re-run of the login script)"
 check '[[ "$(stat -c %a "$T")" == "754" ]]' "mode copied from the original"
 check '! ls -A "$TMPROOT/profile.d" | grep -q "hotfix"' "no temp file left in the target directory"

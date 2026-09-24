@@ -182,6 +182,9 @@ HOTFIX_RE="$MATCH_RE" HOTFIX_DATE="$(date +%Y-%m-%d)" awk '
     }
     { print }
 ' "$TARGET" > "$stage"
+# 20_configure_rstudio.sh writes the file with printf "%s" (no final newline);
+# awk always ends with one. Keep the original's last byte.
+if [[ -n "$(tail -c1 -- "$TARGET")" ]]; then truncate -s -1 -- "$stage"; fi
 
 bash -n "$stage" || { log_error "patched file does not pass bash -n — nothing changed"; exit 1; }
 [[ "$(grep -cE "$MATCH_RE" "$stage" || true)" -eq 0 ]] || { log_error "patch did not remove the entry — nothing changed"; exit 1; }
