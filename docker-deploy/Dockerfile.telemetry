@@ -18,9 +18,10 @@ RUN pip install --no-cache-dir \
     prometheus-client==0.20.0 pydantic==2.7.4 \
     anyio==4.4.0 dnspython==2.6.1 email-validator==2.1.1
 
-# Copy the telemetry application and configurations
+# Copy the telemetry application. The admin recipient list is site data (real
+# e-mail addresses): it is NOT baked into the image but bind-mounted read-only
+# from config/site/admin_recipients.txt by docker-compose.yml (config/SITE_OVERRIDE.md).
 COPY scripts/telemetry/telemetry_api.py /app/telemetry_api.py
-COPY scripts/telemetry/admin_recipients.txt /app/admin_recipients.txt
 
 # The application runs as a FastAPI server on port 8000
 # Given network_mode: host, it will bind to the host's 127.0.0.1:8000

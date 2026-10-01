@@ -100,7 +100,7 @@ spec:
 
         # --- Main RStudio Application ---
         - name: rstudio
-          image: ghcr.io/unibo/r-studioconf/rstudio-samba:latest # Or the locally built image repository
+          image: ghcr.io/unibo/r-studioconf/rstudio-samba:v1.0.0 # Or the locally built image repository
           envFrom:
             - configMapRef:
                 name: rstudio-config

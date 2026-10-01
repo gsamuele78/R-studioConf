@@ -3,7 +3,7 @@
 # Unified entrypoint for RStudio Docker Containers
 # Handles Auth (SSSD/Samba) and detailed RStudio Configuration
 
-set -e
+set -euo pipefail
 
 # Source Common Utils if available (mirrored)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -243,17 +243,30 @@ fi
 
 # 3.5 Pesimistic Race Condition Prevention (Phase 3 Hardening)
 log "INFO" "Enforcing Non-Optimistic Auth Initialization..."
+MAX_AUTH_RETRIES=60
 if [ "$AUTH_BACKEND" == "sssd" ] && [ -S "/var/lib/sss/pipes/nss" ]; then
-    log "INFO" "Polling SSSD backend..."
+    log "INFO" "Polling SSSD backend (max ${MAX_AUTH_RETRIES} retries)..."
+    AUTH_RETRY=0
     until getent passwd > /dev/null 2>&1; do
-        log "WARN" "Waiting for SSSD to respond..."
+        AUTH_RETRY=$((AUTH_RETRY + 1))
+        if [ $AUTH_RETRY -ge $MAX_AUTH_RETRIES ]; then
+            log "ERROR" "SSSD did not respond after ${MAX_AUTH_RETRIES} retries. Aborting."
+            exit 1
+        fi
+        log "WARN" "Waiting for SSSD to respond (attempt ${AUTH_RETRY}/${MAX_AUTH_RETRIES})..."
         sleep 2
     done
     log "INFO" "SSSD backend active."
 elif [ "$AUTH_BACKEND" == "samba" ]; then
-    log "INFO" "Polling Winbind backend..."
+    log "INFO" "Polling Winbind backend (max ${MAX_AUTH_RETRIES} retries)..."
+    AUTH_RETRY=0
     until wbinfo -p > /dev/null 2>&1; do
-        log "WARN" "Waiting for Winbind to respond..."
+        AUTH_RETRY=$((AUTH_RETRY + 1))
+        if [ $AUTH_RETRY -ge $MAX_AUTH_RETRIES ]; then
+            log "ERROR" "Winbind did not respond after ${MAX_AUTH_RETRIES} retries. Aborting."
+            exit 1
+        fi
+        log "WARN" "Waiting for Winbind to respond (attempt ${AUTH_RETRY}/${MAX_AUTH_RETRIES})..."
         sleep 2
     done
     log "INFO" "Winbind backend active."

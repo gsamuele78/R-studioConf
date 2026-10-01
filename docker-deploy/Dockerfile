@@ -1,5 +1,5 @@
 # Dockerfile for RStudio Botanical "Pet Container"
-FROM rocker/geospatial:4.4.1
+FROM rocker/geospatial:4.4.2
 
 LABEL maintainer="docker-deploy-botanical"
 
@@ -66,8 +66,7 @@ COPY scripts/entrypoint_auth_pet.sh /usr/local/bin/entrypoint_auth_pet.sh
 RUN chmod +x /usr/local/bin/entrypoint_auth_pet.sh
 
 # 5. Environment Variables
-# Prevent RStudio from asking for auth (we handle it via PAM but some env vars help)
-ENV PASSWORD="preset_but_unused_if_pam_works"
+# Auth is handled via PAM (SSSD/Winbind passthrough). No static password needed.
 
 # Overwrite entrypoint to use our custom setup before handing off to S6/RStudio
 ENTRYPOINT ["/usr/local/bin/entrypoint_auth_pet.sh"]

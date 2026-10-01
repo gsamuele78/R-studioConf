@@ -2,11 +2,45 @@
 # Redirects all port 80 traffic to HTTPS.
 # Includes logic for Let's Encrypt ACME challenge.
 
+# Rate limit zone for public /api/ status endpoint (http-level = correct scope)
+# Shared memory zone: 1m ≈ 16,000 IP addresses tracked
+limit_req_zone $binary_remote_addr zone=api_status:1m rate=30r/m;
+
 # MAP: Extract short username (before @) to bypass TTYD 32-char limit
 map $remote_user $short_remote_user {
     ~^(?P<user>[^@]+)@.*$ $user;
     default $remote_user;
 }
+
+# MAP: Upgrade header mapping for WebSockets
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# ── ADD 1: WebSocket-aware Connection header map (FIX-3) ─────────────────────
+#
+# Problem: The previous config hard-coded:
+#   proxy_set_header Connection "upgrade";
+#
+# HTTP/1.1 keepalive requires Connection: "" (empty) on pooled HTTP requests.
+# Sending "upgrade" on a non-WebSocket RPC call signals to Nginx that this
+# might be a protocol upgrade, preventing keepalive reuse on that connection.
+# Every JSON-RPC call paid a new TCP handshake cost to the RStudio backend.
+#
+# This map solves the conflict cleanly:
+#   When browser sends "Upgrade: websocket" → $connection_upgrade = "upgrade"
+#   When browser sends a plain HTTP request → $connection_upgrade = ""
+#
+# Used by: /rstudio-inner/ and /terminal-inner/ location blocks.
+#map $http_upgrade $connection_upgrade {
+#    default  upgrade;
+#    ''       "";
+#}
+
+
+
+
 
 server {
     # Listen on all IPv4 addresses

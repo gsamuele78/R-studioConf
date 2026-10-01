@@ -5,6 +5,7 @@ namespace: botanical
 
 resources:
 - namespace.yaml
+- network-policies.yaml
 - configmaps.yaml
 - secrets.yaml
 - storage.yaml
@@ -53,12 +54,12 @@ replacements:
 # Instead of hardcoding tags in Deployments, they can be bumped here by CI/CD
 images:
 - name: ghcr.io/unibo/r-studioconf/botanical-portal-nginx
-  newTag: "latest"
+  newTag: "v1.0.0"
 - name: ghcr.io/unibo/r-studioconf/rstudio-samba
-  newTag: "latest"
+  newTag: "v1.0.0"
 - name: ghcr.io/unibo/r-studioconf/botanical-telemetry-api
-  newTag: "latest"
+  newTag: "v1.0.0"
 - name: ghcr.io/unibo/r-studioconf/botanical-ai-ollama
-  newTag: "latest"
+  newTag: "v1.0.0"
 - name: quay.io/oauth2-proxy/oauth2-proxy
   newTag: "v7.6.0"

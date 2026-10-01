@@ -25,6 +25,7 @@ on:
       - '.ai/**'
       - 'tests/**'
       - 'docker-deploy/**'
+      - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
@@ -38,6 +39,7 @@ on:
       - '.ai/**'
       - 'tests/**'
       - 'docker-deploy/**'
+      - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
   workflow_dispatch:
   schedule:
@@ -75,6 +77,11 @@ jobs:
 
       - name: Exec-bit guard (launcher visibility)
         run: bash tests/check_exec_bits.sh
+
+      - name: T2/T3 self-contained contract (vendored by Infra-Iam-PKI)
+        # docker-deploy/ and kubernetes-deploy/ are copied byte-for-byte by the
+        # Infra-Iam-PKI sync; they must not reach into the repo root.
+        run: bash tests/docker_deploy_self_contained.sh
 
       - name: §1 silent-failure regressions (run_command mask/pipefail, restore_config, uninstall)
         # Deterministic; writes only under mktemp, stubs service detection — no

@@ -1,0 +1,93 @@
+# oauth2-proxy.cfg.example
+# =====================================================================
+# oauth2-proxy Configuration Template for infra-rstudio
+# =====================================================================
+# Copy this file to oauth2-proxy.cfg and fill in the values below.
+# This file is referenced by docker-compose.yml via:
+#   ${OAUTH2_PROXY_CONFIG:-./config/oauth2-proxy.cfg}
+#
+# Documentation: https://oauth2-proxy.github.io/oauth2-proxy/docs/configuration/overview
+# =====================================================================
+
+# -----------------------------------------------------------------
+# OIDC Provider (Keycloak)
+# -----------------------------------------------------------------
+provider = "oidc"
+
+# Keycloak realm OIDC issuer URL
+# Example: https://sso.biome.unibo.it/realms/biome
+oidc_issuer_url = "https://sso.YOUR_DOMAIN/realms/YOUR_REALM"
+
+# Client credentials — register in Keycloak under Clients
+client_id = "rstudio"
+client_secret = "REPLACE_WITH_KEYCLOAK_CLIENT_SECRET"
+
+# -----------------------------------------------------------------
+# Endpoints & Routing
+# -----------------------------------------------------------------
+
+# The public URL of the callback endpoint (must match Keycloak valid redirect URIs)
+redirect_url = "https://rstudio.YOUR_DOMAIN/oauth2/callback"
+
+# Upstream — RStudio listens on localhost:8787 (network_mode: host)
+upstreams = ["http://127.0.0.1:8787"]
+
+# -----------------------------------------------------------------
+# Session & Cookie
+# -----------------------------------------------------------------
+
+# Generate a 32-byte base64 secret: openssl rand -base64 32
+cookie_secret = "REPLACE_WITH_32_BYTE_BASE64_SECRET"
+
+# Cookie name (default: _oauth2_proxy)
+# cookie_name = "_oauth2_proxy"
+
+# Cookie domain must match your portal domain
+# cookie_domain = ".YOUR_DOMAIN"
+
+# Cookie security flags
+cookie_secure = true
+cookie_httponly = true
+
+# Session expiry (matches Keycloak SSO session lifetime)
+cookie_expire = "168h"
+
+# -----------------------------------------------------------------
+# Authorization
+# -----------------------------------------------------------------
+
+# Allow only users from specific email domains (whitelist)
+email_domains = ["YOUR_DOMAIN"]
+
+# Optional: restrict to specific Keycloak groups
+# allowed_groups = ["/rstudio-users"]
+
+# -----------------------------------------------------------------
+# TLS
+# -----------------------------------------------------------------
+
+# NEVER set this to true in production
+ssl_insecure_skip_verify = false
+
+# If running behind nginx with internal TLS from infra-pki:
+# Provide the CA certificate so oauth2-proxy can verify upstream
+# tls_cert_file = "/certs/tls.crt"
+# tls_key_file  = "/certs/tls.key"
+
+# -----------------------------------------------------------------
+# Logging & Debugging
+# -----------------------------------------------------------------
+
+# Log requests (useful for first-time setup; disable in prod for performance)
+request_logging = true
+
+# Log format: text or json
+# logging_format = "json"
+
+# -----------------------------------------------------------------
+# Skip authentication for specific paths (e.g. health endpoints)
+# -----------------------------------------------------------------
+skip_auth_routes = [
+  "GET=^/health$",
+  "GET=^/metrics$"
+]

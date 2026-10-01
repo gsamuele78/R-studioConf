@@ -65,8 +65,8 @@ check_bash_version() {
 
 # --- CONFIGURATION VARIABLES (Internal to common_utils) ---
 if [[ -z "${LOG_FILE:-}" ]]; then
-    mkdir -p "/var/log/r_env_manager"
-    LOG_FILE="/var/log/r_env_manager/common_utils.log"
+    mkdir -p "/var/log/biome-log/core"
+    LOG_FILE="/var/log/biome-log/core/common_utils.log"
 fi
 
 BACKUP_DIR_BASE="/var/backups/r_env_manager/config_backups_$(date +%Y%m%d)"
@@ -735,3 +735,78 @@ prompt_for_value() {
 
 # Final initialization message
 log "INFO" "common_utils.sh v1.4 sourced and initialized with corrected man-db suppression (valid dpkg options only)."
+
+# ==============================================================================
+# R ORPHAN CLEANUP HELPERS
+# ==============================================================================
+
+# ── Resolve ADMIN_EMAIL to CSV list ─────────────
+# Supports three formats:
+#   file:///path/to/file.txt  → reads addresses from file
+#   addr1,addr2,addr3         → returns as is
+#   addr@domain.com           → single address
+#
+# Usage:
+#   RESOLVED=$(resolve_admin_recipients "$ADMIN_EMAIL")
+#
+resolve_admin_recipients() {
+    local INPUT="$1"
+
+    # File mode
+    if [[ "$INPUT" == file://* ]]; then
+        local FILEPATH="${INPUT#file://}"
+
+        if [ ! -f "$FILEPATH" ]; then
+            echo "" # file not found
+            return 1
+        fi
+
+        local RECIPIENTS=()
+        while IFS= read -r LINE || [[ -n "$LINE" ]]; do
+            # Trim whitespace
+            LINE=$(echo "$LINE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            # Ignore empty lines and comments
+            [[ -z "$LINE" ]] && continue
+            [[ "$LINE" =~ ^# ]] && continue
+            RECIPIENTS+=("$LINE")
+        done < "$FILEPATH"
+
+        if [ "${#RECIPIENTS[@]}" -eq 0 ]; then
+            echo ""
+            return 1
+        fi
+
+        # Return as CSV
+        local IFS=','
+        echo "${RECIPIENTS[*]}"
+        return 0
+    fi
+
+    # Direct string mode (single address or CSV)
+    echo "$INPUT"
+    return 0
+}
+
+# ── Resolve user email (with optional mapping fallback) ──────────────
+# If a mapping file exists, use it. Otherwise fallback to <username>@MAIL_DOMAIN
+#
+# Usage:
+#   USER_EMAIL=$(resolve_user_email "$USERNAME" "$MAIL_DOMAIN")
+#
+resolve_user_email() {
+    local USERNAME="$1"
+    local DEFAULT_DOMAIN="$2"
+    local MAP_FILE="${BIOME_CONF}/conf/user_email_map.txt"
+
+    if [ -f "$MAP_FILE" ]; then
+        local MAPPED
+        MAPPED=$(grep "^${USERNAME}[[:space:]]" "$MAP_FILE" | awk '{print $2}' | head -1)
+        if [ -n "$MAPPED" ]; then
+            echo "$MAPPED"
+            return 0
+        fi
+    fi
+
+    echo "${USERNAME}@${DEFAULT_DOMAIN}"
+    return 0
+}

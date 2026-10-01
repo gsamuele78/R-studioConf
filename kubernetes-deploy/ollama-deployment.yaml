@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: ollama
-          image: ghcr.io/unibo/r-studioconf/botanical-ai-ollama:latest
+          image: ghcr.io/unibo/r-studioconf/botanical-ai-ollama:v1.0.0
           envFrom:
             - configMapRef:
                 name: rstudio-config
