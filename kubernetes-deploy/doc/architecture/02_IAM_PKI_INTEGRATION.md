@@ -17,7 +17,7 @@ Before RStudio or Nginx even attempt to start, they execute an `initContainer` r
 ```yaml
 initContainers:
   - name: fetch-pki-certs
-    image: smallstep/step-cli:0.25.2
+    image: smallstep/step-cli:0.29.0
     # ...
     command:
       - sh

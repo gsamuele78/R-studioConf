@@ -120,7 +120,27 @@ deployment_tiers:
 tier_promotion_rule: "A bug discovered in any tier is fixed in T1 first (or recorded as a T2/T3 deviation); then ported forward T1 → T2 → T3. Never patch T2/T3 in a way that masks a T1 defect."
 
 # Recorded deviations from T1 behavior (each must justify itself)
-tier_deltas: []
+tier_deltas:
+  - id: "TD-T2-01"
+    tier: "T2"
+    delta: "R environment lags T1: docker-deploy/templates/Rprofile_site.R.template is the T1 snapshot of b150f7c (single file) and the entrypoint deploys 00_audit_v27; T1 now ships the Rprofile_site.d/ fragments and 00_audit_v28."
+    rationale: "Back-ported from the Infra-Iam-PKI docker tier, which runs exactly this pair in production today. Moving T2 to the fragment layout needs entrypoint_rstudio.sh to render Rprofile_site.d/ and a container test; not done in this change."
+    status: "OPEN — port T1 fragments + v28 to T2, then close"
+  - id: "TD-T2-02"
+    tier: "T2"
+    delta: "docker-socket-proxy runs on its own bridge network published on 127.0.0.1:2375, not network_mode: host."
+    rationale: "tecnativa/docker-socket-proxy binds [::]:2375 unconditionally (its entrypoint overwrites BIND_CONFIG); on the host network that exposed the Docker API to the LAN. No T1 equivalent."
+    status: "PERMANENT"
+  - id: "TD-T2-03"
+    tier: "T2"
+    delta: "oauth2-proxy uses the v7.6.0-alpine image."
+    rationale: "The default image is distroless (no shell, no wget), so it cannot run a healthcheck. Same upstream version."
+    status: "PERMANENT"
+  - id: "TD-T2-04"
+    tier: "T2"
+    delta: "admin_recipients.txt is bind-mounted from config/site/ into the telemetry container instead of being COPYed at build time."
+    rationale: "The COPY pointed at a file that does not exist (build failure) and would have baked real e-mail addresses into the image."
+    status: "PERMANENT"
 
 # ──────────────────────────────────────────────────────────────
 # ROADMAP — evaluation_pending
@@ -158,11 +178,17 @@ ignore_globs:
 # SUBMODULES — sibling repos referenced from this repo
 # Only listed if the agent must know they exist.
 # ──────────────────────────────────────────────────────────────
-submodules:
+submodules: {}
+# Infra-Iam-PKI (Keycloak IdP + step-ca PKI + Open OnDemand) is no longer a
+# submodule. It CONSUMES this repo: its infra-rstudio/ and kubernetes-deploy/rstudio/
+# are byte-identical vendored copies of docker-deploy/ and kubernetes-deploy/ at the
+# commit pinned in its infra-rstudio/UPSTREAM.lock, refreshed by its
+# scripts/infra-rstudio/sync_rstudioconf.sh. Fix RStudio code HERE, never there.
+consumers:
   infra_iam_pki:
-    path: "Infra-Iam-PKI/"
-    role: "Sibling project (Keycloak IdP + step-ca PKI + Open OnDemand). Will later integrate this RStudio deployment into its docker and kubernetes flows."
-    rule: "Out of scope unless the task explicitly names it. Do NOT duplicate, edit, or cross-reference its files from R-studioConf code; route via its own README/CONFIGURATION.md."
+    repo: "https://github.com/gsamuele78/Infra-Iam-PKI"
+    vendors: ["docker-deploy/", "kubernetes-deploy/"]
+    rule: "docker-deploy/ and kubernetes-deploy/ must stay self-contained (no ../ paths, no reads of root config/ or templates/); the consumer copies only these directories."
 
 # ──────────────────────────────────────────────────────────────
 # HARD CONSTRAINTS

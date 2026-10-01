@@ -69,7 +69,9 @@ for f in $COMPOSE_FILES; do
     CHECKS=$((CHECKS + 1))
     rel_path="${f#$PROJECT_ROOT/}"
     # Extract service names
-    services=$(grep -E '^\s{2}\S+:' "$f" | grep -v '^\s*#' | sed 's/://;s/^ *//' | grep -v '^networks$\|^volumes$\|^x-' || true)
+    # Only keys directly under the top-level `services:` map are services
+    # (top-level x-*/networks:/volumes: children are not).
+    services=$(awk '/^services:/{s=1; next} /^[^[:space:]#]/{s=0} s && /^  [A-Za-z0-9_.-]+:/{sub(/^  /,""); sub(/:.*/,""); print}' "$f" || true)
     for svc in $services; do
         # Check if this service has deploy.resources.limits
         # Use a simple approach: look for 'limits:' inside the service block
@@ -245,7 +247,7 @@ for f in $COMPOSE_FILES; do
                 hint "Use docker-socket-proxy (tecnativa) instead of direct mount"
                 ;;
         esac
-    done < <(grep -Fn 'docker.sock' "$f" 2>/dev/null | grep -v '^\s*#' | cut -d: -f1 || true)
+    done < <(grep -Fn 'docker.sock' "$f" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' | cut -d: -f1 || true)
 done
 [ "$ERRORS" -eq "$HC09_ERRORS_BEFORE" ] && pass "No unauthorized docker.sock mounts"
 

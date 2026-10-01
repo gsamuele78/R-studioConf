@@ -25,6 +25,7 @@ on:
       - '.ai/**'
       - 'tests/**'
       - 'docker-deploy/**'
+      - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
@@ -38,6 +39,7 @@ on:
       - '.ai/**'
       - 'tests/**'
       - 'docker-deploy/**'
+      - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
   workflow_dispatch:
   schedule:
@@ -75,6 +77,11 @@ jobs:
 
       - name: Exec-bit guard (launcher visibility)
         run: bash tests/check_exec_bits.sh
+
+      - name: T2/T3 self-contained contract (vendored by Infra-Iam-PKI)
+        # docker-deploy/ and kubernetes-deploy/ are copied byte-for-byte by the
+        # Infra-Iam-PKI sync; they must not reach into the repo root.
+        run: bash tests/docker_deploy_self_contained.sh
 
       - name: §1 silent-failure regressions (run_command mask/pipefail, restore_config, uninstall)
         # Deterministic; writes only under mktemp, stubs service detection — no
@@ -130,8 +137,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install nginx + openssl
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends nginx-core openssl
+      - name: Install nginx + auth_pam module + openssl
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends nginx-core libnginx-mod-http-auth-pam openssl
       - name: Render nginx templates and test
         run: bash tests/nginx_render_check.sh
 
@@ -164,7 +171,7 @@ jobs:
           set -euo pipefail
           for df in docker-deploy/Dockerfile docker-deploy/Dockerfile.*; do
             echo "── hadolint ${df} ──"
-            docker run --rm -i hadolint/hadolint:v2.12.0 hadolint --failure-threshold error - < "${df}"
+            docker run --rm -i hadolint/hadolint:v2.14.0 hadolint --failure-threshold error - < "${df}"
           done
 
       - name: Build LIGHT images (nginx, telemetry) — fast, every PR

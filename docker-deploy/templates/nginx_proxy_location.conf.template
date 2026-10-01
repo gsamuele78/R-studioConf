@@ -16,18 +16,6 @@ location ^~ /rstudio-inner/ {
     access_log %%LOG_DIR%%/rstudio-access.log;
     error_log %%LOG_DIR%%/rstudio-error.log;
     
-    # --- OIDC / OAUTH2-PROXY BLUEPRINT ---
-    # To enable Keycloak/OOD integration, uncomment the following lines
-    # and disable auth_pam in the /auth-check and /terminal locations.
-    # auth_request /oauth2/auth;
-    # error_page 401 = /oauth2/sign_in;
-    # 
-    # # Pass the authenticated user to RStudio (if simulating login)
-    # auth_request_set $user   $upstream_http_x_auth_request_preferred_username;
-    # auth_request_set $email  $upstream_http_x_auth_request_email;
-    # proxy_set_header X-Forwarded-User $user;
-    # ---------------------------------------
-    
     # Note: RStudio must be configured with www-root-path=/rstudio-inner
     # Standard proxy configuration for subpath
     proxy_pass http://127.0.0.1:%%RSTUDIO_PORT%%/;
@@ -45,8 +33,9 @@ location ^~ /rstudio-inner/ {
     
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection $connection_upgrade;
     
+
     # Pass real Host and standardized Forwarded headers
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -61,16 +50,24 @@ location ^~ /rstudio-inner/ {
     proxy_set_header X-RStudio-Root-Path /rstudio-inner;
     
     # Extended timeout for long-running R sessions
+    #added 300s to the timeout for long-running R sessions and slow VPN/Wi-Fi networks
+    proxy_connect_timeout 300s;
     proxy_read_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
     proxy_send_timeout %%RSESSION_TIMEOUT_SECONDS%%s;
-    
-    # Performance & Persistence (Sysadmin JSON RPC Tuning)
-    proxy_buffer_size 128k;
-    proxy_buffers 4 256k;
-    proxy_busy_buffers_size 256k;
-    large_client_header_buffers 4 32k;
+    # Extended timeout for long-running R sessions and slow VPN/Wi-Fi networks
+    #proxy_connect_timeout 300s;
+    #proxy_read_timeout 300s;
+    #proxy_send_timeout 300s;
+
+
+    # Performance & Persistence
+    # CRITICAL FIX: Disable Nginx buffering to allow real-time WebSocket and JSON RPC streaming
+    # over slow VPN/Wi-Fi networks. Removing this causes JSON RPC drops.
+    proxy_buffering off;
     proxy_request_buffering off;
     proxy_socket_keepalive on;
+    # Allow large uploads in RStudio
+    client_max_body_size 10G;
 
     # Hide X-Frame-Options to allow framing in our wrapper
     proxy_hide_header X-Frame-Options;
@@ -145,6 +142,9 @@ location ^~ /rstudio-inner/ {
     }
     
     # Enforce Secure Cookies on all other RStudio responses
+    # Force Origin/Referer only for requests that have them (preserves JSON-RPC)
+    #proxy_set_header Origin $http_origin;
+    #proxy_set_header Referer $http_referer;
     # Also force Origin for any other POSTs that might happen
     proxy_set_header Origin $scheme://$host:443;
     proxy_set_header Referer $scheme://$host:443$request_uri;
@@ -157,26 +157,14 @@ location / {
     root /var/www/html;
     index index.html;
     try_files $uri $uri/ =404;
-
-    # --- Enterprise Security Headers (Phase 3 Hardening) ---
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-ancestors 'self';" always;
 }
 
 # --- Auth Verification Helper ---
 # Suppresses browser popup on failed login check
 location = /auth-check {
     # Match Realm exactly to share potential cache scope
-    # --- AD PAM AUTHENTICATION ---
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
-    
-    # --- OIDC / OAUTH2-PROXY BLUEPRINT ---
-    # auth_request /oauth2/auth;
-    # error_page 401 = /oauth2/sign_in;
 
     # FIXED: Do NOT use 'return 200' here, as it runs before auth_pam (Rewrite Phase vs Access Phase).
     # Instead, use try_files to serve a dummy static file, forcing the Access Phase (Auth) to run first.
@@ -200,13 +188,8 @@ location /terminal/ {
     index index.html;
     try_files $uri $uri/ =404;
     
-    # --- AD PAM AUTHENTICATION ---
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
-    
-    # --- OIDC / OAUTH2-PROXY BLUEPRINT ---
-    # auth_request /oauth2/auth;
-    # error_page 401 = /oauth2/sign_in;
 }
 
 # 2. /terminal-inner/ proxies to the actual ttyd instance
@@ -214,18 +197,13 @@ location ^~ /terminal-inner/ {
     access_log %%LOG_DIR%%/terminal-access.log;
     error_log %%LOG_DIR%%/terminal-error.log;
     
-    # --- AD PAM AUTHENTICATION ---
     auth_pam "Secure Terminal - AD Credentials Required";
     auth_pam_service_name "nginx";
-    
-    # --- OIDC / OAUTH2-PROXY BLUEPRINT ---
-    # auth_request /oauth2/auth;
-    # error_page 401 = /oauth2/sign_in;
     
     proxy_pass http://127.0.0.1:%%WEB_TERMINAL_PORT%%/terminal-inner/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection $connection_upgrade;
     proxy_set_header Host $host;
     
     # Performance & Persistence
@@ -247,34 +225,27 @@ location ^~ /terminal-inner/ {
     sub_filter '</body>' '<script>
         // Wait 3 seconds for initial load to stabilize
         setTimeout(function() {
-            // More robust observer-based check for the terminal overlay
-            var observer = new MutationObserver(function(mutations) {
-                mutations.forEach(function(mutation) {
-                    if (mutation.addedNodes) {
-                        mutation.addedNodes.forEach(function(node) {
-                            if (node.tagName === "DIV" && node.classList.contains("terminal-overlay")) {
-                                if (node.textContent.includes("Connection Closed") || node.textContent.includes("Reconnect")) {
-                                    window.top.location.replace("/logout");
-                                }
-                            }
-                            // Fallback for ttyd default styles
-                            if (node.tagName === "DIV" && node.style && node.style.fontSize === "xx-large") {
-                                if (node.textContent.includes("Connection Closed") || node.textContent.includes("Reconnect")) {
-                                    window.top.location.replace("/logout");
-                                }
-                            }
-                        });
+            // Poll for the specific "Connection Closed" overlay
+            setInterval(function() {
+                var divs = document.getElementsByTagName("div");
+                for (var i = 0; i < divs.length; i++) {
+                    var d = divs[i];
+                    // The ttyd OverlayAddon creates a div with "font-size: xx-large"
+                    if (d.style.fontSize === "xx-large" && 
+                       (d.textContent.indexOf("Connection Closed") !== -1 || d.textContent.indexOf("Reconnect") !== -1)) {
+                         // Redirect the TOP window to logout, not just the iframe
+                         window.top.location.replace("/logout");
+                         return;
                     }
-                });
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
+                }
+            }, 1000);
         }, 3000);
     </script></body>';
     sub_filter_once on;
 }
 
 # --- Telemetry & Monitoring ---
-# Secure metrics endpoint for Prometheus
+# Secure metrics endpoint for Prometheus (LAN-restricted)
 location /monitoring/ {
     # Allow only local access or specific IPs (Modify allows as needed)
     allow 127.0.0.1;
@@ -295,6 +266,110 @@ location /monitoring/node/ {
     
     # Node Exporter
     proxy_pass http://127.0.0.1:9100/;
+}
+
+location ~* ^/api/(docs|redoc|openapi\.json)$ {
+    proxy_pass         http://127.0.0.1:8000/api/$1;
+    proxy_http_version 1.1;
+    proxy_set_header   Host $host;
+    proxy_buffering    off;
+    add_header         X-Robots-Tag "noindex" always;
+}
+
+# --- Public Status API (portal telemetry strip & SSE stream) ---
+# Exposes /api/v1/status (JSON), /api/v1/stream (SSE) and /api/v1/health only.
+# No sensitive process data or user info — only aggregated counts.
+# Rate-limited: 30 req/min per IP (zone defined at http-level in nginx_site.conf)
+location /api/ {
+    limit_req zone=api_status burst=5 nodelay;
+
+    # Allow GET, POST, OPTIONS
+    limit_except GET POST OPTIONS { deny all; }
+
+    # Strip /api/ prefix → FastAPI /api/v1/*
+    proxy_pass http://127.0.0.1:8000/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Reuse connections — don't tear down between 10s polling intervals or active streams
+    proxy_set_header Connection "";
+    proxy_buffering off;
+
+    # Generous timeout — psutil.cpu_percent blocks ~0.5-2s on busy server
+    proxy_read_timeout 15s;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 10s;
+
+    # CORS: portal JS needs to call this cross-origin sometimes
+    add_header Access-Control-Allow-Origin "$http_origin" always;
+    add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
+    add_header Access-Control-Allow-Headers "Content-Type" always;
+    add_header Cache-Control "no-store, no-cache" always;
+
+    # Handle OPTIONS preflight requests
+    if ($request_method = 'OPTIONS') {
+        add_header 'Access-Control-Allow-Origin' "$http_origin" always;
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'Content-Type' always;
+        add_header 'Access-Control-Max-Age' 1728000;
+        add_header 'Content-Type' 'text/plain; charset=utf-8';
+        add_header 'Content-Length' 0;
+        return 204;
+    }
+
+    # Stream JSON immediately, don't buffer
+    #proxy_buffering off;
+}
+
+# --- Public Metrics Endpoint (for API docs and Prometheus) ---
+# Exposes /metrics endpoint publicly with rate limiting
+location /metrics {
+    limit_req zone=api_status burst=5 nodelay;
+    
+    # Allow GET only
+    limit_except GET { deny all; }
+    
+    proxy_pass http://127.0.0.1:8000/metrics;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    
+    # Generous timeout
+    proxy_read_timeout 15s;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 10s;
+    
+    # CORS headers for API docs (restricted to same origin)
+    add_header Access-Control-Allow-Origin "$http_origin" always;
+    add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
+    add_header Access-Control-Allow-Headers "Content-Type" always;
+    add_header Cache-Control "no-store, no-cache" always;
+    
+    # Handle OPTIONS preflight
+    if ($request_method = 'OPTIONS') {
+        add_header Access-Control-Allow-Origin "$http_origin" always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Content-Type" always;
+        add_header Access-Control-Max-Age 1728000;
+        add_header Content-Type "text/plain; charset=utf-8";
+        add_header Content-Length 0;
+        return 204;
+    }
+}
+
+# --- Server Status Wrapper (full Grafana-style detail page) ---
+# Served at /status/ — links from strip and monitoring tile.
+location = /status { return 301 /status/; }
+location /status/ {
+    alias /var/www/html/status/;
+    index index.html;
+    try_files $uri $uri/ =404;
 }
 
 # --- Logout Mechanism ---
@@ -351,25 +426,6 @@ location @logged_out {
     </html>
     ';
 }
-
-# --- OIDC / OAUTH2-PROXY ENDPOINTS BLUEPRINT ---
-# Uncomment this block to route authentication traffic to the oauth2-proxy sidecar.
-# location /oauth2/ {
-#     proxy_pass       http://127.0.0.1:4180;
-#     proxy_set_header Host                    $host;
-#     proxy_set_header X-Real-IP               $remote_addr;
-#     proxy_set_header X-Scheme                $scheme;
-#     proxy_set_header X-Auth-Request-Redirect $request_uri;
-# }
-# location = /oauth2/auth {
-#     proxy_pass       http://127.0.0.1:4180;
-#     proxy_set_header Host             $host;
-#     proxy_set_header X-Real-IP        $remote_addr;
-#     proxy_set_header X-Scheme         $scheme;
-#     # nginx auth_request includes headers but not body
-#     proxy_set_header Content-Length   "";
-#     proxy_pass_request_body           off;
-# }
 
 # --- Nextcloud Service Discovery (HTTPS) ---
 location ^~ /.well-known/carddav { return 301 /files/remote.php/dav; }
@@ -429,57 +485,4 @@ location ^~ /files-inner/ {
     proxy_buffering off;
 
     # No sub_filter needed (Wrapper handles UI)
-}
-
-# --- Telemetry & Monitoring ---
-# Secure metrics endpoint for Prometheus
-location /monitoring/ {
-    allow 127.0.0.1;
-    allow 192.168.0.0/16; # Default LAN
-    allow 10.0.0.0/8;     # VPN/Internal
-    deny all;
-    proxy_pass http://127.0.0.1:8000/;
-}
-
-location /monitoring/node/ {
-    allow 127.0.0.1;
-    allow 192.168.0.0/16;
-    allow 10.0.0.0/8;
-    deny all;
-    proxy_pass http://127.0.0.1:9100/;
-}
-
-# --- Public Status API (portal telemetry strip & SSE stream) ---
-location /api/ {
-    limit_req zone=api_status burst=5 nodelay;
-
-    limit_except GET POST OPTIONS { deny all; }
-
-    proxy_pass http://127.0.0.1:8000/api/;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header Connection "";
-    proxy_buffering off;
-
-    proxy_read_timeout 15s;
-    proxy_connect_timeout 5s;
-    proxy_send_timeout 10s;
-
-    add_header Access-Control-Allow-Origin "$http_origin" always;
-    add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
-    add_header Access-Control-Allow-Headers "Content-Type" always;
-    add_header Cache-Control "no-store, no-cache" always;
-
-    if ($request_method = 'OPTIONS') {
-        add_header Access-Control-Allow-Origin "$http_origin" always;
-        add_header Access-Control-Allow-Methods "GET, POST, OPTIONS" always;
-        add_header Access-Control-Allow-Headers "Content-Type" always;
-        add_header Access-Control-Max-Age 1728000;
-        add_header Content-Type 'text/plain; charset=utf-8';
-        add_header Content-Length 0;
-        return 204;
-    }
 }

@@ -5,7 +5,53 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed
+
+- **T2/T3 are self-contained and vendored by Infra-Iam-PKI.** `docker-deploy/` and
+  `kubernetes-deploy/` no longer depend on root `config/`/`templates/`: the consumer
+  copies them byte-for-byte (its `infra-rstudio/UPSTREAM.lock`). Contract gate:
+  `tests/docker_deploy_self_contained.sh` (wired into `ci.yml`). The reverse
+  `Infra-Iam-PKI` submodule is removed; `.ai/project.yml` lists it under `consumers`.
+- **Back-port from the Infra-Iam-PKI docker tier** (3-way merge against the port base):
+  exact base-image pins (`rocker/geospatial:4.4.2`, `nginx:1.27.3-alpine`), the
+  `rstudio-init` one-shot and its `curlimages/curl:8.11.1` pin, fingerprint-verified
+  `manage_pki_trust.sh`, and the templates/lib the docker tier runs in production
+  (recorded as `TD-T2-01`, still behind T1's `Rprofile_site.d/` + audit v28).
+- **K8s:** custom images pinned to `v1.0.0` (were `latest`), `step-cli` init containers
+  aligned to `0.29.0` (were `0.25.2`, CA is 0.29.0); NetworkPolicies added
+  (default-deny ingress, then ingress → portal → oauth2-proxy/rstudio/telemetry/ollama).
+
+### Fixed
+
+- `docker-deploy/Dockerfile.telemetry` COPYed a non-existent `admin_recipients.txt`
+  (build failure, and would have baked real addresses into the image): now
+  bind-mounted from `config/site/` (`TD-T2-04`); `validate_deployment.sh` fails early
+  if it is missing.
+- `docker-deploy/.env.sandbox.example` did not resolve: missing `IMAGE_TAG`,
+  `HOST_HOME_DIR`, `HOST_PROJECT_ROOT`, `SSL_*`, …; image names carried a tag twice
+  (`rstudio-botanical-sssd:sandbox:sandbox`); `STEP_CA_ROOT_PATH` pointed outside the tree.
+- CI was red on `main` before this change; now fixed: bats unit tests sourced
+  `lib/common_utils.sh` unprivileged (it defaults `LOG_FILE` to `/var/log`), the nginx
+  render test missed the `auth_pam` dynamic module (stock `modules-enabled` include +
+  `libnginx-mod-http-auth-pam`, as in production), hadolint 2.12 could not parse
+  heredocs (now 2.14.0), and `docker-deploy/scripts/docker-entrypoint.sh` was a
+  one-line stray (`# %b`, no shebang, referenced nowhere): removed.
+- `docker-deploy/Dockerfile.nginx` could not build: Alpine ships `certbot-nginx`,
+  not `py3-certbot-nginx`. Two bats tests never ran (setup failed first) and were
+  wrong: one assigned the readonly `BASH_VERSINFO`, one checked `$status` without `run`.
+  The nginx render test never passed: 1024-bit dhparam (OpenSSL 3 rejects it), and
+  unprivileged `nginx -t` hit root-owned temp/log paths and binds ports 80/443. It now
+  uses a 2048-bit dhparam, temp/log paths under its work dir, ports 18080/18443, and
+  drops `[::]` listens only on hosts without IPv6.
+- `.ai/validate.sh`: HC-01 treated top-level `x-logging`/`networks` children as
+  services; HC-09 flagged a comment that mentions `docker.sock`.
+
 ### Security
+
+- docker-socket-proxy moved off `network_mode: host` to a bridge published on
+  `127.0.0.1:2375` only: the image binds `[::]:2375` unconditionally, which exposed
+  the Docker API to the LAN (`TD-T2-02`). Healthchecks added for it and for
+  oauth2-proxy (`v7.6.0-alpine`, `TD-T2-03`).
 
 - **Site-local config overlay (PII/secret scrub).** AD topology, third-party PII,
   PI/contact emails, internal IPs and the AD group/OU prefixes were removed from

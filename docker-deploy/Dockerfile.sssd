@@ -1,5 +1,5 @@
 # Dockerfile.sssd - RStudio with SSSD Passthrough
-FROM rocker/geospatial:4.4.1
+FROM rocker/geospatial:4.4.2
 
 LABEL maintainer="docker-deploy-botanical-sssd"
 
@@ -41,10 +41,10 @@ COPY templates /etc/docker-templates
 RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
 
 # Install Step CLI
-RUN wget -q -O step.tar.gz https://github.com/smallstep/cli/releases/download/v0.24.4/step_linux_0.24.4_amd64.tar.gz && \
+RUN wget -q -O step.tar.gz https://github.com/smallstep/cli/releases/download/v0.29.0/step_linux_0.29.0_amd64.tar.gz && \
     tar -xf step.tar.gz && \
-    mv step_0.24.4/bin/step /usr/local/bin/ && \
-    rm -rf step.tar.gz step_0.24.4
+    mv step_0.29.0/bin/step /usr/local/bin/ && \
+    rm -rf step.tar.gz step_0.29.0
 
 COPY scripts/pki /scripts/pki
 RUN chmod +x /scripts/pki/*.sh

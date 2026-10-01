@@ -43,6 +43,26 @@ if awk '/^  [a-zA-Z]/{svc=$1} /\/var\/run\/docker\.sock/{print svc}' "$COMPOSE_F
     fail "HC-09 violation: a non-socket-proxy service mounts /var/run/docker.sock"
 fi
 
+# Site files bind-mounted by docker-compose.yml. A missing source file would be
+# created by Docker as an empty DIRECTORY, so fail before `up` instead.
+read_env() { grep "^$1=" "$ENV_FILE" | cut -d= -f2- | tr -d '"' || true; }
+SITE_DIR="${DEPLOY_DIR}/config/site"
+admin_file="$(read_env ADMIN_RECIPIENTS_FILE)"
+admin_file="${admin_file:-./config/site/admin_recipients.txt}"
+case "$admin_file" in /*) ;; *) admin_file="${DEPLOY_DIR}/${admin_file#./}" ;; esac
+[ -f "$admin_file" ] || fail "admin recipients file missing: $admin_file
+  mkdir -p '$SITE_DIR' && cp '${DEPLOY_DIR}/config/admin_recipients.txt.example' '$admin_file'
+  then put the real addresses in it (config/SITE_OVERRIDE.md). It is gitignored."
+
+# oauth2-proxy (profile "oidc") reads a live config holding client/cookie secrets.
+oauth_cfg="$(read_env OAUTH2_PROXY_CONFIG)"
+oauth_cfg="${oauth_cfg:-./config/oauth2-proxy.cfg}"
+case "$oauth_cfg" in /*) ;; *) oauth_cfg="${DEPLOY_DIR}/${oauth_cfg#./}" ;; esac
+if [ ! -f "$oauth_cfg" ]; then
+    warn "oauth2-proxy config not found at $oauth_cfg — required only for the 'oidc' profile."
+    warn "  cp '${DEPLOY_DIR}/config/oauth2-proxy.cfg.example' '$oauth_cfg' and fill in the secrets (gitignored)."
+fi
+
 log "Basic checks passed."
 
 # ── TODO: full validation surface (track in .ai/project.yml) ──
@@ -55,7 +75,6 @@ cat <<'TODO'
   - HC-06: no `apt-get install` / `apk add` in entrypoints
   - HC-10: chown failures in entrypoints exit non-zero
   - HC-11: no CDN URLs in nginx ConfigMap or portal HTML
-  - healthchecks present for oauth2-proxy and docker-socket-proxy (currently deferred)
   - .env required keys present (KEYCLOAK_*, AD_*, STEP_*, OIDC_*)
 TODO
 

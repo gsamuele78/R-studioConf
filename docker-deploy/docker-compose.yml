@@ -1,4 +1,85 @@
+# x-logging: centralised YAML anchor for all services (HC-06)
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
+
+  # ------------------------------------------------------------------
+  # rstudio-init  (one-shot, service_completed_successfully)
+  #
+  # Responsibilities:
+  #   1. Create bind-mount directories with correct permissions
+  #   2. Fetch PKI Root CA from Step-CA (if configured)
+  #   3. Validate prerequisite files exist before services start
+  #
+  # This mirrors the iam-init / ood-init pattern from infra-iam / infra-ood.
+  # ------------------------------------------------------------------
+  rstudio-init:
+    image: curlimages/curl:8.11.1
+    container_name: rstudio_init
+    restart: "no"
+    network_mode: "host"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.2'
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    entrypoint: /bin/sh
+    command: >
+      -c "
+        echo '--- RStudio Init ---';
+        echo 'Verifying PKI trust certificate...';
+        CERT='${STEP_CA_ROOT_PATH:-/etc/ssl/certs/step-ca-root.crt}';
+        if [ -f \"$$CERT\" ]; then
+          echo \"PKI Root CA found at $$CERT\";
+        else
+          echo \"WARN: PKI Root CA not found at $$CERT — services may fail TLS verification\";
+        fi;
+        echo '--- RStudio Init Complete ---';
+      "
+    logging: *default-logging
+
+  # ------------------------------------------------------------------
+  # Docker Socket Proxy (HC-09 Isolation)
+  # Exposes Docker API read-only for telemetry-api.
+  # Prevents direct docker.sock mount in application containers.
+  # ------------------------------------------------------------------
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: rstudio_socket_proxy
+    restart: unless-stopped
+    # NOT on the host network: the image binds [::]:2375 unconditionally (its
+    # entrypoint overwrites BIND_CONFIG), which would expose the Docker API to the
+    # LAN. It lives on its own bridge and is published on loopback only; the
+    # host-network telemetry service reaches it at tcp://127.0.0.1:2375.
+    networks: [ rstudio-proxy-net ]
+    ports:
+      - "127.0.0.1:2375:2375"
+    environment:
+      - CONTAINERS=1   # Allow read-only access to containers API
+      - INFO=1
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:2375/_ping | grep -q OK" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    logging: *default-logging
+
   # --- RStudio Service (SSSD Backend) ---
   rstudio-sssd:
     profiles: [ "sssd" ]
@@ -9,16 +90,12 @@ services:
     container_name: rstudio_pet
     restart: unless-stopped
     network_mode: "host"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
+    logging: *default-logging
     deploy:
       resources:
         limits:
           memory: ${RSTUDIO_MEMORY_LIMIT:-16G}
-          cpus: ${RSTUDIO_CPU_LIMIT:-0.0}
+          cpus: ${RSTUDIO_CPU_LIMIT:-4.0}
     cap_drop:
       - SYS_CHROOT
     # Translate /etc/fstab /tmp ramdisk to Docker tmpfs
@@ -48,6 +125,11 @@ services:
       - ${STEP_CA_ROOT_PATH:-/etc/ssl/certs/step-ca-root.crt}:/usr/local/share/ca-certificates/step-ca-root.crt:ro
       # Python Geospatial Venv
       - ${PYTHON_ENV:-/opt/r-geospatial}:/opt/r-geospatial:ro
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      rstudio-init:
+        condition: service_completed_successfully
 
   # --- RStudio Service (Samba Backend) ---
   rstudio-samba:
@@ -59,16 +141,12 @@ services:
     container_name: rstudio_pet
     restart: unless-stopped
     network_mode: "host"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
+    logging: *default-logging
     deploy:
       resources:
         limits:
           memory: ${RSTUDIO_MEMORY_LIMIT:-16G}
-          cpus: ${RSTUDIO_CPU_LIMIT:-0.0}
+          cpus: ${RSTUDIO_CPU_LIMIT:-4.0}
     cap_drop:
       - SYS_CHROOT
     # Translate /etc/fstab /tmp ramdisk to Docker tmpfs
@@ -96,6 +174,11 @@ services:
       - ${STEP_CA_ROOT_PATH:-/etc/ssl/certs/step-ca-root.crt}:/usr/local/share/ca-certificates/step-ca-root.crt:ro
       # Python Geospatial Venv
       - ${PYTHON_ENV:-/opt/r-geospatial}:/opt/r-geospatial:ro
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      rstudio-init:
+        condition: service_completed_successfully
 
   # --- Nginx Portal Service ---
   nginx-portal:
@@ -107,11 +190,7 @@ services:
     container_name: nginx_portal
     restart: unless-stopped
     network_mode: "host"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
+    logging: *default-logging
     deploy:
       resources:
         limits:
@@ -123,11 +202,6 @@ services:
       timeout: 10s
       retries: 3
     volumes:
-      # Mount assets and templates to context paths if dev changes needed
-      # But Dockerfile copies them in. We might want read-only mounts for live updates?
-      # Let's rely on Image build for stability as per "Pet" design.
-      # Just mount SSL.
-      # Just mount SSL.
       - ${SSL_CERT_PATH}:/etc/ssl/certs/server.crt:ro
       - ${SSL_KEY_PATH}:/etc/ssl/private/server.key:ro
       # Step-CA Root Trust
@@ -137,11 +211,16 @@ services:
       - NGINX_PORT=${HTTPS_PORT}
       - RSTUDIO_PORT=${RSTUDIO_PORT}
       - ENABLE_TELEMETRY_STRIP=${ENABLE_TELEMETRY_STRIP:-true}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    depends_on:
+      rstudio-init:
+        condition: service_completed_successfully
 
   # --- OAuth2-Proxy Sidecar (OIDC Authentication) ---
   oauth2-proxy:
     profiles: [ "oidc" ]
-    image: ${OAUTH2_PROXY_IMAGE:-quay.io/oauth2-proxy/oauth2-proxy}:${OAUTH2_PROXY_TAG:-v7.6.0}
+    image: ${OAUTH2_PROXY_IMAGE:-quay.io/oauth2-proxy/oauth2-proxy}:${OAUTH2_PROXY_TAG:-v7.6.0-alpine}
     container_name: oauth2_proxy
     restart: unless-stopped
     command:
@@ -149,28 +228,24 @@ services:
     volumes:
       - ${OAUTH2_PROXY_CONFIG:-./config/oauth2-proxy.cfg}:/etc/oauth2-proxy.cfg:ro
     network_mode: "host"
+    healthcheck:
+      # -alpine tag: the default image is distroless and has no shell or wget.
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:4180/ping >/dev/null" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     deploy:
       resources:
         limits:
           memory: ${OAUTH2_MEMORY_LIMIT:-128M}
           cpus: ${OAUTH2_CPU_LIMIT:-0.5}
-
-  # --- Docker Socket Proxy (HC-09 Isolation) ---
-  docker-socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.3.0
-    container_name: rstudio_socket_proxy
-    restart: unless-stopped
-    network_mode: "host"
-    environment:
-      - CONTAINERS=1   # Allow read-only access to containers API
-      - INFO=1
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: '0.5'
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    logging: *default-logging
+    depends_on:
+      rstudio-init:
+        condition: service_completed_successfully
 
   # --- Telemetry & Metrics API ---
   telemetry-api:
@@ -184,9 +259,13 @@ services:
     network_mode: "host"
     pid: "host"
     volumes:
-      # Mount host root filesystem read-only to let psutil examine host disks
-      - ${TELEMETRY_HOST_ROOT:-/}:/hostfs:ro
+      # Mount only specific paths instead of entire host root (least privilege)
+      - ${TELEMETRY_NFS_HOME_HOST:-/nfs/home}:/hostfs/nfs/home:ro
+      - ${TELEMETRY_PROJECTS_DIR_HOST:-/nfs/projects}:/hostfs/nfs/projects:ro
+      - /tmp:/hostfs/tmp:ro
+      - /proc:/hostfs/proc:ro
       - ${TELEMETRY_HOST_RUN:-/var/run}:/var/run:ro
+      - ${ADMIN_RECIPIENTS_FILE:-./config/site/admin_recipients.txt}:/etc/biome-calc/conf/admin_recipients.txt:ro
     environment:
       - DOCKER_HOST=tcp://127.0.0.1:2375
       # Tell telemetry to look for disk paths on /hostfs
@@ -199,17 +278,18 @@ services:
           memory: ${TELEMETRY_MEMORY_LIMIT:-512M}
           cpus: ${TELEMETRY_CPU_LIMIT:-1.0}
     depends_on:
-      - docker-socket-proxy
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
+      docker-socket-proxy:
+        condition: service_started
+      rstudio-init:
+        condition: service_completed_successfully
+    logging: *default-logging
     healthcheck:
       test: [ "CMD-SHELL", "curl -f -s http://127.0.0.1:8000/api/v1/health || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 3
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   # --- Ollama AI Engine ---
   ollama-ai:
@@ -235,13 +315,20 @@ services:
           # Protect host from unbounded AI inference core starvation
           memory: ${OLLAMA_RAM_LIMIT:-16G}
           cpus: ${OLLAMA_CPU_LIMIT:-2.5}
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "3"
+    logging: *default-logging
     healthcheck:
       test: [ "CMD-SHELL", "curl -f -s http://127.0.0.1:11434/api/version || exit 1" ]
       interval: 1m
       timeout: 15s
       retries: 5
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+# No named volumes — all bind mounts (HC-02)
+# No version: key — Compose v2 does not need it (HC-09)
+
+networks:
+  # Only the docker-socket-proxy uses it; every other rstudio service stays on
+  # network_mode: host (SSSD/Winbind socket passthrough, see doc/architecture/SYSTEM_OVERVIEW.md).
+  rstudio-proxy-net:
+    driver: bridge

@@ -19,6 +19,9 @@ node_modules/
 # Site-local config overlay (HC-12 pattern) — real site values, NEVER committed.
 # Only the sanitized *.example templates are tracked. See config/SITE_OVERRIDE.md.
 config/site/
+# T2 docker tier: same overlay, plus the live oauth2-proxy config (client/cookie secrets).
+docker-deploy/config/site/
+docker-deploy/config/oauth2-proxy.cfg
 config/admin_recipients.txt
 config/user_email_map.txt
 config/scopri_progetti_known.conf

@@ -1,0 +1,125 @@
+# kubernetes-deploy/network-policies.yaml
+# Default-deny ingress for the botanical namespace, then allow only the paths
+# the portal design needs: ingress controller -> nginx-portal, nginx-portal ->
+# oauth2-proxy (auth_request) and the backends it proxies, RStudio -> Ollama.
+# Back-ported from Infra-Iam-PKI (kubernetes-deploy/rstudio), adapted to the
+# separate oauth2-proxy Deployment used here (auth_request, --upstream=file:///dev/null).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rstudio-default-deny
+  namespace: botanical
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-portal
+  namespace: botanical
+spec:
+  podSelector:
+    matchLabels:
+      app: nginx-portal
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        # RKE2 ships ingress-nginx in kube-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-portal-to-oauth2-proxy
+  namespace: botanical
+spec:
+  podSelector:
+    matchLabels:
+      app: oauth2-proxy
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx-portal
+      ports:
+        - protocol: TCP
+          port: 4180
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-portal-to-rstudio
+  namespace: botanical
+spec:
+  podSelector:
+    matchLabels:
+      app: rstudio
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx-portal
+      ports:
+        - protocol: TCP
+          port: 8787
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-portal-to-telemetry
+  namespace: botanical
+spec:
+  podSelector:
+    matchLabels:
+      app: telemetry-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx-portal
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-ollama
+  namespace: botanical
+spec:
+  podSelector:
+    matchLabels:
+      app: ollama-ai
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx-portal
+        - podSelector:
+            matchLabels:
+              app: rstudio
+      ports:
+        - protocol: TCP
+          port: 11434

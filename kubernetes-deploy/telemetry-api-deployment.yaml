@@ -58,7 +58,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: telemetry-api
-          image: ghcr.io/unibo/r-studioconf/botanical-telemetry-api:latest
+          image: ghcr.io/unibo/r-studioconf/botanical-telemetry-api:v1.0.0
           envFrom:
             - configMapRef:
                 name: rstudio-config

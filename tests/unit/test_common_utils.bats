@@ -6,6 +6,9 @@ setup() {
     DIR="$( cd "$( dirname "$BATS_TEST_FILENAME" )" >/dev/null 2>&1 && pwd )"
     # Assuming test is in tests/unit/ and lib is in lib/
     LIB_PATH="$DIR/../../lib/common_utils.sh"
+    # The library defaults LOG_FILE to /var/log/biome-log (root-only); unit tests
+    # run unprivileged, so log to the bats temp dir instead.
+    export LOG_FILE="${BATS_TMPDIR:-/tmp}/common_utils.log"
     
     # We must source it, but we want to avoid executing any "main" logic if it had any.
     # common_utils.sh is designed to be sourced, so this is safe.
@@ -21,10 +24,10 @@ teardown() {
 
 # --- Test: check_bash_version ---
 
-@test "check_bash_version: fails for old bash (simulated)" {
-    # Mock BASH_VERSINFO array to simulate Bash 3
-    BASH_VERSINFO=(3)
-    run check_bash_version 4
+@test "check_bash_version: fails when the running bash is too old" {
+    # BASH_VERSINFO is readonly, so "too old" is simulated by asking for a
+    # major version no bash has.
+    run check_bash_version 99
     [ "$status" -eq 1 ]
 }
 
@@ -43,11 +46,12 @@ teardown() {
 
     local output_var=""
     
-    # Run the function
-    process_template "$template_file" output_var "USERNAME=jdoe" "HOMEDIR=/home/jdoe"
-    
+    # Run the function directly (not via `run`): it assigns output_var in this shell.
+    local rc=0
+    process_template "$template_file" output_var "USERNAME=jdoe" "HOMEDIR=/home/jdoe" || rc=$?
+
     # Check status
-    [ "$status" -eq 0 ]
+    [ "$rc" -eq 0 ]
     
     # Check content
     local expected_line1="USER=jdoe"

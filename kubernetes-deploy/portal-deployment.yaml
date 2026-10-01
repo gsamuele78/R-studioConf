@@ -23,7 +23,7 @@ spec:
       initContainers:
         # Fetch internal PKI for backend proxying validation
         - name: fetch-pki-certs
-          image: smallstep/step-cli:0.25.2
+          image: smallstep/step-cli:0.29.0
           env:
             - name: STEPPATH
               value: /tmp/step
@@ -48,7 +48,7 @@ spec:
 
       containers:
         - name: nginx-portal
-          image: ghcr.io/unibo/r-studioconf/botanical-portal-nginx:latest # Or locally built
+          image: ghcr.io/unibo/r-studioconf/botanical-portal-nginx:v1.0.0 # Or locally built
           envFrom:
             - configMapRef:
                 name: nginx-portal-config

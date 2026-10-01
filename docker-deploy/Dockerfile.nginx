@@ -1,5 +1,5 @@
 # Dockerfile.nginx - Custom Nginx Build for Botanical Portal
-FROM nginx:1.27-alpine
+FROM nginx:1.27.3-alpine
 
 LABEL maintainer="docker-deploy-botanical-nginx"
 
@@ -29,11 +29,11 @@ RUN chmod +x /docker-entrypoint.sh /usr/local/bin/manage_pki_trust.sh
 
 # Install specific deps for PKI trust script (curl, openssl, ca-certificates) & Step-CLI
 # Add certbot and python3-certbot-nginx packages
-RUN apk add --no-cache openssl ca-certificates wget tar certbot py3-certbot-nginx && \
-    wget -q -O step.tar.gz https://github.com/smallstep/cli/releases/download/v0.24.4/step_linux_0.24.4_amd64.tar.gz && \
+RUN apk add --no-cache openssl ca-certificates wget tar certbot certbot-nginx && \
+    wget -q -O step.tar.gz https://github.com/smallstep/cli/releases/download/v0.29.0/step_linux_0.29.0_amd64.tar.gz && \
     tar -xf step.tar.gz && \
-    mv step_0.24.4/bin/step /usr/local/bin/ && \
-    rm -rf step.tar.gz step_0.24.4
+    mv step_0.29.0/bin/step /usr/local/bin/ && \
+    rm -rf step.tar.gz step_0.29.0
 
 COPY scripts/pki /scripts/pki
 RUN chmod +x /scripts/pki/*.sh

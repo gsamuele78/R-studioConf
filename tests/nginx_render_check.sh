@@ -39,7 +39,9 @@ mkdir -p "${RENDER}" "${LOGS}"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
     -keyout "${WORK}/stub.key" -out "${WORK}/stub.crt" \
     -subj "/CN=localhost" >/dev/null 2>&1
-openssl dhparam -out "${WORK}/dhparam.pem" 1024 >/dev/null 2>&1
+# 2048 bits like production (OpenSSL 3 rejects 1024 as "dh key too small");
+# -dsaparam keeps generation to well under a second.
+openssl dhparam -dsaparam -out "${WORK}/dhparam.pem" 2048 >/dev/null 2>&1
 
 # --- placeholder → context-valid stub map ------------------------------------
 # (paths/ports/URLs must be VALID in their nginx directive, so not a blind `1`.)
@@ -56,27 +58,58 @@ render() {
         -e "s|%%RSESSION_TIMEOUT_SECONDS%%|3600|g" \
         -e "s|%%TIMEOUT_STANDARD%%|60|g" \
         -e "s|%%NEXTCLOUD_TARGET_URL%%|http://127.0.0.1:8080|g" \
+        -e "s|/var/lib/nginx/upload_temp|${WORK}/upload_temp|g" \
+        -e "s#(listen[[:space:]]+(\\[::\\]:)?)80([[:space:];])#\\118080\\3#g" \
+        -e "s#(listen[[:space:]]+(\\[::\\]:)?)443([[:space:];])#\\118443\\3#g" \
         "$1"
 }
 
+# nginx -t also binds the listen sockets: ports 80/443 become 18080/18443 so the
+# test runs unprivileged (and next to a running nginx on the CI runner).
 # Partials are included as nginx_<name>.conf (no .template) from %%NGINX_TEMPLATE_DIR%%.
 for part in ssl_certificate ssl_params performance proxy_location; do
     render "${TPL_DIR}/nginx_${part}.conf.template" > "${RENDER}/nginx_${part}.conf"
 done
 render "${TPL_DIR}/nginx_site.conf.template" > "${RENDER}/nginx_site.conf"
+# Hosts without IPv6 cannot open the `listen [::]:…` sockets: drop only those lines.
+if [ ! -s /proc/net/if_inet6 ]; then
+    sed -i -E '/listen[[:space:]]+\[::\]:/d' "${RENDER}"/nginx_*.conf
+    echo "NOTE: no IPv6 on this host — [::] listen lines dropped for the test."
+fi
 
 leftover="$(grep -rhoE '%%[A-Z0-9_]+%%' "${RENDER}" | sort -u || true)"
 [[ -n "${leftover}" ]] && echo "${C_RED}WARN${C_RST} unmapped placeholder(s) remain: ${leftover//$'\n'/ }"
+
+# --- dynamic modules -----------------------------------------------------------
+# The stock modules-enabled/*.conf use paths relative to nginx's compiled-in
+# prefix (/usr/share/nginx); with `-p ${WORK}` they would resolve under WORK.
+: > "${WORK}/modules.conf"
+for m in /etc/nginx/modules-enabled/*.conf; do
+    [ -e "$m" ] || continue
+    sed -E 's#load_module[[:space:]]+modules/#load_module /usr/share/nginx/modules/#' "$m" >> "${WORK}/modules.conf"
+done
 
 # --- minimal main config that includes the rendered site at http scope -------
 cat > "${WORK}/nginx.conf" <<EOF
 worker_processes 1;
 pid ${WORK}/nginx.pid;
+# Dynamic modules, as Debian/Ubuntu's stock nginx.conf loads them (auth_pam is
+# used by nginx_proxy_location.conf, package libnginx-mod-http-auth-pam).
+include ${WORK}/modules.conf;
 error_log ${LOGS}/global-error.log;
 events { worker_connections 64; }
 http {
     include      /etc/nginx/mime.types;
     default_type application/octet-stream;
+    # Unprivileged run: keep every temp path out of root-owned /var/lib/nginx.
+    # nginx_performance.conf sets client_body_temp_path inside the server block
+    # (rewritten above); this is the http-level default nginx -t also creates.
+    client_body_temp_path ${WORK}/body_temp;
+    access_log            ${LOGS}/access.log;
+    proxy_temp_path   ${WORK}/proxy_temp;
+    fastcgi_temp_path ${WORK}/fastcgi_temp;
+    uwsgi_temp_path   ${WORK}/uwsgi_temp;
+    scgi_temp_path    ${WORK}/scgi_temp;
     include      ${RENDER}/nginx_site.conf;
 }
 EOF

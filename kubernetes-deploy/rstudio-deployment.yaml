@@ -27,7 +27,7 @@ spec:
       initContainers:
         # 1. Pessimistic Init: Fetch PKI Root for Internal Trust (from Infra-Iam-PKI pattern)
         - name: fetch-pki-certs
-          image: smallstep/step-cli:0.25.2
+          image: smallstep/step-cli:0.29.0
           env:
             - name: STEPPATH
               value: /tmp/step
@@ -100,7 +100,7 @@ spec:
 
         # --- Main RStudio Application ---
         - name: rstudio
-          image: ghcr.io/unibo/r-studioconf/rstudio-samba:latest # Or the locally built image repository
+          image: ghcr.io/unibo/r-studioconf/rstudio-samba:v1.0.0 # Or the locally built image repository
           envFrom:
             - configMapRef:
                 name: rstudio-config
