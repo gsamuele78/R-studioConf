@@ -39,7 +39,9 @@ mkdir -p "${RENDER}" "${LOGS}"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
     -keyout "${WORK}/stub.key" -out "${WORK}/stub.crt" \
     -subj "/CN=localhost" >/dev/null 2>&1
-openssl dhparam -out "${WORK}/dhparam.pem" 1024 >/dev/null 2>&1
+# 2048 bits like production (OpenSSL 3 rejects 1024 as "dh key too small");
+# -dsaparam keeps generation to well under a second.
+openssl dhparam -dsaparam -out "${WORK}/dhparam.pem" 2048 >/dev/null 2>&1
 
 # --- placeholder → context-valid stub map ------------------------------------
 # (paths/ports/URLs must be VALID in their nginx directive, so not a blind `1`.)
