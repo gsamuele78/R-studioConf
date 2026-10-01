@@ -2,7 +2,8 @@
 
 # install_botanical_packages.R
 # Installs packages defined in the original r_env_manager.conf
-# Uses bspm if available (enabled in Dockerfile)
+# Docker tier: plain install.packages() against rocker's binary repository
+# (no bspm in T2, see .ai/project.yml TD-T2-05).
 
 # CRAN Packages list extracted from r_env_manager.conf
 cran_packages <- c(
