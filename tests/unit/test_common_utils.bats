@@ -24,10 +24,10 @@ teardown() {
 
 # --- Test: check_bash_version ---
 
-@test "check_bash_version: fails for old bash (simulated)" {
-    # Mock BASH_VERSINFO array to simulate Bash 3
-    BASH_VERSINFO=(3)
-    run check_bash_version 4
+@test "check_bash_version: fails when the running bash is too old" {
+    # BASH_VERSINFO is readonly, so "too old" is simulated by asking for a
+    # major version no bash has.
+    run check_bash_version 99
     [ "$status" -eq 1 ]
 }
 
@@ -46,11 +46,12 @@ teardown() {
 
     local output_var=""
     
-    # Run the function
-    process_template "$template_file" output_var "USERNAME=jdoe" "HOMEDIR=/home/jdoe"
-    
+    # Run the function directly (not via `run`): it assigns output_var in this shell.
+    local rc=0
+    process_template "$template_file" output_var "USERNAME=jdoe" "HOMEDIR=/home/jdoe" || rc=$?
+
     # Check status
-    [ "$status" -eq 0 ]
+    [ "$rc" -eq 0 ]
     
     # Check content
     local expected_line1="USER=jdoe"

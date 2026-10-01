@@ -29,7 +29,7 @@ RUN chmod +x /docker-entrypoint.sh /usr/local/bin/manage_pki_trust.sh
 
 # Install specific deps for PKI trust script (curl, openssl, ca-certificates) & Step-CLI
 # Add certbot and python3-certbot-nginx packages
-RUN apk add --no-cache openssl ca-certificates wget tar certbot py3-certbot-nginx && \
+RUN apk add --no-cache openssl ca-certificates wget tar certbot certbot-nginx && \
     wget -q -O step.tar.gz https://github.com/smallstep/cli/releases/download/v0.29.0/step_linux_0.29.0_amd64.tar.gz && \
     tar -xf step.tar.gz && \
     mv step_0.29.0/bin/step /usr/local/bin/ && \

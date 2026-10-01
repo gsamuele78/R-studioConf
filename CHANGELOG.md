@@ -36,6 +36,9 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   `libnginx-mod-http-auth-pam`, as in production), hadolint 2.12 could not parse
   heredocs (now 2.14.0), and `docker-deploy/scripts/docker-entrypoint.sh` was a
   one-line stray (`# %b`, no shebang, referenced nowhere): removed.
+- `docker-deploy/Dockerfile.nginx` could not build: Alpine ships `certbot-nginx`,
+  not `py3-certbot-nginx`. Two bats tests never ran (setup failed first) and were
+  wrong: one assigned the readonly `BASH_VERSINFO`, one checked `$status` without `run`.
 - `.ai/validate.sh`: HC-01 treated top-level `x-logging`/`networks` children as
   services; HC-09 flagged a comment that mentions `docker.sock`.
 

@@ -68,13 +68,22 @@ render "${TPL_DIR}/nginx_site.conf.template" > "${RENDER}/nginx_site.conf"
 leftover="$(grep -rhoE '%%[A-Z0-9_]+%%' "${RENDER}" | sort -u || true)"
 [[ -n "${leftover}" ]] && echo "${C_RED}WARN${C_RST} unmapped placeholder(s) remain: ${leftover//$'\n'/ }"
 
+# --- dynamic modules -----------------------------------------------------------
+# The stock modules-enabled/*.conf use paths relative to nginx's compiled-in
+# prefix (/usr/share/nginx); with `-p ${WORK}` they would resolve under WORK.
+: > "${WORK}/modules.conf"
+for m in /etc/nginx/modules-enabled/*.conf; do
+    [ -e "$m" ] || continue
+    sed -E 's#load_module[[:space:]]+modules/#load_module /usr/share/nginx/modules/#' "$m" >> "${WORK}/modules.conf"
+done
+
 # --- minimal main config that includes the rendered site at http scope -------
 cat > "${WORK}/nginx.conf" <<EOF
 worker_processes 1;
 pid ${WORK}/nginx.pid;
-# Same as Debian/Ubuntu's stock nginx.conf: dynamic modules (auth_pam is used by
-# nginx_proxy_location.conf and installed as libnginx-mod-http-auth-pam).
-include /etc/nginx/modules-enabled/*.conf;
+# Dynamic modules, as Debian/Ubuntu's stock nginx.conf loads them (auth_pam is
+# used by nginx_proxy_location.conf, package libnginx-mod-http-auth-pam).
+include ${WORK}/modules.conf;
 error_log ${LOGS}/global-error.log;
 events { worker_connections 64; }
 http {
