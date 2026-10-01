@@ -17,7 +17,8 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   `rstudio-init` one-shot and its `curlimages/curl:8.11.1` pin, fingerprint-verified
   `manage_pki_trust.sh`, and the templates/lib the docker tier runs in production
   (recorded as `TD-T2-01`, still behind T1's `Rprofile_site.d/` + audit v28).
-- **K8s:** custom images pinned to `v1.0.0` (were `latest`); NetworkPolicies added
+- **K8s:** custom images pinned to `v1.0.0` (were `latest`), `step-cli` init containers
+  aligned to `0.29.0` (were `0.25.2`, CA is 0.29.0); NetworkPolicies added
   (default-deny ingress, then ingress → portal → oauth2-proxy/rstudio/telemetry/ollama).
 
 ### Fixed
