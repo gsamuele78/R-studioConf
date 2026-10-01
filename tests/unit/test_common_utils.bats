@@ -6,6 +6,9 @@ setup() {
     DIR="$( cd "$( dirname "$BATS_TEST_FILENAME" )" >/dev/null 2>&1 && pwd )"
     # Assuming test is in tests/unit/ and lib is in lib/
     LIB_PATH="$DIR/../../lib/common_utils.sh"
+    # The library defaults LOG_FILE to /var/log/biome-log (root-only); unit tests
+    # run unprivileged, so log to the bats temp dir instead.
+    export LOG_FILE="${BATS_TMPDIR:-/tmp}/common_utils.log"
     
     # We must source it, but we want to avoid executing any "main" logic if it had any.
     # common_utils.sh is designed to be sourced, so this is safe.

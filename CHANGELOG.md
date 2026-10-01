@@ -30,6 +30,12 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 - `docker-deploy/.env.sandbox.example` did not resolve: missing `IMAGE_TAG`,
   `HOST_HOME_DIR`, `HOST_PROJECT_ROOT`, `SSL_*`, …; image names carried a tag twice
   (`rstudio-botanical-sssd:sandbox:sandbox`); `STEP_CA_ROOT_PATH` pointed outside the tree.
+- CI was red on `main` before this change; now fixed: bats unit tests sourced
+  `lib/common_utils.sh` unprivileged (it defaults `LOG_FILE` to `/var/log`), the nginx
+  render test missed the `auth_pam` dynamic module (stock `modules-enabled` include +
+  `libnginx-mod-http-auth-pam`, as in production), hadolint 2.12 could not parse
+  heredocs (now 2.14.0), and `docker-deploy/scripts/docker-entrypoint.sh` was a
+  one-line stray (`# %b`, no shebang, referenced nowhere): removed.
 - `.ai/validate.sh`: HC-01 treated top-level `x-logging`/`networks` children as
   services; HC-09 flagged a comment that mentions `docker.sock`.
 

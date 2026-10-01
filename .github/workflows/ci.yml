@@ -137,8 +137,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install nginx + openssl
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends nginx-core openssl
+      - name: Install nginx + auth_pam module + openssl
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends nginx-core libnginx-mod-http-auth-pam openssl
       - name: Render nginx templates and test
         run: bash tests/nginx_render_check.sh
 
@@ -171,7 +171,7 @@ jobs:
           set -euo pipefail
           for df in docker-deploy/Dockerfile docker-deploy/Dockerfile.*; do
             echo "── hadolint ${df} ──"
-            docker run --rm -i hadolint/hadolint:v2.12.0 hadolint --failure-threshold error - < "${df}"
+            docker run --rm -i hadolint/hadolint:v2.14.0 hadolint --failure-threshold error - < "${df}"
           done
 
       - name: Build LIGHT images (nginx, telemetry) — fast, every PR

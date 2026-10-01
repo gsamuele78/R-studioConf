@@ -72,6 +72,9 @@ leftover="$(grep -rhoE '%%[A-Z0-9_]+%%' "${RENDER}" | sort -u || true)"
 cat > "${WORK}/nginx.conf" <<EOF
 worker_processes 1;
 pid ${WORK}/nginx.pid;
+# Same as Debian/Ubuntu's stock nginx.conf: dynamic modules (auth_pam is used by
+# nginx_proxy_location.conf and installed as libnginx-mod-http-auth-pam).
+include /etc/nginx/modules-enabled/*.conf;
 error_log ${LOGS}/global-error.log;
 events { worker_connections 64; }
 http {
