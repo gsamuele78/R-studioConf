@@ -1,0 +1,49 @@
+# .github/dependabot.yml
+# T2/T3 image versions (docker-deploy compose + Dockerfiles) and action SHAs.
+# docker-deploy/ and kubernetes-deploy/ are vendored by Infra-Iam-PKI: a bump
+# merged here reaches it through its weekly rstudio-upstream-sync PR.
+# The RStudio "monster" images are only built nightly: dispatch ci.yml on the
+# Dependabot branch and merge only when T2 monster build is green.
+version: 2
+updates:
+  - package-ecosystem: docker-compose
+    directory: /docker-deploy
+    schedule:
+      interval: weekly
+      day: monday
+    ignore:
+      # Built locally from docker-deploy/Dockerfile.*, not pulled.
+      - dependency-name: "rstudio-botanical-*"
+      - dependency-name: "botanical-*"
+    groups:
+      compose-minor-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: docker
+    directory: /docker-deploy
+    schedule:
+      interval: weekly
+      day: monday
+    ignore:
+      # A new rocker/geospatial minor is a new R version: decided with the T1
+      # R pin (scripts/pin_r_version.sh), not by a bot.
+      - dependency-name: "rocker/geospatial"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      base-images:
+        patterns: ["*"]
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

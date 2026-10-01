@@ -42,7 +42,7 @@ PINNED UPSTREAM VERSIONS (extracted from Dockerfiles — do not override):
   rocker/geospatial: 4.4.2
   curlimages/curl: 8.11.1
   quay.io/oauth2-proxy/oauth2-proxy: v7.6.0-alpine
-  tecnativa/docker-socket-proxy: 0.3.0
+  tecnativa/docker-socket-proxy: v0.5.0
 
 LOCALLY-BUILT IMAGES (tag via ${IMAGE_TAG} variable; production deploys MUST set a pinned tag):
   botanical-ai-ollama: ${IMAGE_TAG:-latest} (locally built, not pulled from registry)

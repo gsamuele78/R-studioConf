@@ -5,6 +5,17 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed (dependencies)
+
+- step CLI `0.29.0` → `0.31.0` in the nginx/sssd/samba images and the K8s init
+  containers, matching the CA side in Infra-Iam-PKI (step-ca `0.30.2`). The CLI changes
+  since 0.29 that touch this repo: `needs-renewal` prints less (use `--verbose`);
+  flags and exit codes are unchanged.
+- docker-socket-proxy `0.3.0` → `v0.5.0` (HAProxy update; `BIND_CONFIG` can now be
+  overridden, not used here: the proxy stays on its loopback-published bridge, TD-T2-02).
+- `.github/dependabot.yml`: compose and Dockerfile images in `docker-deploy/`, action
+  SHAs. rocker/geospatial minor/major bumps are ignored (they change the R version).
+
 ### Fixed (RStudio images build again)
 
 - `docker-deploy/Dockerfile.{sssd,samba}` (and the generic `docker-deploy/Dockerfile`, which
