@@ -39,8 +39,10 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 - `docker-deploy/Dockerfile.nginx` could not build: Alpine ships `certbot-nginx`,
   not `py3-certbot-nginx`. Two bats tests never ran (setup failed first) and were
   wrong: one assigned the readonly `BASH_VERSINFO`, one checked `$status` without `run`.
-  The nginx render test generated a 1024-bit dhparam that OpenSSL 3 rejects; it now
-  uses 2048 bits like production.
+  The nginx render test never passed: 1024-bit dhparam (OpenSSL 3 rejects it), and
+  unprivileged `nginx -t` hit root-owned temp/log paths and binds ports 80/443. It now
+  uses a 2048-bit dhparam, temp/log paths under its work dir, ports 18080/18443, and
+  drops `[::]` listens only on hosts without IPv6.
 - `.ai/validate.sh`: HC-01 treated top-level `x-logging`/`networks` children as
   services; HC-09 flagged a comment that mentions `docker.sock`.
 
