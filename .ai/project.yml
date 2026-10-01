@@ -138,7 +138,7 @@ tier_deltas:
     status: "PERMANENT"
   - id: "TD-T2-05"
     tier: "T2"
-    delta: "No bspm/r2u in the RStudio images; R packages come from rocker's binary repository (Posit) via install.packages()."
+    delta: "No bspm/r2u in any RStudio image (docker-deploy/Dockerfile, Dockerfile.sssd, Dockerfile.samba); R packages come from rocker's binary repository (Posit) via install.packages()."
     rationale: "rocker/geospatial builds R from source under /usr/local; apt-based bspm/r2u binaries target Ubuntu's own R. The previous Dockerfiles installed r-cran-bspm before adding a PPA that has no noble build, so the images could not be built at all (also sssd-client, which is not an Ubuntu package). The domain-users apt sudoers rule went with it."
     status: "PERMANENT"
   - id: "TD-T2-04"

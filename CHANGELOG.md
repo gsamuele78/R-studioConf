@@ -7,7 +7,8 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ### Fixed (RStudio images build again)
 
-- `docker-deploy/Dockerfile.{sssd,samba}` could not build: they installed
+- `docker-deploy/Dockerfile.{sssd,samba}` (and the generic `docker-deploy/Dockerfile`, which
+  compose does not build but CI lints) could not build: they installed
   `r-cran-bspm`/`python3-bspm` before adding the c2d4u PPA (which has no noble build)
   and asked for `sssd-client`, which Ubuntu doesn't ship. bspm is dropped from the
   docker tier (TD-T2-05): rocker's R lives in `/usr/local` and gets binary packages
