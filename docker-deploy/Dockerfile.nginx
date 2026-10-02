@@ -1,5 +1,5 @@
 # Dockerfile.nginx - Custom Nginx Build for Botanical Portal
-FROM nginx:1.27.3-alpine
+FROM nginx:1.31.0-alpine
 
 LABEL maintainer="docker-deploy-botanical-nginx"
 
