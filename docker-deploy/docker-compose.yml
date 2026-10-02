@@ -18,7 +18,7 @@ services:
   # This mirrors the iam-init / ood-init pattern from infra-iam / infra-ood.
   # ------------------------------------------------------------------
   rstudio-init:
-    image: curlimages/curl:8.11.1
+    image: curlimages/curl:8.22.0
     container_name: rstudio_init
     restart: "no"
     network_mode: "host"
