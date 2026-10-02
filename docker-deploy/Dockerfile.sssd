@@ -1,5 +1,5 @@
 # Dockerfile.sssd - RStudio with SSSD Passthrough
-FROM rocker/geospatial:4.4.2
+FROM rocker/geospatial:4.4.3
 
 LABEL maintainer="docker-deploy-botanical-sssd"
 
