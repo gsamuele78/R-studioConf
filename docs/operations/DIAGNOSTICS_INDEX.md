@@ -226,11 +226,15 @@ under `templates/Rprofile_site.d/` and redeploy via
 ### `scripts/99_troubleshoot_env.sh`
 
 **Run when:** something is broken but you don't know which subsystem.
-**Mode:** `--rprofile` for deep R-runtime check.
-**Mutates:** no.
+**Mode:** `--rprofile` for deep R-runtime check. `--storage --test-user <u>`
+for NFS/CIFS mounts plus a real write test in the user's home (v1.4.0: writes
+1 MiB with fsync; the old `touch` test passed while a ZFS block quota was full).
+**Mutates:** no (the write test file is removed).
 **Output:** consolidated diagnostic dump (logs, env, integration tests,
 Rprofile state).
-**Next step:** grep the dump for `FAIL` lines.
+**Next step:** grep the dump for `FAIL` lines. A write test that reports
+`Disk quota exceeded` is a server-side ZFS quota on TrueNAS:
+[`TROUBLESHOOTING.md §4.4`](TROUBLESHOOTING.md#44-writes-to--fail-with-disk-quota-exceeded-but-df-shows-free-space).
 
 ---
 
@@ -621,6 +625,10 @@ Does `passwd` segfault?
 
 Are nodes diverging on R packages?
   └─► 99_check_pkg_drift.sh
+
+saveRDS / write.csv fail with "Disk quota exceeded" but df shows space?
+  └─► 99_troubleshoot_env.sh --storage --test-user <them>
+        └─► EDQUOT → ZFS userquota/groupquota on TrueNAS (TROUBLESHOOTING.md §4.4)
 
 Is the system "weird" but you can't pinpoint it?
   └─► 99_troubleshoot_env.sh --rprofile

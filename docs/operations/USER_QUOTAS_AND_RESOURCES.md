@@ -167,7 +167,7 @@ blast radius to one process.
 | BLAS threads | 1                   | `blas_set_num_threads` | per-session `RhpcBLASctl::blas_set_num_threads(N)` |
 | OMP threads  | 1                   | `OMP_NUM_THREADS=1`    | per-session `Sys.setenv(OMP_NUM_THREADS=N)`|
 | Scratch      | `/Rtmp` 400 GB      | `TMPDIR=/Rtmp`         | n/a — symlink, do not redirect             |
-| Disk (home)  | NFS quota           | LDAP/NFS               | quota tool on file server                  |
+| Disk (home)  | ZFS `userquota@<uid>` (set per user) | TrueNAS SCALE `zpool/home`, NFSv4 | TrueNAS UI *Manage User Quotas*, or `zfs set userquota@<uid>=` on the server — see [`TROUBLESHOOTING.md §4.4`](TROUBLESHOOTING.md#44-writes-to--fail-with-disk-quota-exceeded-but-df-shows-free-space) |
 
 ---
 

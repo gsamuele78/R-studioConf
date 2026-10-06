@@ -352,6 +352,107 @@ RStudio refuses to launch in that condition (by design).
 `/etc/biome-calc/script/unibo_archive_manager.sh`) handles re-mount.
 Logs in `${ARCHIVE_LOG_DIR}` from `setup_nodes.vars.conf`.
 
+### 4.4 Writes to `~` fail with "Disk quota exceeded" but `df` shows free space
+
+**Symptom (R):** every export fails, whatever the format:
+
+```
+saveRDS(df, "test_file.rds")
+Error in gzfile(file, mode) : cannot open the connection
+In addition: cannot open compressed file 'test_file.rds', probable reason 'Disk quota exceeded'
+```
+
+`write.csv()` / `writeLines()` fail the same way. "compressed" only appears
+because `saveRDS()` opens files through `gzfile()`; compression is not the
+cause. The real error is the kernel's `EDQUOT`.
+
+**Why `df` and `quota` mislead you.** Homes live on the TrueNAS SCALE
+dataset `zpool/home` (`biome-store03:/mnt/zpool/home`, NFSv4.2). ZFS enforces
+per-user and per-group quotas (`userquota@`, `userobjquota@`, `groupquota@`,
+`groupobjquota@`) on the server. The client's `df` shows the whole dataset
+(free TBs), and the Linux `quota` tool cannot read ZFS quotas. So "the user
+is not over quota" is never proven from the compute node.
+
+Seen 2026-10: one user's quota set to `150M` (MiB) instead of `150G` in the
+TrueNAS UI. 153M used → every new file refused, including 2-byte files.
+
+**Step 1 — on the compute node (root): confirm and scope it.**
+
+```bash
+U=<user>; H=$(getent passwd "$U" | cut -d: -f6)
+id "$U"                                   # note numeric uid AND primary gid
+findmnt -T "$H"; df -hT "$H"; df -i "$H"
+# Real data write (a bare `touch` can pass while the block quota is full):
+sudo -u "$U" bash -c 'echo x > ~/.q && rm ~/.q && echo OK'
+sudo -u "$U" bash -c 'cd ~ && dd if=/dev/zero of=.q bs=1M count=20 conv=fsync; echo rc=$?; ls -ln .q; rm -f .q'
+# Same test for 1-2 other AD users: all fail → group or dataset limit (systematic);
+# only this user fails → his userquota.
+nfsidmap -d; grep -i '^Domain' /etc/idmapd.conf     # must match the server
+journalctl -k --since "-2d" | grep -iE 'nfs|quota' | tail -30
+```
+
+Or run the bundled check (writes 1 MiB + fsync and prints the uid/gid to
+look up on the server):
+
+```bash
+sudo bash scripts/99_troubleshoot_env.sh --storage --test-user <user>
+```
+
+If `ls -ln` shows the new file owned by `4294967294`/`65534`, it is an
+NFSv4 idmap mismatch (files charged to `nobody`), not a user quota: fix the
+`Domain` in `/etc/idmapd.conf` on the side that differs and `nfsidmap -c`.
+Remount only in a maintenance window.
+
+**Step 2 — on TrueNAS SCALE (biome-store03, root shell).** Root's shell is
+zsh: run `setopt interactivecomments` first, or pasted `#` lines fail with
+`command not found: #`. Use numeric ids (`-n`): AD users come from SSSD
+id-mapping on the client and the server may resolve names differently.
+
+```bash
+setopt interactivecomments
+DS=$(zfs list -H -o name,mountpoint | awk '$2=="/mnt/zpool/home"{print $1}'); echo "$DS"
+UID_=<uid from id>; GID_=<primary gid from id>
+zfs get -H quota,refquota,used,available,usedbysnapshots "$DS"
+zfs get userquota@$UID_,userused@$UID_,userobjquota@$UID_,userobjused@$UID_ "$DS"
+zfs get groupquota@$GID_,groupused@$GID_,groupobjquota@$GID_,groupobjused@$GID_ "$DS"
+zfs list -r -o name,quota,refquota,used,avail "$DS" | grep -i "<user>"   # per-user child dataset?
+```
+
+Interpretation (`used ≥ quota` on any line = the cause):
+
+| Finding | Scope | Fix |
+|---|---|---|
+| `userquota@<uid>` or `userobjquota@<uid>` reached | one user | raise it (below) |
+| `groupquota@<gid>` reached; gid = `domain_users` (every AD user's primary group) | **all AD users** | remove the group quota, limit per user instead |
+| dataset `quota`/`refquota` reached (`available` ≈ 0) | everyone on the dataset | grow the quota or the pool; `quota` counts snapshots, `refquota` does not |
+| quota exists only for a different uid than the client's | user | idmap mismatch between client SSSD and server; fix before setting quotas by name |
+
+Audit every user quota for typos (MiB vs GiB) and users close to the limit:
+
+```bash
+zfs userspace -n -H -p -o name,used,quota "$DS" \
+ | awk '$3>0 {printf "%-12s %10.1fM / %10.1fM  %5.1f%%\n",$1,$2/2^20,$3/2^20,100*$2/$3}' \
+ | sort -k5 -n -r | head -30
+zfs userspace -n -H -p -o quota "$DS" | sort | uniq -c       # which quota values are in use
+```
+
+A quota in the MiB range for a research user is almost certainly a unit
+typo.
+
+**Step 3 — fix.** Preferred: TrueNAS UI → *Datasets* → `zpool/home` →
+*Dataset Space Management* → *Manage User Quotas* (or *Group Quotas*) → edit
+the user and type the unit explicitly (`150 GiB`, not `150`). Equivalent CLI
+(same ZFS property the UI reads):
+
+```bash
+zfs set userquota@$UID_=150G "$DS"        # or =none
+zfs get userquota@$UID_,userused@$UID_ "$DS"
+```
+
+Effective immediately; no remount, no RStudio restart. Verify from the
+compute node with the Step 1 write test, then have the user re-run the
+unchanged script (HC-13: nothing to change in user code).
+
 ---
 
 ## 5. Nginx / portal / SSL

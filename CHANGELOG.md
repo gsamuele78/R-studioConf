@@ -5,6 +5,18 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Fixed (home write failures with "Disk quota exceeded")
+
+- `scripts/99_troubleshoot_env.sh` v1.4.0: the `--storage --test-user` write test
+  wrote an empty file with `touch`, which passed while the user's ZFS quota on
+  TrueNAS was full. It now writes 1 MiB with fsync, recognises `EDQUOT` and
+  prints the uid/gid to look up on the storage server.
+- `docs/operations/TROUBLESHOOTING.md §4.4`: runbook for `saveRDS`/`write.csv`
+  failing with "Disk quota exceeded" while `df` shows free space (client and
+  TrueNAS SCALE steps, quota audit, fix). Cross-referenced from
+  `DIAGNOSTICS_INDEX.md` and `USER_QUOTAS_AND_RESOURCES.md`. Incident: a user
+  quota typed as 150 MiB instead of 150 GiB.
+
 ### Changed (dependencies)
 
 - step CLI `0.29.0` → `0.31.0` in the nginx/sssd/samba images and the K8s init
