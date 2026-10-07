@@ -18,7 +18,9 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   the 4.6.0 monster build: rJava could not load `libjvm.so`, so `loadeR.java`,
   `climate4R.UDG` and `loadeR` were silently missing from the image (the build still
   passed). `install_botanical_packages.R` now stops the build if any requested
-  package cannot be loaded.
+  package cannot be loaded, printing the load error. That check then found
+  `igraph` (and with it `nimble`/`nimbleHMC`) unloadable: the P3M binary needs
+  `libglpk40`, now installed in the RStudio images.
 
 ### Changed (dependencies, T2 base images)
 

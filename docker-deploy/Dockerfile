@@ -52,8 +52,10 @@ RUN chmod 755 /etc/rstudio/rsession-profile
 # 2b. Java for rJava (mirrors T1 r_env_manager.sh configure_java_for_r):
 # JDK + netcdf-bin, libjvm on the linker path, javareconf, rJava from source,
 # then a JVM smoke test. Without it rJava cannot load libjvm.so and
-# loadeR.java / climate4R.UDG / loadeR fail to install.
-RUN apt-get update && apt-get install -y --no-install-recommends default-jdk netcdf-bin \
+# loadeR.java / climate4R.UDG / loadeR fail to install. libglpk40: runtime
+# library of the P3M igraph binary (needed by nimble / nimbleHMC); on T1 the
+# r2u binaries pull it in as an apt dependency.
+RUN apt-get update && apt-get install -y --no-install-recommends default-jdk netcdf-bin libglpk40 \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")" \
     && test -d "${JAVA_HOME}/lib/server" \
