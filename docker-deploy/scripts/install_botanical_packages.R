@@ -44,3 +44,18 @@ github_packages <- c(
 )
 
 remotes::install_github(github_packages, upgrade = "never")
+
+# Fail the image build if any requested package cannot be loaded.
+# install.packages() and install_github() only warn on failure, which let
+# images ship without loadeR.java / climate4R.UDG / loadeR unnoticed.
+requested <- unique(c(cran_packages, sub("^.*/", "", github_packages)))
+load_error <- vapply(requested, function(pkg) {
+    tryCatch({ loadNamespace(pkg); "" }, error = function(e) conditionMessage(e))
+}, character(1))
+if (any(nzchar(load_error))) {
+    bad <- load_error[nzchar(load_error)]
+    message(sprintf("  %s: %s", names(bad), bad), sep = "\n")
+    stop("packages not loadable after install: ",
+         paste(names(bad), collapse = ", "), call. = FALSE)
+}
+message("All ", length(requested), " requested packages load.")

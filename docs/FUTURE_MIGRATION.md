@@ -52,7 +52,7 @@ Current upstream image pins visible in code are:
 - `curlimages/curl:8.22.0`
 - `tecnativa/docker-socket-proxy:v0.5.0`
 - `quay.io/oauth2-proxy/oauth2-proxy:v7.6.0-alpine`
-- `rocker/geospatial:4.4.3` in the RStudio Dockerfiles (R 4.4; T1 runs R 4.6.0, see TD-T2-06)
+- `rocker/geospatial:4.6.0` in the RStudio Dockerfiles (same R as T1)
 - `ollama/ollama:0.35.0` in the Ollama Dockerfile
 
 Locally built images use `${IMAGE_TAG}` and production deployments must set a pinned tag.
@@ -62,7 +62,7 @@ Locally built images use `${IMAGE_TAG}` and production deployments must set a pi
 - Both `docker-socket-proxy` and `oauth2-proxy` now have healthchecks in Compose. The corresponding item in `.ai/project.yml -> deployment_tiers.T2_docker.open_gaps` is stale.
 - The generic claim that every service uses host networking is false; the socket proxy deliberately does not.
 - Compose defines eight services, not six.
-- The RStudio image base is 4.4.3 (R 4.4), not 4.4.1; T1 is on R 4.6.0.
+- The RStudio image base is 4.6.0, the same R version as T1.
 
 ### T2 gaps still open
 

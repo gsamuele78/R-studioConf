@@ -27,10 +27,10 @@ updates:
       interval: weekly
       day: monday
     ignore:
-      # A new rocker/geospatial minor is a new R version: decided with the T1
-      # R pin (scripts/pin_r_version.sh), not by a bot.
+      # rocker/geospatial = the R version, which must equal the T1 host pin
+      # (scripts/pin_r_version.sh DEFAULT_R_VERSION). Every R bump, patch
+      # included, is done by hand together with T1, never by a bot.
       - dependency-name: "rocker/geospatial"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       base-images:
         patterns: ["*"]

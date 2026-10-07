@@ -5,6 +5,23 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed (T2 R version = T1)
+
+- RStudio images (`docker-deploy/Dockerfile`, `Dockerfile.sssd`, `Dockerfile.samba`)
+  moved from `rocker/geospatial:4.4.3` to `4.6.0`, the R version pinned on the host
+  (`scripts/pin_r_version.sh` `DEFAULT_R_VERSION`, T3 `configmaps.yaml` `R_VERSION`).
+  Closes TD-T2-06. `.github/dependabot.yml` now ignores every `rocker/geospatial`
+  update (patch included): the R version moves by hand together with the T1 pin.
+- RStudio images now configure Java at build time like T1
+  (`r_env_manager.sh configure_java_for_r`): `default-jdk` + `netcdf-bin`, libjvm on
+  the linker path, `R CMD javareconf`, rJava from source, JVM smoke test. Found in
+  the 4.6.0 monster build: rJava could not load `libjvm.so`, so `loadeR.java`,
+  `climate4R.UDG` and `loadeR` were silently missing from the image (the build still
+  passed). `install_botanical_packages.R` now stops the build if any requested
+  package cannot be loaded, printing the load error. That check then found
+  `igraph` (and with it `nimble`/`nimbleHMC`) unloadable: the P3M binary needs
+  `libglpk40`, now installed in the RStudio images.
+
 ### Changed (dependencies, T2 base images)
 
 - Dependabot #20: `rocker/geospatial` 4.4.2 → 4.4.3 (R patch release), `nginx`

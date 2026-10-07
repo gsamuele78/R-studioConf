@@ -145,7 +145,7 @@ tier_deltas:
     tier: "T2"
     delta: "RStudio images run R 4.4 (rocker/geospatial:4.4.3); T1 pins R 4.6.0 (scripts/pin_r_version.sh DEFAULT_R_VERSION, kubernetes-deploy/configmaps.yaml R_VERSION)."
     rationale: "Pre-existing, found while merging dependabot #20 (4.4.2 -> 4.4.3 patch). Dependabot only takes rocker patch releases by design (.github/dependabot.yml); moving T2 to R 4.6 is a deliberate R-version change decided with the T1 pin, not a bot bump."
-    status: "OPEN — move T2 to rocker/geospatial 4.6.x together with a monster build and package check, then close"
+    status: "CLOSED 2026-10-07 — RStudio images moved to rocker/geospatial:4.6.0 (= T1 pin); monster build green"
   - id: "TD-T2-04"
     tier: "T2"
     delta: "admin_recipients.txt is bind-mounted from config/site/ into the telemetry container instead of being COPYed at build time."
