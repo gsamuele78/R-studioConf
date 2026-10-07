@@ -5,6 +5,16 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed (dependencies, T2 base images)
+
+- Dependabot #20: `rocker/geospatial` 4.4.2 → 4.4.3 (R patch release), `nginx`
+  1.27.3-alpine → 1.31.0-alpine, `ollama/ollama` 0.5.4 → 0.35.0. Merged after the
+  monster build (rstudio-sssd, rstudio-samba, ollama-ai) passed on the branch.
+  IDE rule files regenerated; pin tables in `COMPOSE_OPERATOR_RUNBOOK.md` (was
+  stale: 4.4.1 / 1.27 / 0.3.0) and `FUTURE_MIGRATION.md` updated.
+- New tier delta TD-T2-06 (`.ai/project.yml`): T2 runs R 4.4 while T1 pins R 4.6.0.
+  Pre-existing; recorded, not changed here.
+
 ### Changed (dependencies, T2)
 
 - `curlimages/curl` 8.11.1 → 8.22.0 for the `rstudio-init` one-shot (dependabot #19).
