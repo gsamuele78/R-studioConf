@@ -1,5 +1,7 @@
 # Upgrade Runbook — Rprofile v12.4 (Lussu Hang + NFS Library Storm)
 
+> **Historical record (verified 2026-10-06).** This is the v12.4 rollout runbook, kept unchanged for audit history. The current runtime is **Rprofile v12.10** (`config/setup_nodes.vars.conf`); later fixes v12.7–v12.10 are in [`Rprofile_site.CHANGELOG.md`](../reference/Rprofile_site.CHANGELOG.md). Do not run its version-specific steps on a current node; for day-2 work use [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) and [`MAINTENANCE.md`](MAINTENANCE.md).
+
 **Audience**: sysadmin BIOME-CALC.
 **Tier**: T1 (host) — autoritativo.
 **Generato**: 2026-05-09.

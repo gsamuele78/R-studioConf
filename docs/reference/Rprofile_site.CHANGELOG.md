@@ -1834,7 +1834,7 @@ VERIFICATION:
 ROLLBACK PATH (if v12.2 breaks production):
 
   ```bash
-  cd /home/jfs/00_Antigravity_workspace/R-studioConf
+  cd <repo-checkout>/R-studioConf
   cp templates/Rprofile_site.R.template.legacy_v12.1_rollback \
      templates/Rprofile_site.R.template
   rm templates/Rprofile_site.d/{20,30,40,45,50,70}_*.R.template

@@ -5,6 +5,41 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (wiki docx guides)
+
+- `scripts/tools/build_wiki_docx.sh` v1.0.0 (+ `scripts/tools/wiki/`): builds four
+  English Word guides for the SharePoint wiki from the Markdown in `docs/`, per
+  `docs/wiki/manifest.tsv`: User Guide, Common Problems (researchers), Operations
+  Troubleshooting Runbook, Operations Guide. Links between chapters stay
+  internal, links to repo files become plain text, contents page is static
+  (SharePoint's viewer leaves Word TOC fields empty), output stamped with date
+  and git commit. Workstation tool (pandoc ≥ 2.17, python3).
+- `docs/user_guides/COMMON_PROBLEMS.md`: researcher self-help, one section per
+  problem (what you see, why, what to do, when to contact the admins).
+
+### Changed (documentation audit 2026-10)
+
+- `docs/` re-audited against the code (`docs/DOCUMENTATION_AUDIT.md`).
+  SYSTEM_OVERVIEW and SECURITY_MODEL rewritten; TROUBLESHOOTING reorganised as
+  symptom → diagnosis → fix → verification; SCRIPT_CATALOG lists every script;
+  nonexistent variables and the dead NFS-fallback section removed from the user
+  guides. Historical records (v12.4 rollout, Lussu hang, auth_pam regression) and
+  unvalidated SOPs kept in full with a status banner.
+- Researcher guides rewritten for non-IT users (cheat sheet, "How BIOME-CALC works
+  for you", Common Problems, Italian guide): no user names or incident reports, no
+  admin scripts or server internals, only R/portal steps; all R blocks parse.
+  `rstudio_session_isolation.md` and the Italian reply to a researcher moved to
+  `docs/operations/`; `SERVER_NATIVE_API.md` and `USER_CONTRACT.md` moved to the
+  Operations wiki guide. `build_wiki_docx.sh` 1.1.0: researcher guides (`user-*`)
+  carry no repo paths or git stamp.
+
+### Fixed (lint advice)
+
+- `scripts/lib/r_lint_rules.tsv`: R017 claimed `makeCluster()` defaults to FORK on
+  Linux (it defaults to PSOCK everywhere); R010 claimed bare `detectCores()` returns
+  the host total (on BIOME-CALC it is wrapped to the user's share). Texts corrected;
+  ids, patterns and severities unchanged (`tests/r_lint_test.sh` passes).
+
 ### Fixed (home write failures with "Disk quota exceeded")
 
 - `scripts/99_troubleshoot_env.sh` v1.4.0: the `--storage --test-user` write test

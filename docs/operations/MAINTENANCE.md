@@ -1,260 +1,129 @@
 <!-- docs/operations/MAINTENANCE.md -->
+---
+title: "BIOME-CALC Maintenance Runbook"
+audience: operator
+status: current
+tier: T1
+source_path: docs/operations/MAINTENANCE.md
+last_verified: 2026-10-06
+---
+
 # Maintenance Runbook
 
-> **Audience:** sysadmins.  
-> **Tier:** T1 host.  
-> **Last updated:** 2026-05-09.
+## Daily / automated jobs
 
-Routine maintenance tasks, in approximate order of frequency.
+`50_setup_nodes.sh` installs cron jobs in `/etc/cron.d/r_orphan_cleanup` using these defaults from `config/setup_nodes.vars.conf`:
 
----
+| Job | Default schedule | Deployed command |
+|---|---|---|
+| orphan cleanup | `15 * * * *` | `/etc/biome-calc/script/cleanup_r_orphans.sh` |
+| orphan notification | `00 18 * * *` | `/etc/biome-calc/script/notify_r_orphans.sh` |
+| orphan report | `00 08 * * 1-5` | `/etc/biome-calc/script/r_orphan_report.sh` |
 
-## 1. Daily / scheduled (already automated)
-
-These are wired into cron / systemd-timer by the deployment scripts.
-Verify they are still running on each host.
-
-| Job | Installed by | Schedule source | What it does |
-|---|---|---|---|
-| Nginx tmp cleanup | `15_setup_nginx_cleanup.sh` | daily cron | Trim `client_body_temp` / `proxy_temp` with disk safety check. |
-| R orphan cleanup | `50_setup_nodes.sh` (deploys `cleanup_r_orphans.sh.template`) | `setup_nodes.vars.conf :: ORPHAN_CRON_CLEANUP` | Kill rsession workers whose parent ttys/RStudio sessions are gone. |
-| R orphan notify | same | `ORPHAN_CRON_NOTIFY` | Email user before kill (per `user_email_map.txt`). |
-| R orphan report | same | `ORPHAN_CRON_REPORT` | CSV + email to `admin_recipients.txt`. |
-| Let's Encrypt renewal | `32_setup_letsencrypt.sh` | certbot.timer | Renew + nginx reload. |
-| Package drift scan | (manual or cron) | — | `99_check_pkg_drift.sh` — recommend weekly. |
-| Renviron override scan | (manual) | — | `99_check_user_renviron_overrides.sh` — after deploys or when users report env mismatches. |
-
-Verify with: `systemctl list-timers --all | grep -E 'cleanup|orphan|certbot'`
-and `crontab -l -u root`.
-
----
-
-## 2. Weekly
+Nginx temp cleanup is installed by `15_setup_nginx_cleanup.sh`; certificate renewal uses Certbot's timer. Verify the actual host rather than assuming defaults:
 
 ```bash
-# Health snapshot
+sudo cat /etc/cron.d/r_orphan_cleanup
+sudo systemctl list-timers --all | grep -E 'certbot|cleanup|orphan'
+sudo crontab -l
+```
+
+## Weekly
+
+```bash
 sudo bash scripts/99_health_check.sh
-
-# Drift scan
+sudo bash scripts/99_check_rprofile_health.sh --static-only
 sudo bash scripts/99_check_pkg_drift.sh
-
-# Renviron override scan (user-side env drift)
 sudo bash scripts/99_check_user_renviron_overrides.sh
-
-# Disk pressure
-df -h /Rtmp /home /var
-
-# Nginx package drift check (prevent auth_pam regression)
-dpkg -l | grep -E 'nginx|auth-pam'
-apt-mark showhold | grep -E 'nginx|auth-pam'
+df -hT /Rtmp /var /nfs/home
+findmnt -T /nfs/home
+findmnt -T /mnt/ProjectStorage
 ```
 
-If the drift scan flags packages, decide:
-
-* **Pin** in `config/r_env_manager.conf :: R_USER_PACKAGES_CRAN` and
-  re-run `r_env_manager.sh`.
-* **Rebuild** the diverging node from a clean baseline
-  ([`CLEAN_VM_BASELINE.md`](CLEAN_VM_BASELINE.md)).
-
-### 2.1 Nginx package drift guard
-
-Ubuntu `unattended-upgrades` can move nginx to a version that is
-incompatible with `libnginx-mod-http-auth-pam`, causing worker segfaults
-on portal login. The known-good version is `1.24.0-2ubuntu7.9`; the
-known-bad version is `1.24.0-2ubuntu7.10`.
-
-**Verify on every node:**
+Package-drift exit codes are `0` no drift, `1` medium/unknown drift, `2` high risk, `3` internal failure. Update the baseline only after review:
 
 ```bash
-dpkg -l | grep -E 'nginx|auth-pam'
-# Expected:
-#   nginx                       1.24.0-2ubuntu7.9
-#   nginx-common                1.24.0-2ubuntu7.9
-#   nginx-full                  1.24.0-2ubuntu7.9
-#   libnginx-mod-stream         1.24.0-2ubuntu7.9
-#   libnginx-mod-http-auth-pam  1:1.5.5-2build2
-
-apt-mark showhold | grep -E 'nginx|auth-pam'
-# Expected: all five packages listed
-
-ls /etc/apt/preferences.d/99-block-nginx-bad.pref
-# Expected: file exists with Pin-Priority: -1 for 1.24.0-2ubuntu7.10
+sudo bash scripts/99_check_pkg_drift.sh --update
 ```
 
-> **Important:** APT ignores files in `/etc/apt/preferences.d/` with
-> invalid extensions. Use `.pref` or no extension. The filename
-> `99-block-nginx-2ubuntu7.10` is silently ignored because `.10` is
-> not a recognised preferences extension.
+Do not treat `CLEAN_VM_BASELINE.md` as a node rebuild procedure; it is an L4 diagnostic baseline.
 
-**If a node has the bad version**, downgrade using `dpkg-repack` from a
-working node. Full procedure:
-[`NGINX_AUTH_PAM_REGRESSION_2026-06.md`](NGINX_AUTH_PAM_REGRESSION_2026-06.md).
+## Monthly and after changes
 
-**To protect a node that is still on the good version:**
+### R runtime/profile
+
+Current `RPROFILE_VERSION` is `12.10`.
 
 ```bash
-sudo apt-mark hold nginx nginx-common nginx-full libnginx-mod-stream libnginx-mod-http-auth-pam
-
-sudo tee /etc/apt/preferences.d/99-block-nginx-bad.pref >/dev/null <<'EOF'
-Package: nginx nginx-common nginx-full libnginx-mod-stream
-Pin: version 1.24.0-2ubuntu7.10
-Pin-Priority: -1
-EOF
-```
-
----
-
-## 3. Monthly / on-demand
-
-### 3.1 R / RStudio version bump
-
-```bash
-# r_env_manager.sh consults 21_helper_rstudio_version.sh; idempotent.
-sudo ./r_env_manager.sh
-
-# Post-bump audit
+sudo bash scripts/50_setup_nodes.sh --verify
+sudo bash scripts/99_check_rprofile_health.sh --static-only
 sudo bash scripts/99_audit_r_environment.sh
 ```
 
-After the bump:
+After changing `templates/Rprofile_site.R.template`, `templates/Rprofile_site.d/`, or `templates/Renviron.template`, run `50_setup_nodes.sh` and select option `3` (config files only), then verify. Restarting `rstudio-server` terminates sessions; use a maintenance window.
 
-* Re-run `50_setup_nodes.sh` to refresh `/etc/R/Rprofile.site` and
-  `/etc/R/Rprofile_site.d/*` against the new R.
-* Smoke-test with `bash scripts/test_rstudio_login.sh`.
-
-### 3.2 Apply Rprofile v12.4 (Lussu fork-guard + NFS lookup-storm fix)
-
-For the procedure on new and already-deployed nodes, plus rollback and
-per-user bypass, see the dedicated runbook:
-[`UPGRADE_TO_v12.4.md`](UPGRADE_TO_v12.4.md).
-
-Quick reference:
+### Local R libraries
 
 ```bash
-sudo bash scripts/50_setup_nodes.sh   # menu option L = local R-libs + NFS audit only
-sudo bash scripts/50_setup_nodes.sh --verify   # expect: Rprofile.site version: 12.4
+sudo bash scripts/50_setup_nodes.sh
+# option L: local R library root/warmup plus read-only NFS audit
+sudo bash scripts/99_check_user_renviron_overrides.sh
 ```
 
-Optional: pre-create a dedicated `/var/lib/biome-Rlibs/` disk by
-setting `R_LIBS_LOCAL_DEVICE=/dev/sdX` in `setup_nodes.vars.conf` before
-running the script (Mode B; idempotent fstab via UUID).
-
-### 3.3 Re-render templates (after editing under `templates/`)
+`04_user_lib_bootstrap.R` covers new and high-UID AD users at first R start. If the deployed login script still writes `R_LIBS_USER`, preview and apply the targeted hotfix before enabling local libraries:
 
 ```bash
-# Nginx
-sudo bash scripts/update_nginx_templates.sh
-sudo systemctl reload nginx
-
-# R-side dispatcher / fragments / Renviron
-sudo bash scripts/50_setup_nodes.sh   # idempotent
-
-# RStudio config
-sudo bash scripts/20_configure_rstudio.sh
+sudo bash scripts/fix_login_script_rlibs_inplace.sh
+sudo bash scripts/fix_login_script_rlibs_inplace.sh --commit
 ```
 
-### 3.4 Backup / restore config
+Do not use `20_configure_rstudio.sh` options 1, 3, 4, 5 or 9 on a populated node until the open hazards recorded in `CHANGELOG.md` are resolved.
 
-`r_env_manager.sh` rotates each managed config to
-`/var/backups/r_env_manager/files/<full-path>.<timestamp>` before
-rewriting it.
+### Problem Reporter SMTP overlay
 
 ```bash
-ls -lt /var/backups/r_env_manager/files/etc/rstudio/
-# Roll back rserver.conf:
-sudo cp /var/backups/r_env_manager/files/etc/rstudio/rserver.conf.<TS> \
-        /etc/rstudio/rserver.conf
-sudo systemctl restart rstudio-server
+sudo bash scripts/tools/hotfix_smtp_site_overrides.sh --dry-run
+sudo bash scripts/tools/hotfix_smtp_site_overrides.sh
 ```
 
-Rotate `/var/backups/r_env_manager/files/` per your retention policy
-(no automatic prune is shipped, by design — destructive default would
-violate pessimistic engineering).
+This patches six site-local mail keys in `/etc/biome-calc/conf/setup_nodes.vars.conf`; the telemetry API rereads the file per request, so no restart is required.
 
-### 3.5 Domain machine-account refresh
+### Identity
 
-Active Directory rotates the computer-object password periodically.
-After ~30 days, refresh:
+Use exactly one identity backend per host. Verify before rejoining:
 
 ```bash
-sudo bash scripts/11_join_domain_samba.sh    # Samba/winbind backend
-# or
-sudo bash scripts/10_join_domain_sssd.sh     # SSSD backend
+sudo bash scripts/99_verify_domain_join.sh
 ```
 
-Both scripts are idempotent — they detect "already joined" and just
-refresh the keytab + restart the daemon.
+Then run either `10_join_domain_sssd.sh` or `11_join_domain_samba.sh`, never both.
 
----
-
-## 4. Quarterly
-
-### 4.1 Clean-VM baseline test
-
-Build a fresh VM from scratch following [`CLEAN_VM_BASELINE.md`](CLEAN_VM_BASELINE.md);
-diff package versions and `R --version` against production.
-
-### 4.2 Audit drift
+## Quarterly
 
 ```bash
-sudo bash scripts/99_audit_r_environment.sh   # full report
-diff -u <previous-audit.md> <new-audit.md>
-```
-
-Investigate any unexplained delta.
-
-### 4.3 PAM stack verification
-
-Even if `passwd` works today, regression can creep in via
-`unattended-upgrades`. Run:
-
-```bash
+sudo bash scripts/tools/hw_report.sh
+sudo bash scripts/tools/deployment_summary.sh
 sudo bash scripts/fix_pam_segfault_inplace.sh --check
+sudo bash scripts/99_audit_r_environment.sh
+sudo bash scripts/99_postmortem_forensics.sh --all-recent --hours 24 --quick
 ```
 
-If it reports anything other than CLEAN, run without `--check`.
+Review `/var/lib/biome-calc/drift_reports/`, `/var/log/r_orphan_cleanup/`, `/var/log/biome-log/core/`, `/var/log/nginx/`, identity logs, `/Rtmp`, and backup retention.
 
----
+## Backups and rollback
 
-## 5. Emergency rollback
+`r_env_manager.sh` stores run trees below `/var/backups/r_env_manager/files/`. Inspect the actual backup before restoring. The current `restore_config()` implementation restores the newest `run_<timestamp>` tree and restarts services only after at least one file is restored.
 
-If a config change broke production:
+```bash
+sudo ls -lt /var/backups/r_env_manager/files/
+```
 
-1. Stop the service (`systemctl stop nginx`, etc.).
-2. List backups: `ls -lt /var/backups/r_env_manager/files/<path>/`.
-3. Copy the most recent pre-change snapshot back into place.
-4. Restart the service.
-5. File a follow-up ticket — the rollback is temporary; the underlying
-   bug must still be fixed in T1 (and ported to T2/T3 per
-   `.ai/project.yml :: tier_deltas`).
+Use the orchestrator's restore path where possible; for manual file restore, preserve owner/mode and validate the service configuration before restart (`nginx -t`, R parse/health check, or identity-specific checks).
 
----
+## Storage observations
 
-## 6. Logs & retention
+- Homes: TrueNAS SCALE `zpool/home`, NFSv4.2 `sec=sys`, mounted at `/nfs/home`, with server-side per-user ZFS `userquota`.
+- Project share: CIFS `/mnt/ProjectStorage`; observed mount is `soft`, `uid=0,gid=0`, mode `0755`. Users therefore see `Permission denied` on direct writes. A stalled soft mount can return `EIO`; record this as storage evidence rather than changing user code.
+- Scratch: local ext4 `/Rtmp`, expected size 400 GB and mode `1777`.
 
-| Path | Owner | Retention |
-|---|---|---|
-| `/var/log/biome-log/core/*.log` | r_env_manager | rotate via logrotate (default) |
-| `/var/log/rstudio-server/*` | rstudio-server | logrotate |
-| `/var/log/nginx/*` | nginx | logrotate |
-| `/var/log/secure_access/*` | ttyd wrapper | logrotate |
-| `/var/log/sssd/*` | sssd | logrotate |
-| `/var/log/samba/*` | samba | logrotate |
-| `/var/backups/r_env_manager/files/*` | r_env_manager | **manual** prune |
-| `${BIOME_CONF}/audit/*` | 99_audit_r_environment | manual |
-| `${BIOME_CONF}/pkg_drift/baseline.csv` | 99_check_pkg_drift | manual |
-
-Full log inventory: [`diagnostic_logs.md`](diagnostic_logs.md).
-
----
-
-## 7. Cross-references
-
-* Symptom-indexed runbook → [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
-* Diagnostic toolbox → [`DIAGNOSTICS_INDEX.md`](DIAGNOSTICS_INDEX.md)
-* Clean-VM baseline procedure → [`CLEAN_VM_BASELINE.md`](CLEAN_VM_BASELINE.md)
-* Lussu hang investigation → [`LUSSU_HANG_BISECTION.md`](LUSSU_HANG_BISECTION.md)
-* User-script triage → [`USER_SCRIPT_TROUBLESHOOTING.md`](USER_SCRIPT_TROUBLESHOOTING.md)
-* Quotas & limits → [`USER_QUOTAS_AND_RESOURCES.md`](USER_QUOTAS_AND_RESOURCES.md)
-* Storage growth → [`add_storage_no_reboot.md`](add_storage_no_reboot.md)
-* PAM hardening → [`../deployment/PAM_HARDENING.md`](../deployment/PAM_HARDENING.md)
+**Unverified:** the exact live `/etc/fstab` options and TrueNAS quota values are not stored in git. Confirm them with `findmnt` and server-side `zfs get/userspace` on each maintenance cycle.

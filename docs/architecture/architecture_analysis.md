@@ -1,154 +1,231 @@
-# Comparative Architecture Analysis: Legacy Workstation vs. BIOME-CALC Proxmox/NFS
-
-Deep technical analysis comparing the manual "Luchetti workstation" RStudio deployment with the automated BIOME-CALC infrastructure on Proxmox VMs with TrueNAS/NFS + Nextcloud storage.
-
+<!-- docs/architecture/architecture_analysis.md -->
+---
+title: "BIOME-CALC Architecture Analysis"
+audience: architect
+status: current
+tier: T1
+source_path: docs/architecture/architecture_analysis.md
+last_verified: 2026-10-06
 ---
 
-## 1. Architectural Paradigms
+# BIOME-CALC Architecture Analysis
 
-### 1.1 The Legacy Architecture (Standalone Workstation — "Luchetti")
+## 1. Current architectural position
 
-From `00_Installazione_workstation_luchetti.txt`:
+BIOME-CALC is not one uniform deployment. It has three code surfaces with
+different maturity:
 
-| Aspect | Implementation | Risk |
-|:---|:---|:---|
-| **OS install** | Manual `apt install r-base`, manual `gdebi rstudio-server-*.deb` | Not reproducible; drift across rebuilds |
-| **BLAS library** | `openblas-pthread` via `update-alternatives` (hardcoded) | `SIGSEGV` in `blas_thread_server` when ≥2 users run `solve()`/`crossprod()` simultaneously — see [rstudio/rstudio#7031](https://github.com/rstudio/rstudio/issues/7031) |
-| **Thread tuning** | `OPENBLAS_NUM_THREADS=32`, `OMP_NUM_THREADS=32` hardcoded in `/etc/environment` | 5 users × 32 threads = 160 threads on 72-core machine → CPU thrashing, context-switch storm |
-| **Temp storage** | Default OS `/tmp` (often RAM-backed `tmpfs`) | NIMBLE `compileNimble()` → `cc1plus` can spike 8–15 GB temp; fills tmpfs → kernel OOM kill |
-| **User data** | `/BIGDATA1/r_projects/$USER` on local VM disk | Hardware failure = total data loss; no snapshots |
-| **Authentication** | Manual `pam_mkhomedir.so` insertion, manual `sssd.conf` edits | Non-idempotent; copy-paste errors across machines |
-| **R packages** | Manual `install.packages()` from CRAN source | 30+ minutes to compile `sf`/`terra`; requires manual `libgdal-dev` setup |
-| **bspm** | Installed but `bspm::enable()` only; no sudo config for domain users | Fails silently in RStudio web console (no polkit agent) |
-| **Network edge** | Direct RStudio port 8787, `www-address=192.0.2.20` | No TLS, no reverse proxy, no session iframe isolation |
-| **User .Renviron** | `config_rstudio.sh` in `/etc/profile.d/` overrides `HOME=$RUSERPATH` | Breaks `~` expansion; conflicts with NFS home patterns |
+- **T1 host:** authoritative and continuously fixed.
+- **T2 Docker:** migration in progress and required to mirror T1 except for
+  recorded `tier_deltas`.
+- **T3 Kubernetes:** skeleton, not ready for deployment.
 
-### 1.2 The New Architecture (BIOME-CALC v10.0 — Proxmox + NFS)
+The main architectural strength is the T1 R runtime and storage separation.
+The main weakness is the T1 web authentication design, which still forwards
+AD credentials from browser JavaScript and differs materially from the
+optional T2 OIDC design.
 
-| Aspect | Implementation | Benefit |
-|:---|:---|:---|
-| **Provisioning** | `50_setup_nodes.sh` — 12 idempotent steps, menu-driven, `--dry-run` mode | Full node rebuild in ~15 min; version-controlled via git |
-| **BLAS** | `libopenblas0-serial` pinned; `libopenblas0-pthread` actively removed | Eliminates SIGSEGV entirely; serial BLAS has no internal thread pool |
-| **Thread tuning** | Dynamic: `update_resources()` runs per-callback, reads `/proc` for active `rsession` count, divides vCores fairly | Single user gets ≤16 threads (MAX_BLAS_THREADS cap); 5 users get ~6 each |
-| **CORETYPE** | Auto-detected at 3 levels: boot (`/etc/profile.d/biome-coretype.sh`), rsession spawn (`rsession-profile`), R init (`Rprofile_site.R`) | Survives Proxmox live-migration across heterogeneous CPU hosts without `SIGILL` |
-| **Temp storage** | Dedicated 400GB virtio disk at `/Rtmp` (ext4, not tmpfs, not NFS, not OS `/tmp`) | Zero RAM consumed; NIMBLE/TMB compile scratch isolated from OS; daily cleanup via `systemd-tmpfiles` |
-| **User data** | NFS share from TrueNAS at `/nfs/home/<user>` | ZFS snapshots, RAID, enterprise backup; VM is disposable |
-| **Nextcloud** | Iframe wrapper via `31_setup_web_portal.sh` + NGINX reverse proxy | Drag-and-drop file upload from laptop → appears in R session instantly |
-| **Authentication** | Auto-detected SSSD/Samba backends (`detect_auth_backend()`) with scripted PAM + nsswitch | Reproducible; supports both AD backends; pamtester validation built-in |
-| **R packages** | `bspm` with `r2u` binary repo + `sudoers.d/99-bspm-domain-users` | `install.packages("sf")` → 5 seconds (binary); no compilation needed |
-| **Memory guards** | `solve()`, `dist()`, `outer()`, `expand.grid()`, `distm()` intercepted with RAM-aware thresholds | Warns and auto-reduces threads before OOM; never crashes silently |
-| **Orphan cleanup** | `cleanup_r_orphans.sh` via cron (hourly), with 8-level deep process ancestry check | Kills stale `Rscript`/`future`/`PSOCK` workers left by crashed sessions; emails user with fix suggestion |
-| **Network edge** | NGINX with TLS (Let's Encrypt or self-signed), PAM auth, iframe wrappers, `www-root-path=/rstudio-inner` | SSL, origin checks, secure cookies, SameSite=None for iframe |
+## 2. Legacy workstation context
 
----
+The original version of this document compared T1 with a manual workstation
+installation called “Luchetti.” The current repository does not contain an
+authoritative deployment definition for that workstation, so exact historical
+claims about its IP address, core count, package-install duration, disk layout,
+or failure rate are not repeated as facts.
 
-## 2. Feature Comparison Matrix
+**Unverified:** the historical workstation reportedly used manually installed
+RStudio Server, `libopenblas0-pthread`, fixed thread counts, direct port 8787,
+and OS-default temporary storage. Those claims require the external historical
+installation record and were not used to define the current architecture.
 
-| Feature | Legacy (Luchetti) | BIOME-CALC v10.0 | User Impact |
-|:---|:---|:---|:---|
-| **OOM Crashes** | No protection; kernel OOM killer fires randomly | `solve()` guard checks `MemAvailable`, drops threads to 2, warns user | Session survives; colleagues unaffected |
-| **BLAS Crash (SIGSEGV)** | `openblas-pthread` ← crashes on multi-user | `openblas-serial` ← no internal thread pool | Zero SIGSEGV on `crossprod()` — ever |
-| **CPU Fairness** | 32 static threads per user (race condition) | Dynamic: `floor(vCores / active_users)` capped at 16 | Slower solo; stable with 20 users simultaneously |
-| **Temp Disk vs RAM** | Default tmpfs (eats RAM) | 400GB local disk at `/Rtmp` | Full VM RAM available for R; NIMBLE compiles freely |
-| **NIMBLE/MCMC** | Crashes if tmpfs fills, no reboot safety | Compilation to NFS `$HOME/.nimble_compile/session_<PID>`; scratch on `/Rtmp` | 16-hour MCMC chains survive VM reboots |
-| **File Access** | SSH/SFTP only | Nextcloud web UI + NFS mount | Drag-and-drop CSVs from laptop into R session |
-| **Package Install** | Source compile (30 min for `sf`) | Binary via `bspm`/`r2u` (5 seconds) | Researchers self-serve without sysadmin help |
-| **CPU Migration** | `SIGILL` if VM moves to different CPU host | 3-level CORETYPE auto-detection (profile.d + rsession-profile + R) | Transparent Proxmox live-migration |
-| **Session Logging** | None | Per-user syslog to `/var/log/biome-log/r_biome_system.log` | Sysadmin can trace who ran what, when |
-| **Orphan Processes** | Accumulate indefinitely | Hourly cron with 8-level ancestry check + SIGTERM/SIGKILL escalation | No zombie `Rscript` workers consuming RAM for days |
-| **AI Assistant** | None | `ask_ai("How do I run a PERMANOVA?")` via local Ollama (cgroup-limited 24GB) | Researchers get instant R help without internet search |
-| **save()/load()** | Standard (no checks) | `biome_save_session()` checks disk quota, `biome_load_session()` checks RAM | Prevents silent "save to full disk" or "load into OOM" |
-| **Diagnostics** | Manual | `status()`, `biome_plot_budget()`, `biome_tutorial()`, `biome_help()` | Users self-diagnose before emailing sysadmin |
+## 3. Verified T1 decisions
 
----
+| Area | Active implementation | Operational effect |
+|---|---|---|
+| Provisioning | `init.sh` → `r_env_manager.sh` → numbered scripts | Version-controlled, menu-driven host configuration |
+| AD identity | SSSD **or** Samba/Winbind | PAM and NSS integration without mixing both backends |
+| Web edge | Nginx TLS on 80/443 | RStudio, ttyd, Nextcloud proxy, telemetry, and static portal share one gateway |
+| RStudio | OSS on `127.0.0.1:8787`, PAM auth | Backend is not directly network-facing when deployed as configured |
+| Terminal | ttyd on `127.0.0.1:2222`, Nginx PAM | Header-based identity is bounded by loopback and gateway authentication |
+| BLAS | `libopenblas0-serial` | Avoids the pthread BLAS/rsession crash pattern |
+| R temporary storage | `/Rtmp`, 400 GiB local ext4 | Keeps compiler and package scratch off RAM-backed `/tmp` and NFS |
+| Persistent homes | `/nfs/home/<user>` on TrueNAS SCALE | Compute nodes do not own the canonical user home data |
+| User R packages | `/var/lib/biome-Rlibs/<user>/<R-ver>/` first, NFS fallback | Reduces NFS lookup storms during parallel worker startup |
+| Project archive | `/mnt/ProjectStorage` CIFS | Separate project/archive surface |
+| Resource control | systemd `user-.slice` | Per-user memory, task, CPU-weight, and I/O-weight enforcement |
+| R runtime | Rprofile 12.10 dispatcher plus 14 fragments | System-side guards without rewriting portable user scripts |
+| Telemetry | FastAPI on 8000 plus node exporter on 9100 | Aggregated status and metrics through Nginx |
+| Local AI | Optional Ollama on loopback 11434 | Local `ask_ai()` support when installed and running |
 
-## 3. Deep Dive: Critical Optimizations
+## 4. Storage and compute separation
 
-### 3.1 The OpenBLAS Pthread Collision (SIGSEGV)
+```text
+Compute VM
+  /Rtmp                              local 400 GiB ext4, disposable scratch
+  /var/lib/biome-Rlibs/<u>/<R-ver>   local compiled R packages
+  /nfs/home/<u>                      NFSv4.2 persistent home
+  /mnt/ProjectStorage                CIFS project/archive storage
 
-> [!CAUTION]
-> **This is the #1 stability fix.** The legacy server uses `openblas-pthread`, whose internal thread pool collides with RStudio rsession's own pthreads. During `solve()` or `crossprod()`, the OpenBLAS `blas_thread_server` routine and RStudio's event loop race on the same thread IDs → `SIGSEGV`.
-
-**BIOME-CALC fix chain** (defense in depth):
-1. **apt-level**: `setup_nodes_dependencies()` installs `libopenblas-serial-dev`, removes `libopenblas0-pthread`
-2. **alternatives-level**: `setup_nodes_blas()` pins BLAS/LAPACK alternatives to serial paths
-3. **env-level**: `Renviron.site` sets `OPENBLAS_NUM_THREADS=1` (belt-and-suspenders; serial ignores it, but if someone reinstalls pthread, this prevents the crash)
-4. **R-level**: `Rprofile_site.R` Section -1.5 detects pthread at runtime, forces `OPENBLAS_NUM_THREADS=1`, emits `CRITICAL` warning with fix instructions
-
-### 3.2 Memory Guards (OOM Prevention)
-
-The `Rprofile_site.R.template` intercepts 6 base R functions at load time:
-
-| Function | Guard Behavior | Threshold |
-|:---|:---|:---|
-| `solve(a)` | If `a` > 5000×5000 and workspace > 80% RAM: drops BLAS threads to 2, `on.exit` restores | 2.06× matrix size |
-| `dist(x)` | If lower-triangle > 5 GB and > 50% RAM: warns OOM, suggests sparse methods | O(n²) check |
-| `outer(X, Y)` | If result > 5 GB and > 50% RAM: warns, suggests chunking | n1 × n2 |
-| `expand.grid(...)` | If rows × cols > 2 GB and > 50% RAM: warns, suggests `data.table::CJ()` | Exponential product |
-| `geosphere::distm()` | If result > 5 GB: warns; if > 50% RAM: hard warning with NNGP alternatives | O(n²) matrix |
-| `doParallel::registerDoParallel()` | Wraps with `biome_make_cluster()`, forces 1 BLAS thread per worker | Prevents thread fan-out |
-
-### 3.3 Storage Architecture (Decoupled Compute/Data)
-
-```
-┌─────────────────────┐     ┌────────────────────────┐
-│   Proxmox VM (node) │     │   TrueNAS Server       │
-│                     │     │                        │
-│  /Rtmp   (400GB     │     │  /nfs/home/<user>      │
-│   local virtio)     │     │   = ZFS pool           │
-│                     │ NFS │   = daily snapshots    │
-│  /nfs/home/<user> ──┼─────┤   = RAID-Z2            │
-│   (mount)           │     │                        │
-│                     │     │  Nextcloud ──────────── │──→ Web UI
-│  RStudio Server     │     │   (WebDAV bridge)      │
-│  NGINX (TLS)        │     └────────────────────────┘
-│  Ollama AI          │
-└─────────────────────┘
+TrueNAS SCALE
+  zpool/home                         NFS home dataset
+  per-user ZFS quotas                server-side capacity enforcement
 ```
 
-> [!IMPORTANT]
-> **Key insight for users**: If the VM dies, your data is safe on TrueNAS. We can rebuild the VM from `50_setup_nodes.sh` in 15 minutes. On the old server, if the disk failed, everything was gone.
+The architecture does not claim zero data loss. NFS homes are outside the
+compute VM and protected by TrueNAS storage controls, but actual snapshot,
+replication, and backup schedules are not encoded in this repository.
 
-### 3.4 NIMBLE/TMB Compilation Safety
+**Unverified:** snapshot frequency, RAID layout, off-site backup, and recovery
+point objectives for the TrueNAS server.
 
-NIMBLE's `compileNimble()` triggers: `rsession → R → system2(sh) → make → sh → g++ → cc1plus` (6-7 process levels). This creates two risks:
-1. **Temp spike**: `cc1plus` writes 8-15 GB of temporary `.o` files
-2. **Long runtime**: Multi-chain MCMC can run 16+ hours
+## 5. R runtime design
 
-**BIOME-CALC solution**:
-- Compilation outputs → NFS `$HOME/.nimble_compile/session_<PID>` (survives reboots)
-- Compiler scratch (`.o` files) → `/Rtmp` automatically (fast local disk)
-- Thread cap: `max(2, min(4, bt))` per chain (4 chains × 4 threads = 16 = VM max)
-- Orphan cleanup: 8-level ancestry check (`MAX_PARENT_DEPTH=8`) recognizes `R CMD → make → g++ → cc1plus` chain as valid, not orphan
+### 5.1 Kernel enforcement
+
+`config/setup_nodes.vars.conf` defines:
+
+- `MemoryHigh=300G` and `MemoryMax=400G` per user slice;
+- `MemorySwapMax=4G`;
+- `TasksMax=4096`;
+- `CPUWeight=100` and `IOWeight=100` for users;
+- `MemoryMin=16G`, `MemoryLow=24G`, and `CPUWeight=200` for system services.
+
+This is weighted CPU sharing, not a fixed `floor(vCores / active_users)` quota.
+One user can consume available CPU when the node is otherwise idle; weights
+determine competition under load.
+
+### 5.2 Rprofile 12.10
+
+The dispatcher and fragments implement:
+
+- local R-library bootstrap (`04`);
+- cgroup-aware core discovery (`05`, `20`);
+- PSOCK cluster creation (`30`);
+- compile and scratch routing (`35`);
+- wrapper installation and opt-in install blocking (`40`, `42`);
+- memory guards (`45`);
+- package hooks including cgroup-aware `terraOptions` (`50`);
+- fork-to-PSOCK `mclapply` routing with package and global-object replication
+  (`52`);
+- `mc.cores` clamping (`55`);
+- guarded `setwd` (`60`);
+- persistent diagnostic and helper tools (`70`, `80`).
+
+NIMBLE does not compile to `$HOME/.nimble_compile`. R starts with
+`TMPDIR=/Rtmp`, so each process receives its own local R temporary directory.
+Fragment 35 also provides explicit compile-routing helpers. Stan output and
+Rcpp caches are routed to local per-session paths where the active code defines
+supported controls.
+
+### 5.3 Failure boundary
+
+The runtime is designed to fail open for most optional guards: fragment errors
+are logged and the loader continues. The `setwd` guard deliberately fails in
+batch mode for a missing path. The install blocker is dormant by default.
+
+Kernel cgroups remain the final resource boundary. R warnings and wrappers do
+not guarantee that a process cannot exhaust its user slice.
+
+## 6. Active web architecture
+
+The active T1 web path is:
+
+```text
+Browser → Nginx TLS
+  ├── portal Basic/PAM credential check
+  ├── browser POST to RStudio auth-do-sign-in → RStudio PAM
+  ├── browser credential seeding → PAM-protected ttyd
+  └── browser POST to configured Nextcloud login endpoint
+```
+
+This differs from the architecture described in the root README and generated
+agent context, which summarize the target stack as OIDC via oauth2-proxy. The
+code shows oauth2-proxy only in T2's optional `oidc` profile. T1 has no
+oauth2-proxy service or Nginx `auth_request` configuration.
+
+The Nextcloud wrapper, proxy locations, discovery redirects, and portal tile
+are active source, not archived templates.
+
+**Unverified:** whether the site currently operates a compatible Nextcloud
+backend and whether every T1 node has ttyd enabled in production.
+
+## 7. T2 analysis
+
+T2 has useful controls:
+
+- exact upstream image pins;
+- CPU and memory limits on every service;
+- bind mounts only;
+- optional SSSD or Samba RStudio profile;
+- optional oauth2-proxy `oidc` profile;
+- Step-CA root trust bootstrap;
+- docker-socket-proxy v0.5.0 published only on loopback;
+- health checks and bounded logging.
+
+It is not a current replacement for T1 because `TD-T2-01` remains open: the
+container runtime uses a monolithic Rprofile snapshot and audit v27 rather than
+T1's v12.10 fragments and audit v28. T2 also intentionally omits bspm/r2u
+(`TD-T2-05`).
+
+The T2 RStudio containers mount `/tmp` as tmpfs. That is a container-tier
+implementation detail, not permission to move T1 R temporary storage away
+from `/Rtmp`.
+
+## 8. T3 analysis
+
+The 2026-10-01 back-port added NetworkPolicies and pinned custom images, but T3
+remains `SKELETON_NOT_READY`. `.ai/project.yml` still records identity,
+storage, PKI rotation, and deployment gaps. `kubernetes-deploy/configmaps.yaml`
+also contains development values that do not match T1's active R runtime.
+
+T3 must not be described as dormant production infrastructure or as a validated
+HA cluster.
+
+## 9. Current risks and contradictions
+
+| Finding | Impact | Evidence |
+|---|---|---|
+| Browser-side AD password handling remains active | Password reaches JavaScript, URL construction, and multiple login POSTs | `portal_index.html.template` |
+| oauth2-proxy is absent from T1 | Architecture summaries can overstate OIDC coverage | no T1 script/template match; T2 Compose profile only |
+| T1 portal loads Google Fonts | Violates no-CDN hard constraint | `portal_index.html.template` |
+| `20_configure_rstudio.sh` can append NFS temp settings | Can override `/Rtmp` if unsafe menu actions are run | `configure_rstudio.vars.conf`, repo `CHANGELOG.md` |
+| `20_configure_rstudio.sh` and ttyd wrapper lack active strict mode | Violates HC-03 | script line 2 in each file |
+| T2 runtime lags T1 | Container testing does not validate current fragment behavior | `TD-T2-01` |
+| Per-user quota is server-side | `df` can look healthy while writes fail with `EDQUOT` | `99_troubleshoot_env.sh`, troubleshooting runbook |
+
+## 10. Architecture verdict
+
+T1's R runtime, cgroup controls, local scratch, and local package-library design
+match the platform's heavy spatial and Bayesian workloads. Those controls are
+implemented and testable from the repository.
+
+The web authentication surface is older and more fragile than the runtime. It
+should be documented as Basic/PAM plus credential forwarding until T1 actually
+adopts a different flow. T2's optional OIDC profile is not evidence of a T1
+migration.
+
+No current repository evidence supports claims of high availability,
+session roaming, automatic user-to-node routing, zero data loss, or a
+production-ready Kubernetes deployment.
+
+## 11. Verification sources
+
+- `.ai/project.yml`
+- `config/setup_nodes.vars.conf`
+- `config/configure_rstudio.vars.conf`
+- `scripts/03_install_secure_access.sh`
+- `scripts/20_configure_rstudio.sh`
+- `scripts/30_install_nginx.sh`
+- `scripts/40_install_telemetry.sh`
+- `scripts/50_setup_nodes.sh`
+- `templates/Renviron.template`
+- `templates/Rprofile_site.R.template`
+- `templates/Rprofile_site.d/*.R.template`
+- `templates/nginx_proxy_location.conf.template`
+- `templates/portal_index.html.template`
+- `docker-deploy/docker-compose.yml`
+- `CHANGELOG.md`
 
 ---
 
-## 4. Pros and Cons
-
-### Pros
-
-1. **Multi-Tenant Stability**: Memory guards + dynamic threads + orphan cleanup = no single user can crash the server for others
-2. **Data Integrity**: NFS + TrueNAS ZFS = hardware failure on compute nodes = zero data loss
-3. **Reproducible Infrastructure**: Everything is git-versioned bash scripts; new node in 15 min
-4. **Self-Service**: Binary packages (5 sec install), Nextcloud file upload, AI assistant, diagnostic tools
-5. **Live Migration**: 3-level CORETYPE detection → transparent Proxmox migration without SIGILL
-6. **Audit Trail**: Per-section syslogs, 87KB R audit script, deployment summary emails
-
-### Cons
-
-1. **Perceived Performance Drop**: "My script used 32 cores!" — yes, because with 5 concurrent users, 32×5=160 threads caused thrashing. Now you get `floor(32/5)` ≈ 6 fair-share threads, but they actually complete faster (no thrashing)
-2. **Warning Messages**: Guards emit yellow warnings (`BIOME-CALC: dist() on 20,000 obs (~1.5 GB)`). These are intentional — they prevent silent OOM kills
-3. **Environment Rigidity**: Users cannot set `OMP_NUM_THREADS` in `.Renviron` (it gets stripped by `setup_nodes_migrate_users()`). This is by design — static values conflict with dynamic allocation
-4. **NFS Latency**: Small-file I/O on NFS is slower than local disk. BIOME-CALC mitigates this by routing all temp I/O to local `/Rtmp`, but `install.packages()` writes to NFS library paths
-5. **Complexity**: The `Rprofile_site.R` is 1,458 lines (74KB). A bug here affects every user. Mitigation: template integrity self-check, syntax validation on deploy, backup+rollback in `setup_nodes_config_files()`
-
----
-
-## 5. Missing Features / Improvement Opportunities
-
-| Gap | Severity | Recommendation |
-|:---|:---|:---|
-| **No per-user cgroup limits** | Medium | Proxmox can't cgroup individual rsessions. Consider `systemd-run --slice` per user via PAM hook |
-| **No GPU passthrough** | Low | Current VMs are CPU-only (`CUDA_VISIBLE_DEVICES=-1`). If deep learning demand grows, add GPU slice |
-| **No Renv/Conda isolation** | Medium | System-wide packages work for 80% of users; heavy reproducibility users need per-project `renv`. Document workflow |
-| **NFS write-back cache** | Low | TrueNAS default sync writes are safe but slow. For large terra raster writes, consider `async` mount option with UPS |
+*Last verified against active repository code: 2026-10-06.*
