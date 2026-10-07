@@ -1,236 +1,130 @@
 <!-- docs/operations/OPERATOR_QUICKSTART.md -->
-# Operator Quickstart — Day-to-Day Sysadmin Runbook (HC-13)
-
-**Audience:** the on-call sysadmin / IT officer.
-**Status:** normative. One-page summary of *what to actually do* now that
-HC-13 (Adapt System, Not User Script) is encoded in the project.
-**Last updated:** 2026-05-09.
-
+---
+title: "BIOME-CALC Operator Quickstart"
+audience: operator
+status: current
+tier: T1
+source_path: docs/operations/OPERATOR_QUICKSTART.md
+last_verified: 2026-10-06
 ---
 
-## Responsibility Boundaries (HC-13 — read first, every time)
+# Operator Quickstart
 
-> *We adapt system → profile → fragments → env so that portable user R code
-> keeps working. **We do not patch user scripts.** When the system has been
-> exhausted and the failure persists, the clean-VM baseline (L4) proves
-> whether the residual issue is in the user's code or upstream.*
+## Operating boundary
 
-> **You do NOT customise the deployment per user script. You deploy the
-> node profile ONCE. You only run the diagnostic harness when there is
-> an incident ticket. When triage finds a system-side cause, the fix
-> lands in the system (fragment / Renviron / mount / cap) — never in the
-> user's `.R` file.**
+T1 host automation is authoritative. Fix the system, profile, fragments, environment, mounts or cgroups before considering user code. Never silently edit a researcher's `.R` file. Run one AD backend per host: SSSD **or** Samba/Winbind.
 
-If you ever feel tempted to edit a researcher's `.R`, stop and re-read
-the ordering invariant in `.ai/agents.md` §6.6.
+Current runtime facts:
 
----
+- `RPROFILE_VERSION="12.10"`;
+- `/etc/R/Rprofile.site` plus 14 lexical fragments in `/etc/R/Rprofile_site.d/`;
+- `libopenblas0-serial`, never pthread;
+- local ext4 `/Rtmp` (400 GB configured expectation);
+- NFS homes at `/nfs/home`; local user libraries at `/var/lib/biome-Rlibs/<user>/<R-major.minor>/`;
+- generic harness 1.4, Lussu overlay 1.6, profile health 2.0, environment troubleshooter 1.4.0.
 
-## TL;DR
-
-| Question | Answer |
-|---|---|
-| Do I customise scripts per user? | **No.** Per HC-13, never. |
-| Do I redeploy `50_setup_nodes.sh` for every new user script? | **No.** Deploy once per node. |
-| When do I run the diagnostic harness? | **Only on an incident ticket** ("my script hangs/crashes"). |
-| Where do fixes land? | In the **system** — Renviron, fragment, mount opt, cgroup. The user re-runs unchanged code. |
-| What if the system is innocent? | Escalate to L4 clean-VM, then L5 (user/upstream) **with evidence**. |
-
----
-
-## One-Time Deployment (per BIOME-CALC node)
-
-Run on each compute node, once, as root:
+## Start of shift
 
 ```bash
-cd /home/jfs/00_Antigravity_workspace/R-studioConf
+sudo bash scripts/99_health_check.sh
+sudo bash scripts/99_check_rprofile_health.sh --static-only
+systemctl is-active rstudio-server nginx ttyd botanical-telemetry
+findmnt -T /Rtmp
+findmnt -T /nfs/home
+```
+
+Check only the configured identity backend:
+
+```bash
+systemctl is-active sssd
+# OR
+systemctl is-active smbd winbind
+```
+
+## User says "RStudio will not start"
+
+```bash
+sudo bash scripts/99_troubleshoot_env.sh --rstudio --auth --test-user <user>
+sudo bash scripts/99_verify_domain_join.sh
+sudo bash scripts/99_check_rprofile_health.sh --user <user>
+journalctl -u rstudio-server -n 200 --no-pager
+```
+
+Do not run profile probes as root without `--user`; health 2.0 deliberately skips the runtime tier to avoid root-owned user directories.
+
+## User says "my script hangs/crashes"
+
+Run as the user against the unchanged script:
+
+```bash
+sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh --timeout 600 /path/to/user.R'
+```
+
+For the known terra/GDAL/mclapply pattern:
+
+```bash
+sudo su - <user> -c '/usr/local/bin/99_diagnose_lussu_hang.sh --timeout 1800 --progress-window 120 /path/to/user.R'
+```
+
+Read `/tmp/user_diag_<user>_<timestamp>/report.md` or `/tmp/lussu_diag_<user>_<timestamp>/report.md`.
+
+| Verdict | Action |
+|---|---|
+| L0 fails | Repair storage, cgroup, kernel or BLAS evidence. |
+| L3s passes, L3 fails | Personal startup files: preview `99_check_rprofile_health.sh --user <user> --fix`; apply only with `--commit`. |
+| L2 passes, L3s fails | Fragment regression: bisect `BIOME_DISABLE_FRAGMENTS`, patch T1, redeploy option 3. |
+| L1 passes, L2/L3s fail | Dispatcher/load contract. |
+| L3 is `PROGRESSING` | Increase timeout; no failure is proven. |
+| All production layers fail | Continue to the clean-VM L4 SOP. |
+| L3 passes with exit 4 | Infrastructure passed; report contains HIGH lint findings. Share evidence; do not auto-edit. |
+
+## Storage ticket
+
+```bash
+sudo bash scripts/99_troubleshoot_env.sh --storage --test-user <user>
+df -hT /Rtmp /nfs/home /mnt/ProjectStorage
+findmnt -T /Rtmp
+findmnt -T /nfs/home
+findmnt -T /mnt/ProjectStorage
+```
+
+- Home `EDQUOT` with free space in `df`: inspect TrueNAS ZFS `userquota` by numeric UID; see Troubleshooting §4.4.
+- `/mnt/ProjectStorage` direct write returns `Permission denied`: observed CIFS mount is root-owned (`uid=0,gid=0`, `0755`).
+- A stalled soft CIFS mount can return `EIO`; preserve that observation and escalate storage-side.
+
+## Known one-shot repairs
+
+```bash
+sudo bash scripts/fix_pam_segfault_inplace.sh --check
+sudo bash scripts/fix_pam_segfault_inplace.sh          # apply
+sudo bash scripts/fix_pam_segfault_inplace.sh --rollback
+
+sudo bash scripts/fix_login_script_rlibs_inplace.sh    # dry-run
+sudo bash scripts/fix_login_script_rlibs_inplace.sh --commit
+
+sudo bash scripts/tools/hotfix_smtp_site_overrides.sh --dry-run
+sudo bash scripts/tools/hotfix_smtp_site_overrides.sh
+```
+
+## Redeploy and verify
+
+```bash
 sudo bash scripts/50_setup_nodes.sh
-# Pick option H (HC-13 tools) — or run the full deploy, which now includes H.
+# 3 = profile/fragments/Renviron
+# L = local R libraries + NFS audit
+# H = minimal profile + harnesses
+sudo bash scripts/50_setup_nodes.sh --verify
+sudo bash scripts/99_check_rprofile_health.sh --static-only
 ```
 
-Verify:
+Restarting `rstudio-server` terminates sessions. Use a maintenance window.
 
-```bash
-ls -l /etc/R/Rprofile_minimal.R                       # bare-bones forensic profile
-ls -l /usr/local/bin/r_minimal /usr/local/bin/r_minimal_rscript
-ls -l /usr/local/bin/99_diagnose_user_script.sh
-ls -l /usr/local/bin/99_diagnose_lussu_hang.sh
-r_minimal -e 'biome_diag()'                           # smoke-test
-```
+## Do not
 
-| Path on node | Role |
-|---|---|
-| `/etc/R/Rprofile.site` | full production profile (`Rprofile_site.R` + `Rprofile_site.d/*`) |
-| `/etc/R/Rprofile_minimal.R` | minimal HC-13 forensic profile (L0/L1) |
-| `/etc/R/Renviron.site` | thread/BLAS caps, GDAL/POLARS, `TMPDIR=/Rtmp` |
-| `/Rtmp` | 400 GB ext4 — large R temp |
-| `/usr/local/bin/r_minimal` | runs `R` with `R_PROFILE_USER=Rprofile_minimal.R --no-site-file` |
-| `/usr/local/bin/r_minimal_rscript` | same, for `Rscript` |
-| `/usr/local/bin/99_diagnose_user_script.sh` | generic L0..L3 harness (v1.4: L3s isolates the user's startup files) |
-| `/usr/local/bin/99_diagnose_lussu_hang.sh` | Lussu pattern overlay (probes E/F/G) |
+- do not reference the broken sandbox as validation;
+- do not install pthread BLAS or move R temp to `/tmp`;
+- do not run both identity join scripts;
+- do not run `20_configure_rstudio.sh` options 1, 3, 4, 5 or 9 on a populated node while the hazards in `CHANGELOG.md` remain open;
+- do not treat a `touch` test as quota verification; use the 1 MiB+fsync test in `99_troubleshoot_env.sh`.
 
-After this, you do **not** redeploy unless a fragment changes.
-
----
-
-## The Three Day-to-Day Modes
-
-### Mode A — Happy path (95% of days)
-
-Researcher runs their `.R` against the production profile (`Rscript user.R`
-inside RStudio). It works. **You do nothing.** No per-script step.
-
-### Mode B — Incident ticket: "my script hangs / crashes"
-
-```bash
-# 1. Run the generic harness AS THE USER against their UNMODIFIED .R
-#    (it refuses root: cgroup slice, HOME and R_LIBS_USER must be theirs)
-sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh /path/to/user.R'
-
-# 2. Read the verdict
-less /tmp/user_diag_<user>_<ts>/report.md   # "## Verdict" names the layer + next step
-```
-
-Map the verdict to action via the table in
-`docs/operations/USER_SCRIPT_TROUBLESHOOTING.md` ("Verdict → action mapping").
-The fix lands **system-side**, or in the user's startup files, never in
-their `.R`:
-
-| Verdict | Where the fix lands |
-|---|---|
-| `L0 FAILED` (infra) | NFS mount opts, kernel/cgroup, BLAS pkg → re-run `50_setup_nodes.sh` for the affected step |
-| `L3 FAILED but L3s (…) PASSED` | the user's `~/.Renviron` / `~/.Rprofile` → `sudo bash scripts/99_check_rprofile_health.sh --user <user> --fix` (backed up, reversible) |
-| `L3s FAILED but L2 (all fragments off) PASSED` | a fragment in `templates/Rprofile_site.d/` → patch + redeploy that fragment |
-| `L3s+L2 FAILED, L1 PASSED` | dispatcher core in `templates/Rprofile_site.R.template` |
-| `L1, L2, L3s, L3 ALL FAILED` | escalate to L4 (`CLEAN_VM_BASELINE.md`) |
-| `ALL LAYERS PASSED` / `PRODUCTION LAYER L3 PASSED` | ask user for exact reproduction (inputs/args/env/exit code) |
-
-Then the user **re-runs their unchanged `.R`** and the ticket closes. No
-script edit was suggested.
-
-### Mode C — Pattern-specific overlay (when a known anti-pattern is suspected)
-
-Some failure shapes are recurrent enough to have a dedicated overlay that
-runs additional probes (PSOCK swap, `terraOptions(todisk=TRUE)`, …)
-against the **same unmodified** user script:
-
-```bash
-sudo su - <user> -c '/usr/local/bin/99_diagnose_lussu_hang.sh /path/to/user.R'
-# probe E = PSOCK swap of mclapply
-# probe F = terra todisk
-# probe G = allocator caps reach PSOCK workers (does not run the user script)
-# the user's .R is untouched: sibling .R shims source() it
-```
-
-If probe E or F passes while the generic L3 fails, the system-side fix is
-to default that behaviour in a fragment (`50_pkg_hooks.R.template` for
-terra; documented PSOCK launcher for fork+NFS) — never to ask the
-researcher to rewrite their code.
-
----
-
-## Worked Example — Martina's NIMBLE Parallel Chains
-
-**Ticket shape:** "NIMBLE MCMC with N parallel chains hangs / OOMs / crashes
-mid-run."
-
-**Step 0 — do NOT touch the script.** Run the generic harness:
-
-```bash
-sudo su - martina -c '/usr/local/bin/99_diagnose_user_script.sh /home/martina/run_chains.R'
-```
-
-While it runs, the likely surfaces map to **existing** system knobs:
-
-| Likely surface | Where in the system it is already controlled |
-|---|---|
-| NIMBLE C++ compilation needs lots of temp space | `Renviron.template` sets `TMPDIR=/Rtmp` (400 GB ext4); not `/tmp` |
-| User doesn't `setwd()` to a writable dir before MCMC | `templates/Rprofile_site.d/60_safe_setwd.R.template` enforces a fallback |
-| BLAS threads × N chains overload CPU/RAM | `templates/Rprofile_site.d/05_thread_guard.R.template` caps `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`; OpenBLAS-serial is the installed BLAS (HC-§6.1) |
-| Per-chain memory guards (large posterior samples) | `templates/Rprofile_site.d/45_memory_guards.R.template` caps `future.globals.maxSize`, ulimits, `R_MAX_VSIZE` |
-| `parallel::detectCores()` returns hyperthreads → too many chains | `45_memory_guards` / NIMBLE conventions: use `parallel::detectCores(logical=FALSE)` (HC-§6.5) |
-| Forked workers + NFS lock contention | overlay probe E (`99_diagnose_lussu_hang.sh`) — PSOCK swap |
-
-**If verdict says `L3s FAILED but L2 (all fragments off) PASSED`:**
-Bisect with `BIOME_DISABLE_FRAGMENTS="45"` then `"05"` then `"50"`, etc.,
-keeping the L3s isolation (`R_ENVIRON_USER=` + `Rscript --no-init-file`).
-The guilty fragment gets patched in `templates/Rprofile_site.d/`,
-redeployed via `50_setup_nodes.sh`, and Martina re-runs her **unchanged**
-script.
-
-**If verdict says `L3 FAILED but L3s (…) PASSED`:** the culprit is in
-Martina's own `~/.Renviron` / `~/.Rprofile` (e.g. a thread or `mc.cores`
-override). `sudo bash scripts/99_check_rprofile_health.sh --user martina --fix`
-shows the repair plan; apply it with her OK. Her `.R` stays untouched.
-
-**If verdict says `ALL LAYERS PASSED` but Martina still reports an issue:**
-Ask her for exact inputs (seed, N chains, iterations, model file) so the
-harness can reproduce. *Then* — only if L0+L1+L2+L3s+L3+L4 all clear — is a
-user-script suggestion admissible per the HC-13 ordering invariant, and
-**only with cited evidence** (`.ai/agents.md` §6.6).
-
----
-
-## What you write back to the user
-
-Templates from `USER_SCRIPT_TROUBLESHOOTING.md`:
-
-- **System-side fix landed (L0..L3):**
-  *"Your script ran into a system-level issue (`<short reason>`). We have
-  adapted the system. Please re-run; no changes to your code are needed."*
-
-- **The user's startup files (L3s PASS + L3 FAIL):**
-  *"Your script works with the server's standard configuration and fails
-  only with your personal startup files (`<setting>`). With your OK we will
-  fix or set them aside — backed up, reversible. Your `.R` is not touched."*
-
-- **Clean-VM reproduces (L4):**
-  *"We reproduced your failure on a clean reference VM. Minimal reproducer
-  attached, kernel stack attached. Could you confirm and consider an
-  upstream report?"*
-
-- **User-script bug with evidence (L5):**
-  *"Reproduces in isolation against `<pkg>@<ver>` on stock R. We propose
-  `<patch>` for **your** review — we will not change your file without
-  your OK."*
-
-You **never** prescribe a code change at L0..L3.
-
----
-
-## Quick command reference
-
-```bash
-# system smoke-test (no user script)
-r_minimal -e 'biome_diag(); biome_nfs_check(); biome_fork_probe()'
-
-# attach to a hanging session
-pgrep -f 'user.R' | head
-r_minimal -e 'biome_hang_diag(c(<pid1>,<pid2>))'
-r_minimal -e 'biome_worker_tail()'
-
-# generic harness on a ticket (as the user — it refuses root)
-sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh /path/to/user.R'
-
-# pattern overlay (mclapply + terra + NFS)
-sudo su - <user> -c '/usr/local/bin/99_diagnose_lussu_hang.sh /path/to/user.R'
-
-# binary bisection of fragments by hand (same isolation as L2/L3s)
-R_ENVIRON_USER= BIOME_DISABLE_FRAGMENTS="45,50" Rscript --no-init-file /path/to/user.R
-
-# the user's own startup files (verdict L3s PASS + L3 FAIL)
-sudo bash scripts/99_check_rprofile_health.sh --user <user> --fix
-
-# package drift (surface 6)
-Rscript scripts/tools/r_pkg_drift_detector.R
-```
-
----
-
-## See also
-
-- `docs/operations/USER_SCRIPT_TROUBLESHOOTING.md` — full decision tree, verdict→action mapping, forensic helpers.
-- `docs/operations/LUSSU_HANG_BISECTION.md` — worked example (mclapply + terra + NFS).
-- `docs/operations/CLEAN_VM_BASELINE.md` — L4 reference VM SOP.
-- `docs/architecture/USER_CONTRACT.md` — what "portable R" means at the input boundary.
-- `.ai/agents.md` §6.6 — HC-13 architectural rule + ordering invariant.
+**Unverified:** live service state, mount options and TrueNAS quota values are not represented by repository files; collect them from the affected host.

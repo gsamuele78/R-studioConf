@@ -1,145 +1,144 @@
 <!-- docs/README.md -->
-# BIOME-CALC / R-studioConf — Documentation Index
+# BIOME-CALC / R-studioConf Documentation
 
-Welcome to the technical documentation library for **BIOME-CALC**
-(RStudio Server + Nginx Portal + OIDC/SSSD/Samba), the host-tier (T1)
-authoritative deployment of the *botanical big-data calculus* platform.
+This is the role-indexed map of the documentation tree as of 2026-10-06.
 
-> **Tier model.**
-> **T1 = host (this repo)** — `AUTHORITATIVE_CONTINUOUSLY_FIXED`.
-> T2 = `docker-deploy/` — mirror of T1, migration in progress.
-> T3 = `kubernetes-deploy/` — skeleton, not production-ready.
-> Bugs are fixed in **T1 first**, then ported forward.
+| Tier | Current status |
+|---|---|
+| T1 host | `AUTHORITATIVE_CONTINUOUSLY_FIXED` |
+| T2 `docker-deploy/` | `MIGRATION_IN_PROGRESS` |
+| T3 `kubernetes-deploy/` | `SKELETON_NOT_READY` |
 
----
+Fixes originate in T1 and are ported forward T1 -> T2 -> T3. `RPROFILE_VERSION` is 12.10. The sandbox is known broken. `src/biome_core_rust` is dormant.
 
-## 🧭 Read me first by role
+## Start by role
 
-| If you are…                                | Start here                                                                                                                                            |
-|--------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 👤 **End-user / botanist** (just want to run R) | [`user_guides/BOTANIST_CHEATSHEET.md`](user_guides/BOTANIST_CHEATSHEET.md) → [`user_guides/User_guide.md`](user_guides/User_guide.md)                  |
-| 🧑‍💻 **Sysadmin** deploying or upgrading a host | [`deployment/INSTALLATION_GUIDE.md`](deployment/INSTALLATION_GUIDE.md) → [`deployment/CONFIGURATION_REFERENCE.md`](deployment/CONFIGURATION_REFERENCE.md) |
-| 🛠️ **Operator** doing day-2 work                 | [`operations/OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md) → [`operations/TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md)            |
-| 🚨 **On-call / incident**                       | [`operations/DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md) → [`operations/USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) |
-| 🧱 **Developer** changing scripts / templates   | [`developer/README.md`](developer/README.md) → [`reference/SCRIPT_CATALOG.md`](reference/SCRIPT_CATALOG.md)                                            |
-| 🏗️ **Architect** evaluating the design         | [`architecture/SYSTEM_OVERVIEW.md`](architecture/SYSTEM_OVERVIEW.md) → [`architecture/architecture_analysis.md`](architecture/architecture_analysis.md) |
+| Role | Start here |
+|---|---|
+| Researcher/end user | [`user_guides/BOTANIST_CHEATSHEET.md`](user_guides/BOTANIST_CHEATSHEET.md), then [`user_guides/COMMON_PROBLEMS.md`](user_guides/COMMON_PROBLEMS.md) and [`user_guides/User_guide.md`](user_guides/User_guide.md) |
+| Host deployer | [`deployment/INSTALLATION_GUIDE.md`](deployment/INSTALLATION_GUIDE.md), [`deployment/CONFIGURATION_REFERENCE.md`](deployment/CONFIGURATION_REFERENCE.md) |
+| Day-2 operator | [`operations/OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md), [`operations/MAINTENANCE.md`](operations/MAINTENANCE.md) |
+| Incident responder | [`operations/DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md), [`operations/TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md), [`operations/USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) |
+| Developer | [`developer/README.md`](developer/README.md), [`reference/SCRIPT_CATALOG.md`](reference/SCRIPT_CATALOG.md) |
+| Architect | [`architecture/SYSTEM_OVERVIEW.md`](architecture/SYSTEM_OVERVIEW.md), [`architecture/SECURITY_MODEL.md`](architecture/SECURITY_MODEL.md), [`FUTURE_MIGRATION.md`](FUTURE_MIGRATION.md) |
+| Documentation/wiki publisher | [`SHAREPOINT_PUBLICATION.md`](SHAREPOINT_PUBLICATION.md), then generated output under `wiki/` |
 
----
+## Complete file map
 
-## 📚 Full Documentation Tree
+Descriptions state each file's role. They do not imply that every document has passed the 2026-10-06 code audit; consult [`DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md) and verify operational claims against code.
 
-### 1. Architecture (`architecture/`)
+### Top level
 
-- [`SYSTEM_OVERVIEW.md`](architecture/SYSTEM_OVERVIEW.md) — high-level component diagram, data flow.
-- [`SECURITY_MODEL.md`](architecture/SECURITY_MODEL.md) — auth flows, isolation, Nginx hardening.
-- [`USER_CONTRACT.md`](architecture/USER_CONTRACT.md) — formal HC-13 ("adapt the system, not the user script").
-- [`architecture_analysis.md`](architecture/architecture_analysis.md) — cgroup model, CORETYPE, threading rationale.
-- [`rstudio_cluster_evolution_pki_iam_ood.md`](architecture/rstudio_cluster_evolution_pki_iam_ood.md) — future-architecture analysis (PKI, IAM, Open OnDemand, Positron).
-- [`rstudio_positron_june_2026_capability_audit.md`](architecture/rstudio_positron_june_2026_capability_audit.md) — RStudio OSS / Positron capability audit (June 2026).
+- [`README.md`](README.md) — this role and file index.
+- [`FUTURE_MIGRATION.md`](FUTURE_MIGRATION.md) — current T1/T2/T3 maturity, tier deltas, blockers, and conditional future work.
+- [`DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md) — hand-maintained documentation remediation register; its last full audit predates this index refresh.
+- [`SHAREPOINT_PUBLICATION.md`](SHAREPOINT_PUBLICATION.md) — SharePoint publication process.
 
-### 2. Component Guides (`components/`)
+### Architecture (`architecture/`)
 
-- [`NGINX_GATEWAY.md`](components/NGINX_GATEWAY.md) — Nginx reverse proxy configuration, proxy buffer tuning for RStudio sessions.
-- [`PORTAL_FRONTEND.md`](components/PORTAL_FRONTEND.md) — glassmorphism landing page, OAuth2 proxy integration.
-- [`SERVICES_INTEGRATION.md`](components/SERVICES_INTEGRATION.md) — RStudio Server, SSSD/Samba, OAuth2 proxy, telemetry, Ollama wiring.
+- [`SYSTEM_OVERVIEW.md`](architecture/SYSTEM_OVERVIEW.md) — system components and data flow.
+- [`SECURITY_MODEL.md`](architecture/SECURITY_MODEL.md) — trust boundaries, authentication, and isolation.
+- [`USER_CONTRACT.md`](architecture/USER_CONTRACT.md) — HC-13 system/user-code responsibility boundary.
+- [`architecture_analysis.md`](architecture/architecture_analysis.md) — detailed host/runtime design analysis.
+- [`rstudio_cluster_evolution_pki_iam_ood.md`](architecture/rstudio_cluster_evolution_pki_iam_ood.md) — future architecture analysis for PKI, IAM, and Open OnDemand.
+- [`rstudio_positron_june_2026_capability_audit.md`](architecture/rstudio_positron_june_2026_capability_audit.md) — RStudio/Positron capability assessment.
 
-### 3. Deployment (`deployment/`)
+### Archive subsystem (`archiver/`)
 
-- [`INSTALLATION_GUIDE.md`](deployment/INSTALLATION_GUIDE.md) — Ubuntu 24.04 from scratch, all 5 phases.
-- [`CONFIGURATION_REFERENCE.md`](deployment/CONFIGURATION_REFERENCE.md) — thin wrapper around `reference/CONFIGURATION_MAP.md`.
-- [`PAM_HARDENING.md`](deployment/PAM_HARDENING.md) — PAM segfault root cause + fix scripts (`13_harden_pam_password.sh`, `fix_pam_segfault_inplace.sh`).
-- [`COMPOSE_OPERATOR_RUNBOOK.md`](deployment/COMPOSE_OPERATOR_RUNBOOK.md) — T2 docker compose runbook.
-- [`TIER_PROMOTION.md`](deployment/TIER_PROMOTION.md) — promoting fixes T1 → T2 → T3.
+- [`BIOME_Admin_Guide.md`](archiver/BIOME_Admin_Guide.md) — code-backed T1 archive discovery and archive-manager operations.
+- [`BIOME_Guida_Archiviazione.docx`](archiver/BIOME_Guida_Archiviazione.docx) — hand-maintained Italian Word guide; it is not generated by the wiki build.
 
-### 4. Operations (`operations/`)
+### Audits (`audits/`)
 
-- [`OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md) — one-page cheat-sheet for day-2.
-- [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed runbook (RStudio, PAM, identity, storage, nginx, telemetry, escalation).
-- [`DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md) — every `99_*.sh` / `fix_*.sh` (When / Mutates / Output / NextStep) + decision tree.
-- [`MAINTENANCE.md`](operations/MAINTENANCE.md) — daily / weekly / monthly / quarterly tasks, R-version bump, AD rotation, rollback.
-- [`UPGRADE_TO_v12.4.md`](operations/UPGRADE_TO_v12.4.md) — Rprofile v12.4 upgrade runbook (Lussu fork-guard + NFS lookup-storm fix).
-- [`USER_QUOTAS_AND_RESOURCES.md`](operations/USER_QUOTAS_AND_RESOURCES.md) — RAM/CPU/scratch quotas, cgroup user slices, systemd resource controls.
-- [`USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) — debugging user R scripts without editing them (HC-13 compliant).
-- [`LUSSU_HANG_BISECTION.md`](operations/LUSSU_HANG_BISECTION.md) — `mclapply`-on-`terra::rast` hang bisection (worked example).
-- [`CLEAN_VM_BASELINE.md`](operations/CLEAN_VM_BASELINE.md) — clean-baseline VM template procedure (L4 reference).
-- [`add_storage_no_reboot.md`](operations/add_storage_no_reboot.md) — hot-add NFS/disk.
-- [`diagnostic_logs.md`](operations/diagnostic_logs.md) — log location reference.
-- [`sysadmin_troubleshooting_guide.md`](operations/sysadmin_troubleshooting_guide.md) — long-form sysadmin handbook.
+- [`T1_HOST_DEPLOYMENT_AUDIT.md`](audits/T1_HOST_DEPLOYMENT_AUDIT.md) — living T1 defect register with 2026-10-06 re-check status and fixing commits.
 
-### 5. Reference (`reference/`)
+### Components (`components/`)
 
-- [`SCRIPT_CATALOG.md`](reference/SCRIPT_CATALOG.md) — complete inventory of `scripts/`, `lib/`, `init.sh`, `r_env_manager.sh`, `Makefile`.
-- [`CONFIGURATION_MAP.md`](reference/CONFIGURATION_MAP.md) — every `*.vars.conf` + `r_env_manager.conf` + `scopri_progetti_known.conf` + admin/email maps.
-- [`TEMPLATE_GALLERY.md`](reference/TEMPLATE_GALLERY.md) — current vs. legacy templates, modular `Rprofile_site.d/` chain, nginx, identity, orphan-cleanup, Proxmox.
-- [`NGINX_AUTH_BACKENDS.md`](reference/NGINX_AUTH_BACKENDS.md) — SSSD vs. Samba PAM integration deep-dive.
-- [`Rprofile_site.CHANGELOG.md`](reference/Rprofile_site.CHANGELOG.md) — `Rprofile_site` version history (R-runtime profile only).
+- [`NGINX_GATEWAY.md`](components/NGINX_GATEWAY.md) — Nginx gateway and RStudio proxy behavior.
+- [`PORTAL_FRONTEND.md`](components/PORTAL_FRONTEND.md) — portal frontend and UI integration.
+- [`SERVICES_INTEGRATION.md`](components/SERVICES_INTEGRATION.md) — service wiring across identity, RStudio, gateway, telemetry, and optional services.
 
-> **Repo-wide changelog:** the general change history lives at the repository root,
-> [`../CHANGELOG.md`](../CHANGELOG.md) (Keep a Changelog). The `Rprofile_site` log
-> above is scoped to `RPROFILE_VERSION` bumps only (HC-14 / rule 18).
+### Deployment (`deployment/`)
 
-### 6. Developer (`developer/`)
+- [`INSTALLATION_GUIDE.md`](deployment/INSTALLATION_GUIDE.md) — T1 host installation sequence.
+- [`CONFIGURATION_REFERENCE.md`](deployment/CONFIGURATION_REFERENCE.md) — operator-facing configuration reference.
+- [`PAM_HARDENING.md`](deployment/PAM_HARDENING.md) — PAM hardening and segfault-remediation context.
+- [`COMPOSE_OPERATOR_RUNBOOK.md`](deployment/COMPOSE_OPERATOR_RUNBOOK.md) — T2 Docker Compose operations.
+- [`TIER_PROMOTION.md`](deployment/TIER_PROMOTION.md) — T1 -> T2 -> T3 promotion rules.
 
-- [`README.md`](developer/README.md) — developer onboarding.
-- [`SCRIPTS_REFERENCE.md`](developer/SCRIPTS_REFERENCE.md) — code-level script reference.
-- [`LIBRARY_REFERENCE.md`](developer/LIBRARY_REFERENCE.md) — `lib/common_utils.sh`, `lib/biome-portal.js`.
-- [`TEMPLATES_REFERENCE.md`](developer/TEMPLATES_REFERENCE.md) — template authoring rules.
-- [`CONFIGURATION_REFERENCE.md`](developer/CONFIGURATION_REFERENCE.md) — adding new `.vars.conf` keys.
-- [`git_submodule_workflow.md`](developer/git_submodule_workflow.md) — Infra-Iam-PKI submodule rules.
+### Developer (`developer/`)
 
-### 7. User Guides (`user_guides/`)
+- [`README.md`](developer/README.md) — developer entry point and active invariants.
+- [`CONFIGURATION_REFERENCE.md`](developer/CONFIGURATION_REFERENCE.md) — committed configuration and site-overlay developer contract.
+- [`LIBRARY_REFERENCE.md`](developer/LIBRARY_REFERENCE.md) — exact `lib/common_utils.sh` API.
+- [`SCRIPTS_REFERENCE.md`](developer/SCRIPTS_REFERENCE.md) — script inventory, roles, versions, and known compliance gaps.
+- [`TEMPLATES_REFERENCE.md`](developer/TEMPLATES_REFERENCE.md) — active and retained templates, rendering methods, and destinations.
+- [`git_submodule_workflow.md`](developer/git_submodule_workflow.md) — current downstream-consumer workflow; the repo has no submodules.
 
-- [`BOTANIST_CHEATSHEET.md`](user_guides/BOTANIST_CHEATSHEET.md) — **start here** as an end-user (1 page, 10 rules).
-- [`User_guide.md`](user_guides/User_guide.md) — full Italian-language HPC guide for researchers.
-- [`understanding_the_new_server.md`](user_guides/understanding_the_new_server.md) — why the server behaves as it does.
-- [`PARALLEL_R_DOS_AND_DONTS.md`](user_guides/PARALLEL_R_DOS_AND_DONTS.md) — safe parallel R patterns on BIOME-CALC.
-- [`large_spatial_matrices.md`](user_guides/large_spatial_matrices.md) — `terra` / `sf` workflows for > 50 GB rasters.
-- [`NIMBLE_User_Guide.md`](user_guides/NIMBLE_User_Guide.md) — parallel MCMC on BIOME-CALC.
-- [`SERVER_NATIVE_API.md`](user_guides/SERVER_NATIVE_API.md) — `biome_*()` helpers (advanced users).
-- [`rstudio_session_isolation.md`](user_guides/rstudio_session_isolation.md) — how RStudio sessions are isolated.
-- [`risposta_ricercatore_sessioni_rstudio.md`](user_guides/risposta_ricercatore_sessioni_rstudio.md) — Italian-language session FAQ.
+### Operations (`operations/`)
 
-### 8. Specialised guides
+- [`OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md) — day-2 quick reference.
+- [`MAINTENANCE.md`](operations/MAINTENANCE.md) — periodic maintenance schedule and procedures.
+- [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed troubleshooting.
+- [`DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md) — diagnostic and repair-tool index.
+- [`USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) — HC-13 diagnostic ladder for unchanged user R scripts.
+- [`rstudio_session_isolation.md`](operations/rstudio_session_isolation.md) — why RStudio Server OSS allows one session per user across nodes (investigation record).
+- [`risposta_ricercatore_sessioni_rstudio.md`](operations/risposta_ricercatore_sessioni_rstudio.md) — Italian reply sent to a researcher on the same topic (internal record).
+- [`LUSSU_HANG_BISECTION.md`](operations/LUSSU_HANG_BISECTION.md) — worked hang-bisection case.
+- [`CLEAN_VM_BASELINE.md`](operations/CLEAN_VM_BASELINE.md) — L4 clean-VM baseline procedure; this is distinct from the broken Vagrant sandbox.
+- [`USER_QUOTAS_AND_RESOURCES.md`](operations/USER_QUOTAS_AND_RESOURCES.md) — cgroup, memory, CPU, and scratch-resource behavior.
+- [`UPGRADE_TO_v12.4.md`](operations/UPGRADE_TO_v12.4.md) — historical v12.4 upgrade runbook; current Rprofile version is 12.10.
+- [`add_storage_no_reboot.md`](operations/add_storage_no_reboot.md) — storage hot-add procedure.
+- [`diagnostic_logs.md`](operations/diagnostic_logs.md) — log-location reference.
+- [`sysadmin_troubleshooting_guide.md`](operations/sysadmin_troubleshooting_guide.md) — long-form sysadmin troubleshooting guide.
+- [`NGINX_AUTH_PAM_REGRESSION_2026-06.md`](operations/NGINX_AUTH_PAM_REGRESSION_2026-06.md) — June 2026 Nginx/PAM regression record.
 
-- [`archiver/BIOME_Admin_Guide.md`](archiver/BIOME_Admin_Guide.md) — long-term archive admin guide.
-- [`orphan_cleanup/BIOME_Orphan_Cleanup_Guide.md`](orphan_cleanup/BIOME_Orphan_Cleanup_Guide.md) — orphan-file cleanup playbook.
+### Orphan cleanup (`orphan_cleanup/`)
 
-### 9. Roadmap
+- [`BIOME_Orphan_Cleanup_Guide.md`](orphan_cleanup/BIOME_Orphan_Cleanup_Guide.md) — deployed cleanup, notification, report, cron, and current implementation cautions.
 
-- [`FUTURE_MIGRATION.md`](FUTURE_MIGRATION.md) — OIDC, Kubernetes, Ansible adoption path.
+### Reference (`reference/`)
 
-### 10. Meta
+- [`SCRIPT_CATALOG.md`](reference/SCRIPT_CATALOG.md) — repository script catalog.
+- [`CONFIGURATION_MAP.md`](reference/CONFIGURATION_MAP.md) — configuration ownership and variable map.
+- [`TEMPLATE_GALLERY.md`](reference/TEMPLATE_GALLERY.md) — template inventory and examples.
+- [`NGINX_AUTH_BACKENDS.md`](reference/NGINX_AUTH_BACKENDS.md) — SSSD versus Samba/Winbind Nginx/PAM integration.
+- [`Rprofile_site.CHANGELOG.md`](reference/Rprofile_site.CHANGELOG.md) — Rprofile version history required by HC-14.
 
-- [`DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md) — central audit register tracking documentation status and remediation actions.
+The repository-wide change history is [`../CHANGELOG.md`](../CHANGELOG.md).
 
----
+### User guides (`user_guides/`)
 
-## 🔒 Hard Rules (HC-01..HC-15 — read before contributing)
+- [`BOTANIST_CHEATSHEET.md`](user_guides/BOTANIST_CHEATSHEET.md) — shortest researcher entry point.
+- [`COMMON_PROBLEMS.md`](user_guides/COMMON_PROBLEMS.md) — common researcher problems: what you see, why, what to do, when to contact the admins.
+- [`User_guide.md`](user_guides/User_guide.md) — full Italian researcher guide.
+- [`understanding_the_new_server.md`](user_guides/understanding_the_new_server.md) — "How BIOME-CALC works for you": login, where files go, shared resources.
+- [`PARALLEL_R_DOS_AND_DONTS.md`](user_guides/PARALLEL_R_DOS_AND_DONTS.md) — supported parallel R patterns.
+- [`large_spatial_matrices.md`](user_guides/large_spatial_matrices.md) — large spatial/matrix workload guidance.
+- [`NIMBLE_User_Guide.md`](user_guides/NIMBLE_User_Guide.md) — NIMBLE/MCMC guidance.
+- [`SERVER_NATIVE_API.md`](user_guides/SERVER_NATIVE_API.md) — server-provided R helpers (power users and admins; published in the Operations hub).
 
-The full list lives in `.clinerules` / `.cursorrules` / `.windsurfrules`
-at the repo root, and in `.ai/project.yml`. The most consequential for documentation:
+### Generated SharePoint wiki output (`wiki/`)
 
-- **HC-13** — Adapt the system to portable user R code; **never silently
-  patch user scripts**. Fixes go in `Rprofile_site.d/`, `Renviron`,
-  cgroups, PAM — never in a `.R` written by the researcher.
-- **HC-03** — Fix in T1 first, then port forward T1 → T2 → T3. Do not
-  document a workaround in T2/T3 that masks a T1 defect.
-- **HC-08** — `.env` files are never committed; templates use
-  `%%PLACEHOLDERS%%` only.
-- **HC-14** — `RPROFILE_VERSION` bumps must land with matching CHANGELOG
-  section + cross-doc references in the same commit.
+`docs/wiki/` holds generated DOCX files for the SharePoint wiki, built by `scripts/tools/build_wiki_docx.sh` from [`wiki/manifest.tsv`](wiki/manifest.tsv) (see [`SHAREPOINT_PUBLICATION.md §3.2`](SHAREPOINT_PUBLICATION.md)). Generated files are outputs, not hand-edited source documentation.
 
----
+## Hard constraints relevant to documentation
 
-## 🛠️ Maintenance of this index
+The authoritative list is HC-01 through HC-15 in [`../.ai/project.yml`](../.ai/project.yml).
 
-- This file is hand-edited; there is no generator.
-- After adding/removing a document under `docs/`, **update the tree
-  above** and the by-role table.
-- Keep cross-references **relative** (`operations/X.md`), never absolute.
-- The single Italian-language page is `user_guides/User_guide.md` —
-  intentional, not a translation gap.
+- HC-03: all scripts begin with `set -euo pipefail`.
+- HC-08: `.env` files are not committed, except sanitized sandbox examples allowed by policy.
+- HC-11: no external font/CSS CDN calls in UI themes.
+- HC-13: adapt the system to portable user R code; never silently patch researcher scripts.
+- HC-14: every `RPROFILE_VERSION` bump includes its changelog and cross-document updates.
+- HC-15: R/RStudio versions and defaults map to canonical configuration sources.
 
----
+Tier promotion is a project rule, not HC-03. Template placeholders are not governed by HC-08.
 
-*Last full audit: 2026-06-08 — see `DOCUMENTATION_AUDIT.md` for detailed status.*
+## Maintaining this index
+
+- Add every new file under `docs/` here in the same change.
+- Keep links relative.
+- Distinguish current operations, historical runbooks, future analysis, and generated output.
+- Do not present the broken sandbox, dormant Rust core, T2, or T3 as production-ready.
+

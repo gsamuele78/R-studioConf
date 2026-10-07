@@ -1,400 +1,333 @@
-🌿 Guida Ufficiale: Calcolo ad Alte Prestazioni (HPC) sul Server BIOME-CALC
-Benvenuti sul nuovo server BIOME-CALC! Questa macchina è stata ingegnerizzata per offrirvi 450 GB di RAM e 128 processori per spingere al massimo i vostri modelli botanici, ecologici e spaziali.
+---
+title: "Guida BIOME-CALC per ricercatori (italiano)"
+audience: researcher
+status: current
+source_path: docs/user_guides/User_guide.md
+last_verified: 2026-10-07
+sharepoint_section: Researcher Hub
+---
+<!-- docs/user_guides/User_guide.md -->
+# Guida BIOME-CALC per ricercatori
 
-Essendo un server di livello enterprise (HPC), si comporta in modo diverso dal vostro computer portatile o dai server di vecchia generazione. Questa guida vi spiegherà come strutturare il vostro codice R per farlo letteralmente "volare", evitando disconnessioni, crash e blocchi.
+BIOME-CALC è il server RStudio condiviso del laboratorio, pensato per raster
+grandi, statistica spaziale e modelli bayesiani. Questa guida spiega cosa
+cambia rispetto al vostro portatile e come scrivere codice R che qui gira
+bene. Le stesse informazioni, più dettagliate, sono nelle guide in inglese
+(*User Guide* e *Common Problems and Solutions*).
 
-**🔧 Strumento di diagnostica rapida:** Se avete problemi con i grafici che non compaiono nel pannello "Plots" di RStudio, eseguite nella console:
+**In una frase:** se il vostro script gira sul vostro portatile, gira anche
+qui. Non serve, e non va aggiunto, codice specifico per il server.
 
+---
+
+## 1. Entrare nel server
+
+1. Aprite nel browser l'indirizzo del portale che vi hanno dato gli admin.
+2. Inserite **una sola volta** nome utente e password di Ateneo.
+3. Nel portale trovate le tessere:
+   - **RStudio** — il vostro RStudio, nel browser;
+   - **Terminal** — una riga di comando sul server (per `tmux`, `Rscript`, `git`);
+   - **Files** — caricamento di file dal vostro PC, se attivo sul vostro nodo.
+4. Cliccate su RStudio: non vi viene chiesta di nuovo la password.
+
+Non servono VPN né client SSH. Non condividete la password con colleghi:
+ognuno usa il proprio account.
+
+**Una sessione per persona.** Potete avere una sola sessione R alla volta.
+Se aprite RStudio in un secondo browser o su un secondo server, la prima
+finestra si scollega con il messaggio *"another browser connected"*. Il
+lavoro non è perso: la seconda finestra mostra la stessa sessione. È un
+limite della versione gratuita di RStudio Server, non un guasto.
+
+**La sessione vi aspetta.** Se chiudete il browser, la sessione R resta
+attiva sul server per circa 48 ore. Dopo 48 ore di inattività viene chiusa.
+
+---
+
+## 2. Dove salvare i file
+
+| Posto | Che cos'è | Per cosa | Attenzione |
+|---|---|---|---|
+| Cartella home (`~`) | Spazio di rete, uguale su tutti i server | Script, dati di partenza, risultati finali | Ha un **limite personale di spazio**; leggere migliaia di piccoli file è lento |
+| `tempdir()` / `tempfile()` | Disco veloce da 400 GB dentro il server (`/Rtmp`) | File intermedi, pezzi di calcolo, file temporanei dei raster | Cancellato in automatico circa **48 ore** dopo l'ultimo uso; non è visibile dagli altri server |
+| `/mnt/ProjectStorage` | Archivio condiviso dei progetti | Condividere dati nel progetto | Il permesso di scrittura è dato per progetto |
+| `/tmp` | Piccola cartella di sistema | Niente | File grandi qui possono far cadere la sessione |
+
+Non serve mai scrivere `/Rtmp`: `tempdir()` e `tempfile()` puntano già lì,
+così lo stesso codice funziona anche sul portatile.
+
+```r
+saveRDS(risultato_intermedio, file.path(tempdir(), "pezzo_01.rds"))  # veloce, temporaneo
+saveRDS(risultato_finale, "~/progetto/risultati/finale.rds")          # da conservare
 ```
-source("/home/jfs/00_Antigravity_workspace/R-studioConf/scripts/99_diagnose_rstudio_plot_pane.R")
-```
 
-Questo script analizza la vostra sessione e vi dice esattamente cosa non funziona. Per un test completo dei grafici (mappe botaniche realistiche dell'Italia + benchmark del server), usate:
+---
 
-```
-source("/home/jfs/00_Antigravity_workspace/R-studioConf/scripts/99_botanical_plot_stress_test.R")
-```
+## 3. Memoria e processori condivisi
 
-1. Grafici in Background (La sindrome del "Pittore Bendato")
+Molte persone usano il server insieme, quindi ognuno ha una **quota equa**
+di memoria e processori. La quota cresce quando il server è libero e cala
+quando è pieno.
 
-**⚠️ IMPORTANTE: Questo NON è un bug del server.** È il comportamento normale di qualsiasi processo senza interfaccia grafica (Rscript, cron job, background job). I grafici interattivi (`plot()`, `print(ggplot)`) funzionano SOLO dentro RStudio perché usano un canale speciale chiamato RStudioGD che comunica direttamente con il vostro browser.
+- `parallel::detectCores()` restituisce **la vostra** quota: scrivete sempre
+  `makeCluster(parallel::detectCores() - 1)`, mai un numero fisso.
+- `status()` mostra memoria, processori e disco veloce disponibili adesso.
+- Le librerie matematiche usano un thread per processo, così il codice
+  parallelo non sovraccarica il server. Non dovete impostare variabili sui
+  thread.
 
-Quando lanciate un calcolo parallelo o un lavoro in background, quei processi non hanno uno schermo (sono "headless"). Se il vostro script finisce con `plot(dati)` o `print(mio_ggplot)`, il server ignorerà il comando o andrà in errore, e il grafico andrà perduto.
+**Avvisi prima del crash.** Alcune funzioni (`solve()`, `dist()`, `outer()`,
+`expand.grid()`) su dati grandi possono chiedere più memoria di quella che
+c'è. Prima di eseguirle il server stima la memoria necessaria e stampa un
+avviso `BIOME-CALC:` con un'alternativa (per esempio `Matrix::Cholesky()` o
+metodi sparsi). Leggetelo prima di proseguire: se la memoria finisce
+davvero, la sessione R viene chiusa e si perde tutto ciò che non era salvato.
 
-**Come faccio a sapere se il mio pannello Plots funziona?**
-Aprite RStudio e copiate questo nella console:
+---
 
-```
-plot(1, 1, main = "Test: il grafico appare nel pannello Plots?")
-```
+## 4. Le dieci abitudini
 
-Se vedete il punto nel pannello "Plots" (in basso a destra) → tutto OK.
-Se NON lo vedete → eseguite lo script di diagnostica:
+1. **Processori:** `parallel::detectCores()`, mai un numero fisso.
+2. **Thread delle librerie matematiche:** non scrivete niente
+   (niente `OPENBLAS_NUM_THREADS`, niente `blas_set_num_threads()`).
+3. **File temporanei:** `tempfile()` e `tempdir()`, mai `/tmp`.
+4. **Stan / cmdstanr / brms:** lasciate le impostazioni predefinite; non
+   mandate l'output nella home.
+5. **NIMBLE / TMB:** lasciate le impostazioni predefinite; la compilazione
+   avviene già sul disco veloce.
+6. **Raster grandi:** fidatevi di `terra` e `sf`; non alzate `memfrac` o
+   `threads` in `terraOptions()`.
+7. **`~/.Rprofile`:** solo impostazioni estetiche (prompt, cifre, colori),
+   mai thread, `mc.cores` o `setwd()`.
+8. **Pacchetti:** `install.packages("foo")` va nella vostra libreria
+   personale; `bspm::install_sys("foo")` installa un binario pronto in
+   pochi secondi; `renv` registra le versioni del progetto.
+9. **Analisi lunghe:** in background (sezione 6), non nella console.
+10. **Quando qualcosa si rompe:** raccogliete le informazioni (sezione 8),
+    non scrivete solo "non funziona".
 
-```
-source("/home/jfs/00_Antigravity_workspace/R-studioConf/scripts/99_diagnose_rstudio_plot_pane.R")
-```
+---
 
-**Soluzione per processi in background:** Costringete R a stampare l'immagine su un file fisico.
+## 5. Calcolo parallelo: il cuoco e il forno
 
-1. Gestione Sessioni e Prevenzione Crash (L'errore "Aw, Snap!")
-Sui vecchi sistemi, chiudendo RStudio, veniva salvato in automatico un file nascosto chiamato .RData contenente tutto l'ambiente di lavoro. Lavorando con Big Data, questo file può raggiungere svariati Gigabyte. Al vostro login successivo, RStudio cercherà di caricare tutti quei Giga nel vostro browser, facendolo collassare (il classico errore "Aw, Snap!" o "Error Code 4" su Chrome).
+Molti usano `parLapply()` o `foreach` per parallelizzare. A volte i
+worker cadono subito con errori come `unserialize(node$con)`. Succede con
+pacchetti come nimble, terra, rstan, TMB o keras, perché i loro oggetti
+vivono nel C++, fuori dalla memoria normale di R, e non si possono spedire
+a un altro processo (lo dice il manuale di R: `?serialize`).
 
-Come funziona sul nuovo server:
+Un'analogia:
 
-Nessun salvataggio automatico: Abbiamo disabilitato la creazione automatica del .RData.
+- la sessione R principale è il **cuoco**;
+- i dati grezzi e il codice sono la **ricetta**;
+- i worker paralleli sono i **forni**;
+- compilare un modello o aprire un raster è **cuocere la torta**.
 
-Persistenza per 48 ore: Se chiudete il browser, la vostra sessione rimarrà attiva e intatta nella RAM del server per 2 giorni (48 ore). Dopo questo tempo di inattività, il server farà pulizia per liberare risorse per i colleghi.
+Non si può spedire ai forni una torta già cotta. **La regola d'oro: ai
+forni si mandano solo ricetta e ingredienti; ogni forno compila il modello
+o apre il file da solo.**
 
-La Best Practice: Usate SEMPRE il comando saveRDS(miei_risultati, "file.rds") alla fine dei vostri script per salvare solo ciò che vi serve realmente.
+Quando sono caricati terra, sf o GDAL, il server trasforma in automatico
+`mclapply()` in un cluster sicuro. Resta comunque meglio usare un cluster
+esplicito, come negli esempi qui sotto.
 
-1. La Regola d'Oro del Calcolo Parallelo ("Il Cuoco e il Forno")
-Molti di voi usano funzioni come parLapply o foreach per parallelizzare i calcoli. A volte questo causa un crash immediato del processo (es. l'errore unserialize(node$con) o Segmentation Fault).
+### A. Modelli MCMC con nimble
 
-Questo accade con pacchetti come nimble, terra, rstan, TMB, o keras, perché sotto il cofano creano oggetti in linguaggio C++ (che sono puntatori alla memoria fisica, non semplici dati).
+Sbagliato: compilare `nimbleModel()` fuori e passarlo a `parLapply()`.
+Giusto: compilare tutto **dentro** la funzione del worker.
 
-Per capire l'errore, usiamo un'analogia:
-
-La sessione R principale è il Cuoco.
-
-I dati e il codice testuale sono la Ricetta.
-
-I worker paralleli (il cluster) sono i Forni.
-
-Compilare un modello o caricare un Raster equivale a Cuocere la Torta.
-
-Una rete parallela non può trasportare "torte già cotte" (puntatori C++ attivi). Se provate a passare un modello compilato dal Cuoco ai Forni, il sistema va in protezione e "uccide" il processo per sicurezza.
-
-🚨 LA REGOLA D'ORO: Dovete passare ai Forni solo la Ricetta e gli Ingredienti grezzi. Ogni Forno deve compilare il codice o caricare il file da solo al suo interno.
-
-Per aiutarvi, il server ha una funzione speciale pre-caricata chiamata biome_make_cluster(). Sostituisce la classica makeCluster() e ottimizza in automatico l'uso del disco ultra-veloce (NVMe) e della CPU, prevenendo blocchi di sistema.
-
-1. Template Pratici per Pacchetto
-Ecco come applicare la "Regola d'Oro" ai pacchetti più usati nel nostro dipartimento. Copiate questi template!
-
-A. Modelli MCMC (pacchetto nimble)
-Sbagliato: Compilare nimbleModel() fuori e passarlo a parLapply.
-Giusto: Compilare tutto DENTRO la funzione del worker.
-
-```
+```r
 library(parallel)
 
-# 1. Definiamo la funzione per il worker (Il "Forno")
 run_mcmc_worker <- function(chain_id, dati_grezzi, codice_testo, inits) {
-  library(nimble) 
-  
-  # CRITICO: Il modello viene costruito e compilato localmente dal worker!
-  modello_locale <- nimbleModel(code = codice_testo, data = dati_grezzi, inits = inits[[chain_id]])
-  modello_compilato <- compileNimble(modello_locale) 
-  
-  mcmc <- buildMCMC(modello_compilato)
-  Cmcmc <- compileNimble(mcmc, project = modello_locale)
-  
-  campioni <- runMCMC(Cmcmc, niter = 5000)
-  return(campioni) # Restituiamo solo numeri!
+  library(nimble)
+  modello <- nimbleModel(code = codice_testo, data = dati_grezzi,
+                         inits = inits[[chain_id]])
+  cmodello <- compileNimble(modello)            # compilato nel worker
+  mcmc  <- buildMCMC(modello)
+  cmcmc <- compileNimble(mcmc, project = modello)
+  runMCMC(cmcmc, niter = 5000)                  # restituisce solo numeri
 }
 
-# 2. Lancio parallelo con il cluster ottimizzato del server
-N_cluster <- biome_make_cluster(4) 
-risultati <- parLapply(cl = N_cluster, X = 1:4, fun = run_mcmc_worker, 
-                       dati_grezzi = miei_dati, codice_testo = mio_codice, inits = lista_inits)
-stopCluster(N_cluster)
+cl <- makeCluster(min(4, max(1, detectCores() - 1)), type = "PSOCK")
+risultati <- parLapply(cl, 1:4, run_mcmc_worker,
+                       dati_grezzi = miei_dati, codice_testo = mio_codice,
+                       inits = lista_inits)
+stopCluster(cl)
 ```
 
-B. Dati Spaziali (pacchetto terra)
-I raster sono puntatori C++. Non passate l'oggetto SpatRaster via rete!
+### B. Dati spaziali con terra
 
-Soluzione 1 (Migliore): Passare il percorso del file.
+I raster non si passano ai worker. Soluzione migliore: passare il
+**percorso del file**.
 
-```
+```r
 worker_spaziale <- function(percorso_file) {
   library(terra)
-  mio_raster <- rast(percorso_file) # Il worker lo carica dal disco!
-  return(global(mio_raster, "mean", na.rm=TRUE))
+  r <- rast(percorso_file)              # il worker apre il file da solo
+  global(r, "mean", na.rm = TRUE)
 }
 ```
 
-Soluzione 2: Usare wrap() se il raster è in RAM.
+Se il raster è già in memoria, usate `wrap()` / `unwrap()`:
 
-```
-# Nella sessione principale: "Imballiamo" il raster
-raster_imballato <- wrap(mio_raster_gigante)
+```r
+raster_imballato <- terra::wrap(mio_raster)
 
 worker_spaziale <- function(raster_pacchetto) {
   library(terra)
-  # Nel worker: "Sballiamo" il raster per riconnetterlo al C++ locale
-  raster_vero <- unwrap(raster_pacchetto)
-  return(mean(values(raster_vero)))
+  r <- unwrap(raster_pacchetto)
+  global(r, "mean", na.rm = TRUE)
 }
 ```
 
-C. Cicli Paralleli (pacchetto doSNOW / foreach)
-Valgono le stesse identiche regole: la compilazione va dentro il blocco %dopar%.
+### C. Cicli paralleli con foreach
 
-```
+Stesse regole: la compilazione va dentro il blocco `%dopar%`.
+
+```r
 library(foreach)
-library(doSNOW)
+library(doParallel)
 
-N_cluster <- biome_make_cluster(4)
-registerDoSNOW(N_cluster)
+cl <- parallel::makeCluster(min(4, max(1, parallel::detectCores() - 1)))
+registerDoParallel(cl)
 
-# Impostiamo la progress bar
-pb <- txtProgressBar(max = 4, style = 3)
-opzioni_snow <- list(progress = function(n) setTxtProgressBar(pb, n))
-
-risultati <- foreach(i = 1:4, .options.snow = opzioni_snow, .packages = c("nimble")) %dopar% {
-  # La compilazione C++ DEVE avvenire qui dentro!
-  modello <- compileNimble(nimbleModel(mio_codice, miei_dati, inits = inits[[i]]))
-  return(runMCMC(modello, niter = 1000))
+risultati <- foreach(i = 1:4, .packages = "nimble") %dopar% {
+  modello  <- nimbleModel(mio_codice, data = miei_dati, inits = inits[[i]])
+  cmodello <- compileNimble(modello)
+  cmcmc <- compileNimble(buildMCMC(modello), project = modello)
+  runMCMC(cmcmc, niter = 1000)
 }
-close(pb)
-stopCluster(N_cluster)
+parallel::stopCluster(cl)
 ```
 
-D. Machine Learning (pacchetto keras / tensorflow)
-I modelli Keras non possono viaggiare in rete. Inoltre, TensorFlow tende a "mangiare" tutta la CPU bloccando il server.
+### D. Machine learning con keras / tensorflow
 
-```
+I modelli keras non viaggiano tra processi, e TensorFlow tende a usare
+tutti i processori. Limitate i thread in ogni worker, salvate il modello su
+file e restituite solo il nome del file.
+
+```r
 train_keras_worker <- function(learning_rate, dati_x, dati_y) {
-  library(keras)
-  library(tensorflow)
-  
-  # FRENO CPU: Limitiamo TensorFlow a 2 thread per worker
-  tf$config$threading$set_intra_op_parallelism_threads(2L)
-  tf$config$threading$set_inter_op_parallelism_threads(2L)
-  
-  # Costruiamo e addestriamo la rete qui dentro...
-  modello <- keras_model_sequential() %>% layer_dense(units = 64, input_shape = ncol(dati_x))
-  modello %>% compile(optimizer = optimizer_adam(learning_rate), loss = "mse")
-  modello %>% fit(x = dati_x, y = dati_y, epochs = 10, verbose = 0)
-  
-  # SALVATAGGIO: Non restituite il 'modello'. Salvatelo e restituite il nome file!
-  nome_file <- paste0(Sys.getenv("TMPDIR"), "/modello_lr_", learning_rate, ".h5")
-  save_model_hdf5(modello, nome_file)
-  
-  return(nome_file)
+  library(keras3)
+  tensorflow::tf$config$threading$set_intra_op_parallelism_threads(2L)
+  tensorflow::tf$config$threading$set_inter_op_parallelism_threads(2L)
+
+  modello <- keras_model_sequential(input_shape = ncol(dati_x)) |>
+    layer_dense(units = 64, activation = "relu") |>
+    layer_dense(units = 1)
+  modello |> compile(optimizer = optimizer_adam(learning_rate), loss = "mse")
+  modello |> fit(dati_x, dati_y, epochs = 10, verbose = 0)
+
+  nome_file <- file.path(tempdir(), paste0("modello_lr_", learning_rate, ".keras"))
+  save_model(modello, nome_file)
+  nome_file                              # il nome del file, non il modello
 }
 ```
 
-1. Grafici in Background (La sindrome del "Pittore Bendato")
-Quando lanciate un calcolo parallelo o un lavoro in background, quei processi non hanno uno schermo (sono "headless"). Se il vostro script finisce con plot(dati) o print(mio_ggplot), il server ignorerà il comando o andrà in errore, e il grafico andrà perduto.
-
-Soluzione: Costringete R a stampare l'immagine su un file fisico.
-Se usate ggplot2:
-
-```
-mio_grafico <- ggplot(dati, aes(x, y)) + geom_point()
-ggsave(filename = "risultato.png", plot = mio_grafico, width = 8, height = 6)
-```
-
-Se usate Base R:
-
-```
-png("risultato.png", width = 800, height = 600)
-plot(dati)
-dev.off() # IMPORTANTE: chiude e salva il file!
-```
-
-1. Come lanciare analisi lunghe senza bloccare il PC
-Se il vostro script impiega 10 ore a girare, NON eseguitelo premendo "Run" nella console. Se il vostro PC va in standby o scende il Wi-Fi, il processo potrebbe morire.
-
-Metodo A: RStudio Background Jobs (Consigliato per tutti)
-In basso a sinistra in RStudio, di fianco alla scheda "Console", cliccate sulla scheda "Jobs".
-
-Cliccate su "Start Local Job".
-
-Selezionate il vostro script e premete Start.
-
-Fatto! Il calcolo ora gira in sicurezza sul server. Potete chiudere RStudio, spegnere il PC e andare a casa. I risultati verranno salvati nell'ambiente al termine.
-
-Metodo B: Livello Pro con tmux (Per utenti avanzati)
-Il server supporta tmux, un "terminale indistruttibile".
-
-Aprite la scheda "Terminal" in RStudio.
-
-Digitate tmux e premete Invio (comparirà una banda verde in basso).
-
-Lanciate lo script scrivendo: Rscript il_mio_script.R
-
-Per lasciare il processo in background e uscire: premete Ctrl + B, poi rilasciate e premete D (Detach).
-
-Per ritrovare il processo il giorno dopo, aprite il terminale e scrivete tmux attach.
-
-(Nota: I processi lasciati in tmux o nei "Jobs" sono riconosciuti come legittimi dal server e non verranno mai interrotti dalla pulizia automatica).
-
-📚 Appendice Tecnica: Fonti Ufficiali e Documentazione di Sistema
-Per i ricercatori interessati a comprendere le fondamenta tecniche di queste linee guida, riportiamo di seguito i riferimenti alla documentazione ufficiale di R, dei pacchetti spaziali e del nuovo sistema operativo. Le pratiche descritte in questo documento non sono "workaround" locali, ma aderiscono agli standard di sviluppo ufficiali.
-
-1. Perché i modelli MCMC e Raster crashano nei calcoli paralleli?
-Il crash dei worker (es. Error in unserialize(node$con)) non è legato alla memoria del server, ma a un limite fisico di R documentato fin dalle prime versioni.
-
-Documentazione Core di R (Funzione serialize): Il manuale ufficiale di R afferma esplicitamente: "External pointers and weak references cannot be serialized" (I puntatori esterni non possono essere serializzati). I modelli creati in C++ (nimble, rstan) sono puntatori esterni. È quindi vietato da R stesso inviarli via rete a un cluster parallelo.
-
-Manuale Ufficiale di terra: La documentazione di terra (il pacchetto spaziale standard) dedica una sezione specifica al calcolo parallelo. Digitando ?wrap in R, si legge testualmente: "SpatRaster and SpatVector objects are pointers to C++ objects. You cannot pass them directly to nodes on a cluster... you must use wrap before sending them".
-
-Manuale Ufficiale di nimble: Nel capitolo sulla parallelizzazione, il manuale indica che per usare parLapply, la funzione nimbleModel() e compileNimble() devono essere eseguite in ogni singolo nodo del cluster, non nell'ambiente principale.
-
-1. Perché il Server uccide i processi invece di usare lo Swap?
-Sui vecchi sistemi, un calcolo che superava la RAM disponibile causava il congelamento del server per giorni (a causa dello Swap Thrashing). BIOME-CALC utilizza il nuovo standard enterprise per l'High-Performance Computing.
-
-Ubuntu 24.04 LTS e systemd-oomd: A partire dalle recenti versioni LTS, Canonical (l'azienda sviluppatrice di Ubuntu) ha attivato di default il demone systemd-oomd. Questo sistema monitora il PSI (Pressure Stall Information) del Kernel Linux (versione 6+).
-
-La Policy Ufficiale: Se un processo genera una pressione tale da rischiare il congelamento del disco e della CPU (saturando lo Swap), l'OOM-killer interviene e termina il processo prima che il server si blocchi. Questo garantisce che un singolo script errato non distrugga il lavoro di tutti gli altri utenti connessi.
-
-1. Perché l'aggiornamento a Ubuntu 24.04 era obbligatorio?
-Il passaggio a un sistema operativo che usa OOM-killer aggressivi era inevitabile per poter utilizzare le ultime tecnologie statistiche.
-
-R 4.4 / 4.5 e C++ Moderno: Le nuove versioni di R e dei pacchetti spaziali/machine learning richiedono compilatori C++17/C++20 e versioni aggiornate della libreria di sistema glibc (versione 2.35+). Queste librerie non sono supportate sui vecchi sistemi (come Ubuntu 18.04 o 20.04).
-
-Posit (RStudio) Release 2026: Le versioni moderne di RStudio Server seguono matrici di supporto molto rigide per ragioni di sicurezza. Posit ha terminato il supporto per i vecchi sistemi operativi. Mantenere l'hardware aggiornato era l'unico modo per fornirvi un ambiente sicuro, patchato e compatibile con i pacchetti CRAN più recenti.
-
-📚 Appendice Tecnica: Verificare le limitazioni di R
-Le regole sul calcolo parallelo (la "Regola del Cuoco e del Forno") non sono una restrizione del nuovo server, ma un limite nativo del linguaggio R e dei pacchetti spaziali. Potete verificare voi stessi queste regole interrogando la documentazione ufficiale direttamente dalla vostra console RStudio.
-
-1. Il limite nativo di R: I Puntatori Esterni (?serialize)
-Il crash dei worker in parallelo (es. Error in unserialize(node$con)) avviene quando R cerca di impacchettare i dati per spedirli ai vari core. I modelli statistici complessi sono "puntatori esterni" (indirizzi fisici della memoria RAM).
-
-Verifica in RStudio: Digitate nella console il comando ?serialize
-
-Cosa dice il manuale: Nella sezione Details, la documentazione ufficiale del motore R specifica che gli oggetti di riferimento non di sistema, tra cui esplicitamente "all external pointers and weak references" (tutti i puntatori esterni e le reference deboli), non vengono preservati durante il trasferimento di memoria. Se provate a spedirli a un cluster, il worker riceverà un puntatore vuoto e andrà in Segmentation Fault.
-
-1. Pacchetto terra (Raster): Regola per il Parallelo (?wrap)
-Il creatore del pacchetto terra ha implementato funzioni specifiche proprio perché i file spaziali soffrono di questo limite.
-
-Verifica in RStudio: Digitate nella console ?wrap
-
-Citazione Testuale del manuale: "SpatRaster and SpatVector objects are pointers to C++ objects. You cannot pass them directly to nodes on a cluster... you must use wrap before sending them."
-
-Traduzione: Gli oggetti SpatRaster e SpatVector sono puntatori a oggetti C++. Non potete passarli direttamente ai nodi di un cluster... dovete usare la funzione wrap prima di inviarli.
-
-1. Pacchetto nimble: Modelli MCMC in Cluster
-Il team di sviluppo di nimble (UC Berkeley) ha una pagina web ufficiale dedicata esclusivamente agli errori nel calcolo parallelo.
-
-Fonte Web: r-nimble.org/examples/parallelizing_NIMBLE.html
-
-Citazione Testuale: "The key consideration is to ensure that all NIMBLE execution, including model building, is conducted inside the parallelized code." * Traduzione: La considerazione chiave è assicurarsi che tutta l'esecuzione di NIMBLE, inclusa la costruzione del modello, avvenga all'interno del codice parallelizzato (i nostri worker).
-
-1. Il Sistema Operativo e l'OOM-Killer
-Se sul vecchio server i calcoli errati non venivano bloccati istantaneamente, è perché il vecchio sistema operativo andava in Swap Thrashing (congelando le risorse per giorni senza risolvere il calcolo).
-BIOME-CALC usa Ubuntu 24.04 LTS che integra il demone di sicurezza systemd-oomd. Se un processo cerca di leggere RAM non sua (C++ pointer fallito) o satura la memoria rischiando di bloccare il server per gli altri utenti, il Kernel Linux ora applica gli standard di sicurezza cloud e lo termina preventivamente per autodifesa.
-
 ---
 
-## 6. Accesso al Server: Portale Web e Single Sign-On (SSO)
+## 6. Analisi lunghe e grafici in background
 
-Non esiste più il vecchio login `ssh utente@server`. L'accesso passa **interamente da un portale web** protetto da SSO aziendale (OIDC).
+Se lo script dura ore, non lanciatelo con "Run" nella console: se il
+browser si chiude male o la memoria finisce, il lavoro non salvato si perde.
 
-### Flusso di login (cosa vedete dal browser)
+**Metodo A — RStudio Background Jobs (per tutti).** Nella scheda
+**Background Jobs**, accanto alla Console, scegliete *Start Background Job*,
+selezionate lo script e premete Start. Il calcolo continua sul server anche
+se chiudete RStudio e spegnete il PC.
 
-1. Aprite `https://<host-del-laboratorio>/` — nome esatto fornito dall'admin.
-2. Il portale vi reindirizza all'**Identity Provider** (la stessa pagina che usate per email / Teams). Inserite credenziali aziendali una sola volta.
-3. Tornate al portale e vedete tre tessere:
-   - **RStudio Server** — la vostra IDE R abituale.
-   - **TTYD Terminal** — un terminale Linux nel browser (per `tmux`, `Rscript`, `git`).
-   - **Nextcloud** *(se abilitato)* — sincronizzazione file con il vostro PC.
-4. Cliccate su RStudio. Non vi viene richiesta una seconda password: l'auto-login passa il vostro token SSO al server.
-5. La sessione RStudio rimane viva per 48 h anche se chiudete il browser (vedi § 1).
-
-### Cose che NON dovete più fare
-
-- ❌ Non serve VPN.
-- ❌ Non serve client SSH locale.
-- ❌ Non condividete password con colleghi: ogni utente deve avere il proprio account aziendale.
-- ❌ Non aprite più di una sessione RStudio attiva per utente: viene riusata quella esistente.
-
-### Logout
-
-Logout dal portale → invalida il token. La sessione R sul server **non muore subito**: viene mantenuta per 48 h così che possiate riconnettervi da un altro PC.
-
----
-
-## 7. Variabili d'ambiente: cosa potete (e cosa NON dovete) impostare
-
-| Variabile                  | Effetto                                          | Quando usarla                                         |
-|----------------------------|--------------------------------------------------|-------------------------------------------------------|
-| `BIOME_DISABLE_USER_LIBS=1`| Ignora `~/R/x86_64-pc-linux-gnu-library/...`     | Test di riproducibilità con sole librerie di sistema  |
-| `BIOME_VERBOSE_BOOT=1`     | Stampa quale modulo `Rprofile_site.d/` carica    | Quando la sessione R parte in modo anomalo            |
-| `OMP_NUM_THREADS=N`        | (sconsigliato) sovrascrive il cap a 1 thread     | **Solo** dopo aver chiesto all'admin                  |
-
-> ⚠️ **Variabili LEGACY da NON usare** (non hanno effetto, le trovate in vecchi script sul wiki):
-> `BIOME_FORCE_NFS_TMP`, `BIOME_FORCE_TMP=/tmp`, `R_DISABLE_QUOTA`. Ignoratele.
-
-Per impostare una variabile **solo per uno script**:
+**Metodo B — tmux (per utenti esperti).** Nel **Terminal** del portale:
 
 ```bash
-# nel terminale TTYD
-BIOME_DISABLE_USER_LIBS=1 Rscript mio_test.R
+tmux                         # compare una barra verde in basso
+Rscript il_mio_script.R      # avvia l'analisi
+# Ctrl+B, rilasciate, poi D  → uscite lasciandola in esecuzione
+tmux attach                  # il giorno dopo: ci tornate
 ```
 
-**NON** scrivetele dentro il vostro `.R` — perdete portabilità verso il vostro laptop.
+Nei cicli lunghi salvate i risultati con `saveRDS()` ogni tanto: un
+problema costerà solo l'ultimo pezzo.
+
+**I grafici dei processi in background non compaiono nel pannello Plots**,
+perché quei processi non hanno uno schermo. Salvateli su file:
+
+```r
+# ggplot2
+ggsave("risultato.png", plot = mio_grafico, width = 8, height = 6)
+
+# grafica di base
+png("risultato.png", width = 800, height = 600)
+plot(dati)
+dev.off()   # chiude e salva il file
+```
+
+Nel pannello Plots, dentro RStudio, i grafici compaiono normalmente. Per
+provarlo: `plot(1, 1, main = "prova")`. Se non compare, riavviate R
+(Session → Restart R) e riprovate; se ancora non compare, scrivete agli
+admin (sezione 8).
+
+**Niente `.RData` automatico.** Alla chiusura l'ambiente di lavoro non viene
+salvato, perché ricaricare un `.RData` di molti GB fa crollare il browser
+("Aw, Snap!"). Salvate ciò che vi serve con `saveRDS()`.
 
 ---
 
-## 8. Galateo del Server (HPC Etiquette)
+## 7. Problemi più comuni
 
-Siete in 10–30 ricercatori sulla stessa macchina. Poche regole evitano il 99 % dei problemi:
+| Cosa vedete | Cosa fare |
+|---|---|
+| `cannot open compressed file ... Disk quota exceeded` quando salvate | La vostra cartella home è piena (limite personale). Cancellate file inutili, salvate gli intermedi in `tempdir()`, chiedete più spazio agli admin |
+| `Permission denied` su `/mnt/ProjectStorage` | Non avete il permesso di scrittura su quel progetto: salvate nella home e chiedete agli admin |
+| `cannot allocate vector of size ...` o avviso `BIOME-CALC:` sulla memoria | Controllate `status()`, seguite l'alternativa proposta, lavorate a pezzi |
+| "R session aborted" | La memoria è finita. Ripartite dall'ultimo `saveRDS()`; se avevate usato `biome_save_session()`, ripristinate con `biome_load_session()` |
+| Codice parallelo fermo allo 0 % di CPU | Usate un cluster esplicito e caricate pacchetti e dati dentro i worker (sezione 5) |
+| `detectCores()` dà meno processori del previsto | È la vostra quota: è voluto |
+| Avviso `safe_setwd` e file salvati nella cartella sbagliata | La cartella non esiste (spesso un errore di battitura): la cartella di lavoro **non è cambiata**. Correggete il percorso; meglio ancora usate `here::here()` |
+| I file in `/Rtmp` sono spariti | È spazio temporaneo: viene pulito dopo circa 48 ore. Copiate i risultati nella home |
 
-1. **Un job pesante alla volta**, salvo accordo con i colleghi.
-2. **Avvisate il canale lab** prima di lanciare un calcolo > 12 h o > 200 GB RAM.
-3. **Non scrivete in `/tmp`** (vedi § 3 della Cheatsheet) — usate `tempfile()`.
-4. **Non hardcodate `mc.cores = 64`** — usate `parallel::detectCores() - 1` (il sistema ritaglia da solo la fair-share).
-5. **Salvate solo `.rds`** che vi servono davvero. NFS non è infinito.
-6. **Non lasciate sessioni R aperte se andate in vacanza** — chiudetele esplicitamente.
-7. **Mai installare pacchetti come `root`** — non funziona, e se funzionasse rompereste tutti.
-
----
-
-## 9. Come Segnalare un Bug (cosa raccogliere)
-
-Quando qualcosa non va, **non scrivete "non funziona"**. Allegate sempre:
-
-1. **`sessionInfo()`** dalla console R (riga BLAS inclusa).
-2. **`traceback()`** subito dopo l'errore.
-3. **L'errore esatto** copiato dalla console (testo, non screenshot).
-4. **Il PID** della sessione: `Sys.getpid()`.
-5. **Orario approssimativo** (così l'admin può recuperare i log di sistema).
-6. Eventuale **boot-log di emergenza**: `/tmp/biome_boot_errors_<PID>.log`.
-
-Mandate queste 6 cose a `%%BIOME_CONTACT%%` (oppure aprite ticket al sistema indicato dal vostro responsabile lab). L'admin farà il resto:
-
-- Per crash misteriosi: ladder L0..L5 di `99_diagnose_user_script.sh`.
-- Per blocchi su `mclapply` con `terra`: vedi `docs/operations/LUSSU_HANG_BISECTION.md`.
-
-> 🛡️ **Cosa l'admin NON farà mai:** modificare il vostro script. La filosofia del server è
-> "adatta il sistema, non lo script utente" (HC-13). Se il vostro codice gira sul vostro
-> laptop deve girare anche qui — eventuali patch finiscono in `Rprofile_site.d/`, non nel
-> vostro `.R`.
+La guida in inglese *Common Problems and Solutions* spiega ogni caso in
+dettaglio.
 
 ---
 
-## 10. FAQ: Perché non posso aprire più sessioni RStudio contemporaneamente?
+## 8. Come chiedere aiuto
 
-**Domanda:** Ho provato ad aprire RStudio su due nodi diversi (es. `biome-calc01` e `biome-calc02`) con lo stesso account, ma la prima sessione si disconnette. Perché?
+Non scrivete solo "non funziona". Incollate nel messaggio, come testo (non
+come screenshot):
 
-**Risposta:** Questa è una **limitazione fondamentale di RStudio Server Open Source (OSS)**, la versione gratuita che utilizziamo. RStudio Server OSS supporta **una sola sessione R attiva per utente alla volta**. Quando si tenta di connettersi da un secondo browser o nodo, il sistema rileva la nuova connessione e termina quella precedente.
+1. `status()`;
+2. `sessionInfo()`;
+3. `traceback()`, eseguito subito dopo l'errore;
+4. il messaggio di errore esatto;
+5. il percorso dello script e l'ora approssimativa;
+6. se R non parte proprio: il contenuto di `/tmp/biome_boot_errors_*.log`
+   (nel Terminal: `cat /tmp/biome_boot_errors_*.log`).
 
-**Perché esiste questa limitazione?**
-È una scelta architetturale della versione open-source. La versione commerciale **Posit Workbench** (ex RStudio Server Professional) offre sessioni multiple simultanee per lo stesso utente, ma questa funzionalità non è disponibile nella versione OSS.
+Mandate tutto al referente BIOME-CALC del vostro laboratorio (il contatto
+compare nel messaggio di benvenuto di R e del Terminal).
 
-**A cosa servono quindi i nodi multipli?**
-I nodi (`biome-calc01`, `biome-calc02`, …) esistono per permettere a **utenti diversi** di lavorare contemporaneamente, ciascuno sul proprio nodo. Il NAS condiviso (NFS) serve per accedere ai propri file da qualsiasi nodo senza dover ricaricare i dati, non per mantenere sessioni RStudio multiple.
-
-**Cosa posso fare se ho bisogno di più ambienti R?**
-
-- Salvare il lavoro corrente e avviare una nuova sessione dopo il logout.
-- Usare `biome_make_cluster()` per parallelizzare calcoli all'interno della stessa sessione.
-- Valutare RStudio Desktop in locale per un secondo ambiente isolato.
-
-Per approfondimenti tecnici, consultare: `docs/user_guides/rstudio_session_isolation.md`
+Gli admin non vi chiederanno mai di modificare il vostro script per
+adattarlo al server: se il codice gira sul portatile deve girare anche qui,
+e le correzioni si fanno sul server.
 
 ---
 
-## 11. Cross-Reference (per chi vuole approfondire)
+## 9. Impostazioni vecchie da cancellare
 
-- 🌿 **`BOTANIST_CHEATSHEET.md`** — versione 1-pagina di queste regole.
-- 🧬 **`large_spatial_matrices.md`** — workflow `terra` / `sf` per dataset > 50 GB.
-- 🎯 **`NIMBLE_User_Guide.md`** — MCMC paralleli su BIOME-CALC.
-- 🔧 **`SERVER_NATIVE_API.md`** — helper `biome_*()` (solo power-user / admin).
-- 📜 **`understanding_the_new_server.md`** — perché il server si comporta così.
-- 📐 **`docs/architecture/USER_CONTRACT.md`** — versione formale del contratto utente-sistema.
-- 🔒 **`rstudio_session_isolation.md`** — perché non puoi aprire RStudio su due nodi contemporaneamente.
+Negli script vecchi potreste trovare queste impostazioni. Oggi non fanno
+niente: toglietele.
+
+`BIOME_FORCE_NFS_TMP`, `BIOME_FORCE_TMP=/tmp`, `R_DISABLE_QUOTA`,
+`BIOME_LEGACY_BLAS`.
+
+---
+
+## 10. Per approfondire
+
+- **BIOME-CALC R Cheat Sheet** — le regole in una pagina.
+- **Common Problems and Solutions** — messaggi di errore e soluzioni.
+- **Safe Parallel R — Do's and Don'ts** — esempi di codice parallelo.
+- **Working with Large Spatial Correlation Matrices** — `terra` / `sf` su
+  dati molto grandi.
+- **NIMBLE User Guide** — catene MCMC parallele.

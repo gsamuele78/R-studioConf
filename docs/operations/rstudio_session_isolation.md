@@ -1,3 +1,13 @@
+---
+title: "RStudio Server OSS: Session Isolation & Multi-Node Limitations"
+audience: sysadmin
+status: current
+tier: T1
+source_path: docs/operations/rstudio_session_isolation.md
+last_verified: 2026-10-07
+sharepoint_section: Operations Hub
+---
+
 # RStudio Server OSS: Session Isolation & Multi-Node Limitations
 
 **Document Version:** 1.0
