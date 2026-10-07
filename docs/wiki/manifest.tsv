@@ -1,0 +1,8 @@
+# docs/wiki/manifest.tsv — which Markdown sources make up each wiki docx.
+# Columns (TAB-separated): id <TAB> title <TAB> subtitle <TAB> sources (space-separated, relative to docs/, in chapter order)
+# Ids starting with "user-" are researcher guides: no repo paths, no git stamp.
+# Edit this file to add/remove chapters; then run: bash scripts/tools/build_wiki_docx.sh
+user-guide	BIOME-CALC User Guide	For researchers using RStudio Server	user_guides/understanding_the_new_server.md user_guides/BOTANIST_CHEATSHEET.md user_guides/PARALLEL_R_DOS_AND_DONTS.md user_guides/large_spatial_matrices.md user_guides/NIMBLE_User_Guide.md
+user-common-problems	BIOME-CALC Common Problems and Solutions	Self-help for researchers: what you see, why, and what to do	user_guides/COMMON_PROBLEMS.md
+ops-troubleshooting	BIOME-CALC Operations Troubleshooting Runbook	Symptom, diagnosis, fix and verification for operators	operations/TROUBLESHOOTING.md operations/DIAGNOSTICS_INDEX.md operations/USER_SCRIPT_TROUBLESHOOTING.md operations/diagnostic_logs.md
+ops-guide	BIOME-CALC Operations Guide	Architecture, day-2 operations, resources and maintenance	architecture/SYSTEM_OVERVIEW.md architecture/SECURITY_MODEL.md architecture/USER_CONTRACT.md operations/OPERATOR_QUICKSTART.md operations/MAINTENANCE.md operations/USER_QUOTAS_AND_RESOURCES.md operations/add_storage_no_reboot.md operations/rstudio_session_isolation.md user_guides/SERVER_NATIVE_API.md reference/SCRIPT_CATALOG.md

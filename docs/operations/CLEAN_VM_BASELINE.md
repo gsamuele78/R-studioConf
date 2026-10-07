@@ -1,6 +1,8 @@
 <!-- docs/operations/CLEAN_VM_BASELINE.md -->
 # Clean-VM Baseline — HC-13 L4 Reference SOP
 
+> **Internal SOP — needs review (2026-10-06).** Procedure kept as written; the provisioning steps were not re-validated against a fresh VM in this audit. Do not use the Vagrant sandbox (known broken).
+
 **Audience:** sysadmin / IT officer.
 **Status:** normative SOP for the L4 layer of the HC-13 escalation ladder.
 **Prerequisite:** L0..L3 already exhausted via

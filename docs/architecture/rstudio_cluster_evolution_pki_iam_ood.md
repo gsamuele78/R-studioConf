@@ -1,539 +1,248 @@
 <!-- docs/architecture/rstudio_cluster_evolution_pki_iam_ood.md -->
-# RStudio Cluster Evolution — PKI, IAM, Open OnDemand, Container, Positron
+---
+title: "RStudio Cluster Evolution: PKI, IAM, Open OnDemand, Containers, and Positron"
+audience: architect
+status: current
+tier: T1
+source_path: docs/architecture/rstudio_cluster_evolution_pki_iam_ood.md
+last_verified: 2026-10-06
+---
 
-**Purpose:** Honest, pessimistic system-design analysis of architectural options for evolving the current R-studioConf RStudio Server OSS deployment toward a multi-node, trusted-TLS, identity-aware research platform.
+# RStudio Cluster Evolution: PKI, IAM, Open OnDemand, Containers, and Positron
 
-**Date:** 2026-06-04
-**Author:** System Engineer / IT Officer
-**Project:** R-studioConf v3.0.0 + Infra-Iam-PKI v3.1.0
-**Ethos:** "State unknowns as unknowns; never invent confidence. Pessimistic defaults. T1 (host) authoritative & continuously fixed; T2/T3 mirror T1."
+## 1. Document status
+
+This is a roadmap and decision-boundary document. It does not describe PKI,
+Keycloak, Open OnDemand, multi-node routing, or Positron as active T1 services.
+
+The June 2026 version treated an `Infra-Iam-PKI` sibling tree as if it were
+part of this repository. That relationship changed. `.ai/project.yml` now
+states that Infra-Iam-PKI is a **consumer** of this repository: it vendors
+`docker-deploy/` and `kubernetes-deploy/` from the commit recorded in its own
+upstream lock. Fixes originate here; this repository does not import or manage
+the consumer project.
+
+## 2. Verified current baseline
+
+### 2.1 T1 host
+
+T1 is `AUTHORITATIVE_CONTINUOUSLY_FIXED` and currently provides:
+
+- RStudio Server OSS on `127.0.0.1:8787`;
+- Nginx TLS and the static portal on ports 80/443;
+- PAM/NSS identity through SSSD **or** Samba/Winbind;
+- ttyd on `127.0.0.1:2222`, protected by Nginx PAM;
+- a Nextcloud reverse-proxy path to an operator-configured external target;
+- telemetry on `127.0.0.1:8000` and node exporter on `127.0.0.1:9100`;
+- optional Ollama on `127.0.0.1:11434`;
+- Rprofile 12.10, local `/Rtmp`, local R libraries, and cgroup user slices.
+
+T1 supports self-signed or Let's Encrypt certificates. It contains no
+oauth2-proxy, Step-CA enrollment, Keycloak client, Open OnDemand service,
+sticky multi-node router, or Positron service.
+
+### 2.2 T2 Docker
+
+T2 is `MIGRATION_IN_PROGRESS`. The 2026-10-01 back-port added self-contained
+Docker assets, Step-CA root-trust bootstrap, pinned images, an optional
+oauth2-proxy v7.6.0-alpine `oidc` profile, and a loopback-only Docker API
+proxy.
+
+T2 is not a full T1 replacement. `TD-T2-01` remains open: T2 uses a
+monolithic Rprofile snapshot and audit v27 instead of T1's v12.10 fragments
+and audit v28. T2 also intentionally omits bspm/r2u (`TD-T2-05`).
+
+### 2.3 T3 Kubernetes
+
+T3 is `SKELETON_NOT_READY`. NetworkPolicies and pinned images exist, but the
+tier still has unresolved identity, storage, PKI rotation, and parity work.
+It is not an active cluster platform.
+
+### 2.4 External consumer
+
+Infra-Iam-PKI consumes vendored copies of `docker-deploy/` and
+`kubernetes-deploy/`. Its current deployment state, service versions, and
+operational readiness are outside this repository.
+
+**Unverified:** whether Step-CA, Keycloak, Open OnDemand, or an Infra-Iam-PKI
+RStudio deployment is currently running in any environment.
+
+## 3. Decision table
+
+| Capability | Active T1 | Present elsewhere in this repo | Status |
+|---|---|---|---|
+| Self-signed TLS | Yes | T2 certificate bind mounts | Current option |
+| Let's Encrypt TLS | Yes | T2 certificate bind mounts | Current option |
+| Step-CA root trust | No | T2 init and image tooling; T3 init containers | Migration component, not T1 |
+| oauth2-proxy | No | T2 optional `oidc` profile; T3 manifests/config | Migration component, not T1 |
+| Keycloak | No | T3 issuer URL only | External dependency / roadmap |
+| Open OnDemand | No | No active implementation in this repo | Roadmap only |
+| Sticky user-to-node routing | No | No implementation | Roadmap only |
+| Positron | No | No implementation | `EVALUATION_PENDING`, T2/T3 scope only |
+| Posit Workbench | No | No implementation | Out of current scope |
+| Kubernetes production deployment | No | T3 skeleton | Not ready |
+
+## 4. PKI evolution
+
+### 4.1 What exists
+
+T1 can issue or install self-signed and Let's Encrypt certificates through
+`scripts/30_install_nginx.sh` and `scripts/32_setup_letsencrypt.sh`.
+
+T2 has a `rstudio-init` one-shot container that verifies the configured
+Step-CA root certificate path. RStudio and Nginx images mount that root. The
+Docker images include the pinned Step CLI used by the consumer integration.
+
+### 4.2 What does not exist in T1
+
+T1 has no script that:
+
+- enrolls the host against Step-CA;
+- renews a Step-CA leaf certificate;
+- configures an internal ACME endpoint;
+- rotates Step-CA trust; or
+- verifies TLS to RStudio upstream nodes.
+
+Step-CA must therefore remain labeled as a T2/T3 or external-consumer
+capability until those T1 controls are implemented and tested.
+
+### 4.3 Acceptance boundary for any T1 PKI change
+
+A future T1 PKI change must preserve:
+
+- one public TLS gateway;
+- RStudio and ttyd loopback binding;
+- secure RStudio cookies and WebSocket operation;
+- deterministic renewal and rollback;
+- no secret or token in process arguments;
+- T1-first implementation before port-forwarding.
+
+## 5. IAM and OIDC evolution
+
+### 5.1 Current T1 identity
+
+T1 authenticates the portal and terminal through Nginx PAM and authenticates
+RStudio through its own PAM service. The portal browser handles credentials
+and submits them to the relevant backends.
+
+### 5.2 T2 OIDC surface
+
+T2 can start oauth2-proxy under profile `oidc`. The service listens on host
+port 4180 and reads a bind-mounted configuration file. That service alone
+does not prove that the T2 Nginx portal or RStudio OSS login is fully protected
+or that transparent RStudio login is supported.
+
+**Unverified:** end-to-end OIDC login, logout, stale-cookie, CSRF, and browser
+compatibility for the current T2 assets. No repository test exercises an
+actual identity provider.
+
+### 5.3 Transparent RStudio login
+
+The active T1 portal already depends on RStudio's internal
+`/auth-do-sign-in` endpoint. Replacing the credential modal with an OIDC
+identity assertion would still require a supported method to establish the
+RStudio PAM session. The repository contains no completed, tested solution for
+that transition.
+
+Do not document `X-Forwarded-User` as a supported RStudio OSS authentication
+mechanism. It is used for ttyd, not RStudio.
+
+## 6. Open OnDemand
+
+No Open OnDemand code is active in this repository. OOD remains a conditional
+architecture option for a future requirement that includes multiple managed
+interactive applications, per-user proxy processes, and a scheduler-backed
+session lifecycle.
+
+OOD is not required to keep the current single-node portal working, and it is
+not an implemented sticky router for current RStudio nodes.
+
+**Unverified:** the current feature set and deployment readiness of the
+external consumer's OOD material.
+
+## 7. Multi-node routing
+
+The repository has no assignment store, node inventory, drain command, or
+server-side sticky user-to-node routing service. Multiple RStudio node names
+appear in runtime comments and historical operational material, but the active
+Nginx template always proxies RStudio to local `127.0.0.1:8787`.
+
+A future router would need, at minimum:
+
+- authenticated server-side user identity;
+- a durable user-to-node assignment record;
+- node health and drain state;
+- WebSocket and cookie affinity;
+- explicit failure behavior when an assigned node is unavailable;
+- operator query, reassignment, and rollback commands.
+
+These are acceptance requirements, not implemented features.
+
+## 8. RStudio session model
+
+This repository configures one RStudio Server OSS service per node and does
+not configure Posit Workbench, Job Launcher, a session database, or a
+per-session container launcher.
+
+**Unverified:** the exact current upstream limit on simultaneous RStudio OSS
+sessions per user was not verified from repository code. The repo has no code
+that promises multiple independent IDE sessions for one user, so this
+capability must not be advertised.
+
+## 9. Positron
+
+`.ai/project.yml` defines Positron as:
+
+- `EVALUATION_PENDING`;
+- limited to T2 and T3 evaluation;
+- prohibited from adding files, dependencies, or rules until it demonstrably
+  resolves a known T1 problem.
+
+No Positron files or services exist in the active deployment. Positron is not
+a current migration target and does not solve T1 PKI, routing, or identity by
+itself.
+
+## 10. Sequencing constraints
+
+Any evolution must preserve the repository's order:
+
+1. Fix or implement the behavior in T1, unless it is inherently tier-specific
+   and recorded as a tier delta.
+2. Validate T1 on the active user/researcher path. The sandbox is broken.
+3. Port the behavior to T2 and close or update the relevant tier delta.
+4. Address T3 only after T2 parity is stable.
+
+For the current roadmap, the unresolved T2 runtime parity gap has priority over
+claiming a completed platform migration.
+
+## 11. Rejected current-state claims
+
+The following are not supported by repository evidence:
+
+- “T1 uses OIDC or Keycloak.”
+- “Step-CA manages T1 certificates.”
+- “Open OnDemand is deployed.”
+- “Users are automatically routed across RStudio nodes.”
+- “RStudio sessions roam between nodes.”
+- “Positron is available in the browser.”
+- “T2 has T1 Rprofile 12.10 parity.”
+- “T3 is production-ready.”
+- “Infra-Iam-PKI is a submodule of this repository.”
+
+## 12. Sources
+
+- `.ai/project.yml`
+- `CHANGELOG.md`
+- `scripts/20_configure_rstudio.sh`
+- `scripts/30_install_nginx.sh`
+- `scripts/32_setup_letsencrypt.sh`
+- `templates/nginx_proxy_location.conf.template`
+- `docker-deploy/docker-compose.yml`
+- `docker-deploy/Dockerfile.nginx`
+- `docker-deploy/scripts/manage_pki_trust.sh`
+- `kubernetes-deploy/configmaps.yaml`
+- `kubernetes-deploy/`
 
 ---
 
-## 1. Executive Verdict
-
-| Question | Answer |
-|---|---|
-| Should we integrate Step-CA (infra-pki)? | **Yes, immediately.** It removes the self-signed certificate fragility that destabilizes RStudio cookies, WebSockets, and future SSO. |
-| Should we integrate Keycloak/IAM? | **Yes, but as portal-level SSO first.** Transparent SSO into RStudio OSS is high-risk and must be a POC, not a promise. |
-| Does Open OnDemand replace the need for a custom gateway? | **No, for simple user→node routing.** **Yes, for a true HPC multi-app portal.** |
-| Should we migrate to containers (infra-rstudio)? | **Not now.** T1 is authoritative; T2 is migration-in-progress. First stabilize T1 + PKI, then port forward. |
-| Should we use Positron? | **Not now.** Positron is officially `EVALUATION_PENDING` in this project. It does not fix the immediate certificate/routing problem. |
-| Does a user need multiple simultaneous RStudio IDE sessions? | **Not achievable with RStudio OSS.** This requires Posit Workbench (commercial) or a dedicated per-session containerization project. |
-
----
-
-## 2. Current State (Baseline)
-
-### 2.1 R-studioConf T1 Host
-
-```text
-T1_host = AUTHORITATIVE_CONTINUOUSLY_FIXED
-RStudio Server OSS = PAM/SSSD or Samba/Winbind
-RStudio listens on 127.0.0.1:8787
-www-root-path = /rstudio-inner
-www-same-site = none
-auth-cookies-force-secure = 1
-auth-encrypt-password = 0 (behind Nginx TLS)
-www-enable-origin-check = 1
-```
-
-### 2.2 Nginx Reverse Proxy
-
-```text
-nginx_site.conf → proxy_pass http://127.0.0.1:8787/
-nginx_proxy_location.conf → single local backend, no upstream pool
-certificate mode: SELF_SIGNED or LETS_ENCRYPT
-```
-
-### 2.3 RStudio OSS hard limit
-
-```text
-One rsession process per user identity.
-No server-multiple-sessions option (Pro/Workbench only).
-Second browser/tab/node → reuses or disconnects existing session.
-```
-
-Documented in:
-
-- `docs/user_guides/rstudio_session_isolation.md`
-- `docs/user_guides/risposta_ricercatore_sessioni_rstudio.md`
-
-### 2.4 Infra-Iam-PKI sibling project
-
-| Component | Status | Purpose |
-|---|---|---|
-| `infra-pki` | Built (Step-CA + Postgres + Caddy) | Internal TLS and SSH certificate authority |
-| `infra-iam` | Built (Keycloak + Postgres + Caddy) | OIDC/SAML IdP, AD federation |
-| `infra-ood` | Built (Open OnDemand + Apache + PUN) | HPC web portal, interactive app launcher |
-| `infra-rstudio` | Built (Dockerized RStudio + Nginx + oauth2-proxy) | Container-native RStudio pet service |
-
----
-
-## 3. Step-CA Analysis
-
-### 3.1 What Step-CA fixes TODAY
-
-| Problem | Self-signed | Step-CA trusted |
-|---|---|---|
-| Browser security warnings | Always present | Removed |
-| Secure cookie reliability | Fragile, browser-dependent | Stable |
-| SameSite=None acceptance | May be blocked | Reliable |
-| iframe/WebSocket stability | Less predictable | More deterministic |
-| `curl`/`httr` HTTPS validation | Coded workarounds | Clean |
-| R package HTTPS calls | May fail silently | Works |
-| Keycloak/OOD integration | Need manual trust per host | One Root CA |
-| Certificate renewal | Manual, error-prone | Entrypoint-based, auto |
-
-### 3.2 What Step-CA does NOT fix
-
-- User→node routing and assignment.
-- RStudio OSS one-session-per-user limit.
-- RStudio OSS SSO/OIDC injection.
-- Session roaming across nodes.
-- Load balancing.
-- Multi-session same user.
-
-### 3.3 Recommended Step-CA configuration (phase 1)
-
-```text
-ONE trusted FQDN:
-  https://rstudio.biome.internal
-
-Step-CA issues certificate for this FQDN.
-
-Browser users → trusted HTTPS → RStudio Gateway/Nginx → private backend nodes
-```
-
-Do NOT expose individual node URLs to users in phase 1.
-
-**Preferred enrollment flow (from infra-pki docs):**
-
-```bash
-# On PKI host
-scripts/infra-pki/generate_token.sh
-  → inputs: RStudio host FQDN
-  → output: infra-rstudio_join_pki.env
-
-# On RStudio host
-scripts/infra-rstudio/configure_rstudio_pki.sh join_pki.env
-  → injects CA_URL, CA_FINGERPRINT into .env
-
-scripts/infra-rstudio/deploy_rstudio.sh
-  → rstudio-init fetches Root CA
-  → nginx-portal uses Root CA
-  → if STEP_TOKEN set, Nginx enrolls its own TLS cert via ACME
-```
-
-For the current T1 host deployment (non-containerized), integrate by:
-
-1. Installing Step-CA Root CA on the gateway host.
-2. Using `certbot` or `acme.sh` pointed at Step-CA's ACME endpoint.
-3. Configuring Nginx with the issued certificate.
-
-**Node certificates (phase 2):**
-
-After gateway is trusted, issue internal certs for backend nodes so the gateway can verify upstream TLS:
-
-```text
-biome-calc01.internal → 10.x.x.x
-biome-calc02.internal → 10.x.x.x
-biome-calc03.internal → 10.x.x.x
-```
-
-### 3.4 Cookie/TLS stability impact
-
-Current RStudio config uses:
-
-```text
-SameSite=None
-Secure cookies
-auth-cookies-force-secure=1
-iframe wrapper (www-frame-origin=same)
-WebSocket upgrade
-Origin/Referer handling
-```
-
-These require trustworthy HTTPS. Step-CA provides the missing trust foundation.
-
----
-
-## 4. Keycloak/IAM Analysis
-
-### 4.1 Good use: portal-level SSO
-
-```text
-Browser → Keycloak OIDC → authenticated portal session
-Portal shows RStudio tile.
-RStudio still requires PAM/SSSD login.
-```
-
-Benefits:
-
-- Centralized login, groups, roles, AD federation.
-- Consistent identity between services (portal, Nextcloud, OOD, future apps).
-- Audit trail.
-- MFA option.
-- Reduces re-authentication friction at the portal layer.
-
-### 4.2 High-risk use: transparent SSO into RStudio OSS
-
-The `infra-rstudio/OVERVIEW.md` proposes:
-
-```text
-oauth2-proxy (Keycloak OIDC)
-→ Nginx auth_request /oauth2/auth
-→ Backend Proxy Injection
-→ POST /auth-do-sign-in
-→ RStudio Set-Cookie
-```
-
-This is described as:
-
-```text
-RStudio Open Source does not natively accept X-Forwarded-User headers.
-The solution uses Nginx backend proxy injection.
-```
-
-Risk factors:
-
-| Risk | Severity | Detail |
-|---|---|---|
-| RStudio internal endpoint dependency | HIGH | Relies on `/auth-do-sign-in` POST, which is not a public API |
-| Version coupling | HIGH | Breaks on RStudio upgrade if internal behavior changes |
-| CSRF token | HIGH | Injection must handle token correctly or login fails |
-| Cookie path/domain | MEDIUM | Subpath `/rstudio-inner` + cookie scope must match exactly |
-| Browser variation | MEDIUM | Chrome, Firefox, Edge cookie/SameSite handling differs |
-| Logout | MEDIUM | Clean logout requires coordinated cookie clearing |
-| Support complexity | HIGH | Hard to triage without RStudio vendor support |
-
-**Recommendation:** Do NOT promise this to users until a strict POC passes:
-
-```text
-✅ Firefox ESR
-✅ Chrome stable
-✅ Edge (if used)
-✅ fresh login
-✅ stale cookie
-✅ logout
-✅ idle session resume
-✅ forced node reassignment
-✅ RStudio upgrade test
-✅ rollback plan
-```
-
-Until then, keep RStudio OSS native PAM login.
-
----
-
-## 5. Open OnDemand Analysis
-
-### 5.1 What OOD provides
-
-From `infra-ood/OVERVIEW.md`:
-
-```text
-Apache frontend
-→ mod_auth_openidc (Keycloak)
-→ Per-User NGINX (PUN)
-→ reverse proxy to interactive apps
-```
-
-OOD handles:
-
-- Central authentication.
-- App launch dashboard.
-- Per-user proxy isolation.
-- Session management.
-- HPC scheduler integration (future).
-- Custom BiGeA themed UI.
-
-### 5.2 Is OOD required for user→node routing?
-
-**No, not for simple distribution.**
-
-A custom gateway with these features is sufficient:
-
-```text
-user assignment store (SQLite or JSON + jq + flock)
-node health check (rstudio-server status, load, memory, /Rtmp)
-sticky routing cookie (biome_rstudio_node = biome-calc02)
-server-side authority (cookie is hint, not trust)
-drain/reassign admin commands
-```
-
-OOD is overkill if the problem is only:
-
-```text
-certificates + sticky user→node RStudio routing
-```
-
-### 5.3 When OOD makes sense
-
-Adopt OOD when you want:
-
-```text
-True HPC web portal
-Multiple interactive apps (RStudio, Jupyter, terminal, desktop)
-Per-user resource isolation
-Managed app launch/lifecycle
-Integration with SLURM/Torque/scheduler
-Standard HPC center UX
-```
-
-OOD + Step-CA + Keycloak is a strong long-term path, but deploy in phases.
-
----
-
-## 6. Containerization (infra-rstudio) Analysis
-
-### 6.1 Current state
-
-`infra-rstudio` provides:
-
-```text
-container-native RStudio Server
-Nginx reverse proxy
-oauth2-proxy sidecar (opt-in, oidc profile)
-SSSD or Winbind profile (opt-in)
-Step-CA trust bootstrap (rstudio-init)
-resource limits (deploy.resources.limits)
-tmpfs for /tmp
-```
-
-Explicit limitation from `OVERVIEW.md`:
-
-```text
-It is a pet service — designed to run on a single dedicated host.
-network_mode: host is an architectural exception.
-```
-
-### 6.2 Pro
-
-- Cleaner PKI/IAM integration.
-- Resource limits enforced at container level.
-- Immutable container build.
-- oauth2-proxy/OIDC already wired.
-- Step-CA bootstrap already designed.
-
-### 6.3 Contra
-
-| Risk | Detail |
-|---|---|
-| Not a cluster | Pet service = one host. No multi-node routing logic. |
-| T1 parity gap | R-studioConf T1 contains years of R runtime hardening (BLAS, /Rtmp, Rprofile fragments, orphan cleanup, telemetry, NFS tuning). |
-| `network_mode: host` | Exception that complicates multi-node design. |
-| SSSD/Winbind sockets | Bind-mount complexity increases with node count. |
-| T2 status | `MIGRATION_IN_PROGRESS` — open gaps documented in `.ai/project.yml`. |
-| T3 status | `SKELETON_NOT_READY` — blockers include no NetworkPolicy, no StorageClass, no SSSD sidecar strategy. |
-
-### 6.4 Recommendation
-
-- Do NOT migrate production T1 to containers now.
-- Use `infra-rstudio` as a T2 lab/evolution target.
-- Establish T1 parity first, then port forward.
-
----
-
-## 7. Positron Analysis
-
-### 7.1 Project status
-
-From `.ai/project.yml`:
-
-```yaml
-positron:
-  status: "EVALUATION_PENDING"
-  scope: "T2 (docker) and T3 (k8s) only"
-  trigger_condition: >
-    Adopt only if it demonstrably resolves a known T1 host-tier issue
-    (RStudio Server rsession crashes, NIMBLE workload memory pressure,
-    BLAS thread collision, or session-restore Error code 4).
-    Until then: do not propose, do not configure.
-```
-
-### 7.2 Contra
-
-- Not a replacement for RStudio Server OSS today.
-- Does not fix certificate/trust/routing.
-- Does not fix RStudio session limits.
-- Training impact for botanist researchers.
-- Diverts attention from actionable fixes.
-
-### 7.3 Recommendation
-
-Evaluation is valid as future exploration.
-
-It is NOT a current migration target.
-
----
-
-## 8. Roadmap — Recommended Phasing
-
-### Phase 1: Trusted TLS (Step-CA)
-
-**Objective:** Eliminate self-signed certificates.
-
-```text
-Deploy Step-CA (infra-pki).
-Issue trusted certificate for single RStudio gateway FQDN.
-Install Root CA on gateway host and managed clients.
-Nginx uses trusted cert.
-RStudio PAM login unchanged.
-```
-
-**Cost:** Low risk. No user-facing change except no browser warning.
-
-**Acceptance criteria:**
-
-- `curl --cacert root_ca.crt https://rstudio-gateway` returns OK.
-- Browser no longer shows certificate warning.
-- RStudio login works.
-- Cookie `Secure` flag consistently present.
-- WebSocket stable.
-
----
-
-### Phase 2: Sticky User→Node Routing
-
-**Objective:** Distribute different users across different nodes.
-
-```text
-Create node inventory (hostname, IP, port, drain flag).
-Add user assignment store (SQLite or JSON + jq + flock).
-Add node health checks (rstudio-server status, load, memory, /Rtmp).
-Implement assignment policy:
-  - existing assignment + healthy node → reuse.
-  - no assignment → choose least-loaded healthy node.
-  - drained node → no new users; existing users continue.
-Extend Nginx to proxy /rstudio-inner/ to assigned node.
-Add admin commands: drain, undrain, show assignment, force reassign.
-```
-
-**Cost:** Medium risk. Moderate development effort.
-
-**Acceptance criteria:**
-
-- User A always routed to the same node while session is alive.
-- User B routed to a different node if node 1 is busier.
-- Node down → no new users assigned; existing session fails gracefully.
-- Node drain → existing users unaffected; new users routed elsewhere.
-- Admin can query and change assignments.
-
----
-
-### Phase 3: Keycloak Portal SSO
-
-**Objective:** Centralized login for the web portal.
-
-```text
-Configure Keycloak client for RStudio portal.
-Portal uses OIDC for user authentication.
-Portal displays RStudio tile to authenticated users.
-RStudio OSS still uses PAM login internally.
-```
-
-**Cost:** Medium risk. Keycloak is already built in `infra-iam`.
-
-**Acceptance criteria:**
-
-- Single login to portal (Keycloak).
-- Access to portal tiles after login.
-- RStudio PAM login still required (documented).
-- Logout clears portal session.
-
----
-
-### Phase 4: Open OnDemand (conditional)
-
-**Trigger:** Requirement evolves to full HPC portal with multiple interactive apps.
-
-```text
-Deploy infra-ood.
-Configure OOD to use Keycloak OIDC.
-Define RStudio as an interactive OOD app.
-OOD PUN proxies to assigned RStudio node.
-Add Jupyter, terminal, or batch apps as needed.
-```
-
-**Cost:** Medium/high risk. New operational surface.
-
-**Acceptance criteria:**
-
-- OOD dashboard accessible after Keycloak login.
-- Launch RStudio app → assigned to correct node.
-- Multiple app types available.
-- PUN lifecycle managed.
-
----
-
-### Phase 5: OIDC Injection POC (conditional)
-
-**Trigger:** User demand for single login into RStudio IDE.
-
-```text
-Deploy oauth2-proxy (oidc profile in infra-rstudio).
-Configure backend proxy injection.
-Run strict POC across browsers.
-Validate CSRF, logout, stale cookies, forced reassignment.
-If passes: document limitations and enable.
-If fails: keep PAM login; document why OIDC injection is unsupported.
-```
-
-**Cost:** High risk (experimental). Must be reversible.
-
----
-
-### Phase 6: T1→T2 Parity + T3 Later
-
-```text
-After T1 is stable with PKI + routing + optional Keycloak/OOD:
-Port T1 behavior to T2 (docker/infra-rstudio).
-Document any tier_deltas that cannot be identical.
-Only then: address T3 Kubernetes blockers.
-```
-
----
-
-## 9. Non-Goals (Explicit Rejections)
-
-| Non-goal | Reason |
-|---|---|
-| Multiple simultaneous RStudio IDE sessions for same user on OSS | Requires Posit Workbench or per-session containerization project |
-| Transparent RStudio session roaming across nodes | Not supported by RStudio OSS |
-| Random request-level load balancing for RStudio | Breaks WebSocket, cookies, session affinity |
-| Kubernetes production deployment now | T3 = SKELETON_NOT_READY |
-| Positron migration now | EVALUATION_PENDING |
-| Auto-detection of all bottlenecks without observability | Must add monitoring before optimizing |
-| Rewriting user R scripts to work around infrastructure limits | Violates HC-13 |
-
----
-
-## 10. Decision Matrix
-
-| Option | TLS/cookie | Routing | SSO portal | SSO RStudio | Multi-sess | Risk | When |
-|---|---|---|---|---|---|---|---|
-| Step-CA only | ✅ | ❌ | ❌ | ❌ | ❌ | Low | Now |
-| Step-CA + sticky gateway | ✅ | ✅ | ❌ | ❌ | ❌ | Low/Med | Phase 2 |
-| + Keycloak portal SSO | ✅ | ✅ | ✅ | ❌ | ❌ | Med | Phase 3 |
-| + OIDC injection RStudio OSS | ✅ | ✅ | ✅ | ? POC | ❌ | High | Phase 5 POC |
-| + Open OnDemand | ✅ | ✅ | ✅ | ❌ | ❌ | Med/High | Conditional |
-| + Posit Workbench | ✅ | ✅ | ✅ | ✅ | ✅ | Cost/lic | If required |
-| + Container infra-rstudio | ✅ | ❌ | Part | ❌ | ❌ | High now | After T1 parity |
-| + Positron | ❓ | ❌ | ❌ | ❌ | ❓ | High | Not now |
-
----
-
-## 11. References
-
-- `.ai/project.yml` — Hard constraints, tier status, tier deltas, Positron status.
-- `.ai/agents.md` — Full architecture, T1 script chain, R runtime.
-- `docs/user_guides/rstudio_session_isolation.md` — Investigated XDG/env/profile workarounds.
-- `docs/user_guides/risposta_ricercatore_sessioni_rstudio.md` — Researcher-facing explanation.
-- `Infra-Iam-PKI/doc/infra-pki/RSTUDIO_INTEGRATION.md` — Step-CA enrollment + trust chain.
-- `Infra-Iam-PKI/doc/infra-rstudio/OVERVIEW.md` — Container architecture, OIDC injection.
-- `Infra-Iam-PKI/doc/infra-rstudio/CONFIGURATION.md` — `.env` reference.
-- `Infra-Iam-PKI/doc/infra-rstudio/SECURITY.md` — Defense-in-depth, PKI trust model.
-- `Infra-Iam-PKI/doc/infra-rstudio/DEPLOY.md` — Deployment prerequisites and steps.
-- `Infra-Iam-PKI/doc/infra-ood/OVERVIEW.md` — OOD architecture and PUN design.
-- `Infra-Iam-PKI/doc/infra-iam/OVERVIEW.md` — Keycloak architecture and AD federation.
+*Last verified against active repository code: 2026-10-06.*

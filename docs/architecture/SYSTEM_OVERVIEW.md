@@ -1,270 +1,252 @@
 <!-- docs/architecture/SYSTEM_OVERVIEW.md -->
-# BIOME-CALC — System Architecture Overview
+---
+title: "BIOME-CALC System Architecture Overview"
+audience: architect
+status: current
+tier: T1
+source_path: docs/architecture/SYSTEM_OVERVIEW.md
+last_verified: 2026-10-06
+sharepoint_section: Sysadmin / Operator Hub
+---
 
-> **Audience:** architect, sysadmin
-> **Status:** current (rewritten 2026-06-08)
-> **Tier:** T1 (host authoritative)
+# BIOME-CALC System Architecture Overview
+
+## 1. Scope and deployment tiers
+
+BIOME-CALC is a shared RStudio Server OSS platform for ecological and botanical
+workloads. This document describes the repository state on 2026-10-06. The
+host deployment is authoritative; container and Kubernetes material is not a
+statement of production readiness.
+
+| Tier | Repository surface | Status | Entry point |
+|---|---|---|---|
+| T1 host | `init.sh`, `r_env_manager.sh`, `scripts/`, `lib/`, `config/`, `templates/` | `AUTHORITATIVE_CONTINUOUSLY_FIXED` | `init.sh` → `r_env_manager.sh` → numbered scripts |
+| T2 Docker | `docker-deploy/` | `MIGRATION_IN_PROGRESS` | `docker-deploy/deploy.sh` → `docker compose` |
+| T3 Kubernetes | `kubernetes-deploy/` | `SKELETON_NOT_READY` | `kubernetes-deploy/scripts/deploy_k8s.sh` |
+
+Bugs are fixed in T1 first and then ported T1 → T2 → T3. Recorded exceptions
+are in `.ai/project.yml` under `tier_deltas`.
+
+## 2. Active T1 topology
+
+```text
+Browser
+  │ HTTPS :443
+  ▼
+Nginx on the host
+  ├── /                         static portal
+  ├── /rstudio/                RStudio wrapper
+  ├── /rstudio-inner/          127.0.0.1:8787 (RStudio Server OSS)
+  ├── /terminal/               ttyd wrapper, PAM-protected
+  ├── /terminal-inner/         127.0.0.1:2222 (ttyd), PAM-protected
+  ├── /files/                  Nextcloud wrapper
+  ├── /files-inner/            configured external Nextcloud target
+  ├── /api/, /metrics          127.0.0.1:8000 (telemetry API)
+  ├── /monitoring/             127.0.0.1:8000, LAN/VPN allow-list
+  └── /monitoring/node/        127.0.0.1:9100 (node exporter), LAN/VPN allow-list
+
+RStudio / ttyd / Nginx PAM
+  └── system PAM and NSS
+        └── exactly one AD backend: SSSD or Samba/Winbind
+
+R sessions
+  ├── $HOME under /nfs/home/<user>
+  ├── compiled user libraries under /var/lib/biome-Rlibs/<user>/<R-ver>/
+  ├── temporary files under /Rtmp
+  └── systemd user-.slice resource controls
+```
+
+T1 does **not** configure oauth2-proxy. The repository contains oauth2-proxy
+v7.6.0-alpine as the optional T2 Compose profile `oidc`, listening on host
+loopback port 4180. The active T1 templates contain no `auth_request` or
+oauth2-proxy upstream.
+
+## 3. T1 web and authentication flow
+
+### 3.1 Portal authentication
+
+The active portal is not an OIDC-only portal. `portal_index.html.template`
+contains an AD credential modal. The browser builds an HTTP Basic
+`Authorization` header and calls `/auth-check`; Nginx validates the request
+with `ngx_http_auth_pam_module` and PAM service `nginx`.
+
+After a successful check, portal JavaScript currently:
+
+1. POSTs the username, password, and a client-generated CSRF token to
+   `/rstudio-inner/auth-do-sign-in`.
+2. POSTs the credentials to the configured Nextcloud login path.
+3. Rewrites the terminal tile with a credential-bearing URL so the browser can
+   seed HTTP Basic authentication for `/terminal/`.
+
+This is the active implementation, not a recommended future design. Its risks
+are recorded in [SECURITY_MODEL.md](SECURITY_MODEL.md).
+
+### 3.2 RStudio Server OSS
+
+`scripts/20_configure_rstudio.sh` configures RStudio Server to:
+
+- listen on `127.0.0.1:8787`;
+- authenticate through `/etc/pam.d/rstudio`, which includes the system
+  `common-auth`, `common-account`, `common-password`, and `common-session`
+  stacks;
+- use `www-root-path=/rstudio-inner` after Nginx integration;
+- set `www-frame-origin=same`, `www-same-site=none`,
+  `www-enable-origin-check=1`, `auth-encrypt-password=0`, and
+  `auth-cookies-force-secure=1`.
+
+Nginx terminates TLS, supports WebSocket upgrades, disables response and
+request buffering for the RStudio proxy, permits uploads up to 10 GiB, and
+uses the R session timeout from `config/configure_rstudio.vars.conf` (currently
+2,880 minutes) for proxy read and send timeouts.
+
+### 3.3 ttyd terminal
+
+`scripts/03_install_secure_access.sh` installs ttyd and deploys
+`templates/ttyd.service.override.template`. The service binds to
+`127.0.0.1:2222`, uses `/terminal-inner` as its base path, trusts the
+`X-Forwarded-User` header, and starts `/usr/local/bin/ttyd_login_wrapper.sh`.
+Nginx protects both `/terminal/` and `/terminal-inner/` with PAM before setting
+that header. The loopback bind is therefore part of the trust boundary.
+
+### 3.4 Nextcloud proxy
+
+The T1 Nginx and portal templates still deploy `/files/` and
+`/files-inner/`, including WebDAV discovery redirects. The backend URL is the
+operator-supplied `NEXTCLOUD_TARGET_URL` from `config/install_nginx.vars.conf`.
+
+**Unverified:** the repository cannot prove that a Nextcloud backend is
+currently deployed or reachable at the site-specific target.
+
+### 3.5 Telemetry and Ollama
+
+`scripts/40_install_telemetry.sh` installs the host telemetry API as
+`botanical-telemetry.service` on port 8000 and node exporter on port 9100.
+Nginx exposes aggregated status endpoints under `/api/`, a `/metrics` endpoint,
+and LAN/VPN-restricted monitoring paths. These endpoints are not all
+internal-only: `/api/` and `/metrics` are present in the public TLS vhost and
+are rate-limited.
+
+`scripts/50_setup_nodes.sh` can install Ollama unless `SKIP_OLLAMA=true`.
+The configured API is `127.0.0.1:11434`, the service memory limit is 24 GiB,
+and Rprofile tools include `ask_ai()` when the service is available.
+
+## 4. Identity
+
+T1 supports one AD integration backend per host:
+
+- `scripts/10_join_domain_sssd.sh` for SSSD; or
+- `scripts/11_join_domain_samba.sh` for Samba/Winbind.
+
+The backends provide PAM authentication and NSS user/group resolution for
+RStudio, Nginx, ttyd login, and SSH. `scripts/12_lib_kerberos_setup.sh`
+manages Kerberos setup. Running both AD join paths on the same host violates
+the project XOR invariant.
+
+## 5. Storage
+
+| Path | Backing | Active use |
+|---|---|---|
+| `/nfs/home/<user>/` | TrueNAS SCALE dataset `zpool/home`, NFSv4.2, `sec=sys` | Persistent home, scripts, results, and fallback user R library |
+| `/var/lib/biome-Rlibs/<user>/<R-ver>/` | Local ext4, root filesystem or optional dedicated disk | Primary per-user compiled R packages when `ENABLE_R_LIBS_LOCAL=true` |
+| `/Rtmp/` | Dedicated 400 GiB local ext4 disk per VM | `TMPDIR`, `TMP`, `TEMP`, `R_TEMPDIR`, package and compiler scratch |
+| `/mnt/ProjectStorage/` | CIFS/SMB | Project archive and shared project storage |
+| `/tmp/` | OS temporary directory | Small system and diagnostic files only; not R temporary storage |
+
+TrueNAS enforces per-user ZFS quotas. The client-side storage diagnostic writes
+and fsyncs 1 MiB so it can detect `EDQUOT`; free space reported by `df` does not
+prove that a user has quota remaining.
+
+No active T1 R configuration should point R temporary files at `/tmp` or
+`/nfs/home/Rtmp`. `templates/Renviron.template` sets all four R temporary
+variables to `/Rtmp`. `config/configure_rstudio.vars.conf` still contains the
+stale value `GLOBAL_RSTUDIO_TMP_DIR=/nfs/home/Rtmp`; the repo changelog warns
+operators not to run the affected `20_configure_rstudio.sh` menu actions on a
+populated node because they can override the authoritative `50_setup_nodes.sh`
+deployment.
+
+## 6. R runtime
+
+The active host profile is version **12.10**. `scripts/50_setup_nodes.sh`
+renders `/etc/R/Rprofile.site`, `/etc/R/Renviron.site`, and the following
+fragments into `/etc/R/Rprofile_site.d/` in lexical order:
+
+```text
+04_user_lib_bootstrap     05_thread_guard
+20_cgroup_reader          30_psock_factory
+35_compile_routing        40_wrapper_installer
+42_install_block          45_memory_guards
+50_pkg_hooks              52_mclapply_guard
+55_options_guard          60_safe_setwd
+70_persistent_tools       80_tools_ext
+```
+
+The main runtime controls are:
+
+- `libopenblas0-serial`; `libopenblas0-pthread` is prohibited because it has
+  caused RStudio `rsession` crashes.
+- systemd `user-.slice` controls: `MemoryHigh=300G`, `MemoryMax=400G`,
+  `MemorySwapMax=4G`, `TasksMax=4096`, `CPUWeight=100`, and `IOWeight=100`.
+- cgroup-aware `parallel::detectCores()` and `options(mc.cores)` guards.
+- PSOCK cluster construction and automatic `mclapply()` rerouting when
+  fork-unsafe packages are loaded.
+- NIMBLE/TMB/Stan and package temporary work on `/Rtmp`.
+- memory guards around `solve`, `dist`, `outer`, `expand.grid`, and cluster
+  creation.
+- `terra` temporary routing to `/Rtmp`, default `todisk=TRUE`, and cgroup-aware
+  memory limits.
+- an install-block fragment that is shipped **off by default** and can be
+  armed with `BIOME_FORCE_INSTALL_BLOCK=1` or a template change and redeploy.
+
+Fragment failures are isolated and logged; PSOCK workers use a reduced startup
+path. The HC-13 diagnostic ladder distinguishes OS/NFS, minimal R, fragments,
+the full system profile, and user startup files before attributing a failure to
+user code.
+
+## 7. T2 and T3 differences
+
+T2 is not a byte-for-byte runtime match for T1. The recorded open delta
+`TD-T2-01` states that T2 still ships a monolithic Rprofile snapshot and audit
+v27 instead of T1's v12.10 fragments and audit v28. Other active T2 differences
+include:
+
+- optional oauth2-proxy v7.6.0-alpine on port 4180;
+- Step-CA trust bootstrap in `rstudio-init`;
+- RStudio containers using `/tmp` tmpfs;
+- no bspm/r2u in RStudio images (`TD-T2-05`);
+- docker-socket-proxy v0.5.0 published only on `127.0.0.1:2375`.
+
+T3 remains `SKELETON_NOT_READY`. Its manifests and ConfigMaps are development
+material and contain unresolved parity and site-configuration issues; they do
+not define the active platform.
+
+## 8. Known active contradictions
+
+- T1 portal authentication is still Basic/PAM plus browser-side credential
+  forwarding; T2 alone contains the OIDC sidecar.
+- The active portal template calls Google Fonts, contrary to HC-11's no-CDN
+  rule.
+- `scripts/20_configure_rstudio.sh` and `scripts/ttyd_login_wrapper.sh` still
+  have strict mode commented out, contrary to HC-03.
+- T1 still deploys ttyd and Nextcloud proxy support; they are not legacy-only
+  components in this checkout.
+- The sandbox is known broken and is not a validation path.
+
+## 9. Source map
+
+- Web edge: `scripts/30_install_nginx.sh`, `scripts/31_setup_web_portal.sh`,
+  `templates/nginx_site.conf.template`,
+  `templates/nginx_proxy_location.conf.template`,
+  `templates/portal_index.html.template`.
+- RStudio and PAM: `scripts/20_configure_rstudio.sh`,
+  `config/configure_rstudio.vars.conf`.
+- ttyd: `scripts/03_install_secure_access.sh`,
+  `templates/ttyd.service.override.template`, `scripts/ttyd_login_wrapper.sh`.
+- Runtime: `scripts/50_setup_nodes.sh`, `config/setup_nodes.vars.conf`,
+  `templates/Renviron.template`, `templates/Rprofile_site.R.template`,
+  `templates/Rprofile_site.d/`.
+- Tier status and deltas: `.ai/project.yml`, `docker-deploy/docker-compose.yml`,
+  `kubernetes-deploy/configmaps.yaml`.
 
 ---
 
-## 1. Introduction
-
-BIOME-CALC is a shared high-performance computing platform for botanical
-and ecological research. It provides authenticated access to:
-
-- **RStudio Server** — statistical computing environment with cgroup-bound
-  resources, modular Rprofile_site guards, and local SSD scratch (`/Rtmp`).
-- **Nginx Portal** — glassmorphism landing page, reverse proxy, and TLS
-  termination point.
-- **OAuth2 Proxy** — OIDC authentication frontend (oauth2-proxy v7.6.0)
-  integrated with the platform's identity backend.
-- **SSSD / Samba** — Active Directory integration for user authentication
-  and home-directory access via NFS.
-- **Telemetry API** — lightweight FastAPI service for system health
-  monitoring and resource usage reporting.
-- **Ollama** — local LLM inference for botanical AI workloads (optional,
-  GPU-accelerated where available).
-
-## 2. Deployment Tier Model
-
-| Tier | Location | Status | Description |
-|------|----------|--------|-------------|
-| **T1** | Host (bare-metal / VM) | **AUTHORITATIVE — continuously fixed** | All scripts, configs, and templates in `scripts/`, `config/`, `templates/`. The source of truth. |
-| **T2** | `docker-deploy/` | **Migration in progress** | Docker Compose mirror of T1. Must match T1 behavior; deviations documented in `tier_deltas`. |
-| **T3** | `kubernetes-deploy/` | **Skeleton — not production-ready** | Kubernetes manifests. Deferred until T2 is stable and validated. |
-
-**Rule:** Bugs are fixed in T1 first, then ported forward T1 → T2 → T3.
-Never patch T2/T3 in a way that masks a T1 defect (HC-03).
-
-## 3. High-Level Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        USER BROWSER                              │
-│                    (HTTPS / port 443)                            │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     NGINX (TLS termination)                      │
-│  - Reverse proxy for all backend services                       │
-│  - Static portal landing page                                   │
-│  - Proxy buffer / timeout tuning for long-lived RStudio sessions│
-│  - Rate limiting, request filtering                             │
-└───────┬───────────────┬──────────────┬──────────────┬───────────┘
-        │               │              │              │
-        ▼               ▼              ▼              ▼
-┌───────────────┐ ┌────────────┐ ┌──────────┐ ┌──────────────┐
-│ RStudio       │ │ OAuth2     │ │ Telemetry│ │ Ollama       │
-│ Server        │ │ Proxy      │ │ API      │ │ (optional)   │
-│ (port 8787)   │ │ (port 4180)│ │(port 8000)│ │(port 11434)  │
-└───────┬───────┘ └─────┬──────┘ └──────────┘ └──────────────┘
-        │               │
-        ▼               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   IDENTITY & STORAGE LAYER                        │
-│  - SSSD (AD integration, PAM, NSS)                              │
-│  - Samba (CIFS/SMB for legacy clients, optional)                │
-│  - NFS home directories (/nfs/home/<user>)                      │
-│  - Local R library disk (/var/lib/biome-Rlibs/<user>/<R-ver>/)  │
-│  - Local scratch disk (/Rtmp, 400 GB ext4)                      │
-│  - Shared project storage (/media/r_projects/<project>/)        │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 3.1 Nginx — TLS Termination and Reverse Proxy
-
-Nginx is the single entry point for all HTTPS traffic. It:
-
-- Terminates TLS (Let's Encrypt certificates, auto-renewed).
-- Serves the static glassmorphism portal landing page.
-- Proxies `/rstudio/` to RStudio Server with WebSocket support and
-  extended proxy timeouts for long-lived sessions.
-- Proxies `/oauth2/` to the OAuth2 proxy for authentication callbacks.
-- Proxies `/telemetry/` to the Telemetry API (internal only).
-- Applies rate limiting and request size limits.
-
-Nginx does **not** perform authentication itself. Authentication is
-delegated to the OAuth2 proxy and the underlying PAM/SSSD stack.
-
-### 3.2 OAuth2 Proxy — Authentication Frontend
-
-[oauth2-proxy](https://github.com/oauth2-proxy/oauth2-proxy) v7.6.0
-provides OIDC-based authentication:
-
-- Redirects unauthenticated users to the configured identity provider.
-- Validates OIDC tokens and sets session cookies.
-- Passes authenticated user identity to backends via `X-Forwarded-User`
-  and related headers.
-- Runs as a sidecar to RStudio Server, protecting access to RStudio
-  sessions.
-
-### 3.3 RStudio Server — Statistical Computing Environment
-
-RStudio Server (Open Source Edition) provides the R IDE to researchers.
-Each user session:
-
-- Runs inside a **cgroup user slice** with bounded CPU and memory
-  (configured via `config/setup_nodes.vars.conf`).
-- Loads the **modular Rprofile_site** system (version 12.10) which
-  transparently applies safety guards:
-  - `parallel::detectCores()` returns cgroup-effective core count.
-  - `parallel::mclapply()` is auto-rerouted to PSOCK when fork-unsafe
-    packages (terra, sf, raster) are loaded.
-  - `nimble::compileNimble()` routes compilation scratch to `/Rtmp`.
-  - `setwd()` with nonexistent paths is caught.
-  - Package installation inside scripts is blocked by default (opt-in).
-- Uses `/Rtmp` (400 GB local ext4) for temporary files — not `/tmp` and
-  not NFS.
-- Has a per-user local R library under `/var/lib/biome-Rlibs/<user>/`
-  to avoid NFS lookup storms during parallel `library()` calls.
-
-### 3.4 SSSD — Identity and Authentication
-
-SSSD connects the host to Active Directory:
-
-- Provides PAM authentication for RStudio Server and SSH.
-- Provides NSS user/group resolution (`getent passwd`, `id`).
-- Home directories are auto-created on NFS at first login.
-- Kerberos tickets are managed via `lib_kerberos_setup.sh`.
-
-Samba provides optional CIFS/SMB access for legacy Windows clients
-and is configured via `join_domain_samba.sh`.
-
-### 3.5 Telemetry API
-
-A lightweight FastAPI service (`scripts/40_install_telemetry.sh`) that:
-
-- Exposes system health endpoints (CPU, memory, disk, NFS mount status).
-- Reports per-user resource usage from cgroup statistics.
-- Is internal-only (not exposed to the public internet).
-
-### 3.6 Ollama — Local LLM Inference
-
-Optional GPU-accelerated LLM service for botanical AI workloads:
-
-- Runs as a Docker container (T2) or systemd service (T1).
-- Provides a REST API compatible with OpenAI chat completions.
-- Models are pinned to specific versions in the platform configuration.
-
-## 4. Design Principles
-
-### 4.1 Pessimistic System Engineering
-
-Every component is designed with the assumption that it **will** fail.
-Resources are bounded, defaults are conservative, and the system degrades
-gracefully rather than crashing catastrophically.
-
-- **Resource limits are mandatory** — every container and every user
-  session has explicit CPU and memory bounds.
-- **No silent failures** — errors are logged, surfaced, and actionable.
-- **Fail fast, recover cleanly** — hung sessions are terminated by
-  cgroup OOM killer or session timeout, not left to accumulate.
-
-### 4.2 Smallest Blast Radius
-
-- Each RStudio session is isolated in its own cgroup slice.
-- A single user's runaway process cannot starve other users.
-- NFS is used only for persistent home directories; all scratch I/O
-  goes to local SSD (`/Rtmp`).
-
-### 4.3 Adapt the System, Not the User Script (HC-13)
-
-The platform **never edits user R scripts**. All safety guards are
-implemented transparently in:
-
-- `Rprofile_site.d/` fragments loaded at R startup.
-- Environment variables set in `Renviron.site`.
-- cgroup resource controls enforced by systemd.
-- PAM session limits.
-
-When a user script has a problem (e.g., `mclapply` hang with `terra`),
-the fix goes in the platform, not in the user's code. The user writes
-portable R; the platform makes it safe.
-
-### 4.4 Honest Documentation
-
-Documentation describes the system as it actually is, not as we wish
-it were:
-
-- T2 Docker Compose is **migration in progress**, not production-ready.
-- T3 Kubernetes is **skeleton only**, not deployable.
-- The Vagrant sandbox is **known broken** and not a validation path.
-- `/Rtmp` is 400 GB ext4 local disk — it is not a RAM disk, not `/tmp`,
-  and not infinite.
-
-## 5. Key Technical Decisions
-
-| Decision | Rationale | Constraint |
-|---|---|---|
-| **OpenBLAS serial** (not pthread) | `libopenblas0-pthread` causes SIGSEGV under R's fork+thread model | HC-R-BLAS |
-| **Local R library disk** (`/var/lib/biome-Rlibs`) | Eliminates NFS lookup storms when PSOCK workers call `library()` simultaneously | v12.4 |
-| **Modular Rprofile_site fragments** | Each safety guard is an independent, versioned fragment; sysadmin can disable individual guards without rebuilding | HC-14 |
-| **cgroup user slices** | Per-user CPU/memory limits enforced by the kernel; no userspace quota daemon needed | v12.0 |
-| **PSOCK-only parallel** | Fork is unsafe with spatial packages (terra, sf, raster); the platform auto-reroutes `mclapply` to PSOCK when these are loaded | HC-13 |
-| **OAuth2 proxy** (not Basic Auth) | Eliminates credential handling in JavaScript; delegates auth to a dedicated, audited proxy | v7.6.0 migration |
-| **BIND MOUNTS only** (no named Docker volumes) | Host filesystem is the authoritative storage; no Docker-managed volume lifecycle surprises | HC-06 |
-
-## 6. Component Interaction — Authentication Flow
-
-```
-User → Nginx (TLS) → OAuth2 Proxy → Identity Provider (OIDC)
-                          │
-                          ▼ (authenticated)
-                   RStudio Server (PAM via SSSD → AD)
-                          │
-                          ▼
-                   User session with cgroup limits
-                   Rprofile_site guards active
-                   /Rtmp scratch available
-                   NFS home mounted
-```
-
-1. User navigates to `https://biome-calc.example.com/`.
-2. Nginx serves the static portal page.
-3. User clicks "RStudio" → Nginx proxies to OAuth2 Proxy.
-4. OAuth2 Proxy redirects to the OIDC identity provider for login.
-5. On successful authentication, OAuth2 Proxy sets session cookie and
-   proxies to RStudio Server.
-6. RStudio Server authenticates the user via PAM (SSSD → AD).
-7. RStudio session starts with cgroup limits, Rprofile_site guards,
-   and `/Rtmp` scratch available.
-
-## 7. Storage Layout
-
-| Path | Type | Purpose | Size |
-|------|------|---------|------|
-| `/nfs/home/<user>/` | NFS | Persistent home directories | Shared NAS |
-| `/var/lib/biome-Rlibs/<user>/<R-ver>/` | Local ext4 | Per-user compiled R packages | ~80 GB per VM |
-| `/Rtmp/` | Local ext4 | Session scratch / temporary files | 400 GB |
-| `/media/r_projects/<project>/` | NFS | Shared project data | Shared NAS |
-| `/tmp/` | tmpfs (small) | System temporary files (NOT for R scratch) | RAM-based |
-
-## 8. Future Directions
-
-See [`docs/FUTURE_MIGRATION.md`](../FUTURE_MIGRATION.md) for the full roadmap.
-Key items under evaluation (not yet adopted):
-
-- **Positron** — Posit's next-generation IDE. Currently desktop-only;
-  Positron Pro (server) requires Posit Workbench, which is not in scope.
-- **Open OnDemand** — HPC portal framework. Under evaluation as potential
-  replacement for the custom Nginx portal.
-- **Keycloak / Authentik** — Full IAM solutions. The current OAuth2 proxy
-  - AD model may evolve toward a dedicated IdP.
-- **Kubernetes (T3)** — Deferred until T2 Docker Compose is stable and
-  validated in production.
-
-## 9. Official References
-
-| Component | Official Documentation | Key Points for BIOME-CALC |
-|---|---|---|
-| RStudio Server | [Posit RStudio Server Admin Guide](https://docs.posit.co/ide/server-pro/) | PAM authentication, session limits, `rsession.conf` configuration |
-| oauth2-proxy | [oauth2-proxy Documentation](https://oauth2-proxy.github.io/oauth2-proxy/) | OIDC provider configuration, cookie settings, `--upstream` for RStudio |
-| Nginx | [nginx documentation](https://nginx.org/en/docs/) | Reverse proxy, WebSocket proxying, `proxy_read_timeout` for long-lived sessions |
-| SSSD | [SSSD Documentation](https://sssd.io/docs/) | AD integration, PAM/NSS, `enumerate=false` default and its implications |
-| systemd cgroups | [Control Group Interfaces](https://www.freedesktop.org/wiki/Software/systemd/ControlGroupInterface/) | `MemoryHigh`, `MemoryMax`, `CPUQuota` for per-user slices |
-| R `parallel` | [Parallel R](https://stat.ethz.ch/R-manual/R-devel/library/parallel/doc/parallel.pdf) | PSOCK vs FORK semantics, `detectCores()`, `mclapply()` fork safety |
-
----
-
-*Authoritative source: [`docs/architecture/SYSTEM_OVERVIEW.md`](https://github.com/gsamuele78/R-studioConf/blob/main/docs/architecture/SYSTEM_OVERVIEW.md) — last verified 2026-06-08.*
+*Authoritative source: [`docs/architecture/SYSTEM_OVERVIEW.md`](https://github.com/gsamuele78/R-studioConf/blob/main/docs/architecture/SYSTEM_OVERVIEW.md) — last verified 2026-10-06. The Markdown file in git is the source of truth.*

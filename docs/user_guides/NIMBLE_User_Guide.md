@@ -1,7 +1,16 @@
+---
+title: "Guide for Heavy Bayesian MCMC Computations (NIMBLE/nimbleHMC)"
+audience: researcher
+status: current
+source_path: docs/user_guides/NIMBLE_User_Guide.md
+last_verified: 2026-10-06
+sharepoint_section: Researcher Hub
+---
+<!-- docs/user_guides/NIMBLE_User_Guide.md -->
 # BIOME-CALC: Guide for Heavy Bayesian MCMC Computations (NIMBLE/nimbleHMC)
 
 > **For researchers running long Bayesian simulations (NIMBLE, TMB, Stan) on the shared RStudio server.**
-> Last updated: April 2026 | BIOME-CALC v10.0
+> Last verified: 2026-10-07
 
 ---
 
@@ -9,7 +18,7 @@
 
 When you work on BIOME-CALC through your browser:
 
-- **Closing your browser tab does NOT kill your computation.** Your R session keeps running in the background for up to **7 days**.
+- **Closing your browser tab does NOT kill your computation.** Your R session keeps running in the background for up to **48 hours** (the platform's session timeout, `session-timeout-minutes=2880`).
 - **When you reconnect**, you will need to **re-login** (enter username and password again — this is normal for the OSS version of RStudio).
 - **After re-login, RStudio reconnects you to your EXISTING session automatically.** All your variables are still in memory. Any running computation (e.g., `runMCMC()`) is still going. You do NOT need to do anything special.
 
@@ -17,7 +26,7 @@ When you work on BIOME-CALC through your browser:
 
 ```
 1. You close the browser tab
-   → Your R session keeps running on the server (up to 7 days)
+   → Your R session keeps running on the server (up to 48 hours)
    → Your MCMC computation continues in the background
 
 2. Hours later, you come back and re-login
@@ -65,7 +74,8 @@ biome_save_session()    # saves your current variables as a safety net
    status()
    ```
 
-   This shows your RAM quota, CPU allocation, and how many users are active.
+   This shows your RAM quota, CPU/BLAS thread caps, and free space on the
+   local `/Rtmp` disk.
 
 2. **Save any existing work (safety net):**
 
@@ -77,17 +87,21 @@ biome_save_session()    # saves your current variables as a safety net
 
 The server automatically:
 
-- Routes NIMBLE's C++ compilation to **NFS storage** (slower but reboot-safe for 16h+ runs)
-- Uses the **local /Rtmp disk** for compiler scratch files (fast, no RAM cost)
-- Caps threads to prevent overloading the shared CPU
-- Protects your compilation files from being cleaned up
+- Routes NIMBLE's C++ compilation to the **local /Rtmp disk** (fast, no RAM
+  cost, no network storage). Each run gets its own folder under
+  `/Rtmp/biome_<you>/nimble/<run_id>/`, and parallel workers compile in their
+  own subfolder of the same run.
+- Caps threads to prevent overloading the shared CPU.
 
 You will see a message like:
 
 ```
-🧪 BIOME-CALC: NIMBLE compilation routed to NFS (~/.nimble_compile/session_12345).
-   Thread cap: 4 per chain. Safe for multi-chain MCMC.
+BIOME-CALC: routing nimble compile -> /Rtmp/biome_you/nimble/2026-10-06_09-30_pid12345/master
 ```
+
+> ⚠️ `/Rtmp` is scratch space: compile artifacts there are cleaned up after
+> about 48 hours and are **not** backed up. Your *results* must be saved to
+> your home directory (`saveRDS()`), never only to `/Rtmp`.
 
 ### While It's Running
 
@@ -121,7 +135,7 @@ Each NIMBLE chain with `buildDerivs = TRUE` can use 8-15 GB of RAM during C++ co
 |--------|--------------|--------------|
 | 1 | 8-15 GB | ✅ Always safe |
 | 2 | 16-30 GB | ✅ Safe |
-| 4 | 32-60 GB | ✅ Safe (server has 400 GB) |
+| 4 | 32-60 GB | ✅ Safe if your memory share allows it — check `status()` |
 | 8+ | 64-120 GB | ⚠️ Check `status()` first |
 
 ---
@@ -153,7 +167,7 @@ The new server adds **safety guards** that:
 This means your previous session crashed. Common causes:
 
 1. **OOM kill** — Check for `~/ULTIMO_CRASH_RAM.txt`
-2. **Session timeout** — Sessions expire after 7 days of inactivity
+2. **Session timeout** — Sessions expire after 48 hours of inactivity
 3. **Server restart** — Ask the admin if the server was restarted
 
 **What to do:**
@@ -168,9 +182,9 @@ file.exists("~/ULTIMO_CRASH_RAM.txt")
 
 ### "compileNimble() Takes Very Long"
 
-NIMBLE's C++ compilation artifacts are routed to NFS storage for reboot safety.
-Compiler scratch files (intermediate `.o` files) use the local `/Rtmp` disk, which is fast and doesn't consume RAM.
-This combination provides both safety and good performance.
+NIMBLE's C++ compilation runs entirely on the local `/Rtmp` disk (fast,
+no memory cost, no network storage). Compilation is CPU-bound and simply
+takes time for complex models.
 
 Typical compile times:
 
@@ -192,10 +206,11 @@ If you see this error, contact the admin with:
 
 | Command | What it does |
 |---------|-------------|
-| `status()` | Show RAM quota, CPU, active users, tmpfs health |
+| `status()` | Show RAM quota, CPU/BLAS caps, and `/Rtmp` (local disk) free space |
 | `biome_save_session()` | Save all variables to `~/biome_session_backup.RData` |
 | `biome_load_session()` | Restore saved variables |
-| `biome_plot_budget()` | Check if tmpfs has space for plots |
+| `biome_worker_diagnostics()` | Post-mortem logs of crashed parallel workers |
+| `biome_plot_budget()` | `/Rtmp` disk usage breakdown per engine |
 | `biome_help()` | Show all available commands |
 | `biome_tutorial()` | Code examples for common tasks |
 
@@ -203,7 +218,8 @@ If you see this error, contact the admin with:
 
 ## 7. Contact
 
-For technical issues or server problems:
-
-- **Email:** <biome-internal@example.org>
-- **Subject line:** Include "BIOME-CALC" and a brief description
+For technical issues or server problems, email your lab's BIOME-CALC admin
+contact (shown in the R session start-up banner). Include "BIOME-CALC" in
+the subject line, the output of `status()`, the exact error text, and the
+path of the script you were running. See *Common Problems and Solutions* for the
+symptom-by-symptom checklist.

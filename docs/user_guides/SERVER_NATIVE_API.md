@@ -1,4 +1,13 @@
 <!-- docs/user_guides/SERVER_NATIVE_API.md -->
+---
+title: "Server-Native API — Advanced / Optional"
+audience: operator
+status: current
+tier: T1
+source_path: docs/user_guides/SERVER_NATIVE_API.md
+last_verified: 2026-10-07
+sharepoint_section: Operations Hub
+---
 # Server-Native API — Advanced / Optional
 
 **Audience:** power users, admins, on-call engineers.

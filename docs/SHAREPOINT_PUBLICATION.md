@@ -25,10 +25,12 @@ Target: botanists, ecologists, data scientists running R on the platform.
 | Safe Parallel R | `docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md` | Do's and Don'ts for parallel code |
 | Large Spatial Data | `docs/user_guides/large_spatial_matrices.md` | terra/sf workflows for large rasters |
 | NIMBLE MCMC Guide | `docs/user_guides/NIMBLE_User_Guide.md` | Parallel Bayesian modeling |
-| Advanced Helpers | `docs/user_guides/SERVER_NATIVE_API.md` | biome_*() helper functions |
-| Session Isolation | `docs/user_guides/rstudio_session_isolation.md` | How sessions are isolated |
-| Session FAQ (Italian) | `docs/user_guides/risposta_ricercatore_sessioni_rstudio.md` | Italian session FAQ |
-| User Contract | `docs/architecture/USER_CONTRACT.md` | What "portable R" means |
+| Common Problems | `docs/user_guides/COMMON_PROBLEMS.md` | Error message → what to do |
+
+Researcher pages contain no names of users, no incident reports, no server
+internals (configuration files, admin scripts) and only R a researcher can run.
+`SERVER_NATIVE_API.md` (power-user helpers) and `USER_CONTRACT.md` (formal
+contract, admin terminology) are published in the Operations hub.
 
 ### Sysadmin / Operator Hub ("BIOME-CALC Operations")
 
@@ -172,9 +174,42 @@ m365 spo page add --webUrl https://unibo.sharepoint.com/sites/BIOME-CALC \
 3. Paste into the SharePoint modern page as a "Markdown" or "Text" web part.
 4. Update the source path footer with the current date.
 
-### 3.2 Publication Script (future)
+### 3.2 Wiki docx guides (implemented)
 
-A publication script (`scripts/tools/publish_to_sharepoint.sh`) should:
+Four consolidated English Word documents are generated from the Markdown
+and uploaded to the wiki document library:
+
+| docx (`docs/wiki/`) | Hub | Chapters (sources) |
+|---|---|---|
+| `user-guide.docx` | Researcher | how the server works for you, cheat sheet, parallel R, large spatial data, NIMBLE |
+| `user-common-problems.docx` | Researcher | `user_guides/COMMON_PROBLEMS.md` |
+| `ops-troubleshooting.docx` | Operator | `TROUBLESHOOTING.md`, `DIAGNOSTICS_INDEX.md`, `USER_SCRIPT_TROUBLESHOOTING.md`, `diagnostic_logs.md` |
+| `ops-guide.docx` | Operator | system overview, security model, user contract, quickstart, maintenance, quotas/resources, storage expansion, session isolation, server helpers API, script catalog |
+
+The chapter list lives in [`wiki/manifest.tsv`](wiki/manifest.tsv). Build
+on a workstation (pandoc ≥ 2.17, python3; not on the R nodes):
+
+```bash
+bash scripts/tools/build_wiki_docx.sh              # all guides -> docs/wiki/
+bash scripts/tools/build_wiki_docx.sh --only ops-troubleshooting
+```
+
+What the build does: strips front matter and path comments, turns links
+between chapters of the same guide into internal links, turns links to repo
+files outside the guide into plain text (they would be dead links in a
+docx), adds a linked contents page (Word TOC fields stay empty in the
+SharePoint viewer) and stamps title page and footer with date and git
+commit (`+uncommitted` if `docs/` had local changes; publish only clean
+builds). Upload: replace the file in the wiki library, keeping the same
+name so version history accumulates. Never edit the docx; edit the
+Markdown and rebuild.
+
+The Italian source (`User_guide.md`) is not in the docx; its content is
+mirrored in the English guides.
+
+### 3.3 Page publication script (future)
+
+A page publication script (`scripts/tools/publish_to_sharepoint.sh`) should:
 
 1. Read `docs/SHAREPOINT_PUBLICATION.md` for the file→section mapping.
 2. For each file marked for publication:

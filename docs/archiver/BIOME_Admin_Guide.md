@@ -1,5 +1,7 @@
 # BIOME Archive Infrastructure — Admin Guide
 
+> **Internal admin guide (Italian) — needs review (2026-10-06).** Procedure kept as written; not re-validated against `templates/unibo_archive_manager.sh.template` / `scopri_progetti.sh.template` in this audit. Internal only.
+
 > **Versione:** 1.0 · **Server:** biome-calc01 · **OS:** Ubuntu 24.04 LTS  
 > **Realm AD:** `AD.EXAMPLE.COM` · **Storage:** `/mnt/ProjectStorage` · **Home NFS:** `/nfs/home`
 
