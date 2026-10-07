@@ -1,119 +1,96 @@
-# Dynamically Add and Configure `/Rtmp` Storage (Proxmox/Ubuntu)
-
-This guide details the procedure for deploying a newly attached SCSI virtual disk from Proxmox to an Ubuntu 24.04 VM as the dedicated high-performance `/Rtmp` volume, **without rebooting the VM**.
-
-This is optimized for RStudio Server workloads (including heavy NIMBLE MCMC compilation and large spatial matrix computations).
-
+<!-- docs/operations/add_storage_no_reboot.md -->
+---
+title: "Add /Rtmp Storage Without Reboot"
+audience: operator
+status: current
+tier: T1
+source_path: docs/operations/add_storage_no_reboot.md
+last_verified: 2026-10-06
 ---
 
-## 1. Detect the New Disk (No Reboot)
+# Add `/Rtmp` Storage Without Reboot
 
-When you attach a new virtual disk via the Proxmox UI (e.g., using VirtIO SCSI), Ubuntu typically picks it up automatically. If it doesn't, you can force the SCSI bus to rescan.
+Use this procedure for a newly attached Proxmox SCSI/VirtIO disk on an Ubuntu 24.04 T1 host. `/Rtmp` is local ext4 scratch for R, terra, NIMBLE and compilers. It must not be tmpfs, NFS, or mounted `noexec`.
 
-Check currently visible disks:
+## 1. Identify the new device
+
 ```bash
-lsblk
-```
-*(Look for a new, unpartitioned disk, typically `/dev/sdb` or `/dev/sdc`. Note the exact device name. We will refer to it as `/dev/sdX` below.)*
-
-If the disk is **not** visible, trigger a rescan:
-```bash
-for host in /sys/class/scsi_host/host*/scan; do echo "- - -" | sudo tee $host; done
-
-# Verify it appeared
-lsblk
+lsblk -o NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINTS
+for scan in /sys/class/scsi_host/host*/scan; do printf '%s\n' '- - -' | sudo tee "$scan" >/dev/null; done
+lsblk -o NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINTS
 ```
 
----
+Set the device only after comparing size and existing mounts:
 
-## 2. Partition the Disk
-
-We will create a single GPT partition spanning the entire disk. 
-
-> [!WARNING]
-> **Caution:** Replace `/dev/sdX` with your actual device name (e.g., `/dev/sdb`). Selecting the wrong drive will destroy existing data.
-
-Run the `parted` commands to format the disk:
 ```bash
-# Create a GPT partition table
-sudo parted /dev/sdX --script mklabel gpt
-
-# Create a single primary partition using 100% of the drive
-sudo parted /dev/sdX --script mkpart primary ext4 0% 100%
+DEV=/dev/sdX
+lsblk "$DEV"
+sudo wipefs --no-act "$DEV"
 ```
 
-Verify the partition was created (you should now see `/dev/sdX1`):
+> Selecting the wrong device destroys data. Stop unless `DEV` is the newly attached, unused disk.
+
+## 2. Partition and format
+
 ```bash
-lsblk /dev/sdX
+sudo parted "$DEV" --script mklabel gpt
+sudo parted "$DEV" --script mkpart primary ext4 0% 100%
+sudo partprobe "$DEV"
+PART=${DEV}1
+sudo mkfs.ext4 -m 0 -L RtmpVol "$PART"
 ```
 
----
+For NVMe or virtio names ending in a digit, set `PART` explicitly (for example `/dev/nvme1n1p1`).
 
-## 3. Format with ext4 (Optimized for Temp)
-
-For `/Rtmp`, we want maximum space availability. Since this is non-system, temporary storage, we will set the root-reserved block percentage to `0` (`-m 0`) to free up space.
+## 3. Mount now
 
 ```bash
-sudo mkfs.ext4 -m 0 -L RtmpVol /dev/sdX1
-```
-
----
-
-## 4. Prepare Mount Point and Temporary Mount
-
-RStudio needs to compile C++ code (like NIMBLE models) inside its temporary directories. Therefore, we **must not** use the `noexec` flag. However, we should use `nodev`, `nosuid`, and `noatime` (to avoid write amplification on read operations).
-
-```bash
-# Create the target directory
-sudo mkdir -p /Rtmp
-
-# Mount the drive with performance/security flags
-sudo mount -t ext4 -o rw,nosuid,nodev,noatime /dev/sdX1 /Rtmp
-
-# IMPORTANT: Set permissions to function as a public tmp directory
-# The sticky bit (1) ensures users can only delete their own files
+sudo install -d -m 1777 /Rtmp
+sudo mount -t ext4 -o rw,nosuid,nodev,noatime "$PART" /Rtmp
 sudo chmod 1777 /Rtmp
+findmnt -no SOURCE,FSTYPE,OPTIONS /Rtmp
+df -hT /Rtmp
 ```
 
----
+Required observations: filesystem `ext4`; `rw,nosuid,nodev,noatime`; no `noexec`; mode `1777`.
 
-## 5. Persist the Mount (`/etc/fstab`)
+## 4. Persist by UUID
 
-To ensure the disk mounts automatically on future VM reboots, we need to add it to the `/etc/fstab` file using its unique UUID.
-
-Find the UUID of your new partition:
 ```bash
-sudo blkid /dev/sdX1
-```
-*Look for `UUID="xxxxxxx-xxxx-xxxx..."`*
-
-Backup the current `fstab`:
-```bash
-sudo cp /etc/fstab /etc/fstab.backup
+UUID=$(sudo blkid -s UUID -o value "$PART")
+printf 'UUID=%s /Rtmp ext4 rw,nosuid,nodev,noatime 0 2\n' "$UUID" | sudo tee -a /etc/fstab
+sudo findmnt --verify --verbose
 ```
 
-Append the new mount record to `/etc/fstab`. Open `/etc/fstab` in an editor (`sudo nano /etc/fstab`) or append it directly:
+Do not unmount an active `/Rtmp`. Validate the entry without disrupting sessions:
 
 ```bash
-echo "UUID=YOUR-COPIED-UUID-HERE /Rtmp ext4 defaults,rw,nosuid,nodev,noatime 0 2" | sudo tee -a /etc/fstab
-```
-
-Verify the `fstab` entry works by unmounting and mounting all filesystems (this confirms there are no syntax errors before a reboot!):
-```bash
-sudo umount /Rtmp
 sudo mount -a
+findmnt -no SOURCE,FSTYPE,OPTIONS /Rtmp
+sudo -u nobody bash -c 'f=$(mktemp /Rtmp/rtmp-check.XXXXXX); printf ok >"$f"; rm -f "$f"'
 ```
 
-Verify it mounted correctly:
-```bash
-df -h | grep /Rtmp
-```
+## 5. R verification
 
-## 6. Restart RStudio Server Services (Optional)
-
-If existing sessions were previously pointing to system `/tmp` and need to be routed to `/Rtmp` immediately:
+New R sessions read `TMPDIR=/Rtmp` from `/etc/R/Renviron.site`.
 
 ```bash
-sudo systemctl restart rstudio-server
+sudo bash scripts/99_check_rprofile_health.sh --static-only
+R --no-save -e 'cat(tempdir(), "\n")'
 ```
-*(Ensure users have saved their work before doing this!)*
+
+Do not restart `rstudio-server` merely to mount the disk. Existing sessions retain their existing `tempdir()`; schedule a controlled restart only if they must be terminated and recreated.
+
+## Expansion of an existing `/Rtmp` disk
+
+After enlarging the virtual disk in Proxmox, rescan, grow partition 1, then grow ext4 online:
+
+```bash
+DEV=/dev/sdX
+for scan in /sys/class/scsi_host/host*/scan; do printf '%s\n' '- - -' | sudo tee "$scan" >/dev/null; done
+sudo growpart "$DEV" 1
+sudo resize2fs "${DEV}1"
+df -hT /Rtmp
+```
+
+**Unverified:** the repository does not define the Proxmox device name or storage backend. Confirm `DEV` and whether partition 1 is the deployed layout before running destructive commands.

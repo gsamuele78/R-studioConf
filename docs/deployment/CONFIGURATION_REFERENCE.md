@@ -18,8 +18,10 @@ Read that file for the per-variable matrix; this one explains the
   Kerberos-aware scripts).
 * **`config/r_env_manager.conf`** — orchestrator-level config (CRAN
   mirror, baseline R packages, GitHub PAT, min resources).
-* **`config/admin_recipients.txt`, `config/user_email_map.txt`** —
-  notification routing.
+* **`config/site/admin_recipients.txt`, `config/site/user_email_map.txt`** —
+  notification routing. Site-local and gitignored; the repo ships only the
+  `config/*.txt.example` placeholders. `resolve_site_config` (`lib/common_utils.sh`)
+  reads `config/site/<name>` and falls back to `<name>.example` with a WARN.
 * **`templates/*.template`** — placeholder-substitution templates,
   rendered by `process_template` (see `lib/common_utils.sh`).
 

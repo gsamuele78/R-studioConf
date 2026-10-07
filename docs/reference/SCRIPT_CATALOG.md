@@ -1,4 +1,13 @@
 <!-- docs/reference/SCRIPT_CATALOG.md -->
+---
+title: "Script Catalog (T1 Host — Authoritative)"
+audience: sysadmin
+status: current
+tier: T1
+source_path: docs/reference/SCRIPT_CATALOG.md
+last_verified: 2026-10-07
+sharepoint_section: Operations Hub
+---
 # Script Catalog (T1 Host — Authoritative)
 
 > **Tier:** T1 (host) — `AUTHORITATIVE_CONTINUOUSLY_FIXED`. Bugs are fixed
@@ -101,11 +110,11 @@ leaves the same per-user dirs a login does). They are documented in detail in
 | `99_check_rprofile_health.sh` | v2.0. Health of the startup chain every RStudio session runs (dispatcher, fragments, bundle, guards, BLAS, `Renviron.site`) and, with `--user NAME`, that user's startup files and session state, incl. an A/B run against the system baseline. Runtime probes run as the probed user, never as root. Repairs only with `--fix --commit` / `--reset-profile --commit` (backups, reversible quarantine). Runs from the repo checkout. Tested by `tests/rprofile_health_test.sh`. | PASS/WARN/FAIL/CRIT per check; exit `0` clear, `1` CRIT/FAIL, `2` warnings only, `3` invocation error, `4` requested change not applied. |
 | `99_diagnose_lussu_hang.sh` | v1.6. Lussu-specific overlay over the generic HC-13 harness. Adds (E) PSOCK swap probe, (F) `terra::terraOptions(todisk=TRUE,memfrac=0.2)` probe and (G) allocator-cap propagation probe. **Does NOT modify the user's `.R` file.** | Per-probe logs + generic `report.md` under `/tmp/lussu_diag_<user>_<TS>/`. |
 | `99_diagnose_user_script.sh` | v1.4. Generic HC-13 escalation harness: L0 infra probe, then the user script unmodified through 4 system layers (L1 minimal profile / L2 all deployed fragments off / L3s full system profile / L3 production incl. the user's `~/.Renviron` + `~/.Rprofile`). L1–L3s never read the user's startup files, so L3s PASS + L3 FAIL blames them. Run as the affected user. | Verdict + `report.md` under `/tmp/user_diag_<user>_<TS>/`; exit code keyed on L3 (`0`/`1`/`3`/`4`). Only L5 implies the user's script is at fault. |
-| `99_health_check.sh` | v1.1.0. End-to-end service + config + AD reachability check, extended with BIOME-CALC v11+ Rprofile and audit v28 infrastructure assertions. | Pass/fail per check, exit-code-meaningful. |
+| `99_health_check.sh` | v1.2.0. End-to-end service + config + AD reachability check, extended with BIOME-CALC v11+ Rprofile and audit v28 infrastructure assertions. | Pass/fail per check, exit-code-meaningful. |
 | `99_postmortem_forensics.sh` | Crash-after-the-fact collector. `--user <name> [--hours N] [--output FILE]`. Classifies crash type, checks guard coverage, identifies unguarded edge cases, recommends fixes. | Structured diagnosis text report. |
-| `99_troubleshoot_env.sh` | v1.3.0. Aggregates logs, system state, integration tests. `--rprofile` subsystem deep-check for Rprofile v11+ + audit v28. | Consolidated diagnostic dump. |
+| `99_troubleshoot_env.sh` | v1.4.0. Aggregates logs, system state, integration tests. `--rprofile` subsystem deep-check for Rprofile v11+ + audit v28. `--storage --test-user` does a real 1 MiB write and flags server-side quota (EDQUOT). | Consolidated diagnostic dump. |
 | `99_verify_domain_join.sh` | Domain join + home-dir mounting checks. Auto-detects SSSD vs Samba/Winbind. (Originally `01_check_autofs_sssd_pam.sh`.) | Pass/fail per probe. |
-| `99_diagnose_lussu_hang.sh` (alt path) | (See above — first-class entry.) | — |
+| `99_check_user_renviron_overrides.sh` | Audits users' `~/.Renviron` for overrides of system variables (e.g. `TMPDIR`, BLAS threads, `R_LIBS_USER`); optional cleanup. | Per-user findings. |
 
 ---
 
@@ -116,6 +125,7 @@ leaves the same per-user dirs a login does). They are documented in detail in
 | `r_minimal.sh` | `/usr/local/bin/r_minimal`, `/usr/local/bin/r_minimal_rscript` | HC-13 L0/L1 forensic launcher. Starts R/Rscript with `R_PROFILE_USER=/etc/R/Rprofile_minimal.R` so a sysadmin can prove a hang reproduces under pure R, **without** touching `/etc/R/Rprofile.site` on disk. Deployed by `50_setup_nodes.sh`. |
 | `ttyd_login_wrapper.sh` | `/usr/local/bin/ttyd_login_wrapper.sh` | Login wrapper that ttyd execs. Logs to the `secure_access` directory and resolves the AD username. Deployed by `03_install_secure_access.sh`. |
 | `test_rstudio_login.sh` | — | Manual smoke test: curl-driven RStudio plaintext login with multiple variations. Reads password interactively. Used post-deployment to confirm PAM stack works. |
+| `pin_r_version.sh` | — | Pins the system R version with apt preferences (stable default, custom version selectable). Version source of truth: `config/r_env_manager.conf`. |
 | `update_nginx_templates.sh` | — | Re-renders all Nginx templates from current vars without re-running the full `30_install_nginx.sh`. Useful after editing a template. |
 
 ---
@@ -126,6 +136,8 @@ leaves the same per-user dirs a login does). They are documented in detail in
 |---|---|
 | `r_env_audit.R` | Library/version snapshot used by `r_env_manager.sh` to verify the R environment before/after operations. |
 | `legacy_sysadmin_stress_test.R` | Reproducer harness for OpenBLAS-pthread SIGSEGV and CORETYPE regressions. Kept on disk for postmortem use only. |
+| `99_diagnose_rstudio_plot_pane.R` | Run inside the user's RStudio session: diagnoses (and optionally repairs) a blank Plots pane (graphics device, ragg guard). See TROUBLESHOOTING §1.5. |
+| `99_botanical_plot_stress_test.R` | Graphics stress test (base, ggplot2, terra, sf devices) for RStudio Server without X11. |
 
 ---
 
@@ -139,9 +151,28 @@ modifying the telemetry container behavior.
 
 ### `scripts/tools/`
 
-Standalone analytical tools (e.g. `r_pkg_drift_detector.R`) that are
-invoked by the `99_*` runners. Not directly run by operators in the
-normal flow.
+| Tool | Purpose |
+|---|---|
+| `bigger_usage_reports.sh` | Disk-usage report (NFS/CIFS-friendly): top consumers of home and `/Rtmp`. |
+| `build_wiki_docx.sh` | v1.1.0. Builds the English wiki docx guides from `docs/` per `docs/wiki/manifest.tsv` (assets in `tools/wiki/`). Workstation only. |
+| `check_installed_R_Package.sh` / `.R` | Where an R package is installed, which version, and where it loads from. |
+| `check_pkg_config.sh` | Prints OpenBLAS/OpenMP `pkg-config` variables (BLAS build diagnostics). |
+| `check_processor_threads.sh` | CPU/thread topology in machine-readable form. |
+| `deployment_summary.sh` | Post-deployment node report: hardware, R environment, disk usage. |
+| `hotfix_smtp_site_overrides.sh` | Writes only the mail/SMTP site overrides (`SMTP_HOST`, `SENDER_EMAIL`, `MAIL_DOMAIN`, ...) into the site overlay. |
+| `hw_report.sh` | Human-readable hardware report. |
+| `manage_r_sessions.sh` | List and manage running R/RStudio sessions per user. |
+| `r_pkg_drift_detector.R` | Baseline vs live `installed.packages()` diff; called by `99_check_pkg_drift.sh`. |
+
+### `scripts/lib/`
+
+Deployed by `50_setup_nodes.sh` (Step 11f) and used by `99_diagnose_user_script.sh` (L0a/L0b).
+
+| File | Purpose |
+|---|---|
+| `r_lint.R` | HC-13 static lint of a user `.R` file (describes code smells, never edits). |
+| `r_lint_rules.tsv` | Rule table read by `r_lint.R` (ID, severity, pattern, advice). |
+| `r_smoke.R` | Opt-in smoke run: sources the user file unmodified with a wall-clock timeout (`BIOME_DIAG_SMOKE_TIMEOUT_S`, default 300 s). |
 
 ---
 

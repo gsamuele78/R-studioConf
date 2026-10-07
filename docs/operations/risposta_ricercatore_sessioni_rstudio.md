@@ -42,7 +42,7 @@ Abbiamo esaminato i file di configurazione di RStudio (`/etc/rstudio/rsession.co
 
 - **Risultato:** Non esistono opzioni di configurazione nella versione OSS per reindirizzare le directory di stato delle sessioni. Le opzioni `session-default-working-dir` e `session-default-new-project-dir` controllano solo la directory di lavoro, non lo stato della sessione.
 
-La tabella riassuntiva delle prove è documentata in: `docs/user_guides/rstudio_session_isolation.md`
+La tabella riassuntiva delle prove è documentata in: `docs/operations/rstudio_session_isolation.md`
 
 ## 3. Fonti ufficiali e forum che confermano questa limitazione
 
@@ -127,7 +127,7 @@ Per il futuro, se la necessità di sessioni multiple per utente diventasse criti
 Per approfondire, abbiamo preparato due documenti:
 
 - **`docs/user_guides/User_guide.md`** — Sezione 10: FAQ sul perché non puoi aprire più sessioni RStudio. Linguaggio semplice, pensato per tutti gli utenti.
-- **`docs/user_guides/rstudio_session_isolation.md`** — Documento tecnico completo con tutta la cronologia dell'indagine, i test effettuati, i risultati, e i riferimenti alle fonti ufficiali.
+- **`docs/operations/rstudio_session_isolation.md`** — Documento tecnico completo con tutta la cronologia dell'indagine, i test effettuati, i risultati, e i riferimenti alle fonti ufficiali.
 
 ---
 

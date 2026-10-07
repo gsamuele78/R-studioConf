@@ -1,3 +1,12 @@
+---
+title: "BIOME-CALC: Working with Large Spatial Correlation Matrices"
+audience: researcher
+status: current
+source_path: docs/user_guides/large_spatial_matrices.md
+last_verified: 2026-10-07
+sharepoint_section: Researcher Hub
+---
+
 # BIOME-CALC: Working with Large Spatial Correlation Matrices
 
 ## Problem: OOM on Dense Distance Matrix Operations
@@ -143,17 +152,23 @@ for (start in seq(1, n, by = chunk_size)) {
 }
 ```
 
-## When to Use NFS Fallback
+## Where terra writes temporary rasters
 
-If you need to materialize temporary raster files during spatial analysis,
-BIOME-CALC v9.6 will automatically redirect to NFS when tmpfs exceeds 75%.
+Temporary raster files go to your per-user scratch directory on `/Rtmp`
+(400 GB local disk): `/Rtmp/biome_<user>/terra`. When `terra` loads, the
+platform calls `terraOptions(tempdir = <that directory>, todisk = TRUE,
+memfrac = 0.5, memmax = <half of your memory share>)`, so large rasters
+spill to the scratch disk instead of filling memory. Old settings such as
+`BIOME_FORCE_NFS_TMP` do nothing any more, and `/tmp` is not used.
 
-For explicit large-data operations:
+Check what terra is using:
+
 ```r
-Sys.setenv(BIOME_FORCE_NFS_TMP = "true")  # Before loading terra/raster
-library(terra)
-# terra will now write temps to NFS, not RAMDisk
+terra::terraOptions()   # tempdir should be /Rtmp/biome_<user>/terra
 ```
+
+Files in `/Rtmp` are removed about 48 h after they stop being used. Write
+results you want to keep to your home or project share.
 
 ## Quick Reference: Maximum Safe Matrix Sizes
 
