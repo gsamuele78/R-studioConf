@@ -49,6 +49,19 @@ EOF
 
 RUN chmod 755 /etc/rstudio/rsession-profile
 
+# 2b. Java for rJava (mirrors T1 r_env_manager.sh configure_java_for_r):
+# JDK + netcdf-bin, libjvm on the linker path, javareconf, rJava from source,
+# then a JVM smoke test. Without it rJava cannot load libjvm.so and
+# loadeR.java / climate4R.UDG / loadeR fail to install.
+RUN apt-get update && apt-get install -y --no-install-recommends default-jdk netcdf-bin \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")" \
+    && test -d "${JAVA_HOME}/lib/server" \
+    && echo "${JAVA_HOME}/lib/server" > /etc/ld.so.conf.d/java.conf && ldconfig \
+    && R CMD javareconf \
+    && Rscript -e 'install.packages("rJava", type = "source")' \
+    && Rscript -e 'library(rJava); .jinit(); stopifnot(nzchar(.jcall("java/lang/System", "S", "getProperty", "java.version")))'
+
 # 3. Install Botanical Packages
 # Copy the installation script
 COPY scripts/install_botanical_packages.R /rocker_scripts/install_botanical_packages.R
