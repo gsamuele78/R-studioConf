@@ -5,6 +5,13 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed (CI)
+
+- `actions/checkout` v4 → v7 in all workflows (dependabot #18). Breaking changes
+  since v4 do not apply here: GitHub-hosted runners only (node24 is fine), no
+  `pull_request_target` / `workflow_run` triggers, no workflow pushes with the
+  checkout token.
+
 ### Added (wiki docx guides)
 
 - `scripts/tools/build_wiki_docx.sh` v1.0.0 (+ `scripts/tools/wiki/`): builds four
