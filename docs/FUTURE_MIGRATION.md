@@ -49,7 +49,7 @@ Profiles are `sssd`, `samba`, `portal`, `oidc`, and `ai`. All services except `d
 
 Current upstream image pins visible in code are:
 
-- `curlimages/curl:8.11.1`
+- `curlimages/curl:8.22.0`
 - `tecnativa/docker-socket-proxy:v0.5.0`
 - `quay.io/oauth2-proxy/oauth2-proxy:v7.6.0-alpine`
 - `rocker/geospatial:4.4.2` in the RStudio Dockerfiles

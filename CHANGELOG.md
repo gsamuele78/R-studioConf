@@ -5,6 +5,13 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed (dependencies, T2)
+
+- `curlimages/curl` 8.11.1 → 8.22.0 for the `rstudio-init` one-shot (dependabot #19).
+  The init only runs `/bin/sh` checks, no curl options, so nothing else changes.
+  IDE rule files regenerated (`make generate`); no T1/T3 counterpart (T3 has no
+  init container on this image).
+
 ### Changed (CI)
 
 - `actions/checkout` v4 → v7 in all workflows (dependabot #18). Breaking changes
