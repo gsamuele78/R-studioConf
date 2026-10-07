@@ -51,12 +51,13 @@ The full validation surface (HC-01/02/04/05/06/10/11 + healthchecks) is document
 
 | Image | Pin | Source |
 |---|---|---|
-| `rocker/geospatial` | `4.4.1` | `Dockerfile`, `Dockerfile.sssd`, `Dockerfile.samba` |
-| `nginx` | `1.27-alpine` | `Dockerfile.nginx` |
-| `ollama/ollama` | `0.5.4` | `Dockerfile.ollama` |
+| `rocker/geospatial` | `4.4.3` | `Dockerfile`, `Dockerfile.sssd`, `Dockerfile.samba` |
+| `nginx` | `1.31.0-alpine` | `Dockerfile.nginx` |
+| `ollama/ollama` | `0.35.0` | `Dockerfile.ollama` |
 | `python` | `3.11-slim` | `Dockerfile.telemetry` |
-| `quay.io/oauth2-proxy/oauth2-proxy` | `v7.6.0` | compose service |
-| `tecnativa/docker-socket-proxy` | `0.3.0` | compose service |
+| `curlimages/curl` | `8.22.0` | compose service `rstudio-init` |
+| `quay.io/oauth2-proxy/oauth2-proxy` | `v7.6.0-alpine` | compose service (TD-T2-03) |
+| `tecnativa/docker-socket-proxy` | `v0.5.0` | compose service |
 | `botanical-*`, `rstudio-botanical-*` | `:latest` (locally built) | **documented HC-07 exception** |
 
 ## 5. Health & status

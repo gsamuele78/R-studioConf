@@ -36,8 +36,8 @@ COMPOSE FORMAT:
 - Always: deploy, healthcheck, logging, labels, depends_on
 
 PINNED UPSTREAM VERSIONS (extracted from Dockerfiles — do not override):
-  ollama/ollama: 0.5.4
-  rocker/geospatial: 4.4.2
+  ollama/ollama: 0.35.0
+  rocker/geospatial: 4.4.3
   curlimages/curl: 8.22.0
   quay.io/oauth2-proxy/oauth2-proxy: v7.6.0-alpine
   tecnativa/docker-socket-proxy: v0.5.0
