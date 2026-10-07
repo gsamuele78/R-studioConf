@@ -1,5 +1,5 @@
 # Dockerfile for RStudio Botanical "Pet Container"
-FROM rocker/geospatial:4.4.3
+FROM rocker/geospatial:4.6.0
 
 LABEL maintainer="docker-deploy-botanical"
 

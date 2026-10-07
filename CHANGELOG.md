@@ -5,6 +5,14 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed (T2 R version = T1)
+
+- RStudio images (`docker-deploy/Dockerfile`, `Dockerfile.sssd`, `Dockerfile.samba`)
+  moved from `rocker/geospatial:4.4.3` to `4.6.0`, the R version pinned on the host
+  (`scripts/pin_r_version.sh` `DEFAULT_R_VERSION`, T3 `configmaps.yaml` `R_VERSION`).
+  Closes TD-T2-06. `.github/dependabot.yml` now ignores every `rocker/geospatial`
+  update (patch included): the R version moves by hand together with the T1 pin.
+
 ### Changed (dependencies, T2 base images)
 
 - Dependabot #20: `rocker/geospatial` 4.4.2 → 4.4.3 (R patch release), `nginx`

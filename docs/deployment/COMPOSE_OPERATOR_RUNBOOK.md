@@ -51,7 +51,7 @@ The full validation surface (HC-01/02/04/05/06/10/11 + healthchecks) is document
 
 | Image | Pin | Source |
 |---|---|---|
-| `rocker/geospatial` | `4.4.3` | `Dockerfile`, `Dockerfile.sssd`, `Dockerfile.samba` |
+| `rocker/geospatial` | `4.6.0` | `Dockerfile`, `Dockerfile.sssd`, `Dockerfile.samba` (= T1 R pin, `scripts/pin_r_version.sh`) |
 | `nginx` | `1.31.0-alpine` | `Dockerfile.nginx` |
 | `ollama/ollama` | `0.35.0` | `Dockerfile.ollama` |
 | `python` | `3.11-slim` | `Dockerfile.telemetry` |
