@@ -1,59 +1,110 @@
-# BIOME-CALC v10: Infrastructure Architecture Guide for Researchers
-
-> A technical overview of the new BIOME-CALC server architecture, focusing on quantitative improvements in stability, concurrent processing, and data integrity compared to the legacy environment.
-
+---
+title: "How BIOME-CALC Works for You"
+audience: researcher
+status: current
+source_path: docs/user_guides/understanding_the_new_server.md
+last_verified: 2026-10-07
+sharepoint_section: Researcher Hub
 ---
 
-## 1. Concurrent Execution and the "Memory Guard" System
+# How BIOME-CALC Works for You
 
-If an R execution is interrupted with a `BIOME-CALC` warning, it is due to a deterministic safety mechanism designed to maintain system-wide stability.
+BIOME-CALC is a shared RStudio Server for the lab's R work: large rasters,
+spatial statistics, Bayesian models. This chapter explains what is
+different from your laptop and why, so the server's messages make sense.
 
-### 1.1 Resource Contention in the Legacy Architecture
-The previous environment operated on a static resource allocation model. For example, environment variables (`OPENBLAS_NUM_THREADS`) were hardcoded to 32 cores for all users. 
+## 1. Getting in
 
-**The Statistical Reality:**
-While this maximized single-user performance when the server was empty, it failed mathematically under concurrent load. If 5 researchers executed functions like `solve()` or `crossprod()` simultaneously, the system generated 160 active processing threads competing for 32 physical cores.
-* **Result:** Extreme CPU context-switching (thrashing), exponential thermal degradation, and ultimately a kernel-level `OOM Kill` (Out of Memory) or `SIGSEGV` fault, resulting in total data loss for all active sessions.
+1. Open the portal address the admins gave you, in any browser.
+2. Log in once with your **university username and password**.
+3. The portal shows tiles:
+   - **RStudio** — your usual RStudio, in the browser.
+   - **Terminal** — a Linux command line on the server (for `tmux`,
+     `Rscript`, `git`).
+   - **Files** — upload files from your computer, where your node has it.
+4. Click RStudio. You are not asked for the password again.
 
-### 1.2 The BIOME-CALC Solution: Dynamic Fair-Share Algorithm
-The new architecture replaces static assignment with a dynamic allocation mechanism.
-* **CPU Balancing:** The server actively monitors the number of concurrent `rsession` processes and mathematically divides the available vCores. Under heavy multi-tenant load, a user is deterministically assigned a dedicated slice (e.g., 6 isolated threads) ensuring 100% computational efficiency without context-switching overhead.
-* **Pre-computation Memory Modeling (Guards):** Before executing known high-load Base R functions (`solve()`, `dist()`, `expand.grid()`), the server calculates the theoretical RAM footprint. For instance, inverting a matrix requires `~2.06 × matrix_size` in RAM. If the calculation exceeds available system memory, the environment safely pauses the script and alerts the user, preventing a system-wide kernel panic.
+No VPN client, no SSH client, nothing to install on your computer.
 
----
+**One session per person.** You can have one R session at a time. If you
+open RStudio in a second browser or on a second server, the first window
+is disconnected and shows *"another browser connected"*. Your work is not
+lost: the second window shows the same session. This is a limit of the
+free RStudio Server, not a fault.
 
-## 2. Measurable Infrastructure Advantages
+**Your session waits for you.** If you close the browser, the R session
+keeps running on the server for about 48 hours. Log in again and you are
+back where you left it. After 48 hours of inactivity it is closed.
 
-The architectural upgrade introduces structurally different paradigms that provide measurable improvements to daily research workflows:
+## 2. Where your files go
 
-### 🛡️ 2.1 Enterprise Data Integrity (Zero-Loss Architecture)
-* **Legacy:** Local single-point-of-failure storage.
-* **Current:** Storage is decoupled onto a TrueNAS Enterprise Array utilizing the ZFS filesystem. It features RAID-Z2 redundancy and automated cryptographic snapshots. Node hardware failures no longer result in data loss. 
+| Place | What it is | Use it for | Keep in mind |
+|---|---|---|---|
+| Home folder (`~`) | Network storage, the same on every server | Scripts, input data, final results | Has a **personal size limit**; reading thousands of small files is slower |
+| `tempdir()` / `tempfile()` (on `/Rtmp`) | Fast 400 GB disk inside each server | Intermediate files, chunks, raster temp files | Deleted automatically about **48 hours** after last use; not on the other servers |
+| `/mnt/ProjectStorage` | Shared project archive | Sharing data within a project | Write access is given per project |
+| `/tmp` | Small system folder | Nothing | Big files here can crash your session |
 
-### 🏃 2.2 Compilation Efficiency (5-Second Installs)
-* **Legacy:** Packages like `sf` or `terra` required source compilation against standard libraries, averaging 20–30 minutes per installation.
-* **Current:** Integration with the `bspm` (binary system package manager) and `r2u` repositories bypasses compilation entirely. Geospatial libraries download and mount pre-compiled binaries in under 5 seconds.
+You never need to type `/Rtmp`: `tempdir()` and `tempfile()` already point
+there, so the same code works on your laptop.
 
-### 💻 2.3 Secure Web Terminal Integration
-* **Legacy:** Required third-party clients (PuTTY), complex SSH key management, and VPN configurations.
-* **Current:** Built-in `ttyd` integration securely connects to the underlying Linux container via an authenticated WebSockets iframe. Standard university Identity Providers (AD/Kerberos) handle authentication seamlessly.
+## 3. Sharing memory and processors
 
-### 📁 2.4 Cloud-Native WebDAV Uploads (Nextcloud)
-* **Legacy:** Relied on SFTP protocols causing workflow friction.
-* **Current:** A fully integrated Nextcloud instance provides a standard drag-and-drop web interface for importing `.csv` and `.tiff` datasets directly into the RStudio `Home` directory.
+Many people use the server at once, so each person gets a **fair share** of
+memory and processors. The share grows when the server is quiet and
+shrinks when it is busy.
 
-### 🔄 2.5 Multi-Day MCMC Safety (NIMBLE / Bayesian)
-* **Legacy:** Standard `/tmp` directories were mounted on RAM (`tmpfs`). A large `compileNimble()` execution could consume 15 GB of RAM for `cc1plus` `.o` scratch files, starving the actual R process.
-* **Current:** The architecture provisions a dedicated 400 GB virtio disk specifically mounted at `/Rtmp`. 16-hour long Bayesian MCMC chains are isolated from the OS memory pool, eliminating memory-induced termination.
+- `parallel::detectCores()` returns **your** share, so
+  `makeCluster(detectCores() - 1)` is always right.
+- `status()` shows your memory, cores and scratch disk at this moment.
+- Math libraries use one thread per process. This keeps parallel code
+  (`parLapply`, `foreach`, `future`) from overloading the server; you do not
+  need to set any thread variable.
 
----
+## 4. Warnings before the crash
 
-## 3. Resolving Resource Threshold Interventions
+Some functions can ask for more memory than exists: `solve()`, `dist()`,
+`outer()`, `expand.grid()` on large inputs. Before they run, the server
+estimates the memory needed and prints a `BIOME-CALC:` warning with the
+estimate and an alternative, for example `Matrix::Cholesky()` or sparse
+methods. Read it before you continue: if the memory really runs out, the R
+session is stopped and everything not saved to disk is lost.
 
-When a script triggers a BIOME-CALC Memory Guard, it indicates that the requested data transformation exceeds the mathematical limits of a single-node memory pool. This is common in modern high-resolution spatial ecology.
+The chapter *Working with Large Spatial Correlation Matrices* shows the
+alternatives with examples.
 
-**Statistically Validated Optimizations:**
-1. **Analyze the Warning Data:** The console output calculates exactly how much data was attempted (e.g., "Attempted O(n²) calculation on 50,000 spatial points").
-2. **Implement Sparse Matrices:** Functions like `dist()` attempt to materialize billions of zeroes in standard RAM. Transitioning to `sf` or `terra` spatial distances utilizes C++ routines optimized for sparse geographic representations.
-3. **Transition to Data Tables:** `expand.grid()` scales exponentially. Using `data.table::CJ()` performs Cartesian joins using pointer references, reducing RAM overhead by up to 80%.
-4. **Utilize the Offline AI Assistant:** The environment hosts a local LLM via Ollama (`ask_ai("How do I convert this to a sparse matrix?")`), allowing researchers to query R optimization strategies without transmitting proprietary data externally.
+## 5. Things the server does for you
+
+You do not need any special code for these; your scripts stay the same as
+on your laptop.
+
+- **Spatial packages and `mclapply()`.** `mclapply()` can freeze with terra,
+  sf or GDAL loaded. The server switches it to a safe cluster
+  automatically.
+- **terra.** Large rasters are written to the scratch disk instead of
+  filling memory.
+- **NIMBLE, Stan, TMB.** Model compilation happens on the scratch disk,
+  separately for each session.
+- **Packages.** `install.packages()` goes to your personal library.
+  `bspm::install_sys("sf")` installs a ready-made binary in seconds instead
+  of compiling for many minutes.
+- **No automatic `.RData`.** The workspace is not saved on exit, because
+  reloading a multi-GB workspace crashes the browser. Save what you need
+  with `saveRDS()`.
+
+## 6. Helpers you can call
+
+```r
+status()          # memory, cores, scratch disk, right now
+biome_help()      # list of helper commands
+biome_tutorial()  # short printed guide with examples
+```
+
+Where the admins installed it, `ask_ai("How do I convert this to a sparse
+matrix?")` asks a language model that runs on the server, so your data and
+code do not leave it.
+
+## 7. When something goes wrong
+
+See the companion guide **BIOME-CALC Common Problems and Solutions**. It
+lists the usual error messages, what they mean, and what to do.

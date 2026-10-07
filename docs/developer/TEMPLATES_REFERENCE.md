@@ -1,74 +1,127 @@
-# Templates Reference: Dynamic Configuration Engine
+<!-- docs/developer/TEMPLATES_REFERENCE.md -->
+# Templates Reference
 
-The `templates/` directory is central to the idempotency and security model of the BIOME portal. Instead of manipulating configuration files via raw `echo`, `sed`, or `cat <<EOF` in the main deployment scripts, the system relies on a unified templating engine.
+This page describes the T1 `templates/` tree as of 2026-10-06. `scripts/50_setup_nodes.sh` is the principal runtime-template deployer. For a broader gallery, see [`../reference/TEMPLATE_GALLERY.md`](../reference/TEMPLATE_GALLERY.md).
 
-## 1. The Template Engine (`__process_template`)
+## Rendering mechanisms
 
-Located in `lib/common_utils.sh`, the `__process_template` function performs safe, deterministic string substitution on `.template` files.
+### `process_template`
 
-### Security Benefits over `envsubst`
-
-While `envsubst` is common, it blindly evaluates any string matching `$VAR` or `${VAR}`. If user input or an unpredictable file path contains a bash variable syntax, `envsubst` corrupts it.
-
-Our engine explicitly accepts a list of variable names as arguments:
+Defined in `lib/common_utils.sh`:
 
 ```bash
-__process_template "nginx.conf.template" "nginx.conf" "NGINX_PORT" "SSL_CERT"
+process_template template_path output_variable NAME=value ...
 ```
 
-It dynamically constructs a surgical `sed` regex strictly for the placeholder syntax `%%VAR_NAME%%`:
-`s|%%NGINX_PORT%%|443|g`
+It replaces explicit `%%NAME%%` tokens and assigns the rendered text to a shell variable. The caller writes that variable to the destination. There is no `__process_template` function.
 
-By using the pipe character `|` as the `sed` delimiter, it flawlessly injects paths containing forward slashes `/` across web and system configuration files.
+### `process_systemd_template`
 
----
+This separate function replaces `{{NAME}}` tokens from caller variables and writes a destination file, setting `root:root` and mode `0644`. It is not the same engine as `process_template`; the divergent implementations remain an open audit item.
 
-## 2. Core Templates Dictionary
+### Allow-listed `envsubst`
 
-Templates are divided by their target subsystem.
+`50_setup_nodes.sh` uses restricted `envsubst` variable lists for the orphan-cleanup and archive-manager templates. This is active code, not an obsolete path.
 
-### 2.1 Web & Gateway (`nginx_proxy_location.conf.template`)
+## R runtime templates
 
-* **Purpose**: The central routing logic for Nginx.
-* **Injects**:
-  * `%%DOMAIN_NAME%%` for virtual host binding.
-  * Timeout properties (`proxy_read_timeout`) derived directly from RStudio's session configurations.
-  * Path mapping configurations for RStudio (`/rstudio-inner/`), Nextcloud (`/files-inner/`), and TTYD (`/terminal-inner/`).
-* **Sysadmin Detail**: Features the massive JSON RPC buffer inflations (`proxy_buffer_size`) necessary to parse nested datatables sent by the statistical backend without triggering a `502 Bad Gateway`.
+| Template | Active role/destination |
+|---|---|
+| `Rprofile_site.R.template` | Thin dispatcher rendered to `/etc/R/Rprofile.site`; current configured version is 12.10. |
+| `Renviron.template` | Managed R environment source containing `/Rtmp`, local R library, fork/thread, GDAL/PROJ, allocator, Python, and compiler settings. The audit records a remaining discrepancy between this file and the live generation path. |
+| `Rprofile_site.minimal.R.template` | Minimal forensic profile used by diagnostics. |
+| `00_audit_v28.R.template` | Rendered to `${BIOME_CONF}/audit/00_audit_v28.R`. v28 is active on T1. |
+| `rstudio_user_login_script.sh.template` | User login/bootstrap script deployed by RStudio configuration. Uses `jq` for preference merging inside the template. |
+| `r_profile_site_welcome.R.template` | Welcome/profile support template. |
+| `Rprofile_site_optimized.R.template` | Retained non-canonical alternative; canonical dispatcher is `Rprofile_site.R.template`. |
 
-### 2.2 Orchestration Automation
+### Active `Rprofile_site.d/` fragments
 
-Templates that compile into automated cronjobs or event-driven hook scripts.
+`50_setup_nodes.sh` deploys the modular fragment directory to `/etc/biome-calc/profile.d/`. Lexical order is behaviorally significant.
 
-#### `unibo_archive_manager.sh.template`
+| Fragment | Role |
+|---|---|
+| `04_user_lib_bootstrap.R.template` | Creates/repairs the per-user local R library path. |
+| `05_thread_guard.R.template` | Native thread limits and core awareness. |
+| `20_cgroup_reader.R.template` | Reads effective cgroup CPU/memory limits. |
+| `30_psock_factory.R.template` | Public PSOCK cluster factory. |
+| `35_compile_routing.R.template` | Routes NIMBLE/TMB compilation scratch to `/Rtmp`. |
+| `40_wrapper_installer.R.template` | Installs managed wrappers. |
+| `42_install_block.R.template` | Opt-in installation blocker introduced by the v12.10 line. |
+| `45_memory_guards.R.template` | Preflight guards for large allocations. |
+| `50_pkg_hooks.R.template` | Package-specific runtime hooks. |
+| `52_mclapply_guard.R.template` | Fork guard for `mclapply`. |
+| `55_options_guard.R.template` | Managed-option guard. |
+| `60_safe_setwd.R.template` | Safe working-directory behavior. |
+| `70_persistent_tools.R.template` | Persistent public helper functions. |
+| `80_tools_ext.R.template` | Extended tools. |
 
-* **Purpose**: Nightly cleanup. Analyzes AD groupings and Active Directory metadata to transfer orphaned or concluding project directories from `/nfs/home` to the CIFS CIFS storage `ProjectStorage` tier.
-* **Injects**: Active Directory group prefixes, Target mount points, CSV manifest paths.
-* **Security Detail**: Before migrating a user, uses isolated `su -s /bin/bash` with a dotfile `.biome_access_check` to prove Posix write capability by the AD identity, bypassing root permission masking errors.
+`Rprofile_site.d/README.md` documents fragment-specific behavior. Any `RPROFILE_VERSION` change must follow HC-14 and update the Rprofile changelog and cross-references in the same commit.
 
-#### `cleanup_r_orphans.sh.template`
+## Identity, RStudio, Nginx, and portal
 
-* **Purpose**: The OOM/Zombie hunter. Kills R/Java processes consuming CPU that lack a valid parent (like `rsession`).
-* **Injects**: Maximum allowed execution hours via CPU Time (`%%MAX_CPU_HOURS%%`), administrative sender emails (`%%SENDER_EMAIL%%`), and SMTP endpoints.
-* **Security Detail**: Executes a safe kill ladder: `SIGTERM` -> Grace Wait -> `SIGKILL`, ensuring buffers (like NetCDF files) have time to sync to NFS before terminal thread destruction.
+| Templates | Role |
+|---|---|
+| `sssd.conf.template`, `smb.conf.template`, `krb5.conf.template` | SSSD or Samba/Winbind identity and Kerberos configuration. SSSD and Samba are alternatives, not a combined deployment. |
+| `chrony.conf.template` | Time synchronization configuration. |
+| `rstudio_logging.conf.template` | RStudio logging configuration. |
+| `nginx_site.conf.template`, `nginx_proxy_location.conf.template`, `nginx_performance.conf.template` | Nginx virtual host, upstream location, and performance configuration. |
+| `nginx_ssl_params.conf.template`, `nginx_ssl_certificate.conf.template` | TLS settings and certificate paths. |
+| `portal_index.html.template`, `portal_index_simple.html.template`, `portal_style.css.template` | Portal UI. The two HTML templates still load Google Fonts and therefore remain open HC-11 defects. |
+| `rstudio_wrapper.html.template`, `terminal_wrapper.html.template`, `nextcloud_wrapper.html.template`, `server_status_wrapper.html.template` | Wrapper pages retained by the active web/secure-access code paths. `server_status_wrapper.html.template` also still loads Google Fonts. |
+| `ttyd.service.override.template`, `motd_biome_rules.template` | ttyd override and MOTD policy content. |
+| `sysctl_optimization.conf.template`, `guest_optimizer.sh.tpl` | Host/guest tuning. |
 
-### 2.3 User Preferences & UI
+The presence of terminal and Nextcloud variables/templates reflects active repository code paths in `03_install_secure_access.sh` and Nginx configuration. It does not make them part of the T2/T3 maturity claim.
 
-#### `rstudio_user_login_script.sh.template`
+## Archive manager
 
-* **Purpose**: Bootstraps individual AD users when they enter the portal for the first time.
-* **Mechanism**: Since AD groups manage access but not necessarily UI preferences, this script is sourced at login. It utilizes `jq` to non-destructively merge corporate standards (Theme, Auto-save behaviors, R paths) into the user's `~/.config/rstudio/rstudio-prefs.json`.
-* **Injects**: Default Python paths (`%%DEFAULT_PYTHON_PATH_LOGIN_SCRIPT%%`) and Global root prefixes.
+`50_setup_nodes.sh::setup_nodes_project_archiver` renders and deploys:
 
-#### `portal_index.html.template` (Inside `assets/`)
+| Source | Destination |
+|---|---|
+| `scopri_progetti.sh.template` | `/etc/biome-calc/script/scopri_progetti.sh` |
+| `unibo_archive_manager.sh.template` | `/etc/biome-calc/script/unibo_archive_manager.sh` |
 
-* **Purpose**: The static HTML modal gateway.
-* **Mechanism**: Nginx serves the final HTML. The build script injects dynamic routing identifiers (e.g., distinguishing between a Master Node deployment vs. an Edge Node deployment) into the window DOM to direct API fetch calls to the appropriate Dockerized subsystem.
+The committed source headers identify the discovery template as **BIOME AD Group Inspector V4** and the archive manager as **BIOME Precision Archiver V23**. Older documentation names such as `scopri_progetti_v5.sh` and `unibo_archive_manager_v23.sh` are not the deployed filenames.
 
-### 2.4 Subsystems & API
+Site-local `scopri_progetti_known.conf` and `scopri_theme_map.conf` are copied into `${BIOME_CONF}/conf`; their real contents are not committed.
 
-#### `telemetry_api.service.template`
+## Orphan-process cleanup
 
-* **Purpose**: Converts the FastAPI Python application into a resilient, background `systemd` target.
-* **Injects**: Thread counts, uvicorn execution paths, and virtual environment bindings.
-* **Security Detail**: Implements `MemoryMax=%%RAM_LIMIT%%` and `RestartSec` to guarantee the hypervisor never crashes if a poorly nested JSON payload OOMs the telemetry worker pool.
+`50_setup_nodes.sh::setup_nodes_orphan_cleanup` deploys:
+
+- `cleanup_r_orphans.sh.template` -> `/etc/biome-calc/script/cleanup_r_orphans.sh`
+- `notify_r_orphans.sh.template` -> `/etc/biome-calc/script/notify_r_orphans.sh`
+- `r_orphan_report.sh.template` -> `/etc/biome-calc/script/r_orphan_report.sh`
+- `send_email.sh.template` -> `/etc/biome-calc/script/send_email.sh`
+- `orphan_cleanup_helpers.sh.template` -> `/etc/biome-calc/script/orphan_cleanup_helpers.sh`
+- `r_orphan_cleanup.conf.template` -> `/etc/biome-calc/conf/r_orphan_cleanup.conf`
+
+The declared script headers are cleanup v4.5 (with later v4.6/v4.7 comments), notifier v4.3, and report v4.3. Do not relabel them as newer versions unless the source headers are updated.
+
+## Canonical versus retained legacy files
+
+Canonical Rprofile sources are `Rprofile_site.R.template`, `Renviron.template`, `Rprofile_site.minimal.R.template`, `00_audit_v28.R.template`, and the 14 fragment templates.
+
+The following are retained legacy or duplicate artifacts and are not canonical deployment inputs:
+
+- everything under `templates/old/`
+- `cleanup_r_orphans.sh copy.template`
+- versioned monoliths such as `Rprofile_site.R.template_v11.2`, `Rprofile_site.R.template_v11.4`, `Rprofile_site.R.template_v11.4_final`, `Rprofile_site.R.template_v12_nimble_router`, `Rprofile_site_R.template_v11.3`, and `Rprofile_site_R.v11.3.template`
+- `Rprofile_site.R.template_original`
+
+Do not delete or migrate these files as part of documentation work. Their consolidation remains an open codebase audit item.
+
+## Authoring rules
+
+1. Modify T1 templates first.
+2. Preserve active placeholder syntax and use an explicit allow-list.
+3. Do not add external CDN dependencies.
+4. Use `jq` for JSON manipulation.
+5. Keep large R scratch paths on `/Rtmp`, not `/tmp`.
+6. Keep OpenBLAS on the serial implementation.
+7. Preserve executable shebang/strict-mode requirements for rendered shell scripts.
+8. Update T2/T3 mirrors or record a tier delta.
+
+Unverified: rendered files on a production host were not compared byte-for-byte with these sources during this audit.

@@ -1,37 +1,55 @@
-# BIOME Calculus Portal - Developer Reference
+<!-- docs/developer/README.md -->
+# Developer Documentation
 
-This directory contains the internal, highly technical documentation intended for System Administrators, DevOps Engineers, and Developers maintaining the R-Studio/BIOME portal infrastructure.
+This directory documents the active T1 host implementation of BIOME-CALC as of 2026-10-06. T1 is `AUTHORITATIVE_CONTINUOUSLY_FIXED`; fixes start in the host code and are then ported to T2 and T3. T2 is `MIGRATION_IN_PROGRESS`. T3 is `SKELETON_NOT_READY`.
 
-Unlike the operational guides in the parent `docs/` directory, these documents provide a deep dive into the **source code, architectural decisions, script lifecycle, and configuration variables** that power the orchestration engine.
+## Documents
 
-## Documentation Structure
+- [Library Reference](LIBRARY_REFERENCE.md) — the public and internal functions actually defined by `lib/common_utils.sh`.
+- [Scripts Reference](SCRIPTS_REFERENCE.md) — root orchestrators, numbered scripts, diagnostics, fixes, and operator tools under `scripts/`.
+- [Configuration Reference](CONFIGURATION_REFERENCE.md) — committed configuration files, site-local overlays, variables, and canonical version sources.
+- [Templates Reference](TEMPLATES_REFERENCE.md) — active templates, deployment destinations, the modular `Rprofile_site.d/` chain, and legacy files.
+- [Consumer Repository Workflow](git_submodule_workflow.md) — the current relationship with `Infra-Iam-PKI`; this repository has no Git submodules.
 
-The Developer Reference is divided into four main pillars:
+For full generated inventories, also use:
 
-### 1. [Library Reference](LIBRARY_REFERENCE.md)
+- [`../reference/SCRIPT_CATALOG.md`](../reference/SCRIPT_CATALOG.md)
+- [`../reference/CONFIGURATION_MAP.md`](../reference/CONFIGURATION_MAP.md)
+- [`../reference/TEMPLATE_GALLERY.md`](../reference/TEMPLATE_GALLERY.md)
 
-Detailed documentation of `lib/common_utils.sh`, the core Bash framework powering the entire deployment system. This includes function signatures, error handling mechanisms, and sysadmin safety nets (e.g., non-interactive modes, pipeline preservation).
+## Authoritative flow
 
-### 2. [Scripts Reference](SCRIPTS_REFERENCE.md)
+```text
+init.sh -> r_env_manager.sh -> scripts/NN_*.sh
+                         \-> scripts/99_*.sh and maintenance tools
+```
 
-A breakdown of the deployment orchestration (`scripts/*.sh`). This covers the numeric execution order, the idempotency model, and the exact roles of each script from domain joining to telemetry setup.
+`r_env_manager.sh` is version 2.0.0 in its source header. Its active paths are:
 
-### 3. [Configuration Reference](CONFIGURATION_REFERENCE.md)
+- lock: `/var/run/r_env_manager.sh.lock`
+- PID: `/var/run/r_env_manager.sh.pid`
+- log: `/var/log/biome-log/core/r_env_manager.sh.log`
+- state: `/var/lib/r_env_manager/r_env_state`
+- package inventory, when present: `/var/lib/r_env_manager/installed_packages.state`
+- configuration: `config/r_env_manager.conf`
 
-An exhaustive dictionary of all variables injested from the `config/` directory (e.g., `setup_nodes.vars.conf`, `r_env_manager.conf`). It explains what each variable controls and their operational constraints.
+The active R runtime is deployed by `scripts/50_setup_nodes.sh`. `config/setup_nodes.vars.conf` sets `RPROFILE_VERSION="12.10"`; large R temporary data belongs on the local 400 GB ext4 mount at `/Rtmp`; OpenBLAS must use the serial implementation, never `libopenblas0-pthread`.
 
-### 4. [Templates Reference](TEMPLATES_REFERENCE.md)
+## Change rules
 
-Documentation of the templating engine. Explains how the `__process_template` function injects environmental variables into Systemd units, Nginx configs, Bash cronjobs, and JSON preferences without breaking syntax.
+1. Fix T1 first. Port behavior forward to T2 and then T3, or record a deliberate tier delta in `.ai/project.yml`.
+2. Every shell script must start with a shebang and `set -euo pipefail`, source `lib/common_utils.sh` when it is a numbered script, and preserve the shared logging/error contracts.
+3. Use the functions that exist. The template helper is `process_template`, not `__process_template`; systemd templates use the separate `process_systemd_template` implementation.
+4. Keep scripts idempotent. Treat failed ownership or permission setup as fatal where required by HC-10.
+5. Put site-specific AD topology, mail settings, addresses, and PII in gitignored `config/site/` files created from committed `*.example` files. See [`../../config/SITE_OVERRIDE.md`](../../config/SITE_OVERRIDE.md).
+6. Use `jq` for JSON changes. Do not edit JSON with `sed` or `awk`.
+7. Never pass passwords in command-line arguments or silently modify researcher-owned `.R` scripts.
+8. A change to `RPROFILE_VERSION` must include the matching `docs/reference/Rprofile_site.CHANGELOG.md` entry and required cross-document updates in the same commit (HC-14).
+9. Do not activate `src/biome_core_rust`; it is dormant. Do not touch `Infra-Iam-PKI.backup`.
+10. Do not use the Vagrant/libvirt sandbox for validation; it is known broken.
 
----
+## Validation
 
-## Core Engineering Principles
+Use the repository gates that correspond to the changed surface. `make audit`, shell syntax checks, and the CI jobs are code-backed checks; the production host remains the required runtime validation surface while the sandbox is broken.
 
-If you are modifying this codebase, you must adhere to the following principles established by the senior sysadmin architects:
-
-1. **Idempotency**: Every script (`scripts/*.sh`) must be safe to run multiple times without corrupting the state or duplicating configuration blocks.
-2. **Defensive Bash**: All orchestration must use `run_command` from `common_utils.sh` to guarantee timeouts, logging, and retry logic. Never use raw `apt-get` or `systemctl` in the main flow.
-3. **No Interactive Prompts**: The entire suite is designed for "zero-touch" deployment. All `apt`/`dpkg` calls must strictly export `DEBIAN_FRONTEND=noninteractive`.
-4. **Secure Execution (No `eval`)**: Dynamic payloads for R or Bash must be constructed using isolated, randomized `mktemp` files and Heredoc injection (`<<EOF`). String interpolation into `eval()` is strictly forbidden to prevent RCE.
-5. **Least Privilege**: Services (Nginx, TTYD, Backends) run with minimal permissions. Scripts interacting with user homes must preserve enterprise POSIX and NFSv4 ACLs (using structured `su -c` or `chown` rather than destructive recursive `chmod`).
+Unverified: this documentation audit did not execute deployment scripts on a production host, so service health, mounted storage, AD reachability, and live credentials were not tested.

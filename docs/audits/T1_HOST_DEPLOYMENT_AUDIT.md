@@ -24,7 +24,7 @@
 > `r_env_manager.sh`) — guarded by `tests/test_pr1_critical_fixes.sh` (wired into
 > the `t1-static` CI job). Only **AD-backend XOR** (§1) remains OPEN, scheduled as
 > PR-2. Most of §3/§4 and the rest of §5 remain **OPEN**. See
-> [`T1_REMEDIATION_TRIAGE.md`](T1_REMEDIATION_TRIAGE.md).
+> `T1_REMEDIATION_TRIAGE.md` (branch `claude/t1-remediation-triage`, commit `854bbb6`; not merged into `main`).
 
 ---
 

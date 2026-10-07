@@ -5,6 +5,67 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed (dependencies, T2)
+
+- `curlimages/curl` 8.11.1 → 8.22.0 for the `rstudio-init` one-shot (dependabot #19).
+  The init only runs `/bin/sh` checks, no curl options, so nothing else changes.
+  IDE rule files regenerated (`make generate`); no T1/T3 counterpart (T3 has no
+  init container on this image).
+
+### Changed (CI)
+
+- `actions/checkout` v4 → v7 in all workflows (dependabot #18). Breaking changes
+  since v4 do not apply here: GitHub-hosted runners only (node24 is fine), no
+  `pull_request_target` / `workflow_run` triggers, no workflow pushes with the
+  checkout token.
+
+### Added (wiki docx guides)
+
+- `scripts/tools/build_wiki_docx.sh` v1.0.0 (+ `scripts/tools/wiki/`): builds four
+  English Word guides for the SharePoint wiki from the Markdown in `docs/`, per
+  `docs/wiki/manifest.tsv`: User Guide, Common Problems (researchers), Operations
+  Troubleshooting Runbook, Operations Guide. Links between chapters stay
+  internal, links to repo files become plain text, contents page is static
+  (SharePoint's viewer leaves Word TOC fields empty), output stamped with date
+  and git commit. Workstation tool (pandoc ≥ 2.17, python3).
+- `docs/user_guides/COMMON_PROBLEMS.md`: researcher self-help, one section per
+  problem (what you see, why, what to do, when to contact the admins).
+
+### Changed (documentation audit 2026-10)
+
+- `docs/` re-audited against the code (`docs/DOCUMENTATION_AUDIT.md`).
+  SYSTEM_OVERVIEW and SECURITY_MODEL rewritten; TROUBLESHOOTING reorganised as
+  symptom → diagnosis → fix → verification; SCRIPT_CATALOG lists every script;
+  nonexistent variables and the dead NFS-fallback section removed from the user
+  guides. Historical records (v12.4 rollout, Lussu hang, auth_pam regression) and
+  unvalidated SOPs kept in full with a status banner.
+- Researcher guides rewritten for non-IT users (cheat sheet, "How BIOME-CALC works
+  for you", Common Problems, Italian guide): no user names or incident reports, no
+  admin scripts or server internals, only R/portal steps; all R blocks parse.
+  `rstudio_session_isolation.md` and the Italian reply to a researcher moved to
+  `docs/operations/`; `SERVER_NATIVE_API.md` and `USER_CONTRACT.md` moved to the
+  Operations wiki guide. `build_wiki_docx.sh` 1.1.0: researcher guides (`user-*`)
+  carry no repo paths or git stamp.
+
+### Fixed (lint advice)
+
+- `scripts/lib/r_lint_rules.tsv`: R017 claimed `makeCluster()` defaults to FORK on
+  Linux (it defaults to PSOCK everywhere); R010 claimed bare `detectCores()` returns
+  the host total (on BIOME-CALC it is wrapped to the user's share). Texts corrected;
+  ids, patterns and severities unchanged (`tests/r_lint_test.sh` passes).
+
+### Fixed (home write failures with "Disk quota exceeded")
+
+- `scripts/99_troubleshoot_env.sh` v1.4.0: the `--storage --test-user` write test
+  wrote an empty file with `touch`, which passed while the user's ZFS quota on
+  TrueNAS was full. It now writes 1 MiB with fsync, recognises `EDQUOT` and
+  prints the uid/gid to look up on the storage server.
+- `docs/operations/TROUBLESHOOTING.md §4.4`: runbook for `saveRDS`/`write.csv`
+  failing with "Disk quota exceeded" while `df` shows free space (client and
+  TrueNAS SCALE steps, quota audit, fix). Cross-referenced from
+  `DIAGNOSTICS_INDEX.md` and `USER_QUOTAS_AND_RESOURCES.md`. Incident: a user
+  quota typed as 150 MiB instead of 150 GiB.
+
 ### Changed (dependencies)
 
 - step CLI `0.29.0` → `0.31.0` in the nginx/sssd/samba images and the K8s init

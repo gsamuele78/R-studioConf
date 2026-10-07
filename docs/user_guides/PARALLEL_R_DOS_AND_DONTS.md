@@ -1,39 +1,44 @@
+---
+title: "Safe Parallel R — Do's and Don'ts"
+audience: researcher
+status: current
+source_path: docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md
+last_verified: 2026-10-07
+sharepoint_section: Researcher Hub
+---
 <!-- docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md -->
 # Safe Parallel R on BIOME-CALC — Do's and Don'ts
 
-> **Audience:** botanists / researchers writing R scripts that run on the
-> shared BIOME-CALC platform.
-> **Last verified:** 2026-06-08
-> **Rprofile version:** 12.10
+> For researchers writing R scripts that run on the shared BIOME-CALC
+> server. The rule numbers (R001, R002, ...) are the same codes the admins
+> use when they send you a review of a script.
 
 ---
 
 ## Why this guide exists
 
-BIOME-CALC is a shared research platform with resource limits enforced by
-the operating system. Your R session runs inside a **cgroup slice** that
-bounds your CPU and RAM. The platform also provides transparent guards
-that make standard R functions safer, but you still need to follow a few
-rules to keep your code portable and efficient.
+BIOME-CALC is shared: each user gets a fair share of the processors and
+memory. The server already makes standard R safer, but a few habits keep
+your code fast, portable and safe for everyone.
 
-Key facts about the platform:
+What to know about the server:
 
-- **`/Rtmp`** is a 400 GB local SSD disk for temporary files. Use it for
-  scratch data, not your home directory and not `/tmp`.
-- **Your home directory is on NFS** (network storage). Frequent small
-  writes over NFS are slow. Route temporary I/O to `/Rtmp`.
-- **`parallel::detectCores()` is cgroup-aware** on BIOME-CALC. It returns
-  the number of cores allocated to your session, not the full host count.
-- **`parallel::mclapply()` is guarded.** When you have loaded packages
-  that are unsafe to fork (terra, sf, raster), the platform automatically
-  reroutes to a safer PSOCK cluster.
-- **`nimble::compileNimble()` is wrapped** to route compilation scratch
-  to `/Rtmp` automatically.
-- **Package installation inside scripts is blocked** by default. Ask the
-  sysadmin to add packages to the platform configuration.
+- **`tempdir()` / `tempfile()`** point to `/Rtmp`, a fast 400 GB local disk.
+  Use them for scratch files, not your home folder and not `/tmp`.
+- **Your home folder is network storage.** Writing many small files there is
+  slow.
+- **`parallel::detectCores()`** returns your share of the processors, not
+  the total of the machine.
+- **`parallel::mclapply()` is protected.** When terra, sf or raster are
+  loaded, the server switches it to a safe cluster automatically.
+- **`nimble::compileNimble()`** compiles on the fast scratch disk
+  automatically.
+- **Packages** install into your personal library with `install.packages()`.
+  If you ever see "install.packages() is disabled on this cluster", follow
+  the message and send the package name to the admins.
 
-The platform **never edits your R scripts** (that is a hard rule, HC-13).
-The fixes described here are changes you make in your own code.
+The admins never edit your scripts. The changes below are ones you make in
+your own code, and they work the same on your laptop.
 
 ---
 
@@ -43,11 +48,11 @@ The fixes described here are changes you make in your own code.
 |---|---|---|
 | Parallel workers | `makeCluster(8)` without `type=` | `parallel::makeCluster(n, type = "PSOCK")` |
 | Fork-based parallel with spatial packages | `mclapply(..., mc.cores = 8)` after `library(terra)` | Use PSOCK cluster or let the platform auto-reroute |
-| Scratch / temp files | `saveRDS(x, "/tmp/myfile.rds")` | `saveRDS(x, file.path(Sys.getenv("BIOME_USER_TMP"), "myfile.rds"))` |
+| Scratch / temp files | `saveRDS(x, "/tmp/myfile.rds")` | `saveRDS(x, file.path(tempdir(), "myfile.rds"))` |
 | Working directory | `setwd("/home/olduser/project")` | Use `here::here()` or pass paths as arguments |
-| Package installation | `install.packages("pkg")` inside a script | Ask sysadmin to add to `config/r_env_manager.conf` |
-| GitHub package install | `devtools::install_github("user/repo")` | Ask sysadmin; they pin a specific commit |
-| Core count | `parallel::detectCores()` without `logical = FALSE` | `max(1L, parallel::detectCores(logical = FALSE) - 1L)` |
+| Package installation | `install.packages("pkg", lib = "/usr/lib/R/site-library")` | `install.packages("pkg")` (default per-user library) |
+| GitHub package install | `devtools::install_github("user/repo")` inside a script | Install once, record versions with `renv` |
+| Core count | `makeCluster(64)` (fixed number) | `max(1L, parallel::detectCores() - 1L)` |
 | NIMBLE across workers | Compile on master, send compiled object to workers | Compile inside each worker |
 | Hardcoded credentials | `api_key <- "sk-1234abcd"` | `Sys.getenv("MY_API_KEY")` with `~/.Renviron` |
 | Silent error handling | `tryCatch(work(), error = function(e) NULL)` | Log the error: `message(conditionMessage(e))` |
@@ -129,8 +134,8 @@ chunk_size <- 200   # 50–500 is typical; profile with proc.time()
 
 ### R004 — Throttle progress messages
 
-Printing a message for every iteration floods the log and slows down
-NFS writes.
+Printing a message for every iteration floods the log and slows the job
+down.
 
 **✗ Don't:**
 
@@ -196,24 +201,31 @@ mean_r <- terra::app(terra::rast(p), fun = mean, na.rm = TRUE)
 
 ---
 
-### R007 — Do not install packages inside scripts
+### R007 — Install packages into your own library, not the system one
 
-`install.packages()` inside a script causes network calls mid-batch,
-breaks reproducibility, and may fail with permission errors on the
-shared platform.
+`install.packages()` works on BIOME-CALC and installs into your per-user
+library on local disk (`/var/lib/biome-Rlibs/<you>/<R-version>/`). What
+fails is trying to write into the read-only system library.
+
+**✗ Don't:**
+
+```r
+install.packages("foo", lib = "/usr/lib/R/site-library")   # read-only, fails
+```
 
 **✓ Do:**
 
-Ask the sysadmin to add the package to the platform configuration
-(`config/r_env_manager.conf`). The package will be installed cluster-wide
-at the next deployment.
-
-In your script, simply load the package:
-
 ```r
-library(terra)
-library(data.table)
+install.packages("foo")     # per-user library (the default)
+# or faster, Ubuntu binary, no compile:
+bspm::install_sys("foo")
 ```
+
+Put `install.packages()` in a separate setup script, not in the analysis
+script that you run many times. If the whole team needs a package, ask the
+admins to install it for everyone. If you ever see "install.packages() is
+disabled on this cluster", installation is temporarily centralised: send
+the package name to the admins.
 
 ---
 
@@ -245,18 +257,17 @@ This hides bugs by making interactive runs different from batch runs.
 
 ---
 
-### R010 — Use `detectCores(logical = FALSE)`
+### R010 — Size clusters from `detectCores()`, never a fixed number
 
-On BIOME-CALC, `parallel::detectCores()` is wrapped to return your
-cgroup-effective core count. Use `logical = FALSE` for physical cores:
+On BIOME-CALC `parallel::detectCores()` returns your share of the
+processors. Leave one for the main session:
 
 ```r
-n_workers <- max(1L, parallel::detectCores(logical = FALSE) - 1L)
+n_workers <- max(1L, parallel::detectCores() - 1L)
 cl <- parallel::makeCluster(n_workers, type = "PSOCK")
 ```
 
-This is portable: on your laptop it returns the honest physical core
-count; on BIOME-CALC it returns your allocated slice.
+This is portable: on your laptop it returns the laptop's cores.
 
 ---
 
@@ -268,8 +279,8 @@ read.csv("/home/otheruser/data.csv")   # permission denied or worse
 
 **✓ Do:**
 
-- Shared inputs go under `/media/r_projects/<project>/`.
-- Or copy what you need into your own home directory.
+- Shared inputs go in the project share, `/mnt/ProjectStorage/<project>/`.
+- Or copy what you need into your own home folder.
 
 ---
 
@@ -286,7 +297,7 @@ worker_fn <- function(seed, code, data_list, inits, niter, nburn) {
     set.seed(seed)
     mod  <- nimbleModel(code = code, data = data_list, inits = inits)
     cmod <- compileNimble(mod)
-    mcmc <- buildMCMC(cmod)
+    mcmc <- buildMCMC(mod)
     cmcmc <- compileNimble(mcmc, project = mod)
     runMCMC(cmcmc, niter = niter, nburnin = nburn)
 }
@@ -297,17 +308,15 @@ res <- parallel::parLapply(cl, seeds, worker_fn,
 
 ---
 
-### R013 — Keep cluster logs off NFS
+### R013 — Keep cluster logs on the scratch disk
 
-PSOCK worker logs written to NFS can deadlock under load.
+Many workers writing one log file in your home folder (network storage) can
+make the whole cluster hang.
 
 **✓ Do:**
 
 ```r
-cluster_log <- file.path(
-    Sys.getenv("BIOME_USER_TMP", "/Rtmp"),
-    "cluster.log"
-)
+cluster_log <- file.path(tempdir(), "cluster.log")
 cl <- parallel::makeCluster(8, type = "PSOCK", outfile = cluster_log)
 ```
 
@@ -321,8 +330,8 @@ saveRDS(result, "/home/otheruser/results.rds")   # permission denied
 
 **✓ Do:**
 
-Write to your own home directory or to a shared project directory under
-`/media/r_projects/<project>/`.
+Write to your own home folder or to your project folder under
+`/mnt/ProjectStorage/<project>/`.
 
 ---
 
@@ -359,10 +368,7 @@ Relative paths depend on the current working directory, which can change.
 **✓ Do:**
 
 ```r
-data_dir <- Sys.getenv("BIOME_DATA_DIR", ".")
-load(file.path(data_dir, "workspace.RData"))
-
-# Or use here::here():
+# Pass the data folder as an argument, or use here::here():
 library(here)
 source(here("R", "helpers.R"))
 ```
@@ -371,8 +377,9 @@ source(here("R", "helpers.R"))
 
 ### R017 — Always specify `type = "PSOCK"` in `makeCluster()`
 
-The default type on Linux is `"FORK"`, which is unsafe with spatial
-packages.
+The default is already `"PSOCK"`, but writing it makes the intent clear
+and protects you if the default is changed (`FORK` is unsafe with spatial
+packages).
 
 **✓ Do:**
 
@@ -409,7 +416,7 @@ res <- tryCatch(
 ### R020 — Never hardcode credentials
 
 ```r
-api_key <- "sk-1234abcd"   # visible in git, NFS, logs
+api_key <- "sk-1234abcd"   # visible in git, backups, logs
 ```
 
 **✓ Do:**
@@ -443,12 +450,41 @@ relative paths or `here::here()`.
 ### R023 — Do not install from GitHub inside scripts
 
 `devtools::install_github()` runs arbitrary code from a Git repository
-and breaks reproducibility.
+and breaks reproducibility — two runs a week apart can install different
+code.
 
 **✓ Do:**
 
-Ask the sysadmin to add the package to `config/r_env_manager.conf` with
-a pinned commit SHA.
+Install it once from the console (or a setup script) with a fixed
+version, and record versions with `renv` in your project. If the team needs
+it, ask the admins to install it for everyone.
+
+---
+
+### R030 — Keras / TensorFlow models: train inside the worker, return a file path
+
+Keras models are C++ objects and cannot cross a PSOCK socket. Build and
+train the model inside the worker, save it to disk, and return only the
+file name. Also cap TensorFlow's threads per worker so N workers do not
+fight for the CPU.
+
+**✓ Do:**
+
+```r
+train_worker <- function(lr, x, y) {
+    library(keras3)   # or keras
+    tensorflow::tf$config$threading$set_intra_op_parallelism_threads(2L)
+    tensorflow::tf$config$threading$set_inter_op_parallelism_threads(2L)
+    model <- keras_model_sequential(input_shape = ncol(x)) |>
+        layer_dense(units = 64, activation = "relu") |>
+        layer_dense(units = 1)
+    model |> compile(optimizer = optimizer_adam(lr), loss = "mse")
+    model |> fit(x, y, epochs = 10, verbose = 0)
+    out <- file.path(tempdir(), paste0("model_lr_", lr, ".keras"))
+    save_model(model, out)
+    out   # return the path, NOT the model object
+}
+```
 
 ---
 
@@ -472,40 +508,38 @@ for (i in 1:5) {
 
 ---
 
-### R028 — Do not use project-local cache directories on NFS
+### R028 — Do not put cache folders inside your project in your home
 
 ```r
-saveRDS(intermediate, "_temp/chunk_001.rds")   # writes to NFS
+saveRDS(intermediate, "_temp/chunk_001.rds")   # writes to network storage
 ```
 
 **✓ Do:**
 
 ```r
-cache_dir <- file.path(Sys.getenv("BIOME_USER_TMP", "/Rtmp"), "cache")
+cache_dir <- file.path(tempdir(), "cache")
 dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
 saveRDS(intermediate, file.path(cache_dir, "chunk_001.rds"))
 ```
 
-`/Rtmp` is local SSD storage, wiped on reboot — ideal for intermediate
-results.
+Files under `tempdir()` are on the fast scratch disk and are deleted about
+48 hours after last use: copy what you want to keep to your home folder.
 
 ---
 
-### R029 — Direct temporary files to `/Rtmp`, not `/tmp` or NFS
+### R029 — Temporary files go to `tempdir()`, not `/tmp` or your home
 
-`/tmp` is a small RAM-based filesystem that fills quickly. NFS is slow
-for frequent temporary I/O.
+`/tmp` is small and fills quickly; your home folder is slow for frequent
+temporary files.
 
 **✓ Do:**
 
 ```r
-# For terra:
-terra::terraOptions(
-    tempdir = file.path(Sys.getenv("BIOME_USER_TMP", "/Rtmp"), "terra_temp")
-)
+# For terra (the server already does this; only needed elsewhere):
+terra::terraOptions(tempdir = file.path(tempdir(), "terra_temp"))
 
-# For R's tempfile():
-my_temp <- file.path(Sys.getenv("BIOME_USER_TMP", "/Rtmp"), "my_temp_file.rds")
+# For your own files:
+my_temp <- tempfile(fileext = ".rds")
 saveRDS(data, my_temp)
 ```
 
@@ -518,16 +552,13 @@ This pattern produces clean, portable code that works well on BIOME-CALC:
 ```r
 library(nimble)
 
-# 1. Use local SSD scratch (not /tmp, not NFS)
-chunk_dir <- file.path(
-    Sys.getenv("BIOME_USER_TMP", "/Rtmp"),
-    "mcmc_chunks"
-)
+# 1. Scratch folder on the fast local disk (not /tmp, not your home)
+chunk_dir <- file.path(tempdir(), "mcmc_chunks")
 dir.create(chunk_dir, showWarnings = FALSE, recursive = TRUE)
 
-# 2. Support smoke testing (small workload for quick validation)
-n_chunks    <- as.integer(Sys.getenv("BIOME_SMOKE_N_CHUNKS",  "10"))
-chunk_iters <- as.integer(Sys.getenv("BIOME_SMOKE_CHUNK_SIZE", "300"))
+# 2. Size of the work (start small to test, then increase)
+n_chunks    <- 10
+chunk_iters <- 300
 
 # 3. Process in chunks, writing to local disk
 chunk_files <- character(n_chunks)
@@ -548,12 +579,12 @@ cat(sprintf("Done: %d samples merged, scratch cleaned\n", length(merged)))
 
 **Why this is good:**
 
-- Uses `/Rtmp` for scratch, not `/tmp` or NFS.
+- Uses `tempdir()` for scratch, not `/tmp` or the home folder.
 - `gc()` per chunk keeps memory usage bounded.
 - `saveRDS` + `unlink` prevents scratch accumulation.
 - Single-threaded — no PSOCK/clusterExport pitfalls.
 - No `setwd()`, no hardcoded paths, no credentials.
-- Supports `BIOME_SMOKE_*` environment variables for quick testing.
+- Easy to test on a small workload first.
 
 If your script does not need parallelism, **do not add it.**
 Single-threaded chunked I/O with `gc()` per chunk is often faster than
@@ -564,12 +595,10 @@ multiple workers competing for memory and disk.
 ## When you need help
 
 1. Check this guide first — most common issues are covered above.
-2. If your script hangs or crashes, contact the sysadmin. They can run
-   diagnostics that identify whether the problem is in the platform
-   configuration or in your code.
-3. The platform **never edits your R scripts**. You always control what
-   changes and when.
+2. Look up the error message in *Common Problems and Solutions*.
+3. If your script hangs or crashes, write to the admins with `status()`,
+   `sessionInfo()`, the error text and the script path. They can check
+   whether the problem is on the server or in the code. They never edit
+   your scripts.
 
 ---
-
-*Authoritative source: [`docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md`](https://github.com/gsamuele78/R-studioConf/blob/main/docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md) — last verified 2026-06-08.*

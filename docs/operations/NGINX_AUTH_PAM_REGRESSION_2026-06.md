@@ -1,6 +1,8 @@
 <!-- docs/operations/NGINX_AUTH_PAM_REGRESSION_2026-06.md -->
 # Nginx auth_pam Regression — June 2026
 
+> **Incident record (verified 2026-10-06).** Kept for history. The current runbook entry is [`TROUBLESHOOTING.md §5.2`](TROUBLESHOOTING.md).
+
 > **Audience:** sysadmins / on-call.  
 > **Tier:** T1 host.  
 > **Last updated:** 2026-06-09.  
