@@ -27,7 +27,7 @@ This separate function replaces `{{NAME}}` tokens from caller variables and writ
 
 | Template | Active role/destination |
 |---|---|
-| `Rprofile_site.R.template` | Thin dispatcher rendered to `/etc/R/Rprofile.site`; current configured version is 12.10. |
+| `Rprofile_site.R.template` | Thin dispatcher rendered to `/etc/R/Rprofile.site`; current configured version is 12.11. |
 | `Renviron.template` | Managed R environment source containing `/Rtmp`, local R library, fork/thread, GDAL/PROJ, allocator, Python, and compiler settings. The audit records a remaining discrepancy between this file and the live generation path. |
 | `Rprofile_site.minimal.R.template` | Minimal forensic profile used by diagnostics. |
 | `00_audit_v28.R.template` | Rendered to `${BIOME_CONF}/audit/00_audit_v28.R`. v28 is active on T1. |

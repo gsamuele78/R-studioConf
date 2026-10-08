@@ -1,7 +1,7 @@
 <!-- docs/operations/LUSSU_HANG_BISECTION.md -->
 # Lussu Hang Bisection — HC-13 Worked Example
 
-> **Incident record (verified 2026-10-06).** Worked example kept for history; the fixes it led to are live in Rprofile v12.10 (fragments 50/52, see [`Rprofile_site.CHANGELOG.md`](../reference/Rprofile_site.CHANGELOG.md) v12.9.3–v12.9.4). Current tooling: `scripts/99_diagnose_user_script.sh` (harness 1.4) and `scripts/99_diagnose_lussu_hang.sh` (1.6).
+> **Incident record (verified 2026-10-06).** Worked example kept for history; the fixes it led to are live in Rprofile v12.11 (fragments 50/52, see [`Rprofile_site.CHANGELOG.md`](../reference/Rprofile_site.CHANGELOG.md) v12.9.3–v12.9.4). Current tooling: `scripts/99_diagnose_user_script.sh` (harness 1.4) and `scripts/99_diagnose_lussu_hang.sh` (1.6).
 
 **Audience:** sysadmin / IT officer.
 **Status:** worked example. Read `USER_SCRIPT_TROUBLESHOOTING.md` first.

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# templates/biome-quota.sh.template — deployed to /usr/local/bin/biome-quota by 50_setup_nodes.sh (step 11g)
+# Prints the caller's home-quota line from the local cache. Always exits 0.
+
+QUOTA_CACHE_DIR="/var/lib/biome-quota"
+QUOTA_WARN_PCT="%%QUOTA_WARN_PCT%%"
+QUOTA_STALE_MIN="%%QUOTA_STALE_MIN%%"
+
+uid="$(id -u)"
+f="${QUOTA_CACHE_DIR}/${uid}"
+
+if [[ ! -f "$f" || ! -r "$f" ]]; then
+    echo "Home quota: information not available on this server."
+    exit 0
+fi
+
+IFS=$'\t' read -r used quota objused objquota stamp < "$f"
+if [[ ! "$used" =~ ^[0-9]+$ || ! "$objused" =~ ^[0-9]+$ || ! "$stamp" =~ ^[0-9]+$ ]] ||
+   [[ ! "$quota" =~ ^[0-9]+$ && "$quota" != "none" && "$quota" != "-" ]] ||
+   [[ ! "$objquota" =~ ^[0-9]+$ && "$objquota" != "none" && "$objquota" != "-" ]]; then
+    echo "Home quota: information not available on this server."
+    exit 0
+fi
+
+gib() { # bytes -> GiB with one decimal
+    awk -v b="$1" 'BEGIN { printf "%.1f", b/1073741824 }'
+}
+
+now="$(date +%s)"
+age_min=$(( (now - stamp) / 60 ))
+(( age_min < 0 )) && age_min=0
+age_note="updated ${age_min} min ago"
+if (( age_min > QUOTA_STALE_MIN )); then
+    age_note="data from ${age_min} min ago, may be out of date"
+fi
+
+echo "Home quota (~ on the storage server)"
+if [[ "$quota" =~ ^[0-9]+$ ]]; then
+    pct="$(awk -v u="$used" -v q="$quota" 'BEGIN { if (q>0) printf "%d", u*100/q; else printf "0" }')"
+    echo "  Space : $(gib "$used") GiB of $(gib "$quota") GiB used (${pct}%)  — ${age_note}"
+    if (( pct >= QUOTA_WARN_PCT )); then
+        echo "  ⚠ Almost full: new files will fail with \"Disk quota exceeded\"."
+        echo "    Delete unneeded files, keep intermediates in tempdir(), or ask the admins."
+    fi
+else
+    echo "  Space : $(gib "$used") GiB used (no personal limit)  — ${age_note}"
+fi
+if [[ "$objquota" =~ ^[0-9]+$ ]]; then
+    echo "  Files : ${objused} of ${objquota}"
+else
+    echo "  Files : ${objused} (no limit)"
+fi
+echo ""
+echo "Counts every file you own on the home storage. Files a colleague writes"
+echo "into your folder count for them; files you write elsewhere count for you."
+exit 0

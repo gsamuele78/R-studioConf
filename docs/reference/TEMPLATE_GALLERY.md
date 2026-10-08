@@ -152,3 +152,11 @@ and wired into cron/systemd-timer per `setup_nodes.vars.conf`.
 * Which script renders what → [`SCRIPT_CATALOG.md`](SCRIPT_CATALOG.md)
 * Modular fragment loader contract → [`/templates/Rprofile_site.d/README.md`](../../templates/Rprofile_site.d/README.md)
 * Rprofile evolution → [`Rprofile_site.CHANGELOG.md`](Rprofile_site.CHANGELOG.md)
+
+## Home-quota visibility (v12.11)
+
+| Template | Rendered by | Purpose |
+|---|---|---|
+| `biome_quota_collect.sh.template` | `50_setup_nodes.sh` step 11g → `${BIOME_CONF}/script/biome_quota_collect.sh` | Restricted-SSH collector; validates and atomically writes per-uid local cache files |
+| `biome-quota.sh.template` | step 11g → `/usr/local/bin/biome-quota` | Researcher-readable ttyd quota command |
+| `zz-biome-quota.profile.template` | step 11g → `/etc/profile.d/zz-biome-quota.sh` | Interactive-login warning only above quota threshold |

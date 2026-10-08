@@ -54,6 +54,10 @@
     }, error = function(e) "Unknown")
     cat(sprintf("  /Rtmp Disk:   %s\n", tmp_str))
     cat(sprintf("  Tmp Cleanup:  Files >%d hours\n", .biome_env$shared_env$timeout_hours))
+    if (isTRUE(.biome_quota_enabled)) {
+      home_q <- tryCatch(.biome_quota_line(), error = function(e) "quota information not available on this server")
+      cat(sprintf("  Home (~):     %s\n", home_q))
+    }
     ct <- Sys.getenv("OPENBLAS_CORETYPE", "auto")
     cat(sprintf("  BLAS Type:    %s\n", ct))
     cat(sprintf("  User TMP:     %s\n", .biome_env$USER_TMP_ROOT))
@@ -376,6 +380,97 @@
     cat(sprintf("  Support: %s\n", "%%BIOME_CONTACT%%"))
   }, envir = tool_env)
 
+
+  # v12.11 — Home quota from the local cache written by biome_quota_collect.sh
+  # (TrueNAS ZFS userquota; plan/home_quota_visibility). Never throws: returns
+  # NULL when the cache is absent, unreadable, or the user has no entry.
+  .biome_quota_enabled <- identical(tolower("%%ENABLE_HOME_QUOTA_VIEW%%"), "true")
+
+  .biome_home_quota <- function() {
+    if (!.biome_quota_enabled) return(NULL)
+    dir <- Sys.getenv("BIOME_QUOTA_CACHE_DIR", "/var/lib/biome-quota")
+    uid <- tryCatch(suppressWarnings(as.integer(system2("id", "-u", stdout = TRUE, stderr = FALSE)[1])),
+                    error = function(e) NA_integer_)
+    if (is.na(uid)) return(NULL)
+    f <- file.path(dir, as.character(uid))
+    if (!file.exists(f)) return(NULL)
+    fields <- tryCatch(strsplit(readLines(f, n = 1, warn = FALSE), "\t")[[1]],
+                       error = function(e) NULL)
+    if (is.null(fields) || length(fields) != 5) return(NULL)
+    vals <- suppressWarnings(as.numeric(fields[1:5]))
+    if (!all(is.finite(vals[c(1, 3, 5)])) || any(vals[c(1, 3, 5)] < 0)) return(NULL)
+    if (any(!is.na(vals[c(2, 4)]) & vals[c(2, 4)] < 0)) return(NULL)
+    list(used = vals[1],
+         quota = if (is.na(vals[2])) NA_real_ else vals[2],     # NA = no limit
+         objused = vals[3],
+         objquota = if (is.na(vals[4])) NA_real_ else vals[4],  # NA = no limit
+         stamp = vals[5])
+  }
+
+  .biome_fmt_gib <- function(b) sprintf("%.1f GB", b / 1024^3)
+
+  .biome_quota_line <- function() {
+    q <- .biome_home_quota()
+    if (is.null(q)) return("quota information not available on this server")
+    age_min <- max(0, floor((as.numeric(Sys.time()) - q$stamp) / 60))
+    stale_min <- suppressWarnings(as.numeric("%%QUOTA_STALE_MIN%%")); if (!is.finite(stale_min)) stale_min <- 30
+    age_note <- if (age_min > stale_min) sprintf("(data from %s min ago, may be out of date)", age_min)
+                else sprintf("(updated %s min ago)", age_min)
+    if (is.finite(q$quota) && q$quota > 0) {
+      pct <- floor(100 * q$used / q$quota)
+      warn_pct <- suppressWarnings(as.numeric("%%QUOTA_WARN_PCT%%")); if (!is.finite(warn_pct)) warn_pct <- 90
+      warn <- if (pct >= warn_pct) "  ⚠ almost full — see biome_quota()" else ""
+      sprintf("%s of %s used (%d%%) %s%s",
+              .biome_fmt_gib(q$used), .biome_fmt_gib(q$quota), pct, age_note, warn)
+    } else {
+      sprintf("%s used (no personal limit) %s", .biome_fmt_gib(q$used), age_note)
+    }
+  }
+
+  assign("biome_quota", function() {
+    if (!.biome_quota_enabled) {
+      message("Home quota view is not enabled on this server.")
+      return(invisible(NULL))
+    }
+    q <- .biome_home_quota()
+    if (is.null(q)) {
+      message("Home quota: information not available on this server.")
+      message("If you hit 'Disk quota exceeded' when saving, ask the admins — they can read it on the storage server.")
+      return(invisible(NULL))
+    }
+    message(sprintf("Home folder (%s) on the storage server:", path.expand("~")))
+    if (is.finite(q$quota) && q$quota > 0) {
+      left <- q$quota - q$used
+      message(sprintf("  Space : %s of %s used (%d%%) — %s left",
+                      .biome_fmt_gib(q$used), .biome_fmt_gib(q$quota),
+                      floor(100 * q$used / q$quota), .biome_fmt_gib(max(left, 0))))
+      warn_pct <- suppressWarnings(as.numeric("%%QUOTA_WARN_PCT%%")); if (!is.finite(warn_pct)) warn_pct <- 90
+      if (100 * q$used / q$quota >= warn_pct) {
+        message(paste0(.C_YELLOW,
+          "  ⚠ Almost full: new files will fail with 'Disk quota exceeded'.",
+          "
+    Delete unneeded files, keep intermediates in tempdir() (fast scratch disk, not counted),",
+          "
+    or ask the admins for more space.", .C_RESET))
+      }
+    } else {
+      message(sprintf("  Space : %s used (no personal limit)", .biome_fmt_gib(q$used)))
+    }
+    if (is.finite(q$objquota) && q$objquota > 0)
+      message(sprintf("  Files : %d of %d", as.integer(q$objused), as.integer(q$objquota)))
+    else
+      message(sprintf("  Files : %d (no limit)", as.integer(q$objused)))
+    age_min <- max(0, floor((as.numeric(Sys.time()) - q$stamp) / 60))
+    stale_min <- suppressWarnings(as.numeric("%%QUOTA_STALE_MIN%%")); if (!is.finite(stale_min)) stale_min <- 30
+    message(sprintf("  Data  : %s (refreshed every 5 minutes)",
+                    if (age_min > stale_min) sprintf("%s min ago, may be out of date", age_min) else sprintf("%s min ago", age_min)))
+    message("")
+    message("It counts every file you own on the home storage. Files a colleague")
+    message("writes into your folder count for them; files you write elsewhere")
+    message("count for you.")
+    invisible(q)
+  }, envir = tool_env)
+
   assign("biome_save_session", function(file_name = "biome_session_backup.RData") {
     target <- file.path(Sys.getenv("HOME"), file_name)
     EXCLUDE_CLASSES <- c("SpatRaster", "SpatVector", "stars", "RasterStack",
@@ -397,6 +492,17 @@
         "\n   %d spatial objects excluded (file-backed).",
         .C_RESET), ws_gb, excluded_count))
     }
+    tryCatch({
+      q <- .biome_home_quota()
+      if (!is.null(q) && is.finite(q$quota) && q$quota > 0) {
+        left_gb <- (q$quota - q$used) / 1024^3
+        if (left_gb < max(ws_gb * 2, 5)) {
+          warning(sprintf(paste0(.C_RED,
+            "\n\u26a0\ufe0f  HOME QUOTA: only ~%.1f GB left of your personal quota (workspace ~%.1f GB). Save will probably fail with 'Disk quota exceeded'. See biome_quota().", .C_RESET),
+            left_gb, ws_gb), call. = FALSE, immediate. = TRUE)
+        }
+      }
+    }, error = function(e) NULL)
     tryCatch({
       df_home <- system2("df", args = c("-P", "-BG", Sys.getenv("HOME")),
                           stdout = TRUE, stderr = FALSE)

@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# templates/biome_quota_collect.sh.template — deployed to ${BIOME_CONF}/script/biome_quota_collect.sh by 50_setup_nodes.sh (step 11g)
+# Reads ZFS per-user quotas for the home dataset from the TrueNAS server and
+# refreshes a local per-user cache that R (status(), biome_quota()) and ttyd
+# (/usr/local/bin/biome-quota) read from. Design: plan/home_quota_visibility/.
+#
+# Pessimistic contract:
+#   * a failed SSH or a malformed/partial answer NEVER erases the previous cache
+#   * only UIDs that exist in NSS get a file (visible on this node)
+#   * files are atomically replaced, mode 0400, owner = the user
+
+QUOTA_SSH_HOST="${QUOTA_SSH_HOST:?QUOTA_SSH_HOST not set (config/setup_nodes.vars.conf)}"
+QUOTA_SSH_USER="${QUOTA_SSH_USER:-biomequota}"
+QUOTA_CACHE_DIR="${QUOTA_CACHE_DIR:-/var/lib/biome-quota}"
+QUOTA_MIN_LINES="${QUOTA_MIN_LINES:-1}"
+SECRETS_DIR="${SECRETS_DIR:-%%BIOME_CONF%%/secrets}"
+SSH_KEY="${SECRETS_DIR}/quota_ssh_key"
+KNOWN_HOSTS="${SECRETS_DIR}/quota_known_hosts"
+LOG_FILE="${LOG_FILE:-%%LOG_FILE%%}"
+
+# Test-only hook: if set, this command is executed instead of ssh (must print
+# the same output as the forced command on TrueNAS). Never set in production.
+QUOTA_SSH_CMD="${QUOTA_SSH_CMD:-}"
+
+exec 9>"${QUOTA_CACHE_DIR}/.collect.lock"
+flock -w 10 9 || { echo "biome_quota_collect: another run is active" >>"${LOG_FILE}"; exit 0; }
+
+fetch() {
+    if [[ -n "${QUOTA_SSH_CMD}" ]]; then
+        eval "${QUOTA_SSH_CMD}"
+    else
+        ssh -o BatchMode=yes -o ConnectTimeout=10 \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${KNOWN_HOSTS}" \
+            -i "${SSH_KEY}" "${QUOTA_SSH_USER}@${QUOTA_SSH_HOST}"
+    fi
+}
+
+raw="$(fetch)" || { echo "biome_quota_collect: fetch failed (cache kept): $(date -Iseconds)" >>"${LOG_FILE}"; exit 1; }
+
+out_dir="$(mktemp -d "${QUOTA_CACHE_DIR}/.stage.XXXXXX")"
+trap 'rm -rf "${out_dir}"' EXIT
+
+lines=0
+while IFS=$'\t' read -r name used quota objused objquota; do
+    [[ -z "${name}" || "${name}" == \#* ]] && continue
+    [[ "${name}" =~ ^[0-9]+$ ]] || continue
+    for v in "${used}" "${quota}" "${objused}" "${objquota}"; do
+        [[ "${v}" =~ ^[0-9]+$ || "${v}" == "none" || "${v}" == "-" ]] || continue 2
+    done
+    getent passwd "${name}" >/dev/null || continue
+    printf '%s\t%s\t%s\t%s\t%s\n' "${used}" "${quota}" "${objused}" "${objquota}" "$(date +%s)" \
+        > "${out_dir}/${name}"
+    lines=$((lines + 1))
+done <<< "${raw}"
+
+current_lines=$(find "${QUOTA_CACHE_DIR}" -maxdepth 1 -type f -name '[0-9]*' 2>/dev/null | wc -l)
+if [[ "${lines}" -lt "${QUOTA_MIN_LINES}" ]] ||
+   { [[ "${current_lines}" -ge 4 ]] && [[ $((lines * 2)) -lt "${current_lines}" ]]; }; then
+    echo "biome_quota_collect: only ${lines} valid lines (min ${QUOTA_MIN_LINES}, previous ${current_lines}) — cache kept" >>"${LOG_FILE}"
+    exit 1
+fi
+
+stamp="$(date +%s)"
+for f in "${out_dir}/"*; do
+    uid="$(basename "${f}")"
+    if [[ "${QUOTA_SKIP_CHOWN:-0}" != "1" ]]; then
+        chown "${uid}:root" "${f}"
+    fi
+    chmod 0400 "${f}"
+    mv -f "${f}" "${QUOTA_CACHE_DIR}/${uid}"
+done
+printf '%s\n' "${stamp}" > "${QUOTA_CACHE_DIR}/.collected_at.tmp"
+mv -f "${QUOTA_CACHE_DIR}/.collected_at.tmp" "${QUOTA_CACHE_DIR}/.collected_at"
+chmod 0644 "${QUOTA_CACHE_DIR}/.collected_at"
+echo "biome_quota_collect: ${lines} quota rows refreshed" >>"${LOG_FILE}"

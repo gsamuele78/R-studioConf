@@ -8,6 +8,36 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.11 (2026-10-07) — "TrueNAS home quota visible to users"
+
+### Trigger
+
+`saveRDS()`, `write.csv()` and every other write failed for a researcher with
+`Disk quota exceeded`, while `df` on the NFS client showed 2.2 TB free. The
+TrueNAS ZFS `userquota` was 150 MiB (entered instead of 150 GiB) and 153 MiB
+was used. Linux NFS clients cannot query ZFS userquota through `quota` /
+`rpc.rquotad`; the source of truth is `zfs userspace` on TrueNAS.
+
+### Changes
+
+- `70_persistent_tools.R`: new `biome_quota()`; `status()` prints personal home
+  usage/limit, file-count quota and cache age; `biome_save_session()` warns
+  against the personal quota instead of relying only on dataset-wide `df`.
+- Data comes from `/var/lib/biome-quota/<uid>`, a local read-only cache refreshed
+  by the T1 host collector (SSH forced command to a delegated, read-only
+  TrueNAS user). Missing/stale/malformed data never prevents R startup.
+- T2 RStudio services bind-mount the host cache read-only; no collector runs in
+  containers. T3 deferred while SKELETON_NOT_READY.
+- Operator/user runbooks document configuration, privacy and degraded behavior.
+
+### Verification
+
+`tests/rprofile_quota_test.R` covers missing, quota, no-limit, stale and
+malformed cache entries. Collector fixtures cover valid, malformed, partial and
+SSH-failure paths without touching TrueNAS.
+
+---
+
 ## v12.10-doc (2026-06-05) — "RStudioGD plot-pane diagnostics + runbook"
 
 ### Trigger

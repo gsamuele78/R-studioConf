@@ -107,7 +107,7 @@ jobs:
       - name: Install bats
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends bats
       - name: Run bats unit tests
-        run: bats tests/unit/test_common_utils.bats
+        run: bats tests/unit/*.bats
 
   # ── R runtime: template parse gate + HC-13 linter oracle + health checker ──
   r-runtime-static:
@@ -122,6 +122,8 @@ jobs:
           use-public-rspm: true
       - name: Rprofile fragment + dispatcher parse gate
         run: bash tests/templates_parse.sh
+      - name: Home-quota R helper (missing, quota, no-limit, stale, malformed)
+        run: Rscript tests/rprofile_quota_test.R
       - name: r_lint oracle differ (HC-13 linter stability)
         run: bash tests/r_lint_test.sh
       - name: 99_check_rprofile_health.sh regression (mktemp fixture trees, real R)

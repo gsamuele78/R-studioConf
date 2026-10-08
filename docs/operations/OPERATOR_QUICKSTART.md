@@ -16,7 +16,7 @@ T1 host automation is authoritative. Fix the system, profile, fragments, environ
 
 Current runtime facts:
 
-- `RPROFILE_VERSION="12.10"`;
+- `RPROFILE_VERSION="12.11"`;
 - `/etc/R/Rprofile.site` plus 14 lexical fragments in `/etc/R/Rprofile_site.d/`;
 - `libopenblas0-serial`, never pthread;
 - local ext4 `/Rtmp` (400 GB configured expectation);

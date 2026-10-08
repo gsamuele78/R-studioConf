@@ -8,8 +8,8 @@
 > (incl. `Rprofile_site.d/*.R.template`), `config/*.conf` (+ `*.example`),
 > `r_env_manager.sh`, `.ai/project.yml`, `CHANGELOG.md`,
 > `reference/Rprofile_site.CHANGELOG.md`, `git log`.
-> Facts at audit time: `RPROFILE_VERSION=12.10`; `99_troubleshoot_env.sh`
-> 1.4.0; homes on TrueNAS SCALE (`zpool/home`, NFSv4.2) with per-user ZFS
+> Facts at audit time: `RPROFILE_VERSION=12.11`; `99_troubleshoot_env.sh`
+> 1.5.0; homes on TrueNAS SCALE (`zpool/home`, NFSv4.2) with per-user ZFS
 > quotas; T1 authoritative, T2 migration in progress, T3 skeleton.
 
 ## Status legend
@@ -49,7 +49,7 @@
 |---|---|---|
 | `SYSTEM_OVERVIEW.md` | `current` | Rewritten against templates/scripts (was `needs-rewrite`) |
 | `SECURITY_MODEL.md` | `current` | Rewritten (was `needs-rewrite`: legacy Basic-Auth/header-spoofing model) |
-| `USER_CONTRACT.md` | `current` | Updated for v12.4–v12.10 wrappers |
+| `USER_CONTRACT.md` | `current` | Updated for v12.4–v12.11 wrappers |
 | `architecture_analysis.md` | `checked` | |
 | `rstudio_cluster_evolution_pki_iam_ood.md` | `checked` | Future analysis; condensed by the audit, statuses (Positron EVALUATION_PENDING, K8s SKELETON_NOT_READY) kept |
 | `rstudio_positron_june_2026_capability_audit.md` | `checked` | Dated capability audit |
@@ -74,7 +74,7 @@
 | `TROUBLESHOOTING.md` | `current` | Symptom → diagnosis → fix → verification for every incident in the history; §4.3 CIFS project share, §4.4 ZFS quota (EDQUOT) |
 | `DIAGNOSTICS_INDEX.md` | `current` | Every `99_*`, `fix_*`, `tools/*` script listed |
 | `OPERATOR_QUICKSTART.md`, `MAINTENANCE.md`, `USER_QUOTAS_AND_RESOURCES.md`, `USER_SCRIPT_TROUBLESHOOTING.md`, `add_storage_no_reboot.md`, `diagnostic_logs.md` | `current` | |
-| `UPGRADE_TO_v12.4.md` | `historical` | Restored in full; banner points to v12.10 |
+| `UPGRADE_TO_v12.4.md` | `historical` | Restored in full; banner points to v12.11 |
 | `LUSSU_HANG_BISECTION.md`, `NGINX_AUTH_PAM_REGRESSION_2026-06.md` | `historical` | Incident records, restored in full |
 | `sysadmin_troubleshooting_guide.md` | `needs-review` | v10.0-era handbook, restored; `TROUBLESHOOTING.md` wins on conflict |
 | `CLEAN_VM_BASELINE.md` | `needs-review` | SOP restored; provisioning not re-run |

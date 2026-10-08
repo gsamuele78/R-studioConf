@@ -116,6 +116,8 @@ services:
     volumes:
       - ${HOST_HOME_DIR}:/home
       - ${HOST_PROJECT_ROOT}:/nfs/home
+      # T1 collector cache; read-only mirror for status()/biome_quota() (no collector in container)
+      - ${HOST_QUOTA_CACHE_DIR:-/var/lib/biome-quota}:/var/lib/biome-quota:ro
       - ${HOST_SSS_PIPES:-/var/lib/sss/pipes}:/var/lib/sss/pipes:rw
       - ${HOST_SSS_MC:-/var/lib/sss/mc}:/var/lib/sss/mc:ro
       - ${HOST_SSSD_CONF:-/etc/sssd/sssd.conf}:/etc/sssd/sssd.conf:ro
@@ -165,6 +167,8 @@ services:
     volumes:
       - ${HOST_HOME_DIR}:/home
       - ${HOST_PROJECT_ROOT}:/nfs/home
+      # T1 collector cache; read-only mirror for status()/biome_quota() (no collector in container)
+      - ${HOST_QUOTA_CACHE_DIR:-/var/lib/biome-quota}:/var/lib/biome-quota:ro
       - ${HOST_WINBINDD_DIR:-/var/run/samba/winbindd}:/var/run/samba/winbindd:rw
       - ${HOST_SAMBA_DIR:-/var/lib/samba}:/var/lib/samba:rw
       - ${HOST_SMB_CONF:-/etc/samba/smb.conf}:/etc/samba/smb.conf:ro

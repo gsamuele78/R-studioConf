@@ -5,6 +5,29 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (Rprofile v12.11 — TrueNAS home quota visible to users)
+
+- Optional T1 collector (`50_setup_nodes.sh` step 11g, disabled by default)
+  reads the exact `zfs userspace` output over a restricted, forced-command SSH
+  key and atomically caches one private local file per uid under
+  `/var/lib/biome-quota`. Failed/partial/malformed fetches keep the old cache.
+- R: `biome_quota()`, `status()` `Home (~)` line and a personal-quota warning in
+  `biome_save_session()`. TTYD: `biome-quota` command and an interactive-login
+  warning above `QUOTA_WARN_PCT` (90% default). Missing or stale data degrades
+  to a plain message and never blocks R/login.
+- T2 RStudio services mount the host cache read-only; no collector/secrets in
+  containers. T3 deferred (`SKELETON_NOT_READY`).
+- Tests cover collector valid/malformed/partial/fetch-failure paths and R helper
+  missing/quota/no-limit/stale/malformed paths. `99_troubleshoot_env.sh` v1.5.0
+  reports the cached TrueNAS quota before its real 1 MiB+fsync write test.
+- Security: TrueNAS service account receives one exact NOPASSWD read command and
+  a forced SSH key; no `zfs allow userquota`, no password, no modifiable quota
+  permission. Key/known_hosts remain root-only files, never CLI arguments.
+- `.ai/hooks/pre-commit`: the HC-14 check piped a 100 KB changelog into
+  `grep -q` under `pipefail`; grep exits on the first match, `echo` gets SIGPIPE
+  (141) and a present `## vX` section was reported missing. Now uses here-strings.
+
+
 ### Changed (T2 R version = T1)
 
 - RStudio images (`docker-deploy/Dockerfile`, `Dockerfile.sssd`, `Dockerfile.samba`)

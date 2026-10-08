@@ -162,7 +162,7 @@ T1 installs a systemd `user-.slice` policy with these configured values:
 | `IOWeight` | 100 |
 
 The system slice has a 16 GiB hard memory floor, a 24 GiB soft floor, and CPU
-weight 200. Ollama uses CPU weight 80. Rprofile 12.10 adds cgroup-aware core
+weight 200. Ollama uses CPU weight 80. Rprofile 12.11 adds cgroup-aware core
 and memory guards, but these do not replace kernel enforcement.
 
 ## 8. Secrets and site configuration

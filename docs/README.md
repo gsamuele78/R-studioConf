@@ -9,7 +9,7 @@ This is the role-indexed map of the documentation tree as of 2026-10-06.
 | T2 `docker-deploy/` | `MIGRATION_IN_PROGRESS` |
 | T3 `kubernetes-deploy/` | `SKELETON_NOT_READY` |
 
-Fixes originate in T1 and are ported forward T1 -> T2 -> T3. `RPROFILE_VERSION` is 12.10. The sandbox is known broken. `src/biome_core_rust` is dormant.
+Fixes originate in T1 and are ported forward T1 -> T2 -> T3. `RPROFILE_VERSION` is 12.11. The sandbox is known broken. `src/biome_core_rust` is dormant.
 
 ## Start by role
 
@@ -87,7 +87,7 @@ Descriptions state each file's role. They do not imply that every document has p
 - [`LUSSU_HANG_BISECTION.md`](operations/LUSSU_HANG_BISECTION.md) — worked hang-bisection case.
 - [`CLEAN_VM_BASELINE.md`](operations/CLEAN_VM_BASELINE.md) — L4 clean-VM baseline procedure; this is distinct from the broken Vagrant sandbox.
 - [`USER_QUOTAS_AND_RESOURCES.md`](operations/USER_QUOTAS_AND_RESOURCES.md) — cgroup, memory, CPU, and scratch-resource behavior.
-- [`UPGRADE_TO_v12.4.md`](operations/UPGRADE_TO_v12.4.md) — historical v12.4 upgrade runbook; current Rprofile version is 12.10.
+- [`UPGRADE_TO_v12.4.md`](operations/UPGRADE_TO_v12.4.md) — historical v12.4 upgrade runbook; current Rprofile version is 12.11.
 - [`add_storage_no_reboot.md`](operations/add_storage_no_reboot.md) — storage hot-add procedure.
 - [`diagnostic_logs.md`](operations/diagnostic_logs.md) — log-location reference.
 - [`sysadmin_troubleshooting_guide.md`](operations/sysadmin_troubleshooting_guide.md) — long-form sysadmin troubleshooting guide.

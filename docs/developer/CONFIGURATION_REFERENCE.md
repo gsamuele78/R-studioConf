@@ -58,7 +58,7 @@ Current core values:
 |---|---|
 | Host/storage | `BIOME_HOST=""`, `BIOME_IP=""`, `NFS_HOME="/nfs/home"`, `CIFS_ARCHIVE="/mnt/ProjectStorage"`, `BIOME_CONF="/etc/biome-calc"` |
 | R scratch | `RAMDISK_SIZE="0"`, `RAMDISK_GB=0`, `TMP_DISK_GB=400`, `TMP_WARN_THRESHOLD_PCT=80`; `/Rtmp` is local disk, not tmpfs |
-| R profile | `RPROFILE_VERSION="12.10"`, `RSESSION_CONF_PATH="/etc/rstudio/rsession.conf"` |
+| R profile | `RPROFILE_VERSION="12.11"`, `RSESSION_CONF_PATH="/etc/rstudio/rsession.conf"` |
 | BLAS | `MAX_BLAS_THREADS=16`, `MAX_THREADS=16`, serial BLAS/LAPACK paths under `/usr/lib/x86_64-linux-gnu/openblas-serial/` |
 | Local R libraries | `ENABLE_R_LIBS_LOCAL=true`, `ENABLE_R_LIBS_LOCAL_WARMUP=true`, `R_LIBS_LOCAL_ROOT="/var/lib/biome-Rlibs"`, optional block device, ext4, 80 GB size hint |
 | NFS audit | `NFS_AUDIT_REQUIRE_NCONNECT_MIN=4`, `NFS_AUDIT_REQUIRE_VERS_MIN="4.1"`, `NFS_AUDIT_HINT_LOOKUPCACHE_ALL=true` |
