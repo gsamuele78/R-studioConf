@@ -114,8 +114,9 @@ quota cannot block the update.
 
 User surfaces: `status()` (`Home (~)` line), `biome_quota()` in R,
 `biome-quota` in ttyd and a login warning at `QUOTA_WARN_PCT` (90% default).
-T2 mounts the same host cache read-only. Setup and TrueNAS least-privilege
-steps are in `plan/home_quota_visibility/implementation_plan.md`.
+T2 mounts the same host cache read-only. Step-by-step setup for TrueNAS
+SCALE 25.04 and several Ubuntu 24.04 nodes:
+[`HOME_QUOTA_VIEW_SETUP.md`](HOME_QUOTA_VIEW_SETUP.md).
 
 ```bash
 sudo bash scripts/50_setup_nodes.sh     # option QH, or full deploy

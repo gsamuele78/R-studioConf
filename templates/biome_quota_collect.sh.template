@@ -30,9 +30,12 @@ fetch() {
     if [[ -n "${QUOTA_SSH_CMD}" ]]; then
         eval "${QUOTA_SSH_CMD}"
     else
-        ssh -o BatchMode=yes -o ConnectTimeout=10 \
+        # Bound the whole exchange: a server that accepts the TCP connection
+        # and then stalls must not hang this node's cron run forever.
+        timeout 60 ssh -o BatchMode=yes -o ConnectTimeout=10 \
+            -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${KNOWN_HOSTS}" \
-            -i "${SSH_KEY}" "${QUOTA_SSH_USER}@${QUOTA_SSH_HOST}"
+            -o IdentitiesOnly=yes -i "${SSH_KEY}" "${QUOTA_SSH_USER}@${QUOTA_SSH_HOST}"
     fi
 }
 

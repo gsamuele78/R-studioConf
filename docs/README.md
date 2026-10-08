@@ -87,6 +87,7 @@ Descriptions state each file's role. They do not imply that every document has p
 - [`LUSSU_HANG_BISECTION.md`](operations/LUSSU_HANG_BISECTION.md) — worked hang-bisection case.
 - [`CLEAN_VM_BASELINE.md`](operations/CLEAN_VM_BASELINE.md) — L4 clean-VM baseline procedure; this is distinct from the broken Vagrant sandbox.
 - [`USER_QUOTAS_AND_RESOURCES.md`](operations/USER_QUOTAS_AND_RESOURCES.md) — cgroup, memory, CPU, and scratch-resource behavior.
+- [`HOME_QUOTA_VIEW_SETUP.md`](operations/HOME_QUOTA_VIEW_SETUP.md) — enable the user-visible TrueNAS home quota on one or more nodes (TrueNAS SCALE 25.04, Ubuntu 24.04).
 - [`UPGRADE_TO_v12.4.md`](operations/UPGRADE_TO_v12.4.md) — historical v12.4 upgrade runbook; current Rprofile version is 12.11.
 - [`add_storage_no_reboot.md`](operations/add_storage_no_reboot.md) — storage hot-add procedure.
 - [`diagnostic_logs.md`](operations/diagnostic_logs.md) — log-location reference.

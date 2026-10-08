@@ -78,6 +78,7 @@
 | `LUSSU_HANG_BISECTION.md`, `NGINX_AUTH_PAM_REGRESSION_2026-06.md` | `historical` | Incident records, restored in full |
 | `sysadmin_troubleshooting_guide.md` | `needs-review` | v10.0-era handbook, restored; `TROUBLESHOOTING.md` wins on conflict |
 | `CLEAN_VM_BASELINE.md` | `needs-review` | SOP restored; provisioning not re-run |
+| `HOME_QUOTA_VIEW_SETUP.md` | `current` | New (2026-10-08). UI fields checked against TrueNAS 25.04 docs; live TrueNAS behaviour (key options kept, sudo arg matching, zfs path) is proven by the CHECK steps, not yet run on site |
 | `rstudio_session_isolation.md` | `checked` | Moved from `user_guides/` (sysadmin investigation record) |
 | `risposta_ricercatore_sessioni_rstudio.md` (IT) | `historical` | Moved from `user_guides/`: a reply to one researcher, internal record |
 

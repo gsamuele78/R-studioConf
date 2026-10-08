@@ -5,6 +5,20 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (home quota view: multi-node runbook)
+
+- `docs/operations/HOME_QUOTA_VIEW_SETUP.md`: step-by-step setup for TrueNAS SCALE
+  25.04 and several Ubuntu 24.04 nodes — one TrueNAS service user, one SSH key per
+  node bound with `from=<node IP>` and forced to the read-only `zfs userspace`,
+  staggered cron per node, UID-consistency check across nodes, a CHECK after
+  every step, sshd `Match` fallback if the UI drops key options, add/remove/
+  replace a node, troubleshooting, rollback. States plainly what was checked
+  against the 25.04 documentation and what is only proven on site by the CHECKs.
+  Replaces the single-node steps in the plan §5; in the ops wiki guide.
+- Collector: the SSH exchange is bounded (`timeout 60`, `ServerAliveInterval`),
+  so a TrueNAS that accepts the connection and stalls cannot hang the cron run;
+  `IdentitiesOnly=yes` so only the quota key is offered.
+
 ### Added (Rprofile v12.11 — TrueNAS home quota visible to users)
 
 - Optional T1 collector (`50_setup_nodes.sh` step 11g, disabled by default)
