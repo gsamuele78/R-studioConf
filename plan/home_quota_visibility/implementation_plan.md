@@ -113,36 +113,14 @@ Degraded cases (one plain sentence, never an R error):
 Wording goes into `docs/user_guides/COMMON_PROBLEMS.md §1` and the cheat
 sheet ("check with `status()`"), replacing "you cannot see the quota".
 
-## 5. TrueNAS SCALE steps (operator, once)
+## 5. TrueNAS SCALE and node steps
 
-1. Credentials → Local Users → Add `biomequota`: no password login, shell
-   `/usr/bin/sh` (needed for `command=`), home under the system pool, not in
-   `zpool/home`. Auxiliary groups: none. Add this exact sudo command as
-   NOPASSWD (UI field "Allowed sudo commands with no password"):
-   `/usr/sbin/zfs userspace -Hpn -o name,used,quota,objused,objquota zpool/home`.
-   Do **not** grant `zfs allow` permissions.
-2. On each compute node as root, before enabling the feature:
-
-   ```bash
-   install -d -m 0700 /etc/biome-calc/secrets
-   ssh-keygen -t ed25519 -N '' -f /etc/biome-calc/secrets/quota_ssh_key
-   ssh-keyscan -H biome-store03 > /etc/biome-calc/secrets/quota_known_hosts
-   chmod 0600 /etc/biome-calc/secrets/quota_ssh_key
-   chmod 0644 /etc/biome-calc/secrets/quota_known_hosts
-   ```
-
-   Verify the scanned host-key fingerprint out of band against TrueNAS before
-   trusting it; never accept an interactive SSH prompt in the cron job.
-3. Add the node's public key to `biomequota` in the UI (SSH Public Key field),
-   then on the TrueNAS shell prefix it with
-   `restrict,command="sudo -n /usr/sbin/zfs userspace -Hpn -o name,used,quota,objused,objquota zpool/home" `.
-   Check whether the TrueNAS UI preserves the prefix on save; if not, see
-   open item O1.
-4. System → Services → SSH: enabled, password login off for `biomequota`.
-5. From the node, as root:
-   `ssh -i /etc/biome-calc/secrets/quota_ssh_key biomequota@biome-store03 | head`
-   must print TAB-separated lines; `ssh ... ls` must print the same (the
-   forced command ignores the requested one).
+Moved to the operator runbook
+[`docs/operations/HOME_QUOTA_VIEW_SETUP.md`](../../docs/operations/HOME_QUOTA_VIEW_SETUP.md):
+TrueNAS 25.04 user/sudo/SSH settings, one key per node bound with `from=`,
+staggered cron, UID consistency check across nodes, Ubuntu 24.04
+prerequisites, a CHECK after every step, add/remove/replace a node,
+troubleshooting and rollback.
 
 ## 6. Tests
 

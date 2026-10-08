@@ -2461,7 +2461,7 @@ setup_nodes_home_quota_view() {
 
   if [[ ! -f "${key}" || ! -f "${kh}" ]]; then
     log_warn "SSH key or known_hosts missing under ${secrets_dir}."
-    log_warn "Create them (see plan/home_quota_visibility/implementation_plan.md §5), then run:"
+    log_warn "Create them (docs/operations/HOME_QUOTA_VIEW_SETUP.md, Part B), then run:"
     log_warn "  ${BIOME_CONF}/script/biome_quota_collect.sh"
     return 0
   fi

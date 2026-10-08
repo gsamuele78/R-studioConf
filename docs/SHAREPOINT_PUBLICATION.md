@@ -184,7 +184,7 @@ and uploaded to the wiki document library:
 | `user-guide.docx` | Researcher | how the server works for you, cheat sheet, parallel R, large spatial data, NIMBLE |
 | `user-common-problems.docx` | Researcher | `user_guides/COMMON_PROBLEMS.md` |
 | `ops-troubleshooting.docx` | Operator | `TROUBLESHOOTING.md`, `DIAGNOSTICS_INDEX.md`, `USER_SCRIPT_TROUBLESHOOTING.md`, `diagnostic_logs.md` |
-| `ops-guide.docx` | Operator | system overview, security model, user contract, quickstart, maintenance, quotas/resources, storage expansion, session isolation, server helpers API, script catalog |
+| `ops-guide.docx` | Operator | system overview, security model, user contract, quickstart, maintenance, quotas/resources, home-quota view setup, storage expansion, session isolation, server helpers API, script catalog |
 
 The chapter list lives in [`wiki/manifest.tsv`](wiki/manifest.tsv). Build
 on a workstation (pandoc ≥ 2.17, python3; not on the R nodes):

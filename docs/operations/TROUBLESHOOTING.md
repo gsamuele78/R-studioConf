@@ -386,8 +386,8 @@ sudo -u "$U" biome-quota
 sudo stat -c '%U %G %a %n' "/var/lib/biome-quota/$(id -u "$U")"  # user root 400
 ```
 
-Configure the TrueNAS service account and restricted key exactly as documented
-in `plan/home_quota_visibility/implementation_plan.md §5`, then on the node set
+Configure the TrueNAS service account and restricted keys (one per node) exactly
+as documented in [`HOME_QUOTA_VIEW_SETUP.md`](HOME_QUOTA_VIEW_SETUP.md), then on the node set
 `ENABLE_HOME_QUOTA_VIEW=true`, the `QUOTA_*` site variables, install the key as
 `${BIOME_CONF}/secrets/quota_ssh_key` (0600) and known_hosts as
 `${BIOME_CONF}/secrets/quota_known_hosts` (0644), and run
