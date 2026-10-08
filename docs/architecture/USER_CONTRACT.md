@@ -52,7 +52,7 @@ entry points, but the kernel cgroup remains the final boundary.
 
 ### 2.3 Runtime compatibility layer
 
-Rprofile version 12.10 is deployed as a dispatcher plus these active
+Rprofile version 12.11 is deployed as a dispatcher plus these active
 fragments:
 
 ```text

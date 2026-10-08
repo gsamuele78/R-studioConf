@@ -25,6 +25,12 @@ Read that file for the per-variable matrix; this one explains the
 * **`templates/*.template`** — placeholder-substitution templates,
   rendered by `process_template` (see `lib/common_utils.sh`).
 
+Home-quota visibility is opt-in: `ENABLE_HOME_QUOTA_VIEW`, `QUOTA_CRON`,
+`QUOTA_WARN_PCT` and `QUOTA_STALE_MIN` are safe defaults in
+`setup_nodes.vars.conf`; site-local `QUOTA_SSH_HOST`, `QUOTA_SSH_USER`, `QUOTA_MIN_LINES` live in `setup_nodes.site.vars.conf` (see
+`.example`). SSH key and known_hosts are files under `${BIOME_CONF}/secrets`,
+never config values or CLI arguments.
+
 ```
 .vars.conf  ──source──►  scripts/NN_*.sh  ──process_template──►  rendered config (/etc/...)
 ```
@@ -61,7 +67,7 @@ updating the others **will** break sessions.
 
 | Artefact | Owner script | Source template |
 |---|---|---|
-| `/etc/R/Rprofile.site` (thin **v12.4** dispatcher) | `50_setup_nodes.sh` | `templates/Rprofile_site.R.template` |
+| `/etc/R/Rprofile.site` (thin **v12.11** dispatcher) | `50_setup_nodes.sh` | `templates/Rprofile_site.R.template` |
 | `/etc/R/Rprofile_site.d/[0-9][0-9]_*.R` (modular fragments, incl. v12.4 `52_mclapply_guard.R`) | `50_setup_nodes.sh` | `templates/Rprofile_site.d/*.R.template` |
 | `/etc/R/Rprofile_site.d/.compiled/{bundle.Rc,manifest.txt}` (**v12.3** byte-compiled fragment bundle — derived cache, NEVER source) | `50_setup_nodes.sh` Step 8 | (regenerated atomically; manifest mismatch silently demotes to legacy `sys.source()` loop) |
 

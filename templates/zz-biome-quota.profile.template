@@ -1,0 +1,18 @@
+#!/bin/sh
+# templates/zz-biome-quota.profile.template — deployed to /etc/profile.d/zz-biome-quota.sh by 50_setup_nodes.sh (step 11g)
+# One line at login, only when the home quota is at or above the warn level.
+# POSIX sh only, must never fail an interactive login.
+case "$-" in
+    *i*) ;;
+    *) return 0 2>/dev/null || exit 0 ;;
+esac
+if command -v biome-quota >/dev/null 2>&1; then
+    out=$(biome-quota 2>/dev/null) || out=""
+    case "$out" in
+        *"Almost full"*)
+            echo "BIOME-CALC: your home folder is almost full (see: biome-quota or status() in R)"
+            echo "$out" | sed -n '2p'
+            ;;
+    esac
+fi
+return 0 2>/dev/null || exit 0

@@ -24,3 +24,9 @@ SMTP_DNS_SERVERS="192.0.2.10 192.0.2.11"
 
 # Contact address shown in notifications / portal footer.
 BIOME_CONTACT="ops@example.org"
+
+# Home quota view (optional): where the storage server is and which dataset
+# carries the per-user ZFS quotas. See plan/home_quota_visibility.
+QUOTA_SSH_HOST="biome-store03.example.org"
+QUOTA_SSH_USER="biomequota"
+QUOTA_MIN_LINES=1

@@ -35,7 +35,7 @@ T1 is `AUTHORITATIVE_CONTINUOUSLY_FIXED` and currently provides:
 - a Nextcloud reverse-proxy path to an operator-configured external target;
 - telemetry on `127.0.0.1:8000` and node exporter on `127.0.0.1:9100`;
 - optional Ollama on `127.0.0.1:11434`;
-- Rprofile 12.10, local `/Rtmp`, local R libraries, and cgroup user slices.
+- Rprofile 12.11, local `/Rtmp`, local R libraries, and cgroup user slices.
 
 T1 supports self-signed or Let's Encrypt certificates. It contains no
 oauth2-proxy, Step-CA enrollment, Keycloak client, Open OnDemand service,
@@ -49,7 +49,7 @@ oauth2-proxy v7.6.0-alpine `oidc` profile, and a loopback-only Docker API
 proxy.
 
 T2 is not a full T1 replacement. `TD-T2-01` remains open: T2 uses a
-monolithic Rprofile snapshot and audit v27 instead of T1's v12.10 fragments
+monolithic Rprofile snapshot and audit v27 instead of T1's v12.11 fragments
 and audit v28. T2 also intentionally omits bspm/r2u (`TD-T2-05`).
 
 ### 2.3 T3 Kubernetes
@@ -225,7 +225,7 @@ The following are not supported by repository evidence:
 - “Users are automatically routed across RStudio nodes.”
 - “RStudio sessions roam between nodes.”
 - “Positron is available in the browser.”
-- “T2 has T1 Rprofile 12.10 parity.”
+- “T2 has T1 Rprofile 12.11 parity.”
 - “T3 is production-ready.”
 - “Infra-Iam-PKI is a submodule of this repository.”
 

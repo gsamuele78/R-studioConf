@@ -123,6 +123,10 @@ setup_nodes_uninstall() {
   log_step "Uninstalling BIOME-CALC node setup"
   
   local files_to_remove=(
+    "/etc/cron.d/biome_quota"
+    "${BIOME_CONF}/script/biome_quota_collect.sh"
+    "/usr/local/bin/biome-quota"
+    "/etc/profile.d/zz-biome-quota.sh"
     "/etc/profile.d/biome-coretype.sh"
     "/etc/rstudio/rsession-profile"
     "/etc/systemd/system/ollama.service.d/biome-hardening.conf"
@@ -137,6 +141,14 @@ setup_nodes_uninstall() {
     fi
   done
   
+  if [[ -d /var/lib/biome-quota ]]; then
+    run_cmd rm -rf /var/lib/biome-quota
+    log_success "Removed: /var/lib/biome-quota"
+  fi
+
+  # Preserve ${BIOME_CONF}/secrets/quota_ssh_key and quota_known_hosts: an
+  # uninstall must not destroy operator-managed credentials.
+
   # Restore Rprofile/Renviron backups (fixed .bak suffix)
   for f in /etc/R/Rprofile.site /etc/R/Renviron.site; do
     if [[ -f "${f}.bak" ]]; then
@@ -173,7 +185,8 @@ setup_nodes_preflight() {
   # companion templates directory MUST exist AND contain fragments.
   # Otherwise deploy would ship a broken RStudio (v12.2 kernel expects fragments).
   if grep -q 'Rprofile_site\.d' "${RPROFILE_TEMPLATE}" 2>/dev/null; then
-    local frag_src_dir="$(dirname "${RPROFILE_TEMPLATE}")/Rprofile_site.d"
+    local frag_src_dir
+    frag_src_dir="$(dirname "${RPROFILE_TEMPLATE}")/Rprofile_site.d"
     if [[ ! -d "${frag_src_dir}" ]]; then
       log_error "Kernel template references Rprofile_site.d/ but source dir missing: ${frag_src_dir}"
       exit 1
@@ -1003,7 +1016,7 @@ setup_nodes_local_rlibs() {
       if [[ ! -d "${nfs_home_base}" ]]; then
         log_warn "  ${nfs_home_base} not present — AD discovery skipped (local accounts only)"
       fi
-      local warmup_count=0 warmup_skipped=0 warmup_failed=0 warmup_unresolved=0
+      local warmup_count=0 warmup_skipped=0 warmup_failed=0
       while IFS=: read -r u _ uid gid _ home shell; do
         # v12.8 gate: accepts AD/SSSD users (UIDs 100M+); excludes system
         # accounts (<1000) and the nobody sentinel (65534).
@@ -1294,7 +1307,8 @@ tryCatch({parse(file='${rprofile}');cat('PARSE_OK')},
   # ── Rprofile_site.d/ FRAGMENTS (v12.1 modular-additive) ──────────────────────
   # Deploy every templates/Rprofile_site.d/*.R.template to /etc/R/Rprofile_site.d/
   # Each fragment is independently rollback-able. See templates/Rprofile_site.d/README.md
-  local frag_src_dir="$(dirname "${RPROFILE_TEMPLATE}")/Rprofile_site.d"
+  local frag_src_dir
+  frag_src_dir="$(dirname "${RPROFILE_TEMPLATE}")/Rprofile_site.d"
   local frag_dst_dir="/etc/R/Rprofile_site.d"
 
   if [[ -d "${frag_src_dir}" ]]; then
@@ -1323,7 +1337,8 @@ tryCatch({parse(file='${rprofile}');cat('PARSE_OK')},
 
     # Backup existing deployed fragments (if any) in one timestamped tarball
     if compgen -G "${frag_dst_dir}/*.R" >/dev/null 2>&1; then
-      local frag_bak="${frag_dst_dir}.bak.$(date +%s)"
+      local frag_bak
+      frag_bak="${frag_dst_dir}.bak.$(date +%s)"
       run_cmd cp -a "${frag_dst_dir}" "${frag_bak}" && \
         log_info "  backup: ${frag_bak}"
     fi
@@ -1351,7 +1366,10 @@ tryCatch({parse(file='${rprofile}');cat('PARSE_OK')},
         LOG_FILE="${LOG_FILE}" \
         RAMDISK_GB="${RAMDISK_GB}" \
         RSESSION_CONF_PATH="${RSESSION_CONF_PATH}" \
-        TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-80}"
+        TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-80}" \
+        ENABLE_HOME_QUOTA_VIEW="${ENABLE_HOME_QUOTA_VIEW:-false}" \
+        QUOTA_WARN_PCT="${QUOTA_WARN_PCT:-90}" \
+        QUOTA_STALE_MIN="${QUOTA_STALE_MIN:-30}"
 
       printf "%s" "${generated_frag}" > "${frag_tmp}"
 
@@ -2372,6 +2390,90 @@ setup_nodes_admin_tools() {
 }
 
 # ==============================================================================
+# STEP 11g: Home quota view (plan/home_quota_visibility)
+# Local per-user cache of the ZFS userquota on the TrueNAS home dataset.
+# Off unless ENABLE_HOME_QUOTA_VIEW=true. Never touches the storage server:
+# it only deploys the collector; the key lives in ${BIOME_CONF}/secrets.
+# ==============================================================================
+setup_nodes_home_quota_view() {
+  if [[ "${ENABLE_HOME_QUOTA_VIEW:-false}" != "true" ]]; then
+    log_info "Home quota view disabled (ENABLE_HOME_QUOTA_VIEW!=true) — step 11g skipped"
+    return 0
+  fi
+  log_step "Step 11g: Home quota view (TrueNAS ZFS userquota cache)"
+
+  : "${QUOTA_SSH_HOST:?QUOTA_SSH_HOST is required (site vars)}"
+  local quota_user="${QUOTA_SSH_USER:-biomequota}"
+  local cache_dir="/var/lib/biome-quota"
+  local secrets_dir="${BIOME_CONF}/secrets"
+  local key="${secrets_dir}/quota_ssh_key"
+  local kh="${secrets_dir}/quota_known_hosts"
+
+  # Collector script (rendered template; secrets are file paths, never CLI args)
+  local generated_collect
+  process_template "${WORKSPACE_ROOT}/templates/biome_quota_collect.sh.template" generated_collect \
+    BIOME_CONF="${BIOME_CONF}" \
+    LOG_FILE="${LOG_FILE}"
+  local collect_tmp
+  collect_tmp=$(mktemp /tmp/biome_quota_collect.XXXXXX)
+  printf "%s" "${generated_collect}" > "${collect_tmp}"
+  bash -n "${collect_tmp}" || { log_error "collector template has a syntax error"; rm -f "${collect_tmp}"; exit 1; }
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    log_info "[DRY-RUN] deploy ${BIOME_CONF}/script/biome_quota_collect.sh, /usr/local/bin/biome-quota, profile.d, cron"
+    rm -f "${collect_tmp}"
+    return 0
+  fi
+
+  run_cmd mkdir -p "${BIOME_CONF}/script"
+  run_cmd cp "${collect_tmp}" "${BIOME_CONF}/script/biome_quota_collect.sh"
+  rm -f "${collect_tmp}"
+  run_cmd chmod 0750 "${BIOME_CONF}/script/biome_quota_collect.sh" || exit 1
+
+  # Shell reader for ttyd
+  local generated_bq
+  process_template "${WORKSPACE_ROOT}/templates/biome-quota.sh.template" generated_bq \
+    QUOTA_WARN_PCT="${QUOTA_WARN_PCT:-90}" \
+    QUOTA_STALE_MIN="${QUOTA_STALE_MIN:-30}"
+  printf "%s" "${generated_bq}" > /usr/local/bin/biome-quota || { log_error "cannot write /usr/local/bin/biome-quota"; exit 1; }
+  run_cmd chmod 0755 /usr/local/bin/biome-quota || exit 1
+
+  # Login notice (profile.d; MOTD template is not deployed by any script)
+  run_cmd cp "${WORKSPACE_ROOT}/templates/zz-biome-quota.profile.template" /etc/profile.d/zz-biome-quota.sh || exit 1
+  run_cmd chmod 0644 /etc/profile.d/zz-biome-quota.sh || exit 1
+
+  # Cache directory and secrets directory; hard rule 14: permissions or we stop
+  run_cmd mkdir -p "${cache_dir}" "${secrets_dir}" || exit 1
+  run_cmd chown root:root "${cache_dir}" "${secrets_dir}" || exit 1
+  run_cmd chmod 0711 "${cache_dir}" || exit 1
+  run_cmd chmod 0700 "${secrets_dir}" || exit 1
+  if [[ -f "${key}" ]]; then run_cmd chmod 0600 "${key}" || exit 1; fi
+  if [[ -f "${kh}" ]]; then run_cmd chmod 0644 "${kh}" || exit 1; fi
+
+  # Cron
+  local cron_tmp
+  cron_tmp=$(mktemp /tmp/biome_quota.cron.XXXXXX)
+  printf '%s\n' \
+    "${QUOTA_CRON:-*/5 * * * *} root QUOTA_SSH_HOST='${QUOTA_SSH_HOST}' QUOTA_SSH_USER='${quota_user}' QUOTA_MIN_LINES='${QUOTA_MIN_LINES:-1}' ${BIOME_CONF}/script/biome_quota_collect.sh > /dev/null 2>&1" \
+    > "${cron_tmp}"
+  run_cmd mv "${cron_tmp}" /etc/cron.d/biome_quota
+  run_cmd chmod 0644 /etc/cron.d/biome_quota || exit 1
+  log_success "cron: /etc/cron.d/biome_quota (${QUOTA_CRON:-*/5 * * * *})"
+
+  if [[ ! -f "${key}" || ! -f "${kh}" ]]; then
+    log_warn "SSH key or known_hosts missing under ${secrets_dir}."
+    log_warn "Create them (see plan/home_quota_visibility/implementation_plan.md §5), then run:"
+    log_warn "  ${BIOME_CONF}/script/biome_quota_collect.sh"
+    return 0
+  fi
+  local n=0
+  if n=$(QUOTA_SSH_HOST="${QUOTA_SSH_HOST}" QUOTA_SSH_USER="${quota_user}" QUOTA_MIN_LINES="${QUOTA_MIN_LINES:-1}" "${BIOME_CONF}/script/biome_quota_collect.sh" 2>&1); then
+    log_success "collector: $(find "${cache_dir}" -maxdepth 1 -type f -name '[0-9]*' | wc -l) quota rows cached"
+  else
+    log_warn "first collector run failed (${n}) — key/known_hosts/TrueNAS side to fix; cache empty until then"
+  fi
+}
+
+# ==============================================================================
 # STEP 11F: HC-13 TRIAGE TOOLING (minimal Rprofile + r_minimal + harnesses)
 # ==============================================================================
 # Per HC-13 ("Adapt System, Not User Script") we deploy the minimal-profile
@@ -2695,6 +2797,7 @@ echo "  10) Setup BIOME Precision Archiver (Step 11c)"
 echo "  T) Setup BIOME Admin Tools (Step 11d)"
 echo "  L) Setup local R libs disk + NFS audit (Step 7c+7d, v12.4)"
 echo "  H) Deploy HC-13 triage tooling (Step 11f: minimal Rprofile + r_minimal + harnesses)"
+echo "  QH) Deploy Home quota view (Step 11g: TrueNAS ZFS quota cache)"
 echo "  R) Master Diagnostic Report (Step 11e)"
 echo "  O) Deploy Optimized Rprofile (Rust plugin + Template)"
 echo "  V) Verify deployment (cgroups + Rprofile version)"
@@ -2728,6 +2831,7 @@ case "${choice}" in
     setup_nodes_project_archiver
     setup_nodes_admin_tools
     setup_nodes_hc13_tools
+    setup_nodes_home_quota_view
     setup_nodes_blas_test
     setup_nodes_summary
     setup_nodes_master_report
@@ -2779,6 +2883,10 @@ case "${choice}" in
   H)
     setup_nodes_preflight
     setup_nodes_hc13_tools
+    ;;
+  QH)
+    setup_nodes_preflight
+    setup_nodes_home_quota_view
     ;;
   R)
     setup_nodes_preflight

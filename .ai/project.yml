@@ -441,6 +441,14 @@ r_runtime:
     template: "templates/Rprofile_site.R.template"
     deployed_by: "50_setup_nodes.sh"
     audit_template: "templates/00_audit_v27.R.template"
+  home_quota_visibility:
+    status: "OPTIONAL_T1_T2 — disabled until TrueNAS restricted SSH account/key is configured"
+    source: "TrueNAS zfs userspace on zpool/home via forced-command SSH; Linux NFS clients cannot query ZFS userquota"
+    cache: "/var/lib/biome-quota/<uid> (local ext4, 0400 owned by uid; refreshed every 5 min)"
+    user_surfaces: "R status(), biome_quota(), biome_save_session warning; ttyd biome-quota + profile.d warning"
+    deployed_by: "50_setup_nodes.sh Step 11g; ENABLE_HOME_QUOTA_VIEW=true"
+    t2: "host cache bind-mounted read-only into RStudio containers"
+    t3: "DEFERRED — SKELETON_NOT_READY"
   workloads:
     - "NIMBLE MCMC (Bayesian hierarchical models)"
     - "Geospatial analysis (sf, terra, raster)"

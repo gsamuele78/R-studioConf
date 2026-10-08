@@ -33,7 +33,7 @@ The intended T1 ordering is `01..03 -> 10 or 11 -> 12 -> 13 -> 15 -> 20/21 -> 30
 | `31_setup_web_portal.sh` | Deploys the portal HTML/CSS/assets and `lib/biome-portal.js`. The duplicate `31_` prefix remains an open ordering defect. |
 | `32_setup_letsencrypt.sh` | Certbot installation, certificate acquisition, renewal, status, and revocation operations. |
 | `40_install_telemetry.sh` | Deploys the telemetry payload and service and verifies the API. |
-| `50_setup_nodes.sh` | Deploys the R runtime, serial OpenBLAS, local `/Rtmp`, swap, Python/R packages, local R libraries, Rprofile v12.10 fragments, cgroups, audit/logging, orphan cleanup, archive manager, admin tools, HC-13 tools, and optional Ollama. |
+| `50_setup_nodes.sh` | Deploys the R runtime, serial OpenBLAS, local `/Rtmp`, swap, Python/R packages, local R libraries, Rprofile v12.11 fragments, cgroups, audit/logging, orphan cleanup, archive manager, admin tools, HC-13 tools, and optional Ollama. |
 
 ## Diagnostics and repair scripts
 
@@ -84,7 +84,7 @@ These tools are not shown by the root script launcher:
 
 ## Current compliance notes
 
-- `RPROFILE_VERSION` is `12.10`.
+- `RPROFILE_VERSION` is `12.11`.
 - `99_troubleshoot_env.sh` is version `1.4.0`.
 - Several scripts still have strict mode commented out: `12_lib_kerberos_setup.sh`, `15_setup_nginx_cleanup.sh`, `20_configure_rstudio.sh`, `31_setup_web_portal.sh`, `99_verify_domain_join.sh`, `test_rstudio_login.sh`, and `ttyd_login_wrapper.sh`. `50_setup_nodes.sh` and several diagnostics use `set -euo` without `pipefail`. These remain open HC-03 defects.
 - All tracked root-level shell scripts currently have executable mode except `scripts/test_rstudio_login.sh`, which is tracked as `100644`.

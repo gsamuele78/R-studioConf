@@ -53,7 +53,7 @@ installation record and were not used to define the current architecture.
 | User R packages | `/var/lib/biome-Rlibs/<user>/<R-ver>/` first, NFS fallback | Reduces NFS lookup storms during parallel worker startup |
 | Project archive | `/mnt/ProjectStorage` CIFS | Separate project/archive surface |
 | Resource control | systemd `user-.slice` | Per-user memory, task, CPU-weight, and I/O-weight enforcement |
-| R runtime | Rprofile 12.10 dispatcher plus 14 fragments | System-side guards without rewriting portable user scripts |
+| R runtime | Rprofile 12.11 dispatcher plus 14 fragments | System-side guards without rewriting portable user scripts |
 | Telemetry | FastAPI on 8000 plus node exporter on 9100 | Aggregated status and metrics through Nginx |
 | Local AI | Optional Ollama on loopback 11434 | Local `ask_ai()` support when installed and running |
 
@@ -94,7 +94,7 @@ This is weighted CPU sharing, not a fixed `floor(vCores / active_users)` quota.
 One user can consume available CPU when the node is otherwise idle; weights
 determine competition under load.
 
-### 5.2 Rprofile 12.10
+### 5.2 Rprofile 12.11
 
 The dispatcher and fragments implement:
 
@@ -164,7 +164,7 @@ T2 has useful controls:
 
 It is not a current replacement for T1 because `TD-T2-01` remains open: the
 container runtime uses a monolithic Rprofile snapshot and audit v27 rather than
-T1's v12.10 fragments and audit v28. T2 also intentionally omits bspm/r2u
+T1's v12.11 fragments and audit v28. T2 also intentionally omits bspm/r2u
 (`TD-T2-05`).
 
 The T2 RStudio containers mount `/tmp` as tmpfs. That is a container-tier

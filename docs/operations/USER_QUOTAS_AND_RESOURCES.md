@@ -5,7 +5,7 @@ audience: operator
 status: current
 tier: T1
 source_path: docs/operations/USER_QUOTAS_AND_RESOURCES.md
-last_verified: 2026-10-06
+last_verified: 2026-10-07
 ---
 
 # User Quotas and Resources
@@ -102,6 +102,26 @@ id <user>
 ```
 
 The bundled test writes 1 MiB and fsyncs it. `EDQUOT` requires server-side `zfs userspace`/`zfs get` by numeric UID. Keep the Troubleshooting §4.4 anchor unchanged when linking it.
+
+### Optional user-visible quota cache (Rprofile v12.11)
+
+`ENABLE_HOME_QUOTA_VIEW=true` deploys step 11g: a root cron fetches the exact
+read-only `zfs userspace` output over a restricted SSH key every five minutes
+and writes local cache files under `/var/lib/biome-quota` (0711). Each `<uid>`
+file is 0400 and owned by that uid; users cannot list or read one another's
+files. The cache is local ext4, not NFS, so NFS ACL inheritance and a full user
+quota cannot block the update.
+
+User surfaces: `status()` (`Home (~)` line), `biome_quota()` in R,
+`biome-quota` in ttyd and a login warning at `QUOTA_WARN_PCT` (90% default).
+T2 mounts the same host cache read-only. Setup and TrueNAS least-privilege
+steps are in `plan/home_quota_visibility/implementation_plan.md`.
+
+```bash
+sudo bash scripts/50_setup_nodes.sh     # option QH, or full deploy
+sudo -u <user> biome-quota
+sudo stat -c '%U %G %a %n' /var/lib/biome-quota/$(id -u <user>)
+```
 
 ## Project storage
 

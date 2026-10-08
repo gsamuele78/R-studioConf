@@ -33,7 +33,7 @@ init.sh -> r_env_manager.sh -> scripts/NN_*.sh
 - package inventory, when present: `/var/lib/r_env_manager/installed_packages.state`
 - configuration: `config/r_env_manager.conf`
 
-The active R runtime is deployed by `scripts/50_setup_nodes.sh`. `config/setup_nodes.vars.conf` sets `RPROFILE_VERSION="12.10"`; large R temporary data belongs on the local 400 GB ext4 mount at `/Rtmp`; OpenBLAS must use the serial implementation, never `libopenblas0-pthread`.
+The active R runtime is deployed by `scripts/50_setup_nodes.sh`. `config/setup_nodes.vars.conf` sets `RPROFILE_VERSION="12.11"`; large R temporary data belongs on the local 400 GB ext4 mount at `/Rtmp`; OpenBLAS must use the serial implementation, never `libopenblas0-pthread`.
 
 ## Change rules
 

@@ -10,7 +10,7 @@ last_verified: 2026-10-06
 
 # Troubleshooting Runbook
 
-Every section is self-contained and follows **symptom → diagnosis → fix → verification**. Commands target the T1 host. Current runtime: Rprofile v12.10, 14 fragments, OpenBLAS serial, local ext4 `/Rtmp`, NFS homes at `/nfs/home` and local R libraries under `/var/lib/biome-Rlibs`.
+Every section is self-contained and follows **symptom → diagnosis → fix → verification**. Commands target the T1 host. Current runtime: Rprofile v12.11, 14 fragments, OpenBLAS serial, local ext4 `/Rtmp`, NFS homes at `/nfs/home` and local R libraries under `/var/lib/biome-Rlibs`.
 
 ## 0. First capture
 
@@ -121,7 +121,7 @@ sudo su - <user> -c '/usr/local/bin/99_diagnose_lussu_hang.sh --timeout 1800 --p
 
 Read `/tmp/lussu_diag_<user>_<timestamp>/report.md` and `lussu_overlay.tsv`. Probe E tests PSOCK reroute, F tests terra spill-to-disk, and G checks allocator variables on workers. `PROGRESSING` is not a hang; increase timeout.
 
-**Fix.** Current v12.10 already contains ForkGuard package/global synchronization, cgroup-aware terra memory and allocator propagation. If a probe exposes drift, redeploy the profile chain rather than patching the user script:
+**Fix.** Current v12.11 already contains ForkGuard package/global synchronization, cgroup-aware terra memory and allocator propagation. If a probe exposes drift, redeploy the profile chain rather than patching the user script:
 
 ```bash
 sudo bash scripts/50_setup_nodes.sh
@@ -357,7 +357,7 @@ df -i "$H"
 sudo bash scripts/99_troubleshoot_env.sh --storage --test-user "$U"
 ```
 
-The v1.4.0 tool writes 1 MiB and fsyncs it; a bare `touch` is insufficient. If files appear owned by `4294967294`/`65534`, investigate NFSv4 idmapping before changing quotas.
+The v1.5.0 tool prints the local TrueNAS-quota cache (when enabled), then writes 1 MiB and fsyncs it; a bare `touch` is insufficient. If files appear owned by `4294967294`/`65534`, investigate NFSv4 idmapping before changing quotas.
 
 **Diagnosis on TrueNAS (root, numeric IDs).**
 
@@ -372,6 +372,28 @@ zfs userspace -n -H -p -o name,used,quota "$DS"
 ```
 
 A 2026-10 incident was a user quota entered as `150M` rather than `150G`.
+
+**User-visible quota cache (Rprofile v12.11, optional).** When
+`ENABLE_HOME_QUOTA_VIEW=true`, `status()` / `biome_quota()` in R and
+`biome-quota` in ttyd read `/var/lib/biome-quota/<uid>`, refreshed every five
+minutes by `/etc/cron.d/biome_quota`. Check:
+
+```bash
+sudo systemctl status cron --no-pager
+sudo tail -50 /var/log/biome-log/r_biome_system.log
+sudo ls -ld /var/lib/biome-quota             # 0711 root:root
+sudo -u "$U" biome-quota
+sudo stat -c '%U %G %a %n' "/var/lib/biome-quota/$(id -u "$U")"  # user root 400
+```
+
+Configure the TrueNAS service account and restricted key exactly as documented
+in `plan/home_quota_visibility/implementation_plan.md §5`, then on the node set
+`ENABLE_HOME_QUOTA_VIEW=true`, the `QUOTA_*` site variables, install the key as
+`${BIOME_CONF}/secrets/quota_ssh_key` (0600) and known_hosts as
+`${BIOME_CONF}/secrets/quota_known_hosts` (0644), and run
+`sudo bash scripts/50_setup_nodes.sh` → `QH`. Never grant `zfs allow userquota`:
+the TrueNAS user gets only one exact NOPASSWD `zfs userspace` command, and its
+SSH key is forced to the same command.
 
 **Fix.** Correct the numeric user/group/dataset quota in TrueNAS. Example, only after confirming policy and UID:
 
@@ -539,7 +561,7 @@ Health 2.0 checks dispatcher, 14 fragments, byte-compiled bundle, guards, BLAS, 
 
 **Fix.** Follow the exact finding. System drift is usually corrected by option 3. Personal startup repair uses `--fix`/`--reset-profile` with explicit `--commit`.
 
-**Verification.** Static and user health checks return 0 (or only understood warnings), version is 12.10, fragment count is 14 and runtime worker survival passes.
+**Verification.** Static and user health checks return 0 (or only understood warnings), version is 12.11, fragment count is 14 and runtime worker survival passes.
 
 ## 9. Prohibited incident shortcuts
 

@@ -52,7 +52,7 @@ Do not treat `CLEAN_VM_BASELINE.md` as a node rebuild procedure; it is an L4 dia
 
 ### R runtime/profile
 
-Current `RPROFILE_VERSION` is `12.10`.
+Current `RPROFILE_VERSION` is `12.11`.
 
 ```bash
 sudo bash scripts/50_setup_nodes.sh --verify

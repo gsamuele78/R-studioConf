@@ -54,6 +54,10 @@ personal limit, so they can say "plenty of space" while your quota is full.
 
 **What you can do**
 
+- First run `status()` in R. The `Home (~)` line shows space used, your
+  personal limit, percentage and when it was last updated. For the full
+  explanation run `biome_quota()` (or `biome-quota` in the Terminal).
+  If it says "information not available", send the admins the original error.
 - See which of your folders are biggest (hidden folders such as `.cache`
   included; it can take a minute):
 
@@ -79,8 +83,9 @@ personal limit, so they can say "plenty of space" while your quota is full.
 
 **When to ask the admins**
 
-When you have cleaned up and still need more space. Tell them how much
-space your project needs; they can raise your quota.
+When you have cleaned up and still need more space. Send the output of
+`biome_quota()` and tell them how much space the project needs; they can raise
+your quota. The number can be up to five minutes old.
 
 ---
 

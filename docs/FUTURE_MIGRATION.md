@@ -7,7 +7,7 @@
 
 | Tier | Status | Repository surface | Honest description |
 |---|---|---|---|
-| T1 host | `AUTHORITATIVE_CONTINUOUSLY_FIXED` | `init.sh`, `r_env_manager.sh`, `scripts/`, `lib/`, `config/`, `templates/` | Active source of truth. Fix defects here first and port them forward. Rprofile version 12.10; serial OpenBLAS; local 400 GB ext4 `/Rtmp`. |
+| T1 host | `AUTHORITATIVE_CONTINUOUSLY_FIXED` | `init.sh`, `r_env_manager.sh`, `scripts/`, `lib/`, `config/`, `templates/` | Active source of truth. Fix defects here first and port them forward. Rprofile version 12.11; serial OpenBLAS; local 400 GB ext4 `/Rtmp`. |
 | T2 Docker | `MIGRATION_IN_PROGRESS` | `docker-deploy/` | Self-contained Compose v2 migration surface. It is not a complete behavioral mirror of T1. |
 | T3 Kubernetes | `SKELETON_NOT_READY` | `kubernetes-deploy/` | Kustomize/manifests exist, but the tier is gated and not a production target. |
 
@@ -23,7 +23,7 @@ init.sh -> r_env_manager.sh -> scripts/NN_*.sh
 
 Current runtime invariants include:
 
-- `RPROFILE_VERSION="12.10"`
+- `RPROFILE_VERSION="12.11"`
 - `libopenblas0-serial`, never the pthread OpenBLAS implementation
 - local `/Rtmp`, 400 GB ext4, not `/tmp` and not tmpfs
 - SSSD XOR Samba/Winbind
@@ -112,7 +112,7 @@ Ansible/Terraform adoption is speculative. It is not an active commitment and mu
 Before claiming T2 parity:
 
 1. close or explicitly record every observable deviation from T1;
-2. deploy Rprofile 12.10 fragments and audit v28 behavior;
+2. deploy Rprofile 12.11 fragments and audit v28 behavior;
 3. resolve large-scratch storage parity;
 4. pass Compose constraints, build tests, healthchecks, and production-host behavior checks.
 

@@ -82,7 +82,7 @@ fi
 VARS_FILE="config/setup_nodes.vars.conf"
 CHANGELOG_FILE="docs/reference/Rprofile_site.CHANGELOG.md"
 
-if echo "$STAGED_FILES" | grep -qx "$VARS_FILE"; then
+if grep -qx "$VARS_FILE" <<< "$STAGED_FILES"; then
     # Extract the staged (new) RPROFILE_VERSION value
     NEW_VER=$(git show ":$VARS_FILE" 2>/dev/null \
         | grep -E '^RPROFILE_VERSION=' | head -1 \
@@ -98,7 +98,7 @@ if echo "$STAGED_FILES" | grep -qx "$VARS_FILE"; then
 
         # Check the STAGED content of the CHANGELOG for the section
         STAGED_CHANGELOG=$(git show ":$CHANGELOG_FILE" 2>/dev/null || true)
-        if ! echo "$STAGED_CHANGELOG" | grep -qE "^## v${NEW_VER} "; then
+        if ! grep -qE "^## v${NEW_VER} " <<< "$STAGED_CHANGELOG"; then
             echo ""
             echo "══════════════════════════════════════════════════"
             echo "  COMMIT BLOCKED (HC-14): RPROFILE_VERSION=$NEW_VER"

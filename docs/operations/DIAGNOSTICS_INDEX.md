@@ -99,7 +99,7 @@ sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh --timeout 600 /pa
 - **Mutation:** read-only unless `--incident`, which appends `/var/log/biome-log/incident_log.txt`; `--output` writes the requested report.
 - **Requirement:** either `--user` or `--all-recent`.
 
-### `99_troubleshoot_env.sh` — version 1.4.0
+### `99_troubleshoot_env.sh` — version 1.5.0
 
 - **Use:** subsystem diagnostics and sanitized collection.
 - **Flags:** `--auth`, `--nginx`, `--rstudio`, `--rprofile`, `--ttyd`, `--ollama`, `--storage`, `--telemetry`, `--native-opt`, `--all`, `--test-user USER`, `--collect`, `--help`.

@@ -1,4 +1,4 @@
-# Rprofile_site.d/ — Kernel Feature Fragments (v12.10)
+# Rprofile_site.d/ — Kernel Feature Fragments (v12.11)
 
 Deployed by `scripts/50_setup_nodes.sh` to `/etc/R/Rprofile_site.d/`. Since
 v12.2 the `Rprofile_site.R` dispatcher is a **thin bootstrap** that, after
@@ -84,7 +84,7 @@ new fragments can be inserted between existing ones without renumbering.
    invariant has been satisfied (system → config → unchecked, in order;
    see `.ai/agents.md` §6.6).
 
-## Current fragments (v12.10)
+## Current fragments (v12.11)
 
 | # | File | Source | Purpose |
 |---|---|---|---|
@@ -100,7 +100,7 @@ new fragments can be inserted between existing ones without renumbering.
 | 52 | `52_mclapply_guard.R` | additive (v12.4) | Fork Guard: reroutes `parallel::mclapply` → PSOCK when fork-unsafe packages (terra/sf/GDAL) are loaded; v12.7 adds PKG-SYNC (replicate attached packages to workers); v12.9.3 adds GLOBAL-SYNC (export master `globalenv()` to workers). Disable: `BIOME_DISABLE_FORK_GUARD=1`. |
 | 55 | `55_options_guard.R` | additive (v12.3, hardened v12.5) | Clamps `options(mc.cores)` to vcores at session start; prevents user code from oversubscribing cores; v12.5 adds per-user audit log. |
 | 60 | `60_safe_setwd.R` | additive (v12.1) | Hard-fail guard on `base::setwd()` when path missing (fixes Martina-gate class of bug) |
-| 70 | `70_persistent_tools.R` | split from v12.1 monolith lines 1822-2496 | `biome_cluster_test`, `biome_worker_diagnostics`, `biome_plot_budget`, `tools:biome_calc` attachment, final diag dump, welcome banner |
+| 70 | `70_persistent_tools.R` | split from v12.1; quota view added v12.11 | `biome_cluster_test`, `biome_worker_diagnostics`, `biome_plot_budget`, `biome_quota`, quota line in `status()`, quota-aware `biome_save_session()`, `tools:biome_calc` attachment, final diag dump, welcome banner |
 | 80 | `80_tools_ext.R` | additive (v12.1) | `biome_tmb_compile()`, `biome_run_diagnostics()` attached to `tools:biome_calc` (requires 70) |
 
 ## Disabling fragments (dev / debug)

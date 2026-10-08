@@ -1,6 +1,6 @@
 # BIOME-CALC Sysadmin Troubleshooting Guide
 
-> **Legacy handbook — needs review (2026-10-06).** Written for BIOME-CALC v10.0; parts describe behaviour superseded by Rprofile v12.10. Internal only (not published to the wiki). The current, code-verified runbook is [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) with [`DIAGNOSTICS_INDEX.md`](DIAGNOSTICS_INDEX.md); when the two disagree, they win.
+> **Legacy handbook — needs review (2026-10-06).** Written for BIOME-CALC v10.0; parts describe behaviour superseded by Rprofile v12.11. Internal only (not published to the wiki). The current, code-verified runbook is [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) with [`DIAGNOSTICS_INDEX.md`](DIAGNOSTICS_INDEX.md); when the two disagree, they win.
 
 **Emergency DevOps Fix-Chain Reference for BIOME-CALC v10.0**
 

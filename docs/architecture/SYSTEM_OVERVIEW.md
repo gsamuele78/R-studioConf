@@ -166,7 +166,7 @@ deployment.
 
 ## 6. R runtime
 
-The active host profile is version **12.10**. `scripts/50_setup_nodes.sh`
+The active host profile is version **12.11**. `scripts/50_setup_nodes.sh`
 renders `/etc/R/Rprofile.site`, `/etc/R/Renviron.site`, and the following
 fragments into `/etc/R/Rprofile_site.d/` in lexical order:
 
@@ -206,7 +206,7 @@ user code.
 
 T2 is not a byte-for-byte runtime match for T1. The recorded open delta
 `TD-T2-01` states that T2 still ships a monolithic Rprofile snapshot and audit
-v27 instead of T1's v12.10 fragments and audit v28. Other active T2 differences
+v27 instead of T1's v12.11 fragments and audit v28. Other active T2 differences
 include:
 
 - optional oauth2-proxy v7.6.0-alpine on port 4180;

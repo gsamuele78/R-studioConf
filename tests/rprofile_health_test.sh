@@ -549,7 +549,8 @@ if ! ( export LOG_FILE="$TMPROOT/cu.log"
            process_template "$1" out BIOME_HOST=test-node RPROFILE_VERSION="$CFG_VER" VM_VCORES=4 VM_RAM_GB=8 \
                BIOME_CONTACT=ops@example.org MAX_BLAS_THREADS=4 BIOME_CONF="$FIX/etc/biome-calc" \
                LOG_FILE="$FIX/var/log/biome-log/r_biome_system.log" RAMDISK_GB=0 \
-               RSESSION_CONF_PATH="$FIX/etc/rstudio/rsession.conf" TMP_WARN_THRESHOLD_PCT=80 || return 1
+               RSESSION_CONF_PATH="$FIX/etc/rstudio/rsession.conf" TMP_WARN_THRESHOLD_PCT=80 \
+               ENABLE_HOME_QUOTA_VIEW=false QUOTA_WARN_PCT=90 QUOTA_STALE_MIN=30 || return 1
            printf '%s' "$out" > "$2"
        }
        render "${REPO}/templates/Rprofile_site.R.template" "$FIX/etc/R/Rprofile.site" || exit 1

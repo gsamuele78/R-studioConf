@@ -111,7 +111,7 @@ anything not saved to disk.
 |---|---|
 | Session crashes during `solve()` / `lm()` / `brm()` | Send `sessionInfo()` to the admins |
 | `cannot allocate vector of size ...` | `status()`, then *Common Problems* §3 |
-| `Disk quota exceeded` when saving | *Common Problems* §1 |
+| `Disk quota exceeded` when saving | `status()` → `Home (~)`; then `biome_quota()` and *Common Problems* §1 |
 | `No space left on device` during Stan compile | `status()` (scratch disk use) |
 | Parallel code uses 0 % CPU | *Common Problems* §5 |
 | Script 10× slower than yesterday | Writing many files to `~/` instead of `tempfile()`? |
