@@ -5,6 +5,18 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (ADR-0002, ADR-0003: measurement and in-place host update)
+
+- `docs/adr/0002-measure-before-adopting.md`: every change that claims an improvement
+  pre-registers metric, baseline, target and guard in the PR, labels the evidence
+  level reached (L0 static → L4 fleet), and ships each new gate with a mutation.
+- `docs/adr/0003-in-place-host-update-and-hotfix-contract.md`: hosts run release
+  tags and record them in `/etc/biome-calc/release.json`; one non-interactive
+  `update_host.sh` (`--plan` default, `--apply` with journal + atomic swap +
+  validator, `--rollback`); one hotfix contract (`--check` default, idempotent,
+  same-PR template fix + convergence test) and absorption by the next PATCH.
+  Pre-registered metrics M1–M7. Docs only; no script changes.
+
 ### Added (home quota view: multi-node runbook)
 
 - `docs/operations/HOME_QUOTA_VIEW_SETUP.md`: step-by-step setup for TrueNAS SCALE
