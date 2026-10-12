@@ -7,7 +7,7 @@ SHELL := /usr/bin/env bash
 
 AI_DIR := .ai
 
-.PHONY: help audit validate generate generate-check ai-regen clean-archive doc-coherence
+.PHONY: help audit validate generate generate-check ai-regen clean-archive doc-coherence lint shellcheck shellcheck-baseline actionlint unit
 
 
 help: ## Show this help
@@ -42,3 +42,19 @@ ai-regen: generate ## Alias for `generate`
 
 clean-archive: ## List quarantined orphan paths (does NOT delete; archive/ is reversible)
 	@find archive/ -type f 2>/dev/null | sort || echo "no archive/ yet"
+
+lint: audit shellcheck actionlint unit ## Every fast gate CI runs (same commands, same order)
+	@echo "[lint] PASS"
+
+shellcheck: ## ShellCheck -S warning with ratchet baseline (tests/lint/shellcheck-baseline.txt); errors always fail
+	@bash tests/lint/shellcheck_ratchet.sh
+
+shellcheck-baseline: ## Rewrite the ShellCheck baseline (only after FIXING warnings: it must shrink)
+	@bash tests/lint/shellcheck_ratchet.sh --update
+
+actionlint: ## Lint .github/workflows/*.yml (needs actionlint on PATH)
+	@command -v actionlint >/dev/null || { echo "[actionlint] not installed — see .github/workflows/lint.yml for the pinned version"; exit 2; }
+	@actionlint
+
+unit: ## T1 bash unit tests (bats)
+	@bats tests/unit/*.bats

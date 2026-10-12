@@ -5,6 +5,21 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed (CI hygiene, aligned with Infra-Iam-PKI)
+
+- Every `uses:` pinned to a commit SHA with the tag in a comment (13/13; was 0/14),
+  same `actions/checkout` pin as Infra-Iam-PKI; `ludeeus/action-shellcheck@master`
+  removed.
+- `permissions: contents: read`, `concurrency` and `timeout-minutes` on every
+  workflow/job.
+- ShellCheck now runs at severity **warning** (Infra-Iam-PKI level) through
+  `make shellcheck`, pinned to v0.11.0, with a ratchet baseline
+  (`tests/lint/shellcheck-baseline.txt`, 50 findings, may only shrink); errors
+  always fail. The advisory `shellcheck … || true` job in `ai-context.yml` is gone.
+- actionlint v1.7.12 (checksum-verified) on every workflow change.
+- `make lint` = `audit` + `shellcheck` + `actionlint` + `unit`: one command that
+  reproduces the fast CI gates locally.
+
 ### Added (home quota view: multi-node runbook)
 
 - `docs/operations/HOME_QUOTA_VIEW_SETUP.md`: step-by-step setup for TrueNAS SCALE
