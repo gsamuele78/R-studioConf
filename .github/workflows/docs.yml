@@ -1,0 +1,83 @@
+# .github/workflows/docs.yml
+# Docs-as-code gate (ADR-0001, docs/adr/0001-documentation-site.md).
+#
+# build:  renders docs/ with MkDocs in strict mode. Any broken link between
+#         pages, broken #anchor, or link to a missing repo file fails the PR.
+#         tests/docs_site_test.sh also runs negative controls so the gate
+#         cannot go false-green. The rendered site is uploaded as an artifact
+#         (download it from the run to preview).
+# deploy: publishes to GitHub Pages ONLY when the repository variable
+#         DOCS_PAGES_ENABLED is 'true' AND Pages is set to "GitHub Actions" in
+#         the repo settings. Both are off by default: publication is a separate,
+#         explicit maintainer decision (see ADR-0001 "Publication").
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'scripts/tools/docs_site/**'
+      - 'tests/docs_site_test.sh'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'scripts/tools/docs_site/**'
+      - 'tests/docs_site_test.sh'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Docs build (MkDocs strict + link-gate regression)
+    runs-on: ubuntu-24.04
+    env:
+      # MkDocs 2.0 notice acknowledged in ADR-0001: we pin mkdocs 1.x.
+      NO_MKDOCS_2_WARNING: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/tools/docs_site/requirements.txt
+
+      - name: Install pinned docs toolchain
+        run: python -m pip install -r scripts/tools/docs_site/requirements.txt
+
+      - name: Link-gate regression (real tree + negative controls)
+        run: bash tests/docs_site_test.sh
+
+      - name: Build site (strict)
+        run: mkdocs build --strict
+
+      - name: Upload rendered site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    name: Publish to GitHub Pages (opt-in)
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DOCS_PAGES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

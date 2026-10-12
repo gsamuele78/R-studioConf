@@ -1,0 +1,9 @@
+# scripts/tools/docs_site/requirements.txt — pinned docs-site toolchain (ADR-0001).
+# MkDocs 2.0 is a backward-incompatible, currently unlicensed rewrite: stay on 1.x.
+# Material for MkDocs is in maintenance mode (security fixes only); exit path is
+# Zensical, which reads mkdocs.yml. Bump only via PR with a green docs build.
+mkdocs==1.6.1
+mkdocs-material==9.7.6
+mkdocs-material-extensions==1.3.1
+pymdown-extensions==12.2
+Markdown==3.11
