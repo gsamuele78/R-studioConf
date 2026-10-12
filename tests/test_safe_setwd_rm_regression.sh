@@ -4,7 +4,7 @@
 #
 # Run: bash tests/test_safe_setwd_rm_regression.sh
 # Exit: 0 all pass | 1 critical fail | 2 invocation error
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO="$(cd "${SCRIPT_DIR}/.." && pwd)"
