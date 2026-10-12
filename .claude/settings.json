@@ -1,9 +1,62 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
       "Bash(awk -F'value_length=' '{print $1 \"len=\" length\\($2\\)}')",
-      "Bash(git reset *)",
       "Bash(git commit *)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/*.env)",
+      "Read(./config/site/**)",
+      "Read(./docker-deploy/config/site/**)",
+      "Read(./docker-deploy/config/oauth2-proxy.cfg)",
+      "Read(./config/admin_recipients.txt)",
+      "Read(./config/user_email_map.txt)",
+      "Read(./config/scopri_progetti_known.conf)",
+      "Read(./config/scopri_theme_map.conf)",
+      "Read(./config/lib_kerberos_setup.vars.conf)",
+      "Read(./config/join_domain_sssd.vars.conf)",
+      "Read(./config/join_domain_samba.vars.conf)",
+      "Read(./config/setup_nodes.site.vars.conf)",
+      "Read(**/*.key)",
+      "Read(**/*.pem)",
+      "Read(**/*.p12)",
+      "Read(**/*.keytab)",
+      "Read(**/private_key)",
+      "Read(**/.vagrant/**)",
+      "Read(/etc/krb5.keytab)",
+      "Read(/etc/shadow)",
+      "Read(/etc/sssd/sssd.conf)",
+      "Read(/var/lib/samba/private/**)",
+      "Edit(**/.env)",
+      "Edit(./config/site/**)"
+    ],
+    "ask": [
+      "Bash(git push*)",
+      "Bash(git reset --hard*)",
+      "Bash(*init.sh*)",
+      "Bash(*r_env_manager.sh*)",
+      "Bash(*--commit*)",
+      "Bash(*--rollback*)",
+      "Bash(*--uninstall*)",
+      "Bash(*systemctl restart*)",
+      "Bash(*systemctl stop*)",
+      "Bash(*docker compose*down*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

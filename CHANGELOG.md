@@ -5,6 +5,22 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (agent guardrails)
+
+- `.claude/hooks/guard.sh`: PreToolUse hook for AI agents. It normalises each Bash
+  command (invisible/bidi characters removed, NFKC, quotes stripped) and then
+  **denies** catastrophic commands (`rm -rf` on system or home paths, `mkfs`, `dd`
+  to a block device, download piped to a shell, keytab/shadow reads, secret
+  exfiltration) and **asks** a human before production-changing ones (`git push`,
+  `systemctl restart/stop`, PAM/SSSD/Kerberos/nginx config writes, `realm leave`,
+  package changes, the orchestrators and the in-place hotfixes). Fails closed to
+  "ask". Pattern adapted from OpenHands software-agent-sdk (MIT).
+- `.claude/settings.json`: `deny` on site secrets, keys and keytabs (aligned with
+  Infra-Iam-PKI); `ask` list; `git reset *` no longer pre-approved.
+- `tests/unit/test_agent_guard.bats` + `tests/fixtures/agent_guard/`: 83-command
+  corpus (27 deny, 26 ask, 30 allow) and a mutation test proving every rule is
+  covered.
+
 ### Added (home quota view: multi-node runbook)
 
 - `docs/operations/HOME_QUOTA_VIEW_SETUP.md`: step-by-step setup for TrueNAS SCALE
