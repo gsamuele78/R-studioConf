@@ -98,7 +98,7 @@ and must:
 The next PATCH release lists the hotfix under "Hotfixes absorbed" (RELEASING.md).
 On a hotfixed host, `update_host.sh --plan` for that release must show **0 diff**
 on the files the hotfix touched; the update sets `absorbed_in` for that hotfix.
-After the release ships, the hotfix script moves to `scripts/archive/hotfix/`.
+After the release ships, the hotfix script moves to `archive/hotfix/`.
 
 ### 5. Migration of existing scripts
 
