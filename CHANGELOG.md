@@ -103,6 +103,10 @@ current `main`; those PRs are closed as superseded.
 
 ### Changed (dependencies, T2 base images)
 
+- Dependabot #23 (superseded, applied here): `ollama/ollama` 0.35.0 → 0.35.1
+  (patch). The bot PR was red only on `generate --check` (it cannot regenerate the
+  IDE rule files); files regenerated, runbook + `FUTURE_MIGRATION.md` pin rows
+  updated. Ollama image proven only by the T2 light build / nightly monster canary.
 - Dependabot #20: `rocker/geospatial` 4.4.2 → 4.4.3 (R patch release), `nginx`
   1.27.3-alpine → 1.31.0-alpine, `ollama/ollama` 0.5.4 → 0.35.0. Merged after the
   monster build (rstudio-sssd, rstudio-samba, ollama-ai) passed on the branch.
