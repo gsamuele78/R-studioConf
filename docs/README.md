@@ -21,7 +21,7 @@ Fixes originate in T1 and are ported forward T1 -> T2 -> T3. `RPROFILE_VERSION` 
 | Incident responder | [`operations/DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md), [`operations/TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md), [`operations/USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) |
 | Developer | [`developer/README.md`](developer/README.md), [`reference/SCRIPT_CATALOG.md`](reference/SCRIPT_CATALOG.md) |
 | Architect | [`architecture/SYSTEM_OVERVIEW.md`](architecture/SYSTEM_OVERVIEW.md), [`architecture/SECURITY_MODEL.md`](architecture/SECURITY_MODEL.md), [`FUTURE_MIGRATION.md`](FUTURE_MIGRATION.md) |
-| Documentation/wiki publisher | [`SHAREPOINT_PUBLICATION.md`](SHAREPOINT_PUBLICATION.md), then generated output under `wiki/` |
+| Documentation/wiki publisher | [`SHAREPOINT_PUBLICATION.md`](SHAREPOINT_PUBLICATION.md), then generated output under `wiki/`; docs site and CI gate: [`adr/0001-documentation-site.md`](adr/0001-documentation-site.md) |
 
 ## Complete file map
 
@@ -33,6 +33,12 @@ Descriptions state each file's role. They do not imply that every document has p
 - [`FUTURE_MIGRATION.md`](FUTURE_MIGRATION.md) — current T1/T2/T3 maturity, tier deltas, blockers, and conditional future work.
 - [`DOCUMENTATION_AUDIT.md`](DOCUMENTATION_AUDIT.md) — hand-maintained documentation remediation register; its last full audit predates this index refresh.
 - [`SHAREPOINT_PUBLICATION.md`](SHAREPOINT_PUBLICATION.md) — SharePoint publication process.
+
+### Decisions (`adr/`)
+
+- [`adr/README.md`](adr/README.md) — ADR index and conventions.
+- [`adr/0000-template.md`](adr/0000-template.md) — ADR template (from `Proxmox_biome_log_collector`).
+- [`adr/0001-documentation-site.md`](adr/0001-documentation-site.md) — docs site with MkDocs in strict mode as a CI gate; GitHub Wiki not used; Pages publication opt-in.
 
 ### Architecture (`architecture/`)
 
@@ -139,7 +145,7 @@ Tier promotion is a project rule, not HC-03. Template placeholders are not gover
 ## Maintaining this index
 
 - Add every new file under `docs/` here in the same change.
-- Keep links relative.
+- Keep links relative. CI (`.github/workflows/docs.yml`) builds `docs/` with MkDocs in strict mode: a link to a missing page, a missing `#anchor` or a missing repo file fails the PR. Check locally with `python3 -m pip install -r scripts/tools/docs_site/requirements.txt && mkdocs build --strict` (do not add `--quiet`: it hides the warnings strict mode counts).
 - Distinguish current operations, historical runbooks, future analysis, and generated output.
 - Do not present the broken sandbox, dormant Rust core, T2, or T3 as production-ready.
 

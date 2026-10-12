@@ -1,0 +1,67 @@
+# mkdocs.yml — docs-as-code site for docs/ (ADR-0001, docs/adr/0001-documentation-site.md).
+# Markdown in docs/ stays the single source of truth; this file only renders it.
+# Build:  python3 -m pip install -r scripts/tools/docs_site/requirements.txt && mkdocs build
+# Keep this config minimal (no third-party plugins) so it stays portable to Zensical.
+site_name: BIOME-CALC / R-studioConf
+site_description: RStudio Server platform for the BIOME research group — user, operator and developer documentation
+repo_url: https://github.com/gsamuele78/R-studioConf
+repo_name: gsamuele78/R-studioConf
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+
+# Fail the build on any warning: a broken link between docs pages is a CI failure.
+strict: true
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+# Generated or binary artefacts that are not pages.
+exclude_docs: |
+  wiki/manifest.tsv
+
+hooks:
+  - scripts/tools/docs_site/mkdocs_hooks.py
+
+extra:
+  # Branch used by the hook for links to files outside docs/.
+  source_branch: main
+
+theme:
+  name: material
+  language: en
+  # HC-15: no external CDN fonts/CSS. Use system fonts instead of Google Fonts.
+  font: false
+  features:
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+      # GitHub-compatible heading ids, so #anchors written for GitHub resolve on the site too.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences

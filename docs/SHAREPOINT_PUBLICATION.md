@@ -207,7 +207,19 @@ Markdown and rebuild.
 The Italian source (`User_guide.md`) is not in the docx; its content is
 mirrored in the English guides.
 
-### 3.3 Page publication script (future)
+### 3.3 HTML docs site and CI link gate (implemented)
+
+The same Markdown is also rendered as a static site with MkDocs (Material
+theme) by `.github/workflows/docs.yml`, in strict mode: broken links between
+pages, broken `#anchors` and links to missing repo files fail the PR. The
+rendered site is attached to each run as an artifact. Publication to GitHub
+Pages is off by default and needs an explicit maintainer decision on the
+audience, because the repository is public and the site would make the
+"Internal / Not for SharePoint" documents searchable. SharePoint stays the
+researcher channel. Rationale and rollback:
+[`adr/0001-documentation-site.md`](adr/0001-documentation-site.md).
+
+### 3.4 Page publication script (future)
 
 A page publication script (`scripts/tools/publish_to_sharepoint.sh`) should:
 
