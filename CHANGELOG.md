@@ -5,6 +5,17 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (consumer contract with Infra-Iam-PKI)
+
+- `tests/contract/consumer_pki.sh` + `make contract-pki PKI=<checkout>`: runs
+  Infra-Iam-PKI's own rstudio gates (`sync_rstudioconf.sh --update/--check`,
+  `.ai/validate.sh --ci`, `docker compose config` for sssd and samba) against this
+  commit, on a throw-away copy of the consumer. Proven to fail on three mutations:
+  a vendored tool removed, an image moved to `:latest`, a broken compose service.
+- `.github/workflows/consumer-contract.yml`: runs it on PRs touching
+  `docker-deploy/`, `kubernetes-deploy/` or the 14 vendored host tools, weekly,
+  and on demand. Read-only checkout of the consumer; not a required check yet.
+
 ### Added (home quota view: multi-node runbook)
 
 - `docs/operations/HOME_QUOTA_VIEW_SETUP.md`: step-by-step setup for TrueNAS SCALE

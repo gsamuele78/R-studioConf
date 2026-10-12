@@ -7,7 +7,7 @@ SHELL := /usr/bin/env bash
 
 AI_DIR := .ai
 
-.PHONY: help audit validate generate generate-check ai-regen clean-archive doc-coherence
+.PHONY: contract-pki help audit validate generate generate-check ai-regen clean-archive doc-coherence
 
 
 help: ## Show this help
@@ -39,6 +39,10 @@ generate-check: ## Verify IDE rule files match what generate.sh would produce (C
 	@bash $(AI_DIR)/generate.sh --check
 
 ai-regen: generate ## Alias for `generate`
+
+contract-pki: ## Consumer contract: run Infra-Iam-PKI's rstudio gates on HEAD (PKI=<path to checkout>)
+	@test -n "$(PKI)" || { echo "usage: make contract-pki PKI=<path to Infra-Iam-PKI checkout>" >&2; exit 2; }
+	tests/contract/consumer_pki.sh "$(PKI)"
 
 clean-archive: ## List quarantined orphan paths (does NOT delete; archive/ is reversible)
 	@find archive/ -type f 2>/dev/null | sort || echo "no archive/ yet"
