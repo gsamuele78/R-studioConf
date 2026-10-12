@@ -1,0 +1,63 @@
+# .github/workflows/consumer-contract.yml
+# Consumer contract with Infra-Iam-PKI (R-04): would the consumer's own rstudio
+# gates still pass if it re-vendored this commit? Runs the consumer's unchanged
+# tools (sync_rstudioconf.sh, .ai/validate.sh, docker compose config) against a
+# read-only checkout of Infra-Iam-PKI. Nothing is pushed to the consumer.
+#
+# Not a required check at first (ADR-0002: measure before making it blocking).
+# A red run is real: fix it here, or mark the change MAJOR and open an issue on
+# Infra-Iam-PKI. Weekly run catches drift that comes from the consumer side.
+name: Consumer contract (Infra-Iam-PKI)
+
+on:
+  pull_request:
+    paths:
+      - 'docker-deploy/**'
+      - 'kubernetes-deploy/**'
+      # The 14 T1 tools vendored by Infra-Iam-PKI (its infra-rstudio/UPSTREAM.lock).
+      - 'scripts/99_audit_r_environment.sh'
+      - 'scripts/99_health_check.sh'
+      - 'scripts/99_troubleshoot_env.sh'
+      - 'scripts/99_verify_domain_join.sh'
+      - 'scripts/test_rstudio_login.sh'
+      - 'scripts/ttyd_login_wrapper.sh'
+      - 'scripts/tools/bigger_usage_reports.sh'
+      - 'scripts/tools/check_installed_R_Package.R'
+      - 'scripts/tools/check_installed_R_Package.sh'
+      - 'scripts/tools/check_pkg_config.sh'
+      - 'scripts/tools/check_processor_threads.sh'
+      - 'scripts/tools/deployment_summary.sh'
+      - 'scripts/tools/hw_report.sh'
+      - 'scripts/tools/manage_r_sessions.sh'
+      - 'tests/contract/**'
+      - '.github/workflows/consumer-contract.yml'
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: consumer-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  infra-iam-pki:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout Infra-Iam-PKI (read-only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gsamuele78/Infra-Iam-PKI
+          path: _consumer/Infra-Iam-PKI
+          persist-credentials: false
+
+      - name: Consumer gates on this commit
+        run: tests/contract/consumer_pki.sh _consumer/Infra-Iam-PKI HEAD
