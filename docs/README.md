@@ -106,6 +106,11 @@ Descriptions state each file's role. They do not imply that every document has p
 - [`NGINX_AUTH_BACKENDS.md`](reference/NGINX_AUTH_BACKENDS.md) — SSSD versus Samba/Winbind Nginx/PAM integration.
 - [`Rprofile_site.CHANGELOG.md`](reference/Rprofile_site.CHANGELOG.md) — Rprofile version history required by HC-14.
 
+### Planning (`planning/`)
+
+- [`ROADMAP_EXECUTION_PLAN.md`](planning/ROADMAP_EXECUTION_PLAN.md) — live roadmap execution plan: ordered work streams (audit → implement → validate), ADR-style decisions, open-PR triage record.
+- [`PROJECT_MAP_CONSOLIDATION_PLAN.md`](planning/PROJECT_MAP_CONSOLIDATION_PLAN.md) — approved, not yet executed brief (work stream WS-3 of the roadmap plan): archive `next_gen/`, MADR ADR system, triage-prune dead code, deepen tests. Records the "do NOT rewrite T1 to Python" verdict.
+
 The repository-wide change history is [`../CHANGELOG.md`](../CHANGELOG.md).
 
 ### User guides (`user_guides/`)
