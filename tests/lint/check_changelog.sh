@@ -7,10 +7,21 @@ set -euo pipefail
 #   - "## [Unreleased]" exists and is the first "## [" section;
 #   - release headings are "## [X.Y.Z] - YYYY-MM-DD", newest first, no duplicates;
 #   - every vX.Y.Z git tag has its section (release.yml publishes it as notes).
+#
+# Usage: tests/lint/check_changelog.sh [--tag vX.Y.Z]
+#   --tag  check only that tag's section instead of every tag (release.yml: an
+#          older tag's CHANGELOG cannot contain sections for later tags).
 # The R-runtime log (docs/reference/Rprofile_site.CHANGELOG.md) has its own
 # format and its own gate (make doc-coherence, HC-14).
 # ==============================================================================
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
+
+ONLY_TAG=""
+case "${1:-}" in
+    --tag) ONLY_TAG="${2:?--tag needs a value}" ;;
+    "")    ;;
+    *)     echo "usage: $0 [--tag vX.Y.Z]" >&2; exit 2 ;;
+esac
 
 cd "$(dirname "$0")/../.."
 status=0
@@ -38,7 +49,7 @@ fi
 while read -r tag; do
     [[ -n "$tag" ]] || continue
     printf '%s\n' "${versions[@]}" | grep -qxF "${tag#v}" || err "tag ${tag} has no '## [${tag#v}]' section"
-done < <(git tag -l 'v[0-9]*.[0-9]*.[0-9]*')
+done < <(if [[ -n "$ONLY_TAG" ]]; then echo "$ONLY_TAG"; else git tag -l 'v[0-9]*.[0-9]*.[0-9]*'; fi)
 
 (( status == 0 )) && echo -e "${GREEN}CHANGELOG.md: OK (${#versions[@]} releases)${NC}"
 exit "$status"

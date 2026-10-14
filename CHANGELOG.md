@@ -16,8 +16,12 @@ R runtime at this release: Rprofile v12.11 ([`Rprofile_site.CHANGELOG.md`](docs/
 
 - `release.yml`: pushing a `vX.Y.Z` tag publishes a GitHub Release whose notes are
   that version's section of this file (pattern from Proxmox_biome_log_collector).
+  Checks out only a `vX.Y.Z` tag, refuses a tag whose commit is not on `main`, and
+  keeps the write token away from repository code (no persisted credential).
 - `tests/lint/check_changelog.sh` (in CI, `t1-static`): `[Unreleased]` first,
-  `## [X.Y.Z] - YYYY-MM-DD` headings newest-first, every tag has a section.
+  `## [X.Y.Z] - YYYY-MM-DD` headings newest-first, every tag has a section
+  (full tag history fetched; `CHANGELOG.md`-only PRs also run it). `--tag vX.Y.Z`
+  checks one tag, so an older release can still be re-published.
 - `docs/developer/RELEASING.md`: SemVer for an infrastructure repo, defined by
   what an operator must do on a live host.
 
