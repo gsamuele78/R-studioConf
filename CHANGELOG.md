@@ -27,6 +27,25 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   reload, fresh-host create/remove, placeholder refusal, lock.
 - `docs/operations/IN_PLACE_UPDATE.md`: usage and the test-host procedure with
   the metrics to record.
+- `update_host.sh --component rprofile`: step 8 of `50_setup_nodes.sh` in place
+  (`/etc/R/Rprofile.site`, `/etc/R/Rprofile_site.d/NN_*.R`, the `.compiled`
+  bundle), without re-running the installer. Before the swap it parses every
+  file, checks `RPROFILE_VERSION` and starts R as `nobody` with the staged
+  profile and fragments; after the swap it starts R again with the deployed
+  files; either failure restores the previous files. Fragments on the host that
+  the release does not have are reported and left in place. No service is
+  touched: new R sessions load the new profile, running sessions keep theirs.
+  First case: the `safe_setwd` / `compileNimble` fix below reaches a live host
+  without `50_setup_nodes.sh` option 3. `Renviron.site` is not managed yet.
+- Default `--component` is now `all` (nginx, then rprofile; one journal each).
+- `lib/render_rprofile.sh`: the step 8 renderer, key set and bundle build, now
+  used by both `50_setup_nodes.sh` and `update_host.sh`. Output is
+  byte-identical to the previous step 8 (CI checks it).
+- `tests/update_host_test.sh` gains the rprofile cases (byte identity, setwd fix
+  applied, bundle rebuilt, local fragment kept, idempotence, rollback, parse and
+  start-up guards before and after the swap, bundle-compile failure);
+  `tests/update_host_rprofile_real_r_test.sh` runs the same flow with real R in
+  the R CI job and proves a fragment failing at run time is rejected before the swap.
 
 ### Deprecated
 

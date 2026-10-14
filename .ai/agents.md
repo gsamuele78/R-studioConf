@@ -160,7 +160,7 @@ These 12 hard constraints are the non-negotiable engineering rules.
 | `99_verify_domain_join.sh` | Validates AD/SSSD/Samba domain join state |
 | `test_rstudio_login.sh` | Curl-based RStudio plaintext login test (interactive — reads password from stdin) |
 | `ttyd_login_wrapper.sh` | Wraps ttyd terminal login for web-based shell access |
-| `update_host.sh` | In-place host update (ADR-0003): `--plan` default, `--apply` with journal + validator + auto-restore, `--rollback`; nginx today |
+| `update_host.sh` | In-place host update (ADR-0003): `--plan` default, `--apply` with journal + validator + auto-restore, `--rollback`; components nginx + rprofile (step 8, no Renviron) |
 | `update_nginx_templates.sh` | Deprecated by `update_host.sh` (no backup, restarts rstudio-server) |
 | `legacy_sysadmin_stress_test.R` | Advanced R memory/worker parallel load test |
 

@@ -135,6 +135,24 @@ hu_install_file() {
     hu_log INFO "replaced ${rel} (${sha_before:0:12} -> ${sha_after:0:12})"
 }
 
+# hu_remove_file DEST — journaled removal (hu_rollback puts the file back).
+hu_remove_file() {
+    local rel="$1" dest
+    [[ -n "${HU_JOURNAL}" ]] || { hu_log ERROR "hu_remove_file called without an open journal"; return 1; }
+    dest="$(hu_path "${rel}")"
+    [[ -e "${dest}" ]] || return 0
+    local mode owner sha_before
+    mode="$(stat -c '%a' "${dest}")"
+    owner="$(stat -c '%u:%g' "${dest}")"
+    sha_before="$(hu_sha "${dest}")"
+    mkdir -p "${HU_JOURNAL}/files$(dirname "${rel}")"
+    cp -p "${dest}" "${HU_JOURNAL}/files${rel}"
+    rm -f "${dest}"
+    printf '%s\t1\t%s\t%s\t%s\tabsent\n' "${rel}" "${mode}" "${owner}" "${sha_before}" >> "${HU_JOURNAL}/manifest.tsv"
+    HU_CHANGED_COUNT=$(( HU_CHANGED_COUNT + 1 ))
+    hu_log INFO "removed ${rel} (${sha_before:0:12})"
+}
+
 # hu_set_mode PATH MODE — journaled chmod (for hotfixes that fix permissions).
 hu_set_mode() {
     local rel="$1" want="$2" p cur
@@ -225,6 +243,30 @@ hu_hotfix_record() {
     jq --arg id "${id}" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg journal "${HU_JOURNAL#"${HU_ROOT}"}" \
        '.hotfixes=((.hotfixes // []) | map(select(.id != $id)) + [{id:$id, applied_at:$at, journal:$journal, absorbed_in:null}])' \
        "${f}" > "${tmp}"
+    chmod 0644 "${tmp}"
+    mv -f "${tmp}" "${f}"
+}
+
+# hu_release_unrecord JOURNAL COMPONENT — after a rollback, put that component's
+# entry of release.json back as it was before the apply of JOURNAL, leaving the
+# other components and the hotfix history alone. jq only (rule 16).
+hu_release_unrecord() {
+    local journal="$1" component="$2" f tmp before="{}" jrel
+    f="$(hu_path "${HU_RELEASE_FILE}")"
+    [[ -s "${f}" ]] || return 0
+    [[ -s "${journal}/release.json.before" ]] && before="$(cat "${journal}/release.json.before")"
+    jrel="${journal#"${HU_ROOT}"}"
+    tmp="$(mktemp "$(dirname "${f}")/.release.json.XXXXXX")"
+    jq --argjson b "${before}" --arg comp "${component}" --arg j "${jrel}" '
+        (if ($b.components // {})[$comp] then .components[$comp] = $b.components[$comp]
+         else del(.components[$comp]) end)
+        | (if .journal == $j then .tag=$b.tag | .commit=$b.commit | .applied_at=$b.applied_at | .journal=$b.journal else . end)' \
+        "${f}" > "${tmp}"
+    # Nothing left to describe: the host is back to "never updated".
+    if jq -e '((.components // {}) | length) == 0 and ((.hotfixes // []) | length) == 0' "${tmp}" >/dev/null; then
+        rm -f "${tmp}" "${f}"
+        return 0
+    fi
     chmod 0644 "${tmp}"
     mv -f "${tmp}" "${f}"
 }

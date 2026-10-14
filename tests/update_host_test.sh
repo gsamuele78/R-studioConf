@@ -53,7 +53,7 @@ EOF
 # shellcheck disable=SC2034  # OUT/RC read inside eval'd check strings
 run() { OUT="$(HU_ROOT="$ROOT" HU_NO_SYSLOG=1 HU_SKIP_ROOT_CHECK=1 LOG_FILE="$T/cu.log" \
                HU_NGINX_BIN="$T/bin/nginx" HU_SYSTEMCTL_BIN="$T/bin/systemctl" \
-               bash "$SUT" --nginx-vars "$T/nginx.vars.conf" "$@" 2>&1)"; RC=$?; }
+               bash "$SUT" --component nginx --nginx-vars "$T/nginx.vars.conf" "$@" 2>&1)"; RC=$?; }
 has() { grep -qF -- "$1" <<< "$OUT"; }
 tree_sha() { (cd "$ROOT" && find etc -type f ! -path 'etc/biome-calc/*' -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum) | sha256sum | cut -d' ' -f1; }
 last_journal() { find "$ROOT/var/backups/biome-calc" -mindepth 1 -maxdepth 1 -type d -name 'update-*' | sort | tail -n 1; }
@@ -185,6 +185,159 @@ exec 8>"$ROOT/run/lock/biome-calc-update.lock"; flock -n 8
 run --apply --allow-untagged
 check '[[ $RC -eq 3 ]] && has "refusing to run concurrently"' "second writer refused while the lock is held (got $RC)"
 exec 8>&-
+
+# ============================================================================
+# rprofile component (step 8 of 50_setup_nodes.sh: Rprofile.site + fragments + bundle)
+# ============================================================================
+R_ROOT="$T/rroot"
+mkdir -p "$R_ROOT" "$T/fragerr"
+printf '1\n' > "$T/bundle_ok"
+printf '0\n' > "$T/smoke_fail_on"
+: > "$T/smoke_count"
+: > "$T/rcalls"
+# Rscript stub: parse / cmpfile / start-up, driven by markers in the files.
+cat > "$T/bin/Rscript" <<STUB
+#!/usr/bin/env bash
+echo "Rscript \$*" >> "$T/rcalls"
+if [[ "\$1" == "--vanilla" ]]; then
+    expr="\$3"
+    if grep -q cmpfile <<< "\$expr"; then
+        src="\$(grep -oP "cmpfile\\('\\K[^']+" <<< "\$expr")"
+        dst="\$(grep -oP "cmpfile\\('[^']+', '\\K[^']+" <<< "\$expr")"
+        [[ "\$(cat "$T/bundle_ok")" == 1 ]] || { echo "BUNDLE_FAIL: stub"; exit 1; }
+        cp "\$src" "\$dst"; echo BUNDLE_OK; exit 0
+    fi
+    f="\$(grep -oP "parse\\(file='\\K[^']+" <<< "\$expr")"
+    if grep -q PARSE_BREAK "\$f"; then echo "PARSE_FAIL: stub"; else echo PARSE_OK; fi
+    exit 0
+fi
+n=\$(( \$(wc -l < "$T/smoke_count") + 1 )); echo x >> "$T/smoke_count"
+[[ "\$n" == "\$(cat "$T/smoke_fail_on")" ]] && { echo "Error in stub start-up"; exit 1; }
+fd="\$(grep -oP '\\.biome_frag_dir\\s*<-\\s*"\\K[^"]+' "\$R_PROFILE")"
+if grep -rqs FRAG_BREAK "\$fd"; then echo "frag failed" > "$T/fragerr/biome_frag_errors_\$\$.log"; fi
+echo "BIOME_SMOKE_OK \$\$"
+STUB
+chmod +x "$T/bin/Rscript"
+
+# shellcheck disable=SC2034  # OUT/RC read inside eval'd check strings
+rrun() { OUT="$(HU_ROOT="$R_ROOT" HU_NO_SYSLOG=1 HU_SKIP_ROOT_CHECK=1 LOG_FILE="$T/cu.log" \
+               HU_RSCRIPT_BIN="$T/bin/Rscript" HU_FRAG_ERR_DIR="$T/fragerr" HU_R_SMOKE_USER="" \
+               HU_NGINX_BIN="$T/bin/nginx" HU_SYSTEMCTL_BIN="$T/bin/systemctl" \
+               bash "${SUT_R:-$SUT}" --component rprofile "$@" 2>&1)"; RC=$?; }
+rtree_sha() { (cd "$R_ROOT" && find etc -type f ! -path 'etc/biome-calc/*' -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum) | sha256sum | cut -d' ' -f1; }
+rlast_journal() { find "$R_ROOT/var/backups/biome-calc" -mindepth 1 -maxdepth 1 -type d -name 'update-*' 2>/dev/null | sort | tail -n 1; }
+old_manifest() { (cd "$RD" && find . -maxdepth 1 -type f -name '[0-9][0-9]_*.R' -printf '%f\n' | LC_ALL=C sort | xargs -r -I{} md5sum -- "{}"); }
+RD="$R_ROOT/etc/R/Rprofile_site.d"
+
+echo "== R1. Byte-identical with the historical step 8 output (existing hosts plan 0 diff)"
+mkdir -p "$RD/.compiled"
+(
+    export LOG_FILE="$T/cu.log"
+    # shellcheck source=../lib/common_utils.sh disable=SC1091
+    source "${REPO}/lib/common_utils.sh" >/dev/null 2>&1
+    # shellcheck disable=SC1091
+    source "${REPO}/config/setup_nodes.vars.conf"
+    # shellcheck disable=SC1091
+    [[ -f "${REPO}/config/site/setup_nodes.site.vars.conf" ]] && source "${REPO}/config/site/setup_nodes.site.vars.conf"
+    [[ -z "${BIOME_HOST}" ]] && BIOME_HOST=$(hostname)
+    # Verbatim key sets of 50_setup_nodes.sh step 8 before the shared renderer.
+    gp=""
+    process_template "${REPO}/templates/Rprofile_site.R.template" gp \
+      BIOME_HOST="${BIOME_HOST}" RPROFILE_VERSION="${RPROFILE_VERSION}" VM_VCORES="${VM_VCORES}" \
+      VM_RAM_GB="${VM_RAM_GB}" BIOME_CONTACT="${BIOME_CONTACT}" MAX_BLAS_THREADS="${MAX_BLAS_THREADS}" \
+      BIOME_CONF="${BIOME_CONF}" LOG_FILE="${LOG_FILE}" RAMDISK_GB="${RAMDISK_GB}" \
+      RSESSION_CONF_PATH="${RSESSION_CONF_PATH}" TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-80}"
+    printf "%s" "$gp" > "$R_ROOT/etc/R/Rprofile.site"
+    for tpl in "${REPO}"/templates/Rprofile_site.d/[0-9][0-9]_*.R.template; do
+      gf=""
+      process_template "${tpl}" gf \
+        BIOME_HOST="${BIOME_HOST}" RPROFILE_VERSION="${RPROFILE_VERSION}" VM_VCORES="${VM_VCORES}" \
+        VM_RAM_GB="${VM_RAM_GB}" BIOME_CONTACT="${BIOME_CONTACT}" MAX_BLAS_THREADS="${MAX_BLAS_THREADS}" \
+        BIOME_CONF="${BIOME_CONF}" LOG_FILE="${LOG_FILE}" RAMDISK_GB="${RAMDISK_GB}" \
+        RSESSION_CONF_PATH="${RSESSION_CONF_PATH}" TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-80}" \
+        ENABLE_HOME_QUOTA_VIEW="${ENABLE_HOME_QUOTA_VIEW:-false}" QUOTA_WARN_PCT="${QUOTA_WARN_PCT:-90}" \
+        QUOTA_STALE_MIN="${QUOTA_STALE_MIN:-30}"
+      printf "%s" "$gf" > "$RD/$(basename "$tpl" .template)"
+    done
+)
+old_manifest > "$RD/.compiled/manifest.txt"
+echo "old bundle" > "$RD/.compiled/bundle.Rc"
+rrun --plan
+check '[[ $RC -eq 0 ]]' "plan on a host installed by the old step 8: exit 0 (got $RC)"
+check 'has "files to change: 0"' "plan reports 0 files to change"
+check '! has "REBUILD"' "bundle manifest recognised as current"
+check '[[ ! -s "$T/rcalls" ]]' "plan runs no R (read-only)"
+
+echo "== R2. The setwd fix as first in-place case: drift detected, applied, bundle rebuilt"
+sed -i '/original_fn(dir)/d' "$RD/60_safe_setwd.R"     # host still on the pre-fix fragment
+chmod 0640 "$RD/60_safe_setwd.R"
+printf '# local fragment\n' > "$RD/99_site_local.R"     # a fragment this release does not own
+old_manifest > "$RD/.compiled/manifest.txt"
+# shellcheck disable=SC2034  # read inside eval'd check strings
+RBEFORE="$(rtree_sha)"
+rrun --plan
+check '[[ $RC -eq 10 ]]' "plan with the pre-fix fragment: exit 10 (got $RC)"
+check 'has "CHANGED  /etc/R/Rprofile_site.d/60_safe_setwd.R"' "plan names 60_safe_setwd.R"
+check 'has "original_fn(dir)"' "plan diff shows the setwd fix line"
+check 'has "REBUILD"' "plan announces the bundle rebuild"
+check 'has "EXTRA" && has "99_site_local.R"' "plan reports the fragment it does not own"
+: > "$T/calls"; : > "$T/rcalls"
+rrun --apply --allow-untagged
+check '[[ $RC -eq 0 ]]' "apply: exit 0 (got $RC)"
+check '[[ "$(grep -c "original_fn(dir)" "$RD/60_safe_setwd.R")" -eq 1 ]]' "deployed 60_safe_setwd.R has the fix (grep -c 'original_fn(dir)' = 1)"
+check '[[ "$(stat -c %a "$RD/60_safe_setwd.R")" == "640" ]]' "mode of the replaced fragment preserved"
+check '[[ -f "$RD/99_site_local.R" ]]' "fragment not owned by the release left in place"
+check 'grep -q "99_site_local.R" "$RD/.compiled/manifest.txt"' "rebuilt bundle covers the local fragment too"
+check '[[ "$(cat "$RD/.compiled/manifest.txt")" == "$(old_manifest)" ]]' "manifest matches the deployed fragments (dispatcher fast path)"
+check 'grep -q "parse(file=" "$T/rcalls"' "staged files were parse-checked"
+check '[[ "$(grep -c -- "--no-init-file" "$T/rcalls")" -eq 2 ]]' "R start-up checked twice: staged before the swap, deployed after"
+check '[[ ! -s "$T/calls" ]]' "no service touched (no nginx, no systemctl)"
+check 'jq -e ".components.rprofile.commit" "$R_ROOT/etc/biome-calc/release.json" >/dev/null' "release.json records the rprofile component"
+J_R="$(rlast_journal)"
+check '[[ -n "$J_R" && "$(cut -f1 "$J_R/release.tsv")" == "rprofile" ]]' "journal names its component"
+
+echo "== R3. Idempotence (M3)"
+# shellcheck disable=SC2034  # read inside eval'd check strings
+RAFTER="$(rtree_sha)"
+rrun --apply --allow-untagged
+check '[[ $RC -eq 0 ]] && has "nothing to apply"' "second apply: nothing to apply"
+check '[[ "$(rtree_sha)" == "$RAFTER" ]]' "second apply changed 0 files"
+
+echo "== R4. Rollback (M4)"
+rrun --rollback "${J_R#"$R_ROOT"}"
+check '[[ $RC -eq 0 ]]' "rollback: exit 0 (got $RC)"
+check '[[ "$(rtree_sha)" == "$RBEFORE" ]]' "tree back to the exact pre-apply sha256 (fragments + bundle)"
+check '[[ ! -f "$R_ROOT/etc/biome-calc/release.json" ]]' "release record back to 'never updated'"
+
+echo "== R5. Guard before the swap: a bad fragment touches nothing"
+RB="$T/repo-broken"
+mkdir -p "$RB"
+cp -a "$REPO/scripts" "$REPO/lib" "$REPO/templates" "$REPO/config" "$RB/"
+echo 'PARSE_BREAK <- ' >> "$RB/templates/Rprofile_site.d/60_safe_setwd.R.template"
+SUT_R="$RB/scripts/update_host.sh" rrun --apply --allow-untagged
+check '[[ $RC -eq 1 ]] && has "nothing touched"' "parse failure: exit 1, nothing touched (got $RC)"
+check '[[ "$(rtree_sha)" == "$RBEFORE" ]]' "deployed tree unchanged"
+check '[[ "$(rlast_journal)" == "$J_R" ]]' "no journal opened"
+sed -i 's/^PARSE_BREAK <- $/FRAG_BREAK <- 1/' "$RB/templates/Rprofile_site.d/60_safe_setwd.R.template"
+SUT_R="$RB/scripts/update_host.sh" rrun --apply --allow-untagged
+check '[[ $RC -eq 1 ]] && has "fragments failed at start-up"' "fragment error at staged start-up: exit 1 (got $RC)"
+check '[[ "$(rtree_sha)" == "$RBEFORE" ]]' "deployed tree unchanged"
+
+echo "== R6. Guard after the swap: failed start-up restores the previous files"
+: > "$T/smoke_count"; printf '2\n' > "$T/smoke_fail_on"
+rrun --apply --allow-untagged
+check '[[ $RC -eq 1 ]] && has "previous files restored"' "post-swap start-up failure: exit 1, restored (got $RC)"
+check '[[ "$(rtree_sha)" == "$RBEFORE" ]]' "tree back byte for byte"
+printf '0\n' > "$T/smoke_fail_on"
+
+echo "== R7. Bundle compile failure is not fatal: stale bundle removed, rollback restores it"
+printf '0\n' > "$T/bundle_ok"
+rrun --apply --allow-untagged
+check '[[ $RC -eq 0 ]] && has "bundle compile failed"' "apply succeeds with a WARN (got $RC)"
+check '[[ ! -e "$RD/.compiled/bundle.Rc" && ! -e "$RD/.compiled/manifest.txt" ]]' "stale bundle removed (dispatcher uses the per-fragment loop)"
+rrun --rollback "$(rlast_journal | sed "s|^$R_ROOT||")"
+check '[[ $RC -eq 0 && "$(rtree_sha)" == "$RBEFORE" ]]' "rollback restores fragments and the old bundle"
+printf '1\n' > "$T/bundle_ok"
 
 echo
 if (( FAILS )); then echo "update_host_test: ${FAILS} FAILED"; exit 1; fi

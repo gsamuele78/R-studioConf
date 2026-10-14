@@ -9,9 +9,30 @@
 | Component | Files | Validator (before the service sees them) | Service action |
 |---|---|---|---|
 | `nginx` | `/etc/nginx/templates/nginx_{ssl_params,ssl_certificate,performance,proxy_location}.conf`, `/etc/nginx/sites-available/<DOMAIN_OR_IP>.conf` | `nginx -t` | `systemctl reload nginx` |
+| `rprofile` | `/etc/R/Rprofile.site`, `/etc/R/Rprofile_site.d/NN_*.R`, `/etc/R/Rprofile_site.d/.compiled/{bundle.Rc,manifest.txt}` (step 8 of `50_setup_nodes.sh`, without `Renviron.site`) | R parse of every file, `RPROFILE_VERSION` check, R start-up as `nobody` with the **staged** files (before the swap) and with the deployed files (after it) | none: new R sessions load the new profile, running sessions keep the old one |
 
-`rstudio-server` is **never** restarted by the tool. SSSD, Samba, PAM and
-Kerberos are out of scope until each has its own validator and a VM test.
+`--component all` (the default) does nginx, then rprofile, each with its own
+journal. `rstudio-server` is **never** restarted by the tool. `Renviron.site`,
+SSSD, Samba, PAM and Kerberos are out of scope until each has its own validator
+and a VM test.
+
+Notes on `rprofile`:
+
+- Values come from `config/setup_nodes.vars.conf` and, if present,
+  `config/site/setup_nodes.site.vars.conf`, exactly as step 8 reads them.
+  The renderer is shared with `50_setup_nodes.sh` (`lib/render_rprofile.sh`).
+- The R start-up check fails if R does not finish starting, or if the dispatcher
+  logs a fragment error (`/tmp/biome_frag_errors_<pid>.log`). Running it as
+  `nobody` has the same side effects as any user starting R: fragment 04 may
+  create `/var/lib/biome-Rlibs/nobody/`, and the R system log gets a start-up line.
+- A fragment on the host that the release does not have is listed as `EXTRA`
+  and left in place; it still loads and is included in the rebuilt bundle.
+- If the bundle does not compile, the update still succeeds: the stale bundle is
+  removed (journaled) and sessions use the per-fragment loop, as the dispatcher
+  already does on any bundle mismatch.
+- The `Rprofile_site_optimized.R.template` variant (menu option O, Rust plugin,
+  dormant) is not supported: a host deployed with it shows `Rprofile.site` as
+  `CHANGED`, and the start-up check refuses it.
 
 `scripts/update_nginx_templates.sh` is **deprecated** by this tool and stays only
 until `update_host.sh` has run on a canary host (ADR-0003 §5). The old script has
@@ -23,8 +44,8 @@ no backup, leaves a broken config on disk when `nginx -t` fails, and restarts
 | Command | Effect | Exit |
 |---|---|---|
 | `sudo scripts/update_host.sh` (= `--plan`) | Render from this checkout, diff with the deployed files. **Writes nothing.** | 0 nothing to do · 10 changes pending · 1 error |
-| `sudo scripts/update_host.sh --apply` | Backup + journal, atomic swap, `nginx -t`, reload. If `nginx -t` fails, the previous files are restored and nginx is **not** reloaded. | 0 applied or nothing to do · 1 failed (old files back) · 3 precondition |
-| `sudo scripts/update_host.sh --rollback <journal>` | Restore every file of that run, verify the original `sha256`, reload nginx. | 0 · 1 mismatch |
+| `sudo scripts/update_host.sh --apply` | Validate, backup + journal, atomic swap, validate again, service action (table above). If a validator fails, the previous files of that component are restored. | 0 applied or nothing to do · 1 failed (old files back) · 3 precondition |
+| `sudo scripts/update_host.sh --rollback <journal>` | Restore every file of that run, verify the original `sha256`; for nginx, `nginx -t` and reload. | 0 · 1 mismatch |
 | `sudo scripts/update_host.sh --status` | Print `/etc/biome-calc/release.json`. | 0 |
 
 Rules the tool enforces:
@@ -119,6 +140,23 @@ journalctl -t biome-calc --since today --no-pager
 sudo scripts/update_host.sh --status
 ```
 
+**7. rprofile component: the setwd / compileNimble fix (WS-1.1)**
+
+```bash
+grep -c 'original_fn(dir)' /etc/R/Rprofile_site.d/60_safe_setwd.R            # baseline: 0 on a pre-fix host
+sudo scripts/update_host.sh --component rprofile --plan | tee /root/uh-r-plan.txt; echo "exit=$?"
+rstudio-server active-sessions | tail -n +2 | wc -l                            # sessions before
+time sudo scripts/update_host.sh --component rprofile --apply --allow-untagged; echo "exit=$?"
+rstudio-server active-sessions | tail -n +2 | wc -l                            # sessions after
+grep -c 'original_fn(dir)' /etc/R/Rprofile_site.d/60_safe_setwd.R            # expect 1
+grep -c '\.biome_original_setwd(dir)' /etc/R/Rprofile_site.d/60_safe_setwd.R  # expect 0
+sudo scripts/update_host.sh --component rprofile --plan; echo "exit=$?"        # expect exit=0 (M3)
+```
+
+In a **new** RStudio session as a researcher: `rm(list = ls(all.names = TRUE)); setwd(tempdir())`
+must not error. Then roll back once (step 4 with the rprofile journal) and check the
+plan shows the step-7 diff again, and apply again.
+
 ### Metrics to report
 
 | ID | Metric | Target | Result on test host |
@@ -129,6 +167,9 @@ sudo scripts/update_host.sh --status
 | M5 | RStudio sessions ended by the update | 0 | |
 | Guard | Broken template: exit 1, `nginx -t` OK, plan 0 diff afterwards | yes | |
 | — | Duration of `--apply` | (baseline) | |
+| WS-1.1 | `grep -c 'original_fn(dir)'` before → after | 0 → 1 | |
+| M5-R | RStudio sessions ended by the rprofile apply | 0 | |
+| — | rprofile `EXTRA` fragments found on the host | (baseline) | |
 
 ## Known issue found while building this (not changed here)
 

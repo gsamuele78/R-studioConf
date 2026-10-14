@@ -32,6 +32,9 @@ if [[ ! -f "${COMMON_UTILS}" ]]; then
 fi
 # shellcheck source=../lib/common_utils.sh disable=SC1091
 source "${COMMON_UTILS}"
+# Step 8 renderer, shared with scripts/update_host.sh (ADR-0003: one renderer, no drift)
+# shellcheck source=../lib/render_rprofile.sh disable=SC1091
+source "${WORKSPACE_ROOT}/lib/render_rprofile.sh"
 
 # ── Load configuration ──
 VARS_CONF="${WORKSPACE_ROOT}/config/setup_nodes.vars.conf"
@@ -1255,21 +1258,7 @@ RENVEOF
   # (substitutes all %%KEY%% placeholders from vars.conf)
   local tmp_profile
   tmp_profile=$(mktemp /tmp/Rprofile.site.deploy.XXXXXX)
-  local generated_profile
-  process_template "${RPROFILE_TEMPLATE}" generated_profile \
-    BIOME_HOST="${BIOME_HOST}" \
-    RPROFILE_VERSION="${RPROFILE_VERSION}" \
-    VM_VCORES="${VM_VCORES}" \
-    VM_RAM_GB="${VM_RAM_GB}" \
-    BIOME_CONTACT="${BIOME_CONTACT}" \
-    MAX_BLAS_THREADS="${MAX_BLAS_THREADS}" \
-    BIOME_CONF="${BIOME_CONF}" \
-    LOG_FILE="${LOG_FILE}" \
-    RAMDISK_GB="${RAMDISK_GB}" \
-    RSESSION_CONF_PATH="${RSESSION_CONF_PATH}" \
-    TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-80}"
-
-  printf "%s" "$generated_profile" > "${tmp_profile}"
+  rprofile_render_file "${RPROFILE_TEMPLATE}" "${tmp_profile}"
   run_cmd cp "${tmp_profile}" "${rprofile}"
   rm -f "${tmp_profile}"
   run_cmd chmod 644 "${rprofile}"
@@ -1352,26 +1341,8 @@ tryCatch({parse(file='${rprofile}');cat('PARSE_OK')},
       local frag_tmp
       frag_tmp=$(mktemp /tmp/Rfrag.XXXXXX.R)
 
-      # Substitute %%VARS%% (same key set as the main Rprofile). Fragments
-      # that don't reference any var will just pass through unchanged.
-      local generated_frag
-      process_template "${frag_tpl}" generated_frag \
-        BIOME_HOST="${BIOME_HOST}" \
-        RPROFILE_VERSION="${RPROFILE_VERSION}" \
-        VM_VCORES="${VM_VCORES}" \
-        VM_RAM_GB="${VM_RAM_GB}" \
-        BIOME_CONTACT="${BIOME_CONTACT}" \
-        MAX_BLAS_THREADS="${MAX_BLAS_THREADS}" \
-        BIOME_CONF="${BIOME_CONF}" \
-        LOG_FILE="${LOG_FILE}" \
-        RAMDISK_GB="${RAMDISK_GB}" \
-        RSESSION_CONF_PATH="${RSESSION_CONF_PATH}" \
-        TMP_WARN_THRESHOLD_PCT="${TMP_WARN_THRESHOLD_PCT:-80}" \
-        ENABLE_HOME_QUOTA_VIEW="${ENABLE_HOME_QUOTA_VIEW:-false}" \
-        QUOTA_WARN_PCT="${QUOTA_WARN_PCT:-90}" \
-        QUOTA_STALE_MIN="${QUOTA_STALE_MIN:-30}"
-
-      printf "%s" "${generated_frag}" > "${frag_tmp}"
+      # Substitute %%VARS%% (same key set as the main Rprofile, lib/render_rprofile.sh).
+      rprofile_render_file "${frag_tpl}" "${frag_tmp}"
 
       # Parse-check each fragment BEFORE deploying (fail-fast: PSE rule)
       local fpr
@@ -1436,42 +1407,13 @@ tryCatch({parse(file='${frag_tmp}');cat('PARSE_OK')},
       local bundle_dir="${frag_dst_dir}/.compiled"
       local bundle_stage
       bundle_stage=$(mktemp -d /tmp/biome_bundle.XXXXXX)
-      # Concatenate fragments in lexical order with explicit separators so that
-      # any syntax error's filename is visible to the R parser.
-      local concat_r="${bundle_stage}/bundle.R"
-      : > "${concat_r}"
-      local f
-      while IFS= read -r -d '' f; do
-        printf '\n# <<< %s >>>\n' "$(basename "$f")" >> "${concat_r}"
-        cat "$f" >> "${concat_r}"
-      done < <(find "${frag_dst_dir}" -maxdepth 1 -type f -name '[0-9][0-9]_*.R' -print0 | sort -z)
-
-      # Byte-compile. Any parse/compile failure → skip bundle deployment
+      # Concatenate + byte-compile + manifest (lib/render_rprofile.sh, shared with
+      # update_host.sh). Any parse/compile failure → skip bundle deployment
       # (dispatcher falls back to legacy loop automatically).
       local compile_log="${bundle_stage}/compile.log"
-      if Rscript --vanilla -e "
-options(warn=2)
-tryCatch({
-  suppressPackageStartupMessages(library(compiler))
-  cmpfile('${concat_r}', '${bundle_stage}/bundle.Rc',
-          options = list(optimize = 3L), verbose = FALSE)
-  cat('BUNDLE_OK\n')
-}, error = function(e) {
-  cat(sprintf('BUNDLE_FAIL: %s\n', conditionMessage(e)))
-  quit(status = 1)
-})
-" >"${compile_log}" 2>&1 && grep -q 'BUNDLE_OK' "${compile_log}"; then
+      if rprofile_build_bundle "${frag_dst_dir}" "${bundle_stage}"; then
 
-        # Build manifest: md5sum  basename, sorted for deterministic output.
-        # NOTE: md5sum output is already `<hash>  <path>`. We strip the leading
-        # `./` from the `find -printf` output so the manifest stores bare
-        # basenames matching what the dispatcher sees via basename().
-        (
-          cd "${frag_dst_dir}" || exit 1
-          find . -maxdepth 1 -type f -name '[0-9][0-9]_*.R' -printf '%f\n' \
-            | LC_ALL=C sort \
-            | xargs -r -I{} md5sum -- "{}"
-        ) > "${bundle_stage}/manifest.txt"
+        # manifest.txt (md5  basename, sorted) was written by rprofile_build_bundle.
 
         # Atomic install: mkdir bundle_dir if needed, then mv the two files.
         run_cmd mkdir -p "${bundle_dir}"
