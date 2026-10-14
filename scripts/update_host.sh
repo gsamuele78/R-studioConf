@@ -25,6 +25,7 @@ set -euo pipefail
 #   sudo scripts/update_host.sh --apply [--component ...] [--allow-untagged]
 #   sudo scripts/update_host.sh --rollback /var/backups/biome-calc/update-...
 #   sudo scripts/update_host.sh --status
+#   scripts/fleet_status.sh hosts.txt                # every host: same code? (ssh + --plan)
 #
 # Exit: 0 nothing to do / applied | 10 changes pending (--plan) | 1 failure
 #       (on --apply the previous files of the failing component are back in place)
@@ -59,7 +60,7 @@ readonly R_BUNDLE_DIR="${R_FRAG_DIR}/.compiled"
 HU_R_SMOKE_USER="${HU_R_SMOKE_USER-nobody}"   # R start-up check runs as this user when we are root ("" = test hook: as is)
 : "${HU_FRAG_ERR_DIR:=/tmp}"        # where the dispatcher logs fragment errors (biome_frag_errors_<pid>.log)
 
-usage() { sed -n '2,/^#       | 2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '3,/^#       | 2 usage/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
 
 while (( $# )); do
     case "$1" in
@@ -324,6 +325,10 @@ fi
 printf '\n  files to change: %d   rstudio-server: untouched (active sessions: %s)\n\n' "${total}" "${sessions}"
 
 if [[ "${MODE}" == "plan" ]]; then
+    per=""
+    for comp in "${COMPONENTS[@]}"; do per+="${per:+,}${comp}:${PENDING[${comp}]}"; done
+    # One machine-readable line for scripts/fleet_status.sh.
+    printf 'UPDATE_HOST_SUMMARY tag=%s commit=%s pending=%d components=%s\n' "${REL_TAG}" "${REL_COMMIT}" "${total}" "${per}"
     hu_log INFO "plan components=${COMPONENTS[*]} release=${REL_TAG} commit=${REL_COMMIT} pending=${total}"
     (( total == 0 )) && exit 0
     exit 10

@@ -30,6 +30,9 @@ fi
 source "$UTILS_SCRIPT_PATH"
 # shellcheck source=../lib/render_nginx.sh disable=SC1091
 source "${SCRIPT_DIR}/../lib/render_nginx.sh"
+# Release stamp in /etc/biome-calc/release.json (ADR-0003), shared with update_host.sh
+# shellcheck source=../lib/host_update.sh disable=SC1091
+source "${SCRIPT_DIR}/../lib/host_update.sh"
 
 # =====================================================================
 # ERROR HANDLING AND CLEANUP TRAPS
@@ -746,6 +749,8 @@ install_and_configure_nginx() {
   run_command "Clean Nginx 'sites-enabled' directory" "rm -f '${NGINX_DIR}/sites-enabled/'*"
   run_command "Enable Nginx site for ${DOMAIN_OR_IP}" "ln -sf '${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf' '${NGINX_DIR}/sites-enabled/'"
   run_command "Test Nginx configuration and restart service" "nginx -t && systemctl restart nginx"
+  # Record which code this host now runs (update_host.sh --status, fleet_status.sh). Non-fatal.
+  hu_installer_stamp "$(cd "${SCRIPT_DIR}/.." && pwd)" nginx 30_install_nginx.sh
 
   # Step 8: Final Output
   log "INFO" "----------------------------------------"

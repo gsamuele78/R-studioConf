@@ -216,18 +216,21 @@ hu_repo_release() {
     printf '%s\t%s\n' "${tag}" "${commit}"
 }
 
-# hu_release_record TAG COMMIT COMPONENT — update release.json after an apply.
+# hu_release_record TAG COMMIT COMPONENT [VIA] — update release.json after an apply.
+# VIA names the writer (update_host.sh, 50_setup_nodes.sh, 30_install_nginx.sh), so a
+# host reinstalled from the menu also says which code it runs. An installer run has
+# no journal (journal ""): it cannot be rolled back with --rollback.
 # Keeps the hotfixes[] history. jq only (rule 16).
 hu_release_record() {
-    local tag="$1" commit="$2" component="$3" f tmp
+    local tag="$1" commit="$2" component="$3" via="${4:-update_host.sh}" f tmp
     f="$(hu_path "${HU_RELEASE_FILE}")"
     mkdir -p "$(dirname "${f}")"
     [[ -s "${f}" ]] || printf '{}\n' > "${f}"
     tmp="$(mktemp "$(dirname "${f}")/.release.json.XXXXXX")"
-    jq --arg tag "${tag}" --arg commit "${commit}" --arg comp "${component}" \
+    jq --arg tag "${tag}" --arg commit "${commit}" --arg comp "${component}" --arg via "${via}" \
        --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg journal "${HU_JOURNAL#"${HU_ROOT}"}" \
        '.tag=$tag | .commit=$commit | .applied_at=$at | .journal=$journal
-        | .components[$comp]={tag:$tag, commit:$commit, applied_at:$at, journal:$journal}
+        | .components[$comp]={tag:$tag, commit:$commit, applied_at:$at, journal:$journal, via:$via}
         | .hotfixes=(.hotfixes // [])' "${f}" > "${tmp}"
     chmod 0644 "${tmp}"
     mv -f "${tmp}" "${f}"
@@ -269,4 +272,22 @@ hu_release_unrecord() {
     fi
     chmod 0644 "${tmp}"
     mv -f "${tmp}" "${f}"
+}
+
+# hu_installer_stamp REPO COMPONENT VIA — called by the installers after a successful
+# deploy. Never fails the install: a missing jq or a write error is only a warning.
+hu_installer_stamp() {
+    local repo="$1" component="$2" via="$3" tag commit
+    if ! command -v jq >/dev/null 2>&1; then
+        hu_log WARN "jq missing: ${HU_RELEASE_FILE} not updated (update_host.sh --status will not know this ${component} deploy)"
+        return 0
+    fi
+    IFS=$'\t' read -r tag commit < <(hu_repo_release "${repo}")
+    HU_JOURNAL=""
+    if hu_release_record "${tag}" "${commit}" "${component}" "${via}"; then
+        hu_log INFO "release stamp: ${component} ${tag} ${commit:0:12} via ${via}"
+    else
+        hu_log WARN "could not write ${HU_RELEASE_FILE}"
+    fi
+    return 0
 }

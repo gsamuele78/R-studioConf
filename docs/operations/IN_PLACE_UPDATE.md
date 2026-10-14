@@ -70,6 +70,32 @@ Where things are written:
 | `/etc/biome-calc/release.json` | tag, commit, time and journal of the last apply, per component; hotfix history |
 | journald, tag `biome-calc` | every plan/apply/rollback line: `journalctl -t biome-calc` |
 
+## Which code does each host run? (`scripts/fleet_status.sh`)
+
+`/etc/biome-calc/release.json` is written by every `update_host.sh --apply` and,
+since this change, also by the installers (`50_setup_nodes.sh` step 8 with menu 1, 3
+or O, and `30_install_nginx.sh`), with `via` naming the writer. A host stamped by
+an installer has no journal: `--rollback` cannot undo that run.
+
+The stamp says what was **applied**, not what is on disk now (a hand edit after it
+is invisible to the stamp), and the checkout commit says what **would** be
+deployed. Only the plan proves the deployed files match the checkout. So the fleet
+view combines the three, from any workstation with ssh keys to the hosts:
+
+```bash
+cat > hosts.txt <<'EOF'
+# host [checkout path on that host]  (default /home/ladmin/configServices/R-studioConf)
+biome-calc01
+biome-calc02
+EOF
+scripts/fleet_status.sh hosts.txt; echo "exit=$?"        # 0 SAME CODE · 10 DIFFERENT · 1 NOT VERIFIED
+```
+
+It needs passwordless `sudo -n` on the hosts for `update_host.sh` and `cat`; a host
+where that fails is reported, never counted as matching. Raw sha256 of the
+deployed files are not compared across hosts on purpose: the rendered files hold
+host values (`BIOME_HOST`, `VM_VCORES`, domain), so they always differ.
+
 ## Test-host procedure (L2/L3 evidence, ADR-0002)
 
 Run on the **test host only**. Every step says what to record; the numbers go in

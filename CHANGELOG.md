@@ -38,6 +38,16 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   First case: the `safe_setwd` / `compileNimble` fix below reaches a live host
   without `50_setup_nodes.sh` option 3. `Renviron.site` is not managed yet.
 - Default `--component` is now `all` (nginx, then rprofile; one journal each).
+- Release stamp from the installers too: `50_setup_nodes.sh` step 8 (menu 1, 3, O)
+  and `30_install_nginx.sh` write their component into `/etc/biome-calc/release.json`
+  with `via` (writer and, for the profile, the template used) and no journal. A host
+  reinstalled from the menu therefore also says which code it runs. Non-fatal.
+- `scripts/fleet_status.sh HOSTS_FILE`: are all hosts on the same code? Read-only;
+  per host over ssh + `sudo -n`: checkout commit, `update_host.sh --plan` result and
+  `release.json`. SAME CODE only when every host is on the same clean commit and its
+  deployed files match it (plan 0 diff). Rendered files hold host values, so raw
+  sha256 are not compared across hosts. `update_host.sh --plan` prints one
+  `UPDATE_HOST_SUMMARY` line for it. Test: `tests/fleet_status_test.sh` (CI).
 - `lib/render_rprofile.sh`: the step 8 renderer, key set and bundle build, now
   used by both `50_setup_nodes.sh` and `update_host.sh`. Output is
   byte-identical to the previous step 8 (CI checks it).

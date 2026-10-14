@@ -35,6 +35,9 @@ source "${COMMON_UTILS}"
 # Step 8 renderer, shared with scripts/update_host.sh (ADR-0003: one renderer, no drift)
 # shellcheck source=../lib/render_rprofile.sh disable=SC1091
 source "${WORKSPACE_ROOT}/lib/render_rprofile.sh"
+# Release stamp in /etc/biome-calc/release.json (ADR-0003), shared with update_host.sh
+# shellcheck source=../lib/host_update.sh disable=SC1091
+source "${WORKSPACE_ROOT}/lib/host_update.sh"
 
 # ── Load configuration ──
 VARS_CONF="${WORKSPACE_ROOT}/config/setup_nodes.vars.conf"
@@ -1456,6 +1459,13 @@ tryCatch({parse(file='${frag_tmp}');cat('PARSE_OK')},
       fi
       rm -rf "${bundle_stage}"
     fi
+  fi
+
+  # Record which code this host now runs (read by update_host.sh --status and
+  # scripts/fleet_status.sh). Non-fatal. The template name tells the default
+  # profile from the optimized one, which update_host.sh does not manage.
+  if [[ "${DRY_RUN}" != "true" ]]; then
+    hu_installer_stamp "${WORKSPACE_ROOT}" rprofile "50_setup_nodes.sh:$(basename "${RPROFILE_TEMPLATE}")"
   fi
 }
 

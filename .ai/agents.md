@@ -161,6 +161,7 @@ These 12 hard constraints are the non-negotiable engineering rules.
 | `test_rstudio_login.sh` | Curl-based RStudio plaintext login test (interactive — reads password from stdin) |
 | `ttyd_login_wrapper.sh` | Wraps ttyd terminal login for web-based shell access |
 | `update_host.sh` | In-place host update (ADR-0003): `--plan` default, `--apply` with journal + validator + auto-restore, `--rollback`; components nginx + rprofile (step 8, no Renviron) |
+| `fleet_status.sh` | Read-only fleet view: per host checkout commit + `update_host.sh --plan` + `release.json` over ssh; SAME CODE / DIFFERENT / NOT VERIFIED |
 | `update_nginx_templates.sh` | Deprecated by `update_host.sh` (no backup, restarts rstudio-server) |
 | `legacy_sysadmin_stress_test.R` | Advanced R memory/worker parallel load test |
 
