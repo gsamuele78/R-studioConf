@@ -131,7 +131,9 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
   were already closure-safe; 35 hardened; 60 fixed.
 
 **Implement**
-1. On every host in M1: `sudo ./scripts/50_setup_nodes.sh` (re-render + deploy fragments).
+1. On every host in M1: `sudo scripts/update_host.sh --component rprofile --plan`, then
+   `--apply` (PR #34, ADR-0003: journal, R start-up check before and after the swap,
+   rollback). Replaces re-running `50_setup_nodes.sh` option 3, which has no rollback.
 2. No RPROFILE_VERSION bump (behaviour-restoring fix; HC-14 applies only to bumps).
 
 **Validate**
@@ -205,7 +207,7 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 |---|---|
 | Open-PR triage (#12, #13, #14, #23) | Done in this PR |
 | WS-1.1 v12.11-fix code + CI guard | Done in this PR |
-| WS-1.1 host redeploy | **Open: operator** (needs M1) |
+| WS-1.1 host redeploy | **Open: operator** (needs M1). Tool ready: `update_host.sh --component rprofile` (PR #34); test host first |
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |

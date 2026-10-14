@@ -28,6 +28,11 @@ if [[ ! -f "$UTILS_SCRIPT_PATH" ]]; then
 fi
 # shellcheck source=../lib/common_utils.sh disable=SC1091
 source "$UTILS_SCRIPT_PATH"
+# shellcheck source=../lib/render_nginx.sh disable=SC1091
+source "${SCRIPT_DIR}/../lib/render_nginx.sh"
+# Release stamp in /etc/biome-calc/release.json (ADR-0003), shared with update_host.sh
+# shellcheck source=../lib/host_update.sh disable=SC1091
+source "${SCRIPT_DIR}/../lib/host_update.sh"
 
 # =====================================================================
 # ERROR HANDLING AND CLEANUP TRAPS
@@ -722,41 +727,21 @@ install_and_configure_nginx() {
   # Step 6: Process and Deploy ALL Templates
   log "INFO" "Processing and deploying Nginx templates..."
     
-  # Fetch RStudio session timeout to align Nginx proxy timeouts
-  local rstudio_vars_file="${SCRIPT_DIR}/../config/configure_rstudio.vars.conf"
-  local rsession_timeout_minutes=10080 # Default 7 days
-  if [[ -f "$rstudio_vars_file" ]]; then
-    local extracted_timeout
-    extracted_timeout=$(grep -E '^[[:space:]]*RSESSION_TIMEOUT_MINUTES=' "$rstudio_vars_file" | cut -d= -f2- | tr -d '"'\''[:space:]')
-    if [[ -n "$extracted_timeout" && "$extracted_timeout" =~ ^[0-9]+$ ]]; then
-      rsession_timeout_minutes="$extracted_timeout"
-    fi
+  # Rendering lives in lib/render_nginx.sh, shared with scripts/update_host.sh
+  # (ADR-0003): install and in-place update produce byte-identical files.
+  local render_stage
+  render_stage="$(mktemp -d)"
+  if ! render_nginx_bundle "${TEMPLATE_DIR}" "${render_stage}" \
+         "${SCRIPT_DIR}/../config/configure_rstudio.vars.conf" "${cert_fullpath}" "${key_fullpath}"; then
+      rm -rf "${render_stage}"
+      log "FATAL" "Nginx template rendering failed; nothing deployed."
+      return 1
   fi
-  local rsession_timeout_seconds=$(( rsession_timeout_minutes * 60 ))
-  log "INFO" "Aligned Nginx proxy timeout to ${rsession_timeout_seconds}s (${rsession_timeout_minutes}m)"
-
-  local template_args=(
-      "DOMAIN_OR_IP=${DOMAIN_OR_IP}" "RSTUDIO_PORT=${RSTUDIO_PORT}" "WEB_TERMINAL_PORT=${WEB_TERMINAL_PORT}"
-      "NEXTCLOUD_TARGET_URL=${NEXTCLOUD_TARGET_URL}" "LOG_DIR=${LOG_DIR}" "NGINX_TEMPLATE_DIR=${NGINX_TEMPLATE_DIR}"
-      "CERT_FULLPATH=${cert_fullpath}" "KEY_FULLPATH=${key_fullpath}" "DHPARAM_FULLPATH=${DHPARAM_PATH}"
-      "TIMEOUT_STANDARD=600" "RSESSION_TIMEOUT_SECONDS=${rsession_timeout_seconds}"
-  )
-  local processed_content
-    
-  process_template "${TEMPLATE_DIR}/nginx_ssl_params.conf.template" "processed_content" "${template_args[@]}"
-  echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_ssl_params.conf" > /dev/null
-    
-  process_template "${TEMPLATE_DIR}/nginx_ssl_certificate.conf.template" "processed_content" "${template_args[@]}"
-  echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_ssl_certificate.conf" > /dev/null
-
-  process_template "${TEMPLATE_DIR}/nginx_performance.conf.template" "processed_content" "${template_args[@]}"
-  echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_performance.conf" > /dev/null
-
-  process_template "${TEMPLATE_DIR}/nginx_proxy_location.conf.template" "processed_content" "${template_args[@]}"
-  echo "$processed_content" | sudo tee "${NGINX_TEMPLATE_DIR}/nginx_proxy_location.conf" > /dev/null
-
-  process_template "${TEMPLATE_DIR}/nginx_site.conf.template" "processed_content" "${template_args[@]}"
-  echo "$processed_content" | sudo tee "${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf" > /dev/null
+  local rendered
+  while IFS= read -r -d '' rendered; do
+      sudo install -D -m 0644 "${rendered}" "/${rendered#"${render_stage}"/}"
+  done < <(find "${render_stage}" -type f -print0)
+  rm -rf "${render_stage}"
   log "INFO" "SUCCESS: All templates processed and deployed."
 
   # Step 7: Enable Site and Restart Nginx
@@ -764,6 +749,8 @@ install_and_configure_nginx() {
   run_command "Clean Nginx 'sites-enabled' directory" "rm -f '${NGINX_DIR}/sites-enabled/'*"
   run_command "Enable Nginx site for ${DOMAIN_OR_IP}" "ln -sf '${NGINX_DIR}/sites-available/${DOMAIN_OR_IP}.conf' '${NGINX_DIR}/sites-enabled/'"
   run_command "Test Nginx configuration and restart service" "nginx -t && systemctl restart nginx"
+  # Record which code this host now runs (update_host.sh --status, fleet_status.sh). Non-fatal.
+  hu_installer_stamp "$(cd "${SCRIPT_DIR}/.." && pwd)" nginx 30_install_nginx.sh
 
   # Step 8: Final Output
   log "INFO" "----------------------------------------"

@@ -5,6 +5,70 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (in-place host update, ADR-0003 first increment)
+
+- `scripts/update_host.sh`: update a live T1 host without reinstalling.
+  `--plan` (default) is read-only and shows the diff; `--apply` backs up every
+  file into a journal under `/var/backups/biome-calc/`, swaps atomically, runs
+  `nginx -t` **before** the reload and restores the previous files if it fails;
+  `--rollback <journal>` restores and verifies every sha256; `--status` prints
+  `/etc/biome-calc/release.json`. Refuses an untagged checkout unless
+  `--allow-untagged` (test host only). Never restarts rstudio-server.
+- `lib/host_update.sh`: the shared backup / journal / atomic swap / rollback /
+  `release.json` (jq) / journald (`journalctl -t biome-calc`) helpers that the
+  updater and future `scripts/hotfix/HF-*.sh` use.
+- `lib/render_nginx.sh`: one renderer for the nginx files, now used by both
+  `30_install_nginx.sh` and `update_host.sh`. Output is byte-identical to the
+  previous installer, so an existing host plans 0 diff. It also refuses a
+  placeholder `DOMAIN_OR_IP` and any unreplaced `%%PLACEHOLDER%%`.
+- `tests/update_host_test.sh` (CI): byte-identity with the old installer, drift
+  detection, untagged refusal, apply, idempotence (2nd apply = 0 files),
+  rollback to the exact sha256, failing `nginx -t` leaves the old files and no
+  reload, fresh-host create/remove, placeholder refusal, lock.
+- `docs/operations/IN_PLACE_UPDATE.md`: usage and the test-host procedure with
+  the metrics to record.
+- `update_host.sh --component rprofile`: step 8 of `50_setup_nodes.sh` in place
+  (`/etc/R/Rprofile.site`, `/etc/R/Rprofile_site.d/NN_*.R`, the `.compiled`
+  bundle), without re-running the installer. Before the swap it parses every
+  file, checks `RPROFILE_VERSION` and starts R as `nobody` with the staged
+  profile and fragments; after the swap it starts R again with the deployed
+  files; either failure restores the previous files. Fragments on the host that
+  the release does not have are reported and left in place. No service is
+  touched: new R sessions load the new profile, running sessions keep theirs.
+  First case: the `safe_setwd` / `compileNimble` fix below reaches a live host
+  without `50_setup_nodes.sh` option 3. `Renviron.site` is not managed yet.
+- Default `--component` is now `all` (nginx, then rprofile; one journal each).
+- Release stamp from the installers too: `50_setup_nodes.sh` step 8 (menu 1, 3, O)
+  and `30_install_nginx.sh` write their component into `/etc/biome-calc/release.json`
+  with `via` (writer and, for the profile, the template used) and no journal. A host
+  reinstalled from the menu therefore also says which code it runs. Non-fatal.
+- `scripts/fleet_status.sh HOSTS_FILE`: are all hosts on the same code? Read-only;
+  per host over ssh + `sudo -n`: checkout commit, `update_host.sh --plan` result and
+  `release.json`. SAME CODE only when every host is on the same clean commit and its
+  deployed files match it (plan 0 diff). Rendered files hold host values, so raw
+  sha256 are not compared across hosts. `update_host.sh --plan` prints one
+  `UPDATE_HOST_SUMMARY` line for it. Test: `tests/fleet_status_test.sh` (CI).
+- `lib/render_rprofile.sh`: the step 8 renderer, key set and bundle build, now
+  used by both `50_setup_nodes.sh` and `update_host.sh`. Output is
+  byte-identical to the previous step 8 (CI checks it).
+- `tests/update_host_test.sh` gains the rprofile cases (byte identity, setwd fix
+  applied, bundle rebuilt, local fragment kept, idempotence, rollback, parse and
+  start-up guards before and after the swap, bundle-compile failure);
+  `tests/update_host_rprofile_real_r_test.sh` runs the same flow with real R in
+  the R CI job and proves a fragment failing at run time is rejected before the swap.
+
+### Deprecated
+
+- `scripts/update_nginx_templates.sh`: replaced by `update_host.sh --component nginx`.
+  It did not render `nginx_performance.conf`, kept no backup, left a broken
+  config on disk when `nginx -t` failed and restarted rstudio-server.
+
+### Found, not changed
+
+- `RSESSION_TIMEOUT_MINUTES="2880" # ...` is read with its comment, so nginx uses
+  the 7-day fallback instead of 2 days. Kept as is (no behaviour change);
+  see `docs/operations/IN_PLACE_UPDATE.md`.
+
 ### Changed (CI)
 
 - `r-runtime-static` runs on the production R version: `setup-r` reads
