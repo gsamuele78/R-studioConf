@@ -5,6 +5,14 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Changed (CI)
+
+- `r-runtime-static` runs on the production R version: `setup-r` reads
+  `DEFAULT_R_VERSION` from `config/pin_r_version.vars.conf` (currently **4.6.0**,
+  was a hard-coded 4.4.1) and a new step fails the job if `getRversion()` differs
+  from the pin (HARD RULE 19, roadmap WS-0.3). All six R runtime suites pass on
+  R 4.6.0 unchanged (verified locally on `rocker/r-ver:4.6.0` as a non-root user).
+
 ### Added (planning)
 
 - `docs/planning/ROADMAP_EXECUTION_PLAN.md`: ordered work streams (WS-0 hygiene,

@@ -101,6 +101,8 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 - CI runs the R runtime jobs on **R 4.4.1**, while T1 pins **R 4.6.0**
   (`scripts/pin_r_version.sh`, `kubernetes-deploy/configmaps.yaml`). The R runtime
   tests do not run on the production R version. This contradicts HARD RULE 19.
+  **Resolved in PR #26:** `r-runtime-static` now reads `DEFAULT_R_VERSION` from
+  `config/pin_r_version.vars.conf` and fails if the installed R differs from it.
 
 **Implement**
 1. WS-0.1: Update the stale `open_gaps` / blockers in `.ai/project.yml` and regenerate.
@@ -206,7 +208,7 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.1 host redeploy | **Open: operator** (needs M1) |
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
-| WS-0.3 CI R version = T1 pin | Open |
+| WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |
 | WS-4 T3 | Deferred (gated) |
