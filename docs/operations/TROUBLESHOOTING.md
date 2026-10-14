@@ -457,9 +457,8 @@ sudo nginx -T | grep -nE 'frame-ancestors|Content-Security-Policy'
 **Fix.** Repair `templates/nginx_proxy_location.conf.template`, then:
 
 ```bash
-sudo bash scripts/update_nginx_templates.sh
-sudo nginx -t
-sudo systemctl reload nginx
+sudo scripts/update_host.sh --plan     # read the diff first
+sudo scripts/update_host.sh --apply    # nginx -t before reload; restores on failure
 ```
 
 **Verification.** Browser console is clear and the frame opens through the portal.

@@ -57,7 +57,8 @@ The intended T1 ordering is `01..03 -> 10 or 11 -> 12 -> 13 -> 15 -> 20/21 -> 30
 | `fix_pam_segfault_inplace.sh` | Standalone PAM segfault repair; overlaps `13_harden_pam_password.sh`. |
 | `pin_r_version.sh` | Manages apt pinning for R packages using `config/pin_r_version.vars.conf`. The current hardcoded default `4.6.0` is an open SSOT finding. |
 | `ttyd_login_wrapper.sh` | Login wrapper used by the secure-access/ttyd path. |
-| `update_nginx_templates.sh` | Nginx template maintenance helper. |
+| `update_host.sh` | In-place host update (ADR-0003): plan/apply/rollback with journal; nginx today. Helpers in `lib/host_update.sh`, rendering in `lib/render_nginx.sh`. |
+| `update_nginx_templates.sh` | Deprecated by `update_host.sh`. |
 
 Supporting R files in `scripts/` are `r_env_audit.R` and `legacy_sysadmin_stress_test.R`. The latter is explicitly legacy by name and is not a numbered deployment phase.
 

@@ -5,6 +5,41 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (in-place host update, ADR-0003 first increment)
+
+- `scripts/update_host.sh`: update a live T1 host without reinstalling.
+  `--plan` (default) is read-only and shows the diff; `--apply` backs up every
+  file into a journal under `/var/backups/biome-calc/`, swaps atomically, runs
+  `nginx -t` **before** the reload and restores the previous files if it fails;
+  `--rollback <journal>` restores and verifies every sha256; `--status` prints
+  `/etc/biome-calc/release.json`. Refuses an untagged checkout unless
+  `--allow-untagged` (test host only). Never restarts rstudio-server.
+- `lib/host_update.sh`: the shared backup / journal / atomic swap / rollback /
+  `release.json` (jq) / journald (`journalctl -t biome-calc`) helpers that the
+  updater and future `scripts/hotfix/HF-*.sh` use.
+- `lib/render_nginx.sh`: one renderer for the nginx files, now used by both
+  `30_install_nginx.sh` and `update_host.sh`. Output is byte-identical to the
+  previous installer, so an existing host plans 0 diff. It also refuses a
+  placeholder `DOMAIN_OR_IP` and any unreplaced `%%PLACEHOLDER%%`.
+- `tests/update_host_test.sh` (CI): byte-identity with the old installer, drift
+  detection, untagged refusal, apply, idempotence (2nd apply = 0 files),
+  rollback to the exact sha256, failing `nginx -t` leaves the old files and no
+  reload, fresh-host create/remove, placeholder refusal, lock.
+- `docs/operations/IN_PLACE_UPDATE.md`: usage and the test-host procedure with
+  the metrics to record.
+
+### Deprecated
+
+- `scripts/update_nginx_templates.sh`: replaced by `update_host.sh --component nginx`.
+  It did not render `nginx_performance.conf`, kept no backup, left a broken
+  config on disk when `nginx -t` failed and restarted rstudio-server.
+
+### Found, not changed
+
+- `RSESSION_TIMEOUT_MINUTES="2880" # ...` is read with its comment, so nginx uses
+  the 7-day fallback instead of 2 days. Kept as is (no behaviour change);
+  see `docs/operations/IN_PLACE_UPDATE.md`.
+
 ### Added (home quota view: multi-node runbook)
 
 - `docs/operations/HOME_QUOTA_VIEW_SETUP.md`: step-by-step setup for TrueNAS SCALE

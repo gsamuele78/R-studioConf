@@ -128,7 +128,8 @@ leaves the same per-user dirs a login does). They are documented in detail in
 | `ttyd_login_wrapper.sh` | `/usr/local/bin/ttyd_login_wrapper.sh` | Login wrapper that ttyd execs. Logs to the `secure_access` directory and resolves the AD username. Deployed by `03_install_secure_access.sh`. |
 | `test_rstudio_login.sh` | — | Manual smoke test: curl-driven RStudio plaintext login with multiple variations. Reads password interactively. Used post-deployment to confirm PAM stack works. |
 | `pin_r_version.sh` | — | Pins the system R version with apt preferences (stable default, custom version selectable). Version source of truth: `config/r_env_manager.conf`. |
-| `update_nginx_templates.sh` | — | Re-renders all Nginx templates from current vars without re-running the full `30_install_nginx.sh`. Useful after editing a template. |
+| `update_host.sh` | — | In-place update of a live host (ADR-0003). `--plan` (default, read-only) / `--apply` (backup + journal, atomic swap, `nginx -t` before reload, auto-restore) / `--rollback <journal>` / `--status`. Manages the nginx files today; renders through `lib/render_nginx.sh`, the same code as `30_install_nginx.sh`. See `docs/operations/IN_PLACE_UPDATE.md`. |
+| `update_nginx_templates.sh` | — | **Deprecated** by `update_host.sh` (no backup, leaves a broken config on disk, restarts rstudio-server, does not render `nginx_performance.conf`). Kept until `update_host.sh` has run on a canary host. |
 
 ---
 

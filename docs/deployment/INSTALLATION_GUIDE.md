@@ -203,8 +203,9 @@ Run after Phase 5 and after every R-version bump:
 * Re-run `r_env_manager.sh` to pick up new R / RStudio versions
   (consults `21_helper_rstudio_version.sh`). Idempotent — touches only
   what changed.
-* Re-render Nginx after editing a template:
-  `sudo bash scripts/update_nginx_templates.sh`.
+* Re-render Nginx after editing a template, without reinstalling:
+  `sudo scripts/update_host.sh --plan`, then `--apply`
+  (see `docs/operations/IN_PLACE_UPDATE.md`).
 * Re-run `50_setup_nodes.sh` after editing any `Rprofile_site.d/*.R.template`.
 * Backup snapshots accumulate in `/var/backups/r_env_manager/files/`;
   rotate manually per your retention policy.
