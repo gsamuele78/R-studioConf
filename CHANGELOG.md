@@ -21,6 +21,12 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   check is the first, measurable step. Baseline 2026-10-15: 426 of 690 packages
   drift across calc01-04.
 - CI: `tests/test_pkg_host_drift.sh` in `t1-static`.
+- `scripts/fix_r_pkg_versions_inplace.sh` (ADR-0004 step 3): upgrades the
+  `r-cran-*` packages already installed on one host to the repository version,
+  so hosts converge. Dry-run by default; `--commit` refuses a plan that removes
+  packages or touches `r-base*` (R pin), refuses while R/RStudio sessions run,
+  and saves every old `.deb` before upgrading; `--rollback DIR` reinstalls them.
+  Tested by `tests/test_fix_r_pkg_versions.sh` (stubbed apt, `t1-static`).
 
 ## [2026.10.1] - 2026-10-20 — Rprofile v12.11-fix3
 
