@@ -17,6 +17,12 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   (no return of the v12.4 NFS storm) and their contents are replicated; this
   check is the first, measurable step.
 - CI: `tests/test_pkg_host_drift.sh` in `t1-static`.
+- `scripts/fix_r_pkg_versions_inplace.sh` (ADR-0004 step 3): upgrades the
+  `r-cran-*` packages already installed on one host to the repository version,
+  so hosts converge. Dry-run by default; `--commit` refuses a plan that removes
+  packages or touches `r-base*` (R pin), refuses while R/RStudio sessions run,
+  and saves every old `.deb` before upgrading; `--rollback DIR` reinstalls them.
+  Tested by `tests/test_fix_r_pkg_versions.sh` (stubbed apt, `t1-static`).
 
 ### Changed (CI)
 

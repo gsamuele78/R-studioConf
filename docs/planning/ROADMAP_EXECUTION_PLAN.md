@@ -152,7 +152,10 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 1. `scripts/99_check_pkg_host_drift.sh` (read-only snapshot + compare). Done.
 2. Run it on every host; record the drift count as the baseline metric. Done 2026-10-15:
    426 of 690 packages drift (246 missing, 180 version); calc03 runs R 4.5.3, not the 4.6.0 pin.
-3. Shared request list + per-host reconciler, on the test host first (ADR-0004 step 3).
+3. `scripts/fix_r_pkg_versions_inplace.sh`: align versions in place, one host at a
+   time, test host first (closes most of the 180 version mismatches). calc03 must
+   first move to R 4.6.0 (`scripts/pin_r_version.sh`).
+4. Shared request list + per-host reconciler, on the test host first (ADR-0004 step 4).
 
 **Validate**
 - CI: `tests/test_pkg_host_drift.sh` reproduces the calc01-vs-calc04 case.
@@ -228,6 +231,7 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |
 | WS-1.3 cross-host drift check (ADR-0004 step 1) | Done in PR (tool + CI test) |
 | WS-1.3 drift baseline on every host | Done 2026-10-15: 426/690 packages drift; calc03 on R 4.5.3 (ADR-0004) |
+| WS-1.3 version alignment tool (`fix_r_pkg_versions_inplace.sh`) | Done in PR; run per host: **Open: operator** |
 | WS-1.3 shared request list + reconciler | Open (after baseline; test host first) |
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |
