@@ -123,11 +123,26 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - name: Read pinned R version (single source of truth, HARD RULE 19)
+        id: rpin
+        # T1 pins R in config/pin_r_version.vars.conf (DEFAULT_R_VERSION);
+        # CI must test the production R, never a literal that drifts (WS-0.3).
+        run: |
+          set -euo pipefail
+          v="$(grep -E '^DEFAULT_R_VERSION=' config/pin_r_version.vars.conf | cut -d= -f2- | tr -d '"')"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad DEFAULT_R_VERSION '$v'"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
         with:
-          r-version: '4.4.1'
+          r-version: ${{ steps.rpin.outputs.version }}
           use-public-rspm: true
+      - name: Assert R matches the T1 pin
+        run: |
+          set -euo pipefail
+          got="$(Rscript -e 'cat(as.character(getRversion()))')"
+          echo "R version ${got} (pin ${{ steps.rpin.outputs.version }})"
+          [[ "$got" == "${{ steps.rpin.outputs.version }}" ]] || { echo "::error::CI R ${got} != pin"; exit 1; }
       - name: Rprofile fragment + dispatcher parse gate
         run: bash tests/templates_parse.sh
       - name: Home-quota R helper (missing, quota, no-limit, stale, malformed)
@@ -140,6 +155,8 @@ jobs:
         run: bash tests/rprofile_health_test.sh
       - name: Login-script R_LIBS_USER hotfix + template (render, execute, patch, rollback)
         run: bash tests/login_rlibs_hotfix_test.sh
+      - name: Wrapper rm-survival (safe_setwd + compileNimble after rm(all.names=TRUE))
+        run: bash tests/test_safe_setwd_rm_regression.sh
 
   # ── Nginx: render templates and validate with `nginx -t` ───────────────────
   nginx-config:

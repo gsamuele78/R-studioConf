@@ -53,7 +53,7 @@ The full validation surface (HC-01/02/04/05/06/10/11 + healthchecks) is document
 |---|---|---|
 | `rocker/geospatial` | `4.6.0` | `Dockerfile`, `Dockerfile.sssd`, `Dockerfile.samba` (= T1 R pin, `scripts/pin_r_version.sh`) |
 | `nginx` | `1.31.0-alpine` | `Dockerfile.nginx` |
-| `ollama/ollama` | `0.35.0` | `Dockerfile.ollama` |
+| `ollama/ollama` | `0.35.1` | `Dockerfile.ollama` |
 | `python` | `3.11-slim` | `Dockerfile.telemetry` |
 | `curlimages/curl` | `8.22.0` | compose service `rstudio-init` |
 | `quay.io/oauth2-proxy/oauth2-proxy` | `v7.6.0-alpine` | compose service (TD-T2-03) |
