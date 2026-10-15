@@ -45,6 +45,14 @@ This index covers every current `scripts/99_*`, `scripts/fix_*`, and `scripts/to
 - **State:** baseline `/var/lib/biome-calc/pkg_baseline.rds`; reports `/var/lib/biome-calc/drift_reports/drift_<timestamp>.json`.
 - **Exit:** `0` no drift, `1` medium/unknown, `2` high, `3` internal failure.
 
+### `99_check_pkg_host_drift.sh`
+
+- **Use:** check that several hosts have the same R packages (ADR-0004). Use it first when a researcher says a script works on one server and not on another.
+- **Flags:** `--snapshot` (default) `[--out FILE]`, `--compare FILE FILE...`, `--lib DIR` (repeatable), `--help`.
+- **Mutation:** none; reads `DESCRIPTION` files of `/usr/local/lib/R/site-library`, `/usr/lib/R/site-library`, `/usr/lib/R/library`.
+- **Collect:** `for h in biome-calc01 biome-calc04; do ssh "$h" /home/ladmin/configServices/R-studioConf/scripts/99_check_pkg_host_drift.sh > "/tmp/pkg_$h.tsv"; done`, then `--compare /tmp/pkg_*.tsv`.
+- **Exit:** `0` same, `1` drift, `2` usage, `3` unreadable or invalid snapshot.
+
 ### `99_check_rprofile_health.sh` — health version 2.0
 
 - **Use:** dispatcher/fragments/bundle/BLAS/Renviron/runtime/worker health and one user's startup state.
@@ -220,7 +228,8 @@ sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh --timeout 600 /pa
 | Unwitnessed crash | `99_postmortem_forensics.sh --user <user>` |
 | Home write `EDQUOT` | `99_troubleshoot_env.sh --storage --test-user <user>` |
 | Blank Plots pane | source `99_diagnose_rstudio_plot_pane.R` in RStudio |
-| Package divergence | `99_check_pkg_drift.sh` |
+| Package divergence (one host over time) | `99_check_pkg_drift.sh` |
+| Works on one server, fails on another | `99_check_pkg_host_drift.sh --compare` |
 | `passwd` segfault | `fix_pam_segfault_inplace.sh --check` |
 | Local R library overridden | `99_check_user_renviron_overrides.sh` plus profile health |
 

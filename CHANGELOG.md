@@ -5,6 +5,19 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (operations — cross-host package drift, ADR-0004)
+
+- `scripts/99_check_pkg_host_drift.sh`: read-only check that R hosts have the same
+  packages. `--snapshot` lists the system libraries of one host from their
+  `DESCRIPTION` files (no R start, no profile, no NFS); `--compare` diffs two or
+  more snapshots and exits `1` on a missing package, version or R version
+  difference. Found case: mlr3 on biome-calc01 only, future 1.76.0 vs 1.70.0,
+  because bspm installs into one host's local library.
+- `docs/adr/0004-replicated-local-r-libraries.md`: libraries stay on local disk
+  (no return of the v12.4 NFS storm) and their contents are replicated; this
+  check is the first, measurable step.
+- CI: `tests/test_pkg_host_drift.sh` in `t1-static`.
+
 ### Changed (CI)
 
 - `r-runtime-static` runs on the production R version: `setup-r` reads

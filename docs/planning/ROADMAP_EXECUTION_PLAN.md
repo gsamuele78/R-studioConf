@@ -141,6 +141,23 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 - CI: `tests/test_safe_setwd_rm_regression.sh` green. It was proven to fail with the
   fix reverted (T4/T9 FAIL), so it is a real regression guard.
 
+### WS-1.3: Cross-host R package drift (ADR-0004)
+
+**Audit**
+- 2026-10-15: `biome-calc01` has mlr3 1.8.0 / mlr3spatiotempcv 2.3.5 in
+  `/usr/lib/R/site-library`, `biome-calc04` has neither; future 1.76.0 vs 1.70.0.
+  Cause: bspm installs into the local system library of one host only.
+
+**Implement**
+1. `scripts/99_check_pkg_host_drift.sh` (read-only snapshot + compare). Done.
+2. Run it on every host; record the drift count as the baseline metric. Done 2026-10-15:
+   426 of 690 packages drift (246 missing, 180 version); calc03 runs R 4.5.3, not the 4.6.0 pin.
+3. Shared request list + per-host reconciler, on the test host first (ADR-0004 step 3).
+
+**Validate**
+- CI: `tests/test_pkg_host_drift.sh` reproduces the calc01-vs-calc04 case.
+- Hosts: drift count `0` after each reconcile run.
+
 ### WS-2: T2 parity with T1 (`MIGRATION_IN_PROGRESS`)
 
 **Audit**: the open items, in `FUTURE_MIGRATION.md` §T2 gaps:
@@ -209,6 +226,9 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |
+| WS-1.3 cross-host drift check (ADR-0004 step 1) | Done in PR (tool + CI test) |
+| WS-1.3 drift baseline on every host | Done 2026-10-15: 426/690 packages drift; calc03 on R 4.5.3 (ADR-0004) |
+| WS-1.3 shared request list + reconciler | Open (after baseline; test host first) |
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |
 | WS-4 T3 | Deferred (gated) |

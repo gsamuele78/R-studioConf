@@ -42,6 +42,7 @@ The intended T1 ordering is `01..03 -> 10 or 11 -> 12 -> 13 -> 15 -> 20/21 -> 30
 | `99_health_check.sh` | Host services, TLS, AD, Nginx, storage, `/Rtmp`, Rprofile, serial BLAS/OpenMP, user layout, and cgroups. Version 1.2.0. |
 | `99_audit_r_environment.sh` | Deploys/runs the R environment audit and summarizes results. |
 | `99_check_pkg_drift.sh` | Checks installed R package drift. |
+| `99_check_pkg_host_drift.sh` | Compares R packages across hosts (ADR-0004). |
 | `99_check_rprofile_health.sh` | Deep Rprofile/user-startup health and controlled repair tool. Script-level health version 2.0. |
 | `99_check_user_renviron_overrides.sh` | Reports user `.Renviron` values that override managed runtime settings. |
 | `99_diagnose_user_script.sh` | HC-13 layer bisection without rewriting the supplied R script. Harness version 1.4. |
