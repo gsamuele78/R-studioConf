@@ -1,0 +1,38 @@
+# Every line here MUST classify as "allow" (normal maintenance work).
+git status
+git diff --stat
+git log --oneline -20
+git commit -m "fix: x"
+git switch -c fix/x
+make audit
+make help
+bats tests/unit/*.bats
+bash -n scripts/50_setup_nodes.sh
+shellcheck -x scripts/20_configure_rstudio.sh
+grep -rn RPROFILE_VERSION config/setup_nodes.vars.conf
+cat scripts/50_setup_nodes.sh
+sed -n 1,40p templates/Rprofile_site.R.template
+ls -la /etc/R
+cat /etc/R/Rprofile_site.d/60_safe_setwd.R
+systemctl status rstudio-server
+journalctl -u rstudio-server --since today
+sudo bash scripts/99_health_check.sh
+sudo bash scripts/fix_login_script_rlibs_inplace.sh --dry-run
+docker compose -f docker-deploy/docker-compose.yml config -q
+rm -f /tmp/test.log
+jq . .ai/extracted_versions.env
+.ai/validate.sh --ci
+bash tests/check_exec_bits.sh
+python3 -m json.tool .claude/settings.json
+df -h /Rtmp
+free -g
+findmnt /nfs
+Rscript -e "sessionInfo()"
+sudo bash scripts/fix_pam_segfault_inplace.sh --check
+# Review of PR #28 (sourcery): wrappers, absolute paths, mixed flags, descendants, aliases
+dd if=/dev/zero of=/dev/null bs=1M count=1
+parted /dev/sda print
+cat docker-deploy/.env.example
+ls -l /etc/shadow
+make lint
+grep -rn foo scripts/

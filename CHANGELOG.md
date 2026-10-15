@@ -5,6 +5,29 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Added (agent guardrails)
+
+- `.claude/hooks/guard.sh`: PreToolUse hook for AI agents. It normalises each Bash
+  command (invisible/bidi characters removed, NFKC, quotes stripped) and then
+  **denies** catastrophic commands (`rm -rf` on system or home paths, `mkfs`, `dd`
+  to a block device, download piped to a shell, keytab/shadow reads, secret
+  exfiltration) and **asks** a human before production-changing ones (`git push`,
+  `systemctl restart/stop`, PAM/SSSD/Kerberos/nginx config writes, `realm leave`,
+  package changes, the orchestrators and the in-place hotfixes). Fails closed to
+  "ask" (also when `grep -E` is broken). Before matching, commands are
+  canonicalised: newlines become `;`, `bash -c`/`sh -c`/`eval` are unwrapped,
+  wrappers (`sudo`/`doas` with options, `env`, `command`, `exec`, `nohup`,
+  `nice`, `timeout`, `VAR=val`) and the directory of the command word
+  (`/usr/bin/rm`) are dropped. Pattern adapted from OpenHands software-agent-sdk (MIT).
+- `.claude/settings.json`: `deny` on site secrets, `.env.local`/`.env.prod*`,
+  SSH private keys, keys and keytabs (aligned with Infra-Iam-PKI); `ask` list; `git reset *` no longer pre-approved.
+- `tests/unit/test_agent_guard.bats` + `tests/fixtures/agent_guard/`: 83-command
+  corpus (44 deny, 31 ask, 36 allow; includes the 13 bypasses found in review:
+  wrappers, absolute paths, mixed `rm` flags, `/etc/ssh`-style descendants,
+  `/dev/mmcblk0`, partition creation, `sudo grep` on shadow, `--data-binary`,
+  `.env.local`, multiline commands) and a mutation test proving every rule is
+  covered.
+
 ### Changed (CI)
 
 - `r-runtime-static` runs on the production R version: `setup-r` reads
