@@ -5,6 +5,40 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-15
+
+First tagged release. It records the state of `main` deployed on the BIOME-CALC
+hosts at this date, so hosts and the Infra-Iam-PKI vendor lock can name a version
+instead of a commit. Versioning rules: [`docs/developer/RELEASING.md`](docs/developer/RELEASING.md).
+R runtime at this release: Rprofile v12.11 ([`Rprofile_site.CHANGELOG.md`](docs/reference/Rprofile_site.CHANGELOG.md)).
+
+### Added (release mechanics)
+
+- `release.yml`: pushing a `vX.Y.Z` tag publishes a GitHub Release whose notes are
+  that version's section of this file (pattern from Proxmox_biome_log_collector).
+  Checks out only a `vX.Y.Z` tag, refuses a tag whose commit is not on `main`, and
+  keeps the write token away from repository code (no persisted credential).
+- `tests/lint/check_changelog.sh` (in CI, `t1-static`): `[Unreleased]` first,
+  `## [X.Y.Z] - YYYY-MM-DD` headings newest-first, every tag has a section
+  (full tag history fetched; `CHANGELOG.md`-only PRs also run it). `--tag vX.Y.Z`
+  checks one tag, so an older release can still be re-published.
+- `docs/developer/RELEASING.md`: SemVer for an infrastructure repo, defined by
+  what an operator must do on a live host.
+
+### Operator action (0.1.0)
+
+- On each host: `cd /opt/R-studioConf && git fetch --tags origin && git checkout v0.1.0`.
+  Checking out the tag changes no deployed file by itself.
+- Not verified from the repository: whether every host already runs everything
+  below. Redeploy steps written in the entries below (for example the Rprofile
+  v12.11 home-quota fragments, the v12.11-fix `setwd`/wrapper fragments,
+  `sudo ./scripts/50_setup_nodes.sh`) still apply to a host that has not run them.
+- Verify: `git -C /opt/R-studioConf describe --tags` → `v0.1.0`.
+
+### Rollback (0.1.0)
+
+- `git -C /opt/R-studioConf checkout <previous commit>`; the tag adds no runtime change.
+
 ### Changed (CI)
 
 - `r-runtime-static` runs on the production R version: `setup-r` reads

@@ -27,6 +27,7 @@ on:
       - 'docker-deploy/**'
       - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
+      - 'CHANGELOG.md'
   pull_request:
     paths:
       - 'scripts/**'
@@ -41,6 +42,7 @@ on:
       - 'docker-deploy/**'
       - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
+      - 'CHANGELOG.md'
   workflow_dispatch:
   schedule:
     - cron: '0 1 * * *'   # 01:00 UTC — only trigger that runs t2-build-monsters
@@ -59,12 +61,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # every tag, not only those on shallow-fetched commits
+          fetch-tags: true
 
       - name: Audit gate (HC-01..HC-11 + IDE-rule sync + HC-14 doc coherence)
         # `make audit` = validate + generate-check + doc-coherence. generate-check
         # is deterministic (date-insensitive; classifier reads compose build: keys,
         # yq-preferred with a no-yq fallback that yields identical output).
         run: make audit
+
+      - name: CHANGELOG structure (Unreleased first, X.Y.Z headings, every tag has a section)
+        run: bash tests/lint/check_changelog.sh
 
       - name: Bash syntax (bash -n) on every shell script
         run: |

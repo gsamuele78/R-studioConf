@@ -9,6 +9,7 @@ This directory documents the active T1 host implementation of BIOME-CALC as of 2
 - [Scripts Reference](SCRIPTS_REFERENCE.md) — root orchestrators, numbered scripts, diagnostics, fixes, and operator tools under `scripts/`.
 - [Configuration Reference](CONFIGURATION_REFERENCE.md) — committed configuration files, site-local overlays, variables, and canonical version sources.
 - [Templates Reference](TEMPLATES_REFERENCE.md) — active templates, deployment destinations, the modular `Rprofile_site.d/` chain, and legacy files.
+- [Releasing](RELEASING.md) — tags, SemVer defined by the operator action on a live host, release notes from CHANGELOG.
 - [Consumer Repository Workflow](git_submodule_workflow.md) — the current relationship with `Infra-Iam-PKI`; this repository has no Git submodules.
 
 For full generated inventories, also use:
