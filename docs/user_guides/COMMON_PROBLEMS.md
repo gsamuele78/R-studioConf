@@ -594,6 +594,12 @@ With tuning (`mlr3tuning`, `AutoTuner`), this happens when the search space
 for `mtry` goes above `task$n_features`. Coordinates of a spatial task and the
 target do not count as predictors.
 
+Since October 2026 the server stops such a call first and tells you why:
+
+```
+BIOME-CALC: ranger mtry = 11 but the data has only 9 predictor(s).
+```
+
 **What to do**
 
 - Set the upper bound from the task:

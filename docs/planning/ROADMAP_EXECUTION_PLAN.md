@@ -147,8 +147,10 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
   Same redeploy as WS-1.1.
 - Triage, not a defect: `ranger` "User interrupt or internal error" under mlr3
   (same report) is `mtry` above `task$n_features` in the user's search space.
-  Reproduced on ranger 0.16.0. Documented in COMMON_PROBLEMS §15; no code change
-  (HC-17: user scripts are not patched).
+  Reproduced on ranger 0.16.0. Documented in COMMON_PROBLEMS §15. The dispatcher
+  now raises a clear English error before ranger runs (session and PSOCK workers);
+  it never changes `mtry` (HC-17, decision by Jfs 2026-10-15). Open: package
+  versions on the researcher's other server, to explain why it ran there.
 
 ### WS-2: T2 parity with T1 (`MIGRATION_IN_PROGRESS`)
 

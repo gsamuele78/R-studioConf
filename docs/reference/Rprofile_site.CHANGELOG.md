@@ -44,6 +44,23 @@ ungated check left, P1–P8 gate behaviour including P3 (stale sidecar, the bug)
 and P8 (the reported read → write.csv → read sequence). Negative test: on the
 previous fragment S1, S2 and P0 fail.
 
+### Also in v12.11-fix2: ranger mtry guard (dispatcher)
+
+Same report: mlr3 tuning with `mtry = p_int(1, 11)` on a spatial task with 9
+predictors. ranger stops (`mtry can not be larger than number of variables`),
+prints that only on the worker's stdout, and returns
+`User interrupt or internal error.`. A `packageEvent("ranger", "onLoad")` hook,
+placed before the worker/full-profile branch, `trace()`s `ranger::ranger` and
+stops first with an English message naming mtry, the predictor count and the
+fix. It checks `dependent.variable.name` + `data` and `x`/`y` calls (mlr3 uses
+the former); formula calls are not checked. It never changes `mtry`: Jfs chose a
+clear error over auto-correction (2026-10-15) so results always match the code.
+`trace()` keeps formals, environment and the recorded `$call`. Rollback in a
+session: `untrace(ranger::ranger)`; opt-out:
+`options(biome.ranger_mtry_guard = FALSE)`. Tests:
+`tests/test_ranger_mtry_guard.sh`; negative test on the previous dispatcher
+fails S1 and G0.
+
 ### Deploy
 
 `sudo ./scripts/50_setup_nodes.sh` on every host, then
