@@ -111,9 +111,12 @@ is_root() { [[ "$(id -u)" -eq 0 ]]; }
 
 reload_dbus() { systemctl reload dbus; }
 
+# DBUS_ERR keeps dbus-send's error text for the failure report
+DBUS_ERR=""
 service_answers() {
-  dbus-send --system --print-reply --reply-timeout=10000 --dest="$BUS_NAME" "$OPATH" \
-    org.freedesktop.DBus.Introspectable.Introspect >/dev/null 2>&1
+  DBUS_ERR="$(dbus-send --system --print-reply --reply-timeout=10000 --dest="$BUS_NAME" "$OPATH" \
+    org.freedesktop.DBus.Introspectable.Introspect 2>&1 >/dev/null)" && return 0
+  return 1
 }
 
 xml_escape() { local s="$1"; s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; s="${s//\"/&quot;}"; printf '%s' "$s"; }
@@ -296,8 +299,17 @@ if atomic_write "$POLICY" "$want_policy" && atomic_write "$SERVICE" "$want_servi
   fi
 fi
 
-if [[ $applied -ne 1 ]] || ! reload_dbus || ! service_answers; then
-  log_error "apply or verification failed (the D-Bus service did not answer) — rolling back"
+fail_stage=""
+if [[ $applied -ne 1 ]]; then
+  fail_stage="writing the files failed"
+elif ! reload_dbus; then
+  fail_stage="systemctl reload dbus failed"
+elif ! service_answers; then
+  fail_stage="the D-Bus service did not answer Introspect: ${DBUS_ERR:-no error text}"
+fi
+if [[ -n "$fail_stage" ]]; then
+  log_error "${fail_stage} — rolling back"
+  log_info "diagnose: journalctl -b --since '-5 min' | grep -iE 'dbus|r_project|bspm'"
   do_rollback "$BK" || log_error "automatic rollback incomplete: run --rollback ${BK}"
   exit 1
 fi

@@ -153,7 +153,7 @@ else bad "T6 rollback (rc=$rc)"; cat "${r}/out"; fi
 # T7 service does not answer -> automatic rollback
 r="$(new_root 7)"; rc=0; STUB_DBUS_OK=0 run "$r" --commit || rc=$?
 if [[ $rc -eq 1 && ! -e "${r}${POL}" && ! -e "${r}${SVC}" ]] && cmp -s "${r}/etc/R/Rprofile.site" "${r}/Rprofile.orig" \
-   && grep -q 'rolling back' "${r}/out"; then
+   && grep -q 'did not answer Introspect' "${r}/out"; then
   ok "T7 failed verification rolls everything back automatically"
 else bad "T7 auto-rollback (rc=$rc)"; cat "${r}/out"; fi
 
