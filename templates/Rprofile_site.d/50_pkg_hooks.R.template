@@ -616,6 +616,34 @@
   # ══════════════════════════════════════════════════════════════════════════
   if (ENABLE_SMART_IO) {
 
+    # -------- parquet sidecar gate (v12.11-fix2) --------
+    # A `<file>.parquet` sidecar replaces the text file ONLY when it cannot
+    # change the result: interactive session, no extra reader arguments (sep=,
+    # header=, colClasses= ... are not applied to parquet), and the sidecar is
+    # at least as new as the text file. A stale sidecar is ignored with a
+    # message: before v12.11-fix2 a researcher who rewrote the CSV kept getting the
+    # old table back (biome-calc01, 2026-10). Opt-out:
+    # options(biome.parquet_sidecar = FALSE).
+    # >>> biome_parquet_sidecar
+    .biome_parquet_sidecar <- function(path, n_extra_args = 0L,
+                                       is_interactive = interactive()) {
+      if (!isTRUE(getOption("biome.parquet_sidecar", TRUE))) return(NULL)
+      if (!is_interactive || n_extra_args > 0L) return(NULL)
+      if (!is.character(path) || length(path) != 1L || is.na(path) ||
+          !nzchar(path)) return(NULL)
+      pq <- paste0(path, ".parquet")
+      if (!file.exists(pq) || !file.exists(path)) return(NULL)
+      t_pq  <- file.mtime(pq)
+      t_src <- file.mtime(path)
+      if (is.na(t_pq) || is.na(t_src) || t_pq < t_src) {
+        message("BIOME-IO: ignoring stale parquet sidecar (older than ",
+                basename(path), "): ", pq)
+        return(NULL)
+      }
+      pq
+    }
+    # <<< biome_parquet_sidecar
+
     # -------- read.csv wrapper --------
     if (requireNamespace("utils", quietly = TRUE)) tryCatch({
       ue <- as.environment("package:utils")
@@ -628,14 +656,15 @@
 
         .biome_smart_read_csv <- local({
           .ref <- .biome_original_read_csv
+          .sidecar <- .biome_parquet_sidecar
           function(file, ...) {
-            if (is.character(file) && length(file) == 1L) {
-              pq <- paste0(file, ".parquet")
-              if (file.exists(pq) && interactive() &&
-                  requireNamespace("arrow", quietly = TRUE)) {
-                message("BIOME-IO: Using .parquet accelerator (read.csv -> arrow)")
-                return(arrow::read_parquet(pq))
-              }
+            pq <- .sidecar(file, n_extra_args = ...length())
+            if (!is.null(pq) && requireNamespace("arrow", quietly = TRUE)) {
+              message("BIOME-IO: Using .parquet accelerator (read.csv -> arrow)")
+              # Same shape as read.csv: plain data.frame, check.names = TRUE.
+              out <- as.data.frame(arrow::read_parquet(pq))
+              names(out) <- make.names(names(out), unique = TRUE)
+              return(out)
             }
             # Defensive: .ref is captured in our ENCLOSING environment (the
             # local() frame), NOT in the execution frame. We access it by
@@ -670,6 +699,7 @@
 
         .biome_smart_fread <- local({
           .ref <- .biome_original_fread
+          .sidecar <- .biome_parquet_sidecar
           function(input = "", file = NULL, text = NULL, cmd = NULL, ...) {
             # Parquet sidecar detection: try input if it's a path, then file=
             target <- NULL
@@ -677,13 +707,12 @@
                 file.exists(input)) target <- input
             if (is.null(target) && !is.null(file) && is.character(file) &&
                 length(file) == 1L && file.exists(file)) target <- file
-            if (!is.null(target)) {
-              pq <- paste0(target, ".parquet")
-              if (file.exists(pq) && interactive() &&
-                  requireNamespace("arrow", quietly = TRUE)) {
-                message("BIOME-IO: Using .parquet accelerator (fread -> arrow)")
-                return(arrow::read_parquet(pq))
-              }
+            n_extra <- ...length() + !is.null(text) + !is.null(cmd) +
+                       (!is.null(file) && !identical(target, file))
+            pq <- if (is.null(target)) NULL else .sidecar(target, n_extra_args = n_extra)
+            if (!is.null(pq) && requireNamespace("arrow", quietly = TRUE)) {
+              message("BIOME-IO: Using .parquet accelerator (fread -> arrow)")
+              return(data.table::as.data.table(arrow::read_parquet(pq)))
             }
             # .ref resolved via lexical scoping from the enclosing local() env.
             if (is.null(.ref) || !is.function(.ref)) {

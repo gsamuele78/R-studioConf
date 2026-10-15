@@ -149,6 +149,12 @@ jobs:
         run: bash tests/login_rlibs_hotfix_test.sh
       - name: Wrapper rm-survival (safe_setwd + compileNimble after rm(all.names=TRUE))
         run: bash tests/test_safe_setwd_rm_regression.sh
+      - name: Smart I/O parquet sidecar gate (stale / arg-incompatible sidecar never returned)
+        run: bash tests/test_parquet_sidecar_gate.sh
+      - name: Install ranger (binary, public RSPM) for the mtry guard suite
+        run: Rscript -e 'install.packages("ranger"); stopifnot(requireNamespace("ranger", quietly = TRUE))'
+      - name: ranger mtry guard (clear error in session and PSOCK workers, mtry never changed)
+        run: bash tests/test_ranger_mtry_guard.sh
 
   # ── Nginx: render templates and validate with `nginx -t` ───────────────────
   nginx-config:

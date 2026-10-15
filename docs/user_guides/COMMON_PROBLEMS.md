@@ -545,3 +545,65 @@ console is the wrong place for long runs.
 
 If a background job or tmux run was stopped before finishing. Send the
 script path, the start time, and `status()` from a new session.
+
+## 14. read.csv() returns an old version of a file you just saved
+
+**What you see**
+
+```
+BIOME-IO: Using .parquet accelerator (read.csv -> arrow)
+```
+
+and the table has the old columns or values, even though `write.csv()` saved
+the new ones.
+
+**Why it happens**
+
+If a file `data.csv.parquet` sits next to `data.csv`, the server reads the
+faster parquet copy instead. Before October 2026 it did so even when the CSV
+was newer, so you got the old copy back.
+
+**What to do**
+
+- The server now ignores a parquet copy that is older than the CSV, and says
+  so with `BIOME-IO: ignoring stale parquet sidecar`.
+- If you do not need the parquet copy, delete it:
+  `file.remove("data.csv.parquet")`.
+- To switch the feature off for your session: `options(biome.parquet_sidecar = FALSE)`.
+
+## 15. ranger / mlr3: "User interrupt or internal error"
+
+**What you see**
+
+```
+Warning: Caught simpleError. Canceling all iterations ...
+Error in ranger::ranger(...) : User interrupt or internal error.
+```
+
+**Why it happens**
+
+This is not an interrupt and not the server. ranger stops on a bad setting and
+prints the real reason on the worker, where you do not see it. The most common
+one is `mtry` larger than the number of predictors:
+
+```
+Error: mtry can not be larger than number of variables in data. Ranger will EXIT now.
+```
+
+With tuning (`mlr3tuning`, `AutoTuner`), this happens when the search space
+for `mtry` goes above `task$n_features`. Coordinates of a spatial task and the
+target do not count as predictors.
+
+Since October 2026 the server stops such a call first and tells you why:
+
+```
+BIOME-CALC: ranger mtry = 11 but the data has only 9 predictor(s).
+```
+
+**What to do**
+
+- Set the upper bound from the task:
+  `mtry = p_int(lower = 1L, upper = task.sp$n_features)`,
+  or tune `mtry.ratio = p_dbl(0.1, 1)` instead of `mtry`.
+- To see the real message, run one learner without parallelism:
+  `future::plan("sequential")`, then `lrn$train(task)` with the failing values.

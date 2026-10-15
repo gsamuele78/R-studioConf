@@ -141,6 +141,17 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 - CI: `tests/test_safe_setwd_rm_regression.sh` green. It was proven to fail with the
   fix reverted (T4/T9 FAIL), so it is a real regression guard.
 
+- WS-1.2 **v12.11-fix2 (Smart I/O stale parquet sidecar).** Reported 2026-10-15 on
+  biome-calc01: `read.csv()` returned a stale `<file>.parquet`. Fixed in fragment 50
+  with a freshness / no-extra-args gate and `tests/test_parquet_sidecar_gate.sh`.
+  Same redeploy as WS-1.1.
+- Triage, not a defect: `ranger` "User interrupt or internal error" under mlr3
+  (same report) is `mtry` above `task$n_features` in the user's search space.
+  Reproduced on ranger 0.16.0. Documented in COMMON_PROBLEMS §15. The dispatcher
+  now raises a clear English error before ranger runs (session and PSOCK workers);
+  it never changes `mtry` (HC-17, decision by Jfs 2026-10-15). Open: package
+  versions on the researcher's other server, to explain why it ran there.
+
 ### WS-2: T2 parity with T1 (`MIGRATION_IN_PROGRESS`)
 
 **Audit**: the open items, in `FUTURE_MIGRATION.md` §T2 gaps:
@@ -206,6 +217,8 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | Open-PR triage (#12, #13, #14, #23) | Done in this PR |
 | WS-1.1 v12.11-fix code + CI guard | Done in this PR |
 | WS-1.1 host redeploy | **Open: operator** (needs M1) |
+| WS-1.2 v12.11-fix2 parquet sidecar gate + CI guard | In review (draft PR) |
+| WS-1.2 host redeploy | **Open: operator** (with WS-1.1) |
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |

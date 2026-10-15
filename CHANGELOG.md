@@ -5,6 +5,31 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Fixed (Rprofile v12.11-fix2 — `read.csv()` returned a stale `.parquet` sidecar)
+
+- Fragment 50 Smart I/O: `read.csv(f)` / `fread(f)` used `f.parquet` whenever it
+  existed, even when the CSV had been rewritten since, so a researcher on
+  biome-calc01 kept getting the old table after `write.csv()` (2026-10). The
+  sidecar is now used only when it is at least as new as the text file, the call
+  has no extra reader arguments (`sep=`, `header=`, `colClasses=` are not applied
+  to parquet), and the session is interactive. A stale sidecar is skipped with a
+  `BIOME-IO: ignoring stale parquet sidecar` message. `read.csv` via the sidecar
+  now returns a plain `data.frame` with `check.names` applied; `fread` returns a
+  `data.table`. Opt-out: `options(biome.parquet_sidecar = FALSE)`.
+- Dispatcher: ranger `mtry` guard. `ranger` stops on `mtry` > number of
+  predictors with only `User interrupt or internal error.` (the real reason is
+  printed inside the worker and lost under future/mlr3). A hook on ranger's
+  namespace load, installed before the worker/full-profile branch so PSOCK
+  workers get it too, traces `ranger::ranger` and raises
+  `BIOME-CALC: ranger mtry = 11 but the data has only 9 predictor(s)` with the
+  fix. It never changes `mtry` (HC-17); formula calls are not checked. Opt-out:
+  `options(biome.ranger_mtry_guard = FALSE)`. Suite
+  `tests/test_ranger_mtry_guard.sh` (S1–S2, G0–G9 with the real ranger, PSOCK
+  worker included); CI installs ranger from public RSPM.
+- New regression suite `tests/test_parquet_sidecar_gate.sh` (S1–S2 static,
+  P1–P8 behaviour), wired into `r-runtime-static`. It fails on the previous
+  fragment. Not ported to T2 (TD-T2-01: T2 still runs the pre-fragment snapshot).
+
 ### Changed (CI)
 
 - `r-runtime-static` runs on the production R version: `setup-r` reads

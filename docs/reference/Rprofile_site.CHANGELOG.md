@@ -8,6 +8,67 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.11-fix2 (2026-10-15) — "Smart I/O never returns a stale parquet sidecar"
+
+### Trigger
+
+A researcher on biome-calc01 renamed columns, saved with
+`write.csv(occ_prot2, "data/occurrences/dol_geo_cleandup_lich.csv")`, and
+`read.csv()` on the same path kept returning the old columns with
+`BIOME-IO: Using .parquet accelerator (read.csv -> arrow)`. Their workaround,
+`utils::read.csv`, works because the wrapper replaces only the attached
+`package:utils` binding, not the namespace export.
+
+### Root cause
+
+`50_pkg_hooks.R` replaced the CSV with `<file>.parquet` whenever that file
+existed. Nothing in BIOME-CALC writes the sidecar, so once a user (or an old
+script) created it, it never followed later edits of the CSV. The same check
+also ignored every reader argument (`sep=";"`, `header=FALSE`, `colClasses=`),
+returned a tibble instead of a `data.frame`, and skipped `check.names`.
+
+### Fix
+
+One gate, `.biome_parquet_sidecar(path, n_extra_args)`, used by both the
+`read.csv` and `fread` wrappers. The sidecar is used only when all hold:
+interactive session; no extra reader arguments; sidecar mtime >= text file
+mtime; `getOption("biome.parquet_sidecar", TRUE)`. A stale sidecar is skipped
+with a message. The `read.csv` path returns `as.data.frame()` with
+`make.names(unique = TRUE)`; `fread` returns `as.data.table()`. No
+RPROFILE_VERSION bump: behaviour-restoring (`read.csv(f)` returns `f`).
+
+### Verification
+
+`tests/test_parquet_sidecar_gate.sh`: S1 both wrappers use the gate, S2 no
+ungated check left, P1–P8 gate behaviour including P3 (stale sidecar, the bug)
+and P8 (the reported read → write.csv → read sequence). Negative test: on the
+previous fragment S1, S2 and P0 fail.
+
+### Also in v12.11-fix2: ranger mtry guard (dispatcher)
+
+Same report: mlr3 tuning with `mtry = p_int(1, 11)` on a spatial task with 9
+predictors. ranger stops (`mtry can not be larger than number of variables`),
+prints that only on the worker's stdout, and returns
+`User interrupt or internal error.`. A `packageEvent("ranger", "onLoad")` hook,
+placed before the worker/full-profile branch, `trace()`s `ranger::ranger` and
+stops first with an English message naming mtry, the predictor count and the
+fix. It checks `dependent.variable.name` + `data` and `x`/`y` calls (mlr3 uses
+the former); formula calls are not checked. It never changes `mtry`: Jfs chose a
+clear error over auto-correction (2026-10-15) so results always match the code.
+`trace()` keeps formals, environment and the recorded `$call`. Rollback in a
+session: `untrace(ranger::ranger)`; opt-out:
+`options(biome.ranger_mtry_guard = FALSE)`. Tests:
+`tests/test_ranger_mtry_guard.sh`; negative test on the previous dispatcher
+fails S1 and G0.
+
+### Deploy
+
+`sudo ./scripts/50_setup_nodes.sh` on every host, then
+`grep -c 'biome_parquet_sidecar' /etc/R/Rprofile_site.d/50_pkg_hooks.R` → `5`.
+New R sessions only. T2 is not affected by this change (TD-T2-01).
+
+---
+
 ## v12.11-fix (2026-10-12) — "safe_setwd survives rm(list=ls(all.names=TRUE))"
 
 ### Trigger
