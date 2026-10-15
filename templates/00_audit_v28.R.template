@@ -1834,16 +1834,20 @@ run_audit("14.5", "Task Callback Registration", {
           paste(cb_names, collapse=", "))
 }, fix_hint = "Check addTaskCallback in Rprofile v12.x")
 
-run_audit("14.6", "bspm Sudo Access", {
-  sudoers_file <- "/etc/sudoers.d/99-bspm-domain-users"
-  if (!file.exists(sudoers_file)) stop("bspm sudoers rule missing")
-  bspm_ok <- requireNamespace("bspm", quietly = TRUE)
-  if (!bspm_ok) stop("bspm package not installed")
-  perms <- tryCatch(system(sprintf("stat -c '%%a' '%s'", sudoers_file), intern = TRUE),
-                    error = function(e) "unknown")
-  if (perms != "440") warning(sprintf("Sudoers perms=%s (expected 440)", perms))
-  sprintf("OK (bspm installed, sudoers=%s, perms=%s)", basename(sudoers_file), perms)
-}, fix_hint = "Redeploy bspm sudoers via 50_setup_nodes.sh")
+run_audit("14.6", "bspm D-Bus Service (no sudo)", {
+  # ADR-0005: researchers install through bspm's root D-Bus service, not sudo.
+  svc <- "/usr/share/dbus-1/system-services/org.r_project.linux1.service"
+  pol <- "/etc/dbus-1/system.d/org.r_project.linux1.conf"
+  if (!requireNamespace("bspm", quietly = TRUE)) stop("bspm package not installed")
+  if (!file.exists(svc)) stop("bspm D-Bus service not registered")
+  if (!file.exists(pol)) stop("bspm D-Bus policy missing")
+  if (!any(grepl('send_member="remove"', readLines(pol, warn = FALSE), fixed = TRUE)))
+    warning("D-Bus policy does not deny remove")
+  if (isTRUE(getOption("bspm.sudo"))) warning("bspm.sudo is TRUE (profile still uses sudo)")
+  if (file.exists("/etc/sudoers.d/99-bspm-domain-users"))
+    warning("legacy sudoers rule 99-bspm-domain-users present (root for every domain user)")
+  "OK (bspm installed, D-Bus service + policy registered)"
+}, fix_hint = "sudo bash scripts/fix_bspm_dbus_inplace.sh --commit")
 
 run_audit("14.7", "Python Venv + Reticulate", {
   py_path <- Sys.getenv("RETICULATE_PYTHON", "")

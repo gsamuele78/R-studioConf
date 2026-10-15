@@ -88,6 +88,9 @@ jobs:
         # apt/systemd/AD needed. Guards T1 audit §1 items 1-4 against regression.
         run: bash tests/test_pr1_critical_fixes.sh
 
+      - name: bspm D-Bus hotfix (ADR-0005; policy, apply, idempotency, rollback, refusals)
+        run: bash tests/test_fix_bspm_dbus.sh
+
       - name: Root-guard contract (non-root must refuse, not silently run)
         run: |
           set -euo pipefail

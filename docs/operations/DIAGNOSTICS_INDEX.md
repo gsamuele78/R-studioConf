@@ -137,6 +137,13 @@ sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh --timeout 600 /pa
 - **Mutation:** no-argument mode applies the fix; `--check` is diagnostic; `--rollback` restores `/root/pam-backup-latest`.
 - **Backup:** `/root/pam-backup-<timestamp>/`.
 
+### `fix_bspm_dbus_inplace.sh`
+
+- **Use:** let researchers install R packages through bspm without sudo (ADR-0005).
+- **Flags:** `--commit`, `--rollback DIR`, `--skip-profile`, `--group NAME`, `--help`.
+- **Mutation:** dry-run by default. Writes the D-Bus policy and service files, flips `bspm.sudo` in `/etc/R/Rprofile.site`, reloads dbus; backup `/root/bspm-dbus-hotfix-<timestamp>/`; automatic rollback if the service does not answer.
+- **Safety:** refuses if `bspm.py` or a parent dir is not root-owned or is group/other writable, if python3 lacks dbus/gi/apt, if the group does not resolve, or if `Rprofile.site` is not the v12 dispatcher. Never edits sudoers.
+
 ### `fix_login_script_rlibs_inplace.sh`
 
 - **Use:** stop deployed `/etc/profile.d/00_rstudio_user_logins.sh` from re-adding personal `R_LIBS_USER`.

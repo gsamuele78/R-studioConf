@@ -141,7 +141,28 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 - CI: `tests/test_safe_setwd_rm_regression.sh` green. It was proven to fail with the
   fix reverted (T4/T9 FAIL), so it is a real regression guard.
 
-### WS-2: T2 parity with T1 (`MIGRATION_IN_PROGRESS`)
+### WS-1.4: bspm installs without sudo (ADR-0005)
+
+**Audit** (2026-10-15, on the hosts)
+- Step 7 writes `NOPASSWD` sudo on `apt-get`/`apt-mark`/`dpkg`/`bspm.py` for
+  `%domain_users`: root for every domain user. Narrowing to `bspm.py` is root too
+  (`-o FILE` append as root). Every host also has a manual `%domain_users ALL=(ALL) ALL`.
+- With sudo removed, `install.packages()` fails (no personal-library fallback).
+- bspm's D-Bus service ships with the package but is not registered.
+
+**Implement**
+1. `scripts/fix_bspm_dbus_inplace.sh` (in place, dry-run/commit/rollback).
+2. Template section 0: `bspm.sudo = FALSE`, enable only when the service exists.
+3. Step 7 registers the service; no more sudoers rule.
+
+**Validate**
+- CI: `tests/test_fix_bspm_dbus.sh`.
+- Test host: hotfix `--commit`; as a domain user without sudo, from RStudio Web and
+  `setsid -w Rscript ... < /dev/null`, `install.packages("praise")` lands in
+  `/usr/lib/R/site-library`; `bspm::remove_sys("praise")` is denied.
+- Then production hosts one by one; the operator removes both sudo lines.
+
+
 
 **Audit**: the open items, in `FUTURE_MIGRATION.md` §T2 gaps:
 - TD-T2-01: the container R env is the single-file `b150f7c` snapshot + audit v27;
@@ -209,6 +230,9 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |
+| WS-1.4 bspm D-Bus service + profile + Step 7 (ADR-0005) | In review (draft PR) |
+| WS-1.4 hotfix on test host, then production hosts | **Open: operator** |
+| WS-1.4 remove both domain_users sudo lines | **Open: operator decision** (after the test) |
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |
 | WS-4 T3 | Deferred (gated) |

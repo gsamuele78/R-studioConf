@@ -8,6 +8,17 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.11-fix (2026-10-15) — "bspm without sudo" (ADR-0005)
+
+Section 0 of the dispatcher no longer sets `bspm.sudo = TRUE`. bspm is enabled
+with `bspm.sudo = FALSE` and only when
+`/usr/share/dbus-1/system-services/org.r_project.linux1.service` exists, so
+installs go through bspm's root D-Bus service (policy: install allowed for
+`domain_users`, remove denied). Without the service, bspm stays off and
+`install.packages()` builds into the personal library. No `RPROFILE_VERSION`
+bump: the user-visible behaviour (binary installs from RStudio Web) is unchanged
+on hosts with the service. Live hosts: `scripts/fix_bspm_dbus_inplace.sh`.
+
 ## v12.11-fix (2026-10-12) — "safe_setwd survives rm(list=ls(all.names=TRUE))"
 
 ### Trigger
