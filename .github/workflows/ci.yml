@@ -57,8 +57,9 @@ jobs:
   t1-static:
     name: T1 static (constraints + syntax + exec bits)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Audit gate (HC-01..HC-11 + IDE-rule sync + HC-14 doc coherence)
         # `make audit` = validate + generate-check + doc-coherence. generate-check
@@ -102,8 +103,9 @@ jobs:
   t1-bash-unit:
     name: T1 bash unit (bats — lib/common_utils.sh)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install bats
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends bats
       - name: Run bats unit tests
@@ -113,8 +115,9 @@ jobs:
   r-runtime-static:
     name: R runtime static (Rprofile parse + r_lint oracle + health checker)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Read pinned R version (single source of truth, HARD RULE 19)
         id: rpin
         # T1 pins R in config/pin_r_version.vars.conf (DEFAULT_R_VERSION);
@@ -125,7 +128,7 @@ jobs:
           [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad DEFAULT_R_VERSION '$v'"; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - name: Set up R
-        uses: r-lib/actions/setup-r@v2
+        uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2.14.0
         with:
           r-version: ${{ steps.rpin.outputs.version }}
           use-public-rspm: true
@@ -154,8 +157,9 @@ jobs:
   nginx-config:
     name: Nginx config (render + nginx -t)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install nginx + auth_pam module + openssl
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends nginx-core libnginx-mod-http-auth-pam openssl
       - name: Render nginx templates and test
@@ -165,8 +169,9 @@ jobs:
   t2-validate:
     name: T2 validate (compose config + hadolint + light build)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Write CI env (supplies the no-default compose vars)
         run: |
@@ -207,7 +212,7 @@ jobs:
       matrix:
         service: [rstudio-sssd, rstudio-samba, ollama-ai]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Write CI env
         run: |
           set -euo pipefail
@@ -232,8 +237,9 @@ jobs:
   pkg-manifest:
     name: Package manifest lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate CRAN/GitHub package arrays
         run: |
           set -euo pipefail

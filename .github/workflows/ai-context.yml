@@ -39,6 +39,13 @@ on:
       - "sandbox/*.yml"
       - ".ai/**"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-context-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ────────────────────────────────────────────────────────────
   # Job 1: Validate codebase against hard constraints
@@ -46,9 +53,10 @@ jobs:
   validate-constraints:
     name: "Validate Hard Constraints"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run constraint validator
         run: |
@@ -61,9 +69,10 @@ jobs:
   check-agent-files:
     name: "Check Agent Files Freshness"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check generated files match current code
         run: |
@@ -76,9 +85,10 @@ jobs:
   validate-compose:
     name: "Validate Compose Syntax"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate docker-deploy compose
         run: |
@@ -86,41 +96,3 @@ jobs:
           cp docker-deploy/.env.sandbox.example docker-deploy/.env
           docker compose -f docker-deploy/docker-compose.yml config > /dev/null
         continue-on-error: false
-
-  # ────────────────────────────────────────────────────────────
-  # Job 4: Validate shell script syntax
-  # ────────────────────────────────────────────────────────────
-  validate-scripts:
-    name: "Validate Shell Scripts"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Check bash syntax
-        run: |
-          ERRORS=0
-          for script in $(find scripts/ -name '*.sh'); do
-            if ! bash -n "$script" 2>/dev/null; then
-              echo "SYNTAX ERROR: $script"
-              bash -n "$script" || true
-              ERRORS=$((ERRORS + 1))
-            fi
-          done
-          if [ "$ERRORS" -gt 0 ]; then
-            echo "::error::$ERRORS scripts have syntax errors"
-            exit 1
-          fi
-          echo "All scripts pass syntax check"
-
-      - name: Install shellcheck
-        run: sudo apt-get install -y shellcheck
-
-      - name: Run shellcheck (advisory)
-        run: |
-          # Run shellcheck but don't fail the build — advisory only
-          for script in $(find scripts/ -name '*.sh'); do
-            echo "--- $script ---"
-            shellcheck --severity=warning "$script" || true
-          done
-        continue-on-error: true
