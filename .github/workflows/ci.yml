@@ -149,6 +149,8 @@ jobs:
         run: bash tests/login_rlibs_hotfix_test.sh
       - name: Wrapper rm-survival (safe_setwd + compileNimble after rm(all.names=TRUE))
         run: bash tests/test_safe_setwd_rm_regression.sh
+      - name: Smart I/O parquet sidecar gate (stale / arg-incompatible sidecar never returned)
+        run: bash tests/test_parquet_sidecar_gate.sh
 
   # ── Nginx: render templates and validate with `nginx -t` ───────────────────
   nginx-config:
