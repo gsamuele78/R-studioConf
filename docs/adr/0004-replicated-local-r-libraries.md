@@ -37,6 +37,22 @@ parallel workers, each `library()` performs thousands of metadata lookups on NFS
 (`docs/operations/UPGRADE_TO_v12.4.md`). Any fix must not put package loading back
 on NFS.
 
+### Baseline (measured 2026-10-15, `99_check_pkg_host_drift.sh --compare`, 4 hosts)
+
+| Measure | Value |
+|---|---|
+| Packages seen across hosts | 690 |
+| Missing on at least one host | 246 |
+| Same package, different version | 180 |
+| Drifting packages | **426 (62 %)** |
+| R version | 4.6.0 on calc01/02/04, **4.5.3 on calc03** (pin is 4.6.0, HARD RULE 19) |
+
+Pattern: biome-calc01 carries the newest versions and most extra packages
+(e.g. the whole mlr3 stack incl. mlr3spatiotempcv 2.3.5); calc02 has an older
+mlr3 1.6.0 without mlr3spatiotempcv; calc03/04 have no mlr3 at all; calc04 alone
+has the nimble* extensions. Core compiled packages drift too (rlang 1.3.0 /
+1.2.0 / 1.1.7; terra 1.9-50 / 1.9-25 / 1.9-1; Rcpp 1.1.2 / 1.1.1).
+
 ## Decision
 
 R packages stay on **local disk** on every host; what is installed is made the
