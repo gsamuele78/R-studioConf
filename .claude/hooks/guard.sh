@@ -58,29 +58,76 @@ sys.stdout.write(s)
     out="${out//\"/}"
     out="${out//\'/}"
     out="${out//\\/}"
-    printf '%s' "$out" | tr '\n\t' '  ' | tr -s ' '
+    # Newlines separate commands in bash: keep them as ";" so "echo ok<NL>rm -rf /"
+    # is two commands, not one.
+    printf '%s' "$out" | tr '\n' ';' | tr '\t' ' ' | canonicalise
+}
+
+# Make every command start where the rules look for it:
+#   - "bash -c CMD", "sh -c CMD", "eval CMD" → "; CMD" (quotes are already gone);
+#   - drop wrappers at command position: sudo/doas (with options), env (with
+#     options and VAR=val), command, exec, nohup, nice, ionice, timeout, stdbuf,
+#     time, and leading VAR=val assignments;
+#   - "/usr/bin/rm" → "rm": strip the directory of the command word only (paths
+#     in arguments are kept, the system-path rules need them);
+#   - harmless dd/redirect targets (/dev/null, /dev/zero, ...) are renamed so the
+#     block-device rule can match every other /dev path; committed templates
+#     (.env.example, .env.sandbox.example) are renamed so .env.* rules skip them.
+canonicalise() {
+    local cur prev
+    cur="$(sed -E 's/;/ ; /g; s/(&&|\|\|)/ \1 /g; s/ +/ /g')"
+    for _ in 1 2 3 4 5 6; do
+        prev="$cur"
+        cur="$(sed -E \
+            -e 's/(^|[;&|(`]) *((ba|z|da|k)?sh|eval)( +-[a-zA-Z]*c[a-zA-Z]*)? +-c +/\1 ; /g' \
+            -e 's/(^|[;&|(`]) *eval +/\1 ; /g' \
+            -e 's/(^|[;&|(`]) *(sudo|doas)( +(-[a-zA-Z]*[ugCghprT]|--(user|group|chdir|prompt|host|role|type|close-from)) +[^ ;&|-][^ ;&|]*| +-[a-zA-Z-]+(=[^ ;&|]*)?)* +/\1 /g' \
+            -e 's/(^|[;&|(`]) *env( +-[a-zA-Z-]+( +[^ =;&|-][^ ;&|]*)?| +[A-Za-z_][A-Za-z0-9_]*=[^ ;&|]*)* +/\1 /g' \
+            -e 's/(^|[;&|(`]) *(command|exec|nohup|time|stdbuf( +-[a-zA-Z0-9=]+)*|nice( +-n)? *(-?[0-9]+)?|ionice( +-[a-zA-Z] *[0-9]+)*|timeout( +-[a-zA-Z-]+( +[0-9a-zA-Z]+)?)* +[0-9.]+[smhd]?) +/\1 /g' \
+            -e 's/(^|[;&|(`]) *([A-Za-z_][A-Za-z0-9_]*=[^ ;&|]* +)+/\1 /g' \
+            -e 's#(^|[;&|(`]) *([^ ;&|]*/)([A-Za-z0-9_.+-]+)#\1 \3#g' \
+            <<<"$cur")"
+        [[ "$cur" == "$prev" ]] && break
+    done
+    sed -E -e 's#/dev/(null|zero|u?random|stdout|stderr|stdin|fd/[0-9]+|tty)( |$|;)#DEVSAFE\2#g' \
+           -e 's/\.env((\.[A-Za-z0-9_-]+)*)\.example( |$|;)/ENV_EXAMPLE\1\3/g' \
+           -e 's/ +/ /g; s/^ //; s/ $//' <<<"$cur"
 }
 
 # ---- rules: extended regex over the normalised command ----------------------
-# rm with both recursive and force, in any spelling.
-RM_RF='(^|[;&|(` ])(sudo +)?rm +([^;&|]* )?(-[a-zA-Z]*[rR][a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*[rR]|(-[a-zA-Z]*[rR][a-zA-Z]* +([^;&|]* )?-[a-zA-Z]*f)|(-[a-zA-Z]*f[a-zA-Z]* +([^;&|]* )?-[a-zA-Z]*[rR])|--recursive +([^;&|]* )?--force|--force +([^;&|]* )?--recursive)'
-# A script being executed (not read): at command start, optionally via sudo/bash/sh
-# with flags other than -n (syntax check only), then any path prefix.
-EXEC='(^|[;&|(`] *)(sudo +(-[a-zA-Z]+ +)*)?((ba)?sh +(-[a-mo-zA-Z]+ +)*)?([^ ;&|]*/)?'
-SYS_PATH='( |=)(/|/\*|~|~/|\$HOME|\$\{HOME\}|/(etc|usr|var|home|opt|boot|srv|root|lib|lib64|bin|sbin|Rtmp|nfs|mnt)(/\*?)?)( |;|&|\||$)'
+# rm with both recursive and force, in any spelling (-rf, -r -f, -r --force, ...).
+R_FLAG='(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)'
+F_FLAG='(-[a-zA-Z]*f[a-zA-Z]*|--force)'
+RF_BOTH='(-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*)'
+# \b (GNU grep) ends the flag without consuming the blank the path rules need.
+RM_RF="(^|[;&|(\` ])rm ([^;&|]* )?(${R_FLAG} ([^;&|]* )?${F_FLAG}|${F_FLAG} ([^;&|]* )?${R_FLAG}|${RF_BOTH})\b"
+# A script being executed (not read): at command start, optionally via bash/sh
+# with flags other than -n (syntax check only). Wrappers and directories of the
+# command word were already removed by canonicalise.
+EXEC='(^|[;&|(`] *)((ba)?sh +(-[a-mo-zA-Z]+ +)*)?([^ ;&|]*/)?'
+# System paths. Deep roots: the root and anything below it. Shallow roots
+# (home, data, mounts): the root and its first level (/home/alice), deeper paths
+# fall to "ask". Home: ~, $HOME and its dot-directories (~/.ssh, ~/.config).
+B='( |;|&|\||$)'
+SYS_PATH="( |=)(/\*?|/(etc|usr|boot|bin|sbin|lib|lib32|lib64|root|var/lib|var/log)(/[^ ;&|]*)?|/(home|opt|srv|var|Rtmp|nfs|mnt|media|data)(/[^/ ;&|]*)?/?\*?|(~|\\\$HOME|\\\$\{HOME\})(/(\.[^/ ;&|]*)?)?/?\*?)${B}"
+BLOCKDEV='/dev/(sd|vd|hd|xvd|nvme|mmcblk|loop|md|dm-|mapper/|disk/|zd|rbd|nbd)'
+SECRET_FILES='(/etc/krb5\.keytab|\.keytab|/etc/shadow|/etc/gshadow|/var/lib/samba/private/)'
+READERS='(cat|tac|nl|less|more|head|tail|strings|xxd|od|hexdump|base64|base32|cp|mv|scp|rsync|tar|zip|gzip|bzip2|xz|grep|egrep|fgrep|rg|awk|gawk|sed|cut|sort|uniq|diff|cmp|paste|tee|dd|vi|vim|nano|view|python[0-9.]*|perl|ruby|php|node|source|\.|klist +-k[a-z]*)'
+UPLOAD='(-d|--data(-binary|-raw|-urlencode)?|-F|--form|--upload-file|-T)'
+SECRET_NAMES='(\.env|\.keytab|oauth2-proxy\.cfg|config/site/|id_rsa|id_ecdsa|id_ed25519|\.pem|\.key|/etc/shadow)'
 
 DENY_RULES=(
     "rm -rf on a system or home path|${RM_RF}[^;&|]*${SYS_PATH}"
-    "filesystem creation|(^|[;&|(\` ])(sudo +)?(mkfs(\.[a-z0-9]+)?|wipefs|mkswap) "
-    "raw write to a block device|(^|[;&|(\` ])(sudo +)?dd +[^;&|]*of=/dev/(sd|vd|nvme|xvd|dm-|mapper|md)"
-    "partition table change|(^|[;&|(\` ])(sudo +)?(sgdisk|sfdisk|parted|fdisk) +[^;&|]*(-[a-zA-Z]*[zoZ]|mklabel|rm |--delete|-d)"
-    "download piped to an interpreter|(curl|wget|fetch)( [^|]*)?\| *(sudo +)?(ba|z|da|k)?sh( |$|;)|(curl|wget)( [^|]*)?\| *(sudo +)?(python[0-9.]*|perl|ruby|node)( |$|;)"
+    "filesystem creation|(^|[;&|(\` ])(mkfs(\.[a-z0-9]+)?|wipefs|mkswap) "
+    "raw write to a block device|(^|[;&|(\` ])dd +[^;&|]*of=${BLOCKDEV}|> *${BLOCKDEV}"
+    "partition table change|(^|[;&|(\` ])(sgdisk|sfdisk|fdisk|parted|gdisk|cfdisk) +[^;&|]*(-[a-zA-Z]*[zoZ]|mklabel|mktable|mkpart|resizepart|rm( |$)|--delete|-d)"
+    "download piped to an interpreter|(curl|wget|fetch)( [^|]*)?\| *(ba|z|da|k)?sh( |$|;)|(curl|wget)( [^|]*)?\| *(python[0-9.]*|perl|ruby|node)( |$|;)"
     "remote script via process substitution|(ba|z)?sh +<\( *(curl|wget)"
-    "recursive world-writable permissions on a system path|chmod +(-[a-zA-Z]*R[a-zA-Z]* +)?[0-7]?777[^;&|]*${SYS_PATH}"
-    "recursive ownership change of a system path|chown +-[a-zA-Z]*R[a-zA-Z]* +[^;&|]*${SYS_PATH}"
-    "fork bomb|:\(\) *\{ *:\|:& *\} *;:"
-    "reading Kerberos keytabs or shadow files|(cat|less|more|head|tail|strings|xxd|base64|cp|scp|rsync|klist +-k[a-z]*) +[^;&|]*(/etc/krb5\.keytab|\.keytab|/etc/shadow|/etc/gshadow|/var/lib/samba/private/)"
-    "exfiltrating secrets over the network|(\.env|\.keytab|oauth2-proxy\.cfg|config/site/|id_rsa|id_ed25519|\.pem|\.key)[^;&|]*\| *(curl|wget|nc|ncat|socat)|(curl|wget)[^;&|]*(-d|--data|-F|--upload-file|-T) *@?[^;&| ]*(\.env|\.keytab|oauth2-proxy\.cfg|config/site/|id_rsa|id_ed25519|\.pem|\.key)"
+    "recursive world-writable permissions on a system path|chmod +(-[a-zA-Z]*R[a-zA-Z]* +|--recursive +)?[0-7]?777[^;&|]*${SYS_PATH}"
+    "recursive ownership change of a system path|chown +(-[a-zA-Z]*R[a-zA-Z]*|--recursive) +[^;&|]*${SYS_PATH}"
+    "fork bomb|:\(\) *\{ *: *\| *: *& *\} *; *:"
+    "reading Kerberos keytabs or shadow files|(^|[;&|(\` ])${READERS} +[^;&|]*${SECRET_FILES}|< *[^ ;&|]*${SECRET_FILES}"
+    "exfiltrating secrets over the network|${SECRET_NAMES}[^;&|]*\| *(curl|wget|nc|ncat|socat)|(curl|wget)[^;&|]*${UPLOAD} *@?[^;&| ]*${SECRET_NAMES}"
 )
 
 ASK_RULES=(
@@ -96,13 +143,19 @@ ASK_RULES=(
     "in-place hotfix or rollback|${EXEC}(fix_[a-z0-9_]+_inplace|hotfix_[a-z0-9_]+|update_nginx_templates)\.sh|--commit|--rollback|--apply|--uninstall|99_check_pkg_drift\.sh +[^;&|]*--update"
     "supply-chain configuration|(--index-url|--extra-index-url|--trusted-host|npm +config +set +registry|\.npmrc|pip\.conf|\.pypirc|/etc/apt/sources\.list|add-apt-repository|apt-key|gpg +--recv)"
     "SSH keys or authorized_keys|(\.ssh/|authorized_keys|ssh-keygen|ssh-copy-id)"
-    "reading site secrets|(cat|less|more|head|tail|grep|awk|sed|cp|scp|rsync|base64|xxd|strings|source|\.) +[^;&|]*(config/site/|( |/)\.env( |$)|oauth2-proxy\.cfg|/etc/sssd/sssd\.conf|join_domain_[a-z]+\.vars\.conf( |$)|lib_kerberos_setup\.vars\.conf( |$)|user_email_map\.txt( |$)|admin_recipients\.txt( |$))"
+    "reading site secrets|(^|[;&|(\` ])${READERS} +[^;&|]*(config/site/|( |/)\.env(\.[A-Za-z0-9_-]+)*( |;|$)|oauth2-proxy\.cfg|/etc/sssd/sssd\.conf|join_domain_[a-z]+\.vars\.conf( |$)|lib_kerberos_setup\.vars\.conf( |$)|user_email_map\.txt( |$)|admin_recipients\.txt( |$))"
     "crontab or timer change|(crontab +-[a-z]*[er]|/etc/cron|systemctl +[^;&|]*(enable|daemon-reload))"
     "user or group change|(^|[;&|(\` ])(sudo +)?(useradd|userdel|usermod|groupadd|groupdel|passwd|chpasswd|setquota|edquota)( |$)"
 )
 
 classify() { # $1 = raw command → prints "deny|reason", "ask|reason" or "allow|"
     local norm rule name pattern
+    # Rules are evaluated inside "if grep", where a broken grep reads as "no
+    # match" without tripping the ERR trap: prove grep works first.
+    if ! grep -Eq -- '^a(b|c)$' <<<"ac" || grep -Eq -- '^a(b|c)$' <<<"ad"; then
+        printf 'ask|grep -E unavailable, cannot classify'
+        return 0
+    fi
     if ! norm="$(normalise "$1")"; then
         printf 'ask|could not normalise the command (non-ASCII without python3)'
         return 0

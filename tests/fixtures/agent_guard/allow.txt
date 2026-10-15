@@ -29,3 +29,10 @@ free -g
 findmnt /nfs
 Rscript -e "sessionInfo()"
 sudo bash scripts/fix_pam_segfault_inplace.sh --check
+# Review of PR #28 (sourcery): wrappers, absolute paths, mixed flags, descendants, aliases
+dd if=/dev/zero of=/dev/null bs=1M count=1
+parted /dev/sda print
+cat docker-deploy/.env.example
+ls -l /etc/shadow
+make lint
+grep -rn foo scripts/
