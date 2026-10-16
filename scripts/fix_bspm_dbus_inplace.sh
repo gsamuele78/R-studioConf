@@ -140,8 +140,9 @@ render_policy() {
     <allow send_destination="${BUS_NAME}" send_interface="${IFACE}" send_member="available"/>
     <allow send_destination="${BUS_NAME}" send_interface="${IFACE}" send_member="discover"/>
     <allow send_destination="${BUS_NAME}" send_interface="org.freedesktop.DBus.Introspectable" send_member="Introspect"/>
-    <!-- explicit, last: also covers calls that omit the interface field -->
-    <deny send_destination="${BUS_NAME}" send_member="remove"/>
+    <!-- explicit, last. dbus-daemon rejects the WHOLE file if a member rule has
+         no interface, so every rule here names one (2026-10-16 test-host failure). -->
+    <deny send_destination="${BUS_NAME}" send_interface="${IFACE}" send_member="remove"/>
   </policy>
 </busconfig>
 EOF
@@ -315,6 +316,16 @@ if [[ -n "$fail_stage" ]]; then
 fi
 
 log_ok "bspm D-Bus service registered and answering; Rprofile.site no longer uses sudo for bspm"
+# A service process started from another bspm copy keeps the bus name until it
+# exits (bspm.py quits 10 s after its last install/available call).
+if command -v pgrep >/dev/null 2>&1; then
+  stale="$(pgrep -af 'bspm/service/bspm\.py' | grep -vF '/usr/lib/R/site-library/bspm/service/bspm.py' || true)"
+  if [[ -n "$stale" ]]; then
+    log_warn "a bspm service from another path is still running and answers until it exits:"
+    printf '         %s\n' "$stale" >&2
+    log_warn "stop it when no install is running: sudo kill <PID> (the next call starts the new one)"
+  fi
+fi
 log_info "New R sessions pick this up; running sessions keep the old setting."
 log_info "Rollback: sudo bash $0 --rollback ${BK}"
 log_warn "Sudoers is unchanged. Remove the bspm sudo lines only after a researcher install works (ADR-0005)."

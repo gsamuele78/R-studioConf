@@ -128,6 +128,8 @@ allowed = {m for t, m in rules if t == "allow"}
 assert allowed == {"install", "available", "discover", "Introspect"}, allowed
 assert all(r.get("send_member") for r in grp if r.tag == "allow"), "allow without member"
 assert rules[-1] == ("deny", "remove"), rules
+# dbus-daemon rejects the whole file if a member rule lacks an interface (2026-10-16)
+assert all(r.get("send_interface") for p in root.findall("policy") for r in p if r.get("send_member")), "member rule without interface"
 assert [r.tag for r in pol[(None, None, "default")]] == ["deny"]
 assert {r.get("own") for r in pol[("root", None, None)]} >= {"org.r_project.linux1"}
 EOF

@@ -29,13 +29,25 @@ Checked on the hosts on 2026-10-15:
   cannot simply be removed.
 - The installed bspm ships a D-Bus system service (`bspm.py` with no arguments,
   bus name `org.r_project.linux1`, methods `install`, `available`, `discover`,
-  `remove`), but it is not registered: no file under
-  `/usr/share/dbus-1/system-services/` or `/etc/dbus-1/system.d/`.
-  `python3-dbus`, `python3-gi` and `python3-apt` are installed.
+  `remove`). `python3-dbus`, `python3-gi` and `python3-apt` are installed.
+- Correction (2026-10-16, biome-calc04): the service **is** registered, by hand,
+  not by this repo or a package (`dpkg -S` finds nothing; files dated Apr 28).
+  An earlier search for "bspm" missed it because the files only name the bus.
+  Its `Exec` is `/root/R/x86_64-pc-linux-gnu-library/4.5/bspm/service/bspm.py`
+  (root's personal R 4.5 library) and its policy allows **every local user** to
+  call every method, `remove` included; a domain user's Introspect succeeds.
+  bspm still used sudo only because the profile forces `bspm.sudo = TRUE`.
+- First hotfix run (2026-10-16): dbus-daemon rejected the whole new policy file
+  because one rule named a member without an interface, so even root got
+  `AccessDenied`; the script rolled back. Fixed, and now guarded by a CI test
+  that loads the policy into a real dbus-daemon
+  (`tests/test_bspm_dbus_policy_live.sh`).
 
 ## Decision
 
-1. Register bspm's D-Bus service on every T1 host, run as root by bus activation.
+1. Register bspm's D-Bus service on every T1 host, run as root by bus activation,
+   from the system library copy (`/usr/lib/R/site-library/bspm`), replacing any
+   hand-made registration.
 2. The bus policy (`/etc/dbus-1/system.d/org.r_project.linux1.conf`) denies the
    bus name to everyone by default, lets root own it, and lets `domain_users` call
    only `install`, `available`, `discover` and `Introspect`. `remove` is denied

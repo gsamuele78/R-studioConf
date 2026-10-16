@@ -25,6 +25,13 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 - Audit check 14.6 (`00_audit_v28.R.template`) now checks the D-Bus service and
   policy and warns while the legacy sudoers rule exists.
 - `tests/test_fix_bspm_dbus.sh` (20 cases, mutation-checked) runs in CI.
+- `tests/test_bspm_dbus_policy_live.sh` loads the rendered policy into a real
+  private dbus-daemon and checks the allow/deny matrix (12 cases). Added after
+  the first test-host run, where dbus-daemon rejected the policy file (a member
+  rule without an interface) and the hotfix rolled back.
+- The hotfix replaces a hand-made registration found on the hosts (service run
+  from `/root/R/.../4.5/bspm`, policy open to every local user, `remove`
+  included) and warns if a service process from another path is still running.
 
 ### Changed (CI)
 
