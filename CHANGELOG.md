@@ -5,6 +5,34 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+### Security (bspm installs without sudo, ADR-0005)
+
+- New `scripts/fix_bspm_dbus_inplace.sh`: registers bspm's own D-Bus system
+  service (`org.r_project.linux1`) so researchers' `install.packages()` reaches apt
+  through a root service instead of `sudo`. The bus policy lets `domain_users`
+  call only `install`, `available`, `discover` and `Introspect`; `remove` is
+  denied. Flips `bspm.sudo` to `FALSE` in the deployed `/etc/R/Rprofile.site`
+  (exactly the two dispatcher lines, refuses otherwise). Dry-run by default,
+  `--commit`, `--rollback DIR`, `--skip-profile`, `--group NAME`; backup in
+  `/root/bspm-dbus-hotfix-<ts>/`; reloads dbus and rolls back automatically if
+  the service does not answer. Sudoers is not touched.
+- `templates/Rprofile_site.R.template` section 0: `bspm.sudo = FALSE`; bspm is
+  enabled only when the D-Bus service file exists, otherwise `install.packages()`
+  is plain R into the personal library.
+- `50_setup_nodes.sh` Step 7 registers the service and no longer writes
+  `/etc/sudoers.d/99-bspm-domain-users` (`NOPASSWD` on `apt-get`/`dpkg`/`bspm.py`
+  was root for every domain user). An existing file is kept, with a warning.
+- Audit check 14.6 (`00_audit_v28.R.template`) now checks the D-Bus service and
+  policy and warns while the legacy sudoers rule exists.
+- `tests/test_fix_bspm_dbus.sh` (20 cases, mutation-checked) runs in CI.
+- `tests/test_bspm_dbus_policy_live.sh` loads the rendered policy into a real
+  private dbus-daemon and checks the allow/deny matrix (12 cases). Added after
+  the first test-host run, where dbus-daemon rejected the policy file (a member
+  rule without an interface) and the hotfix rolled back.
+- The hotfix replaces a hand-made registration found on the hosts (service run
+  from `/root/R/.../4.5/bspm`, policy open to every local user, `remove`
+  included) and warns if a service process from another path is still running.
+
 ### Changed (CI)
 
 - `r-runtime-static` runs on the production R version: `setup-r` reads

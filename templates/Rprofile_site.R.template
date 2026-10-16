@@ -370,10 +370,16 @@ if (nzchar(Sys.getenv("BIOME_WORKER_MODE", "")) || .biome_is_psock_worker) {
   # ════════════════════════════════════════════════════════════════════════════
 
   # ── SECTION 0: bspm (Critical Pre-Load) ──
-  options(bspm.sudo = TRUE, bspm.version.check = FALSE)
+  # ADR-0005: bspm talks to its root D-Bus service (policy allows install,
+  # denies remove) instead of sudo apt-get/dpkg. Enabled only when the service
+  # is registered (50_setup_nodes.sh Step 7 / fix_bspm_dbus_inplace.sh);
+  # otherwise install.packages() builds into the personal library as plain R.
+  # Keep both option lines below as they are: the hotfix script greps them.
+  options(bspm.sudo = FALSE, bspm.version.check = FALSE)
   tryCatch({
-    if (requireNamespace("bspm", quietly = TRUE)) {
-      options(bspm.sudo = TRUE)
+    if (requireNamespace("bspm", quietly = TRUE) &&
+        file.exists("/usr/share/dbus-1/system-services/org.r_project.linux1.service")) {
+      options(bspm.sudo = FALSE)
       suppressMessages(bspm::enable())
     }
   }, error = function(e) {

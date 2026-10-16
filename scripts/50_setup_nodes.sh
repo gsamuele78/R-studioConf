@@ -668,17 +668,6 @@ setup_nodes_python() {
 setup_nodes_r_packages() {
   log_step "Step 7: bspm & R Packages"
 
-  # ── Configure bspm Authentication ──
-  # RStudio Web terminal/console does not have a polkit agent or interactive TTY for passwords.
-  # We must explicitly allow the users to execute apt via bspm without a password.
-  local sudoers_bspm="/etc/sudoers.d/99-bspm-domain-users"
-  log_info "Configuring passwordless sudo for bspm (domain_users)"
-  cat > "${sudoers_bspm}" << 'SUDOEOF'
-# BIOME-CALC: Allow domain_users to use bspm for R package management without password prompts in RStudio.
-%domain_users ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-mark, /usr/bin/dpkg, /usr/lib/R/site-library/bspm/service/bspm.py
-SUDOEOF
-  run_cmd chmod 0440 "${sudoers_bspm}"
-
   local tmp_bspm
   tmp_bspm=$(mktemp /tmp/r_setup_bspm.XXXXXX.R)
   cat > "${tmp_bspm}" << 'EOF'
@@ -688,6 +677,22 @@ if (!requireNamespace("bspm", quietly=TRUE)) {
 EOF
   run_cmd Rscript --vanilla "${tmp_bspm}"
   run_cmd rm -f "${tmp_bspm}"
+
+  # ── bspm authentication: D-Bus system service, not sudo (ADR-0005) ──
+  # RStudio Web has no polkit agent or TTY. bspm's own root D-Bus service
+  # installs r-cran-* debs for domain_users; the policy denies `remove`.
+  # The old rule (NOPASSWD apt-get/dpkg/bspm.py) was root for every domain
+  # user, so it is no longer written. An existing file is left in place:
+  # removing it is the operator's call once researcher installs are verified.
+  log_info "Registering the bspm D-Bus service for domain_users (no sudo)"
+  if ! bash "${SCRIPT_DIR}/fix_bspm_dbus_inplace.sh" --commit --skip-profile; then
+    log_error "bspm D-Bus service registration failed; researchers cannot install system R packages"
+    return 1
+  fi
+  if [[ -f /etc/sudoers.d/99-bspm-domain-users ]]; then
+    log_warn "Legacy /etc/sudoers.d/99-bspm-domain-users still present (root for every domain user)."
+    log_warn "  Remove it after a researcher install works without sudo: see docs/adr/0005-bspm-dbus-service-not-sudo.md"
+  fi
 
   # Build a safe R vector from the bash array
   local r_pkg_vector
