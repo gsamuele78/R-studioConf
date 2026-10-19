@@ -123,7 +123,9 @@ zero. It should be reported upstream.
 | biome-calc01 | 2026-10-19 14:35 | open policy file, no service file | `/root/bspm-dbus-hotfix-20261019T143512Z` |
 
 calc04 validated end to end (shell and RStudio web, sudo lines commented,
-`remove_sys` denied). calc01-03: the script's own check passed (service
-answers Introspect); researcher-side install/remove check and sudo-line
-removal pending.
+`remove_sys` denied). calc01-03 (2026-10-19 ~14:40): a domain user's
+`Rscript` installed `praise` into `/usr/lib/R/site-library` over D-Bus and
+`remove_sys` was denied. Sudo-line removal on calc01-03 not yet confirmed
+(`sudo -l -U <user>` pending); calc01 still had two RStudio sessions open
+at that time.
 
