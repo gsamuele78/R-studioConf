@@ -125,7 +125,8 @@ zero. It should be reported upstream.
 calc04 validated end to end (shell and RStudio web, sudo lines commented,
 `remove_sys` denied). calc01-03 (2026-10-19 ~14:40): a domain user's
 `Rscript` installed `praise` into `/usr/lib/R/site-library` over D-Bus and
-`remove_sys` was denied. Sudo-line removal on calc01-03 not yet confirmed
-(`sudo -l -U <user>` pending); calc01 still had two RStudio sessions open
-at that time.
+`remove_sys` was denied. Both sudo lines commented on all four hosts, confirmed 2026-10-19 ~14:47
+with `sudo -l -U <domain user>` ("is not allowed to run sudo"). calc01 had
+two RStudio sessions open when sudo was removed; if they predate the hotfix
+they need Quit Session before `install.packages()` works.
 

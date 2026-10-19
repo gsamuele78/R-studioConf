@@ -231,7 +231,7 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |
 | WS-1.4 bspm D-Bus service + profile + Step 7 (ADR-0005) | In review (draft PR) |
-| WS-1.4 hotfix on test host, then production hosts | Applied on calc01-04 2026-10-19; install/remove check passed on all four; sudo removal on calc01-03 **Open: operator** |
+| WS-1.4 hotfix on test host, then production hosts | Applied on calc01-04 2026-10-19; install/remove check passed and both sudo lines removed on all four (2026-10-19) |
 | WS-1.4 remove both domain_users sudo lines | **Open: operator decision** (after the test) |
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |
