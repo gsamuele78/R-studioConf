@@ -228,7 +228,9 @@ setup_nodes_dependencies() {
     default-jdk \
     libnlopt-dev \
     libgoogle-perftools-dev sendemail dnsutils \
-    samba-common-bin winbind rsync tree
+    samba-common-bin winbind rsync tree \
+    python3-dbus python3-gi python3-apt
+  # python3-dbus/gi/apt: bspm's D-Bus service (Step 7, ADR-0005)
   log_success "Base dependencies installed"
   # NOTE: R CMD javareconf + rJava source install handled by r_env_manager.sh configure_java_for_r()
 }
@@ -671,8 +673,10 @@ setup_nodes_r_packages() {
   local tmp_bspm
   tmp_bspm=$(mktemp /tmp/r_setup_bspm.XXXXXX.R)
   cat > "${tmp_bspm}" << 'EOF'
-if (!requireNamespace("bspm", quietly=TRUE)) {
-  install.packages("bspm", repos="https://cloud.r-project.org")
+# into the system library: the D-Bus service is registered from there, and
+# root's R_LIBS_USER (/root/R/...) is where calc04's stray copy came from
+if (!dir.exists("/usr/lib/R/site-library/bspm")) {
+  install.packages("bspm", lib = "/usr/lib/R/site-library", repos = "https://cloud.r-project.org")
 }
 EOF
   run_cmd Rscript --vanilla "${tmp_bspm}"

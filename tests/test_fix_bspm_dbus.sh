@@ -41,6 +41,11 @@ cat > "${STUBS}/getent" <<'EOF'
 [[ "${2:-}" == "${STUB_GROUP:-domain_users}" ]] && { echo "${2}:x:10000:"; exit 0; }
 exit 2
 EOF
+cat > "${STUBS}/date" <<'EOF'
+#!/usr/bin/env bash
+[[ -n "${STUB_DATE:-}" ]] && { echo "$STUB_DATE"; exit 0; }
+exec /usr/bin/date "$@"
+EOF
 cat > "${STUBS}/systemctl" <<'EOF'
 #!/usr/bin/env bash
 echo "systemctl $*" >> "${STUB_LOG}"
@@ -50,6 +55,8 @@ cat > "${STUBS}/dbus-send" <<'EOF'
 #!/usr/bin/env bash
 # "answers" only when the files are installed and STUB_DBUS_OK=1
 echo "dbus-send $*" >> "${STUB_LOG}"
+# the bus daemon: who owns the name
+[[ "$*" == *GetConnectionUnixProcessID* ]] && { echo "   uint32 ${STUB_OWNER_PID:-4242}"; exit 0; }
 [[ "${STUB_DBUS_OK:-1}" == 1 ]] || exit 1
 [[ -f "${FIX_BSPM_ROOT}/usr/share/dbus-1/system-services/org.r_project.linux1.service" ]] || exit 1
 [[ -f "${FIX_BSPM_ROOT}/etc/dbus-1/system.d/org.r_project.linux1.conf" ]] || exit 1
@@ -73,6 +80,10 @@ new_root() {
   printf '%s\n' "$PROFILE_V12" > "${r}/etc/R/Rprofile.site"
   cp "${r}/etc/R/Rprofile.site" "${r}/Rprofile.orig"
   : > "${r}/stub.log"
+  # pid 4242 = our service (system copy), 4343 = a hand-made copy (calc04)
+  mkdir -p "${r}/proc/4242" "${r}/proc/4343"
+  printf '/usr/bin/python3\0/usr/lib/R/site-library/bspm/service/bspm.py\0' > "${r}/proc/4242/cmdline"
+  printf '/usr/bin/python3\0/root/R/x86_64-pc-linux-gnu-library/4.5/bspm/service/bspm.py\0' > "${r}/proc/4343/cmdline"
   printf '%s' "$r"
 }
 
@@ -80,7 +91,7 @@ new_root() {
 run() {
   local r="$1"; shift
   env PATH="${STUBS}:${PATH}" FIX_BSPM_ROOT="$r" FIX_BSPM_BACKUP_ROOT="${r}/bk" \
-      FIX_BSPM_PYTHON="${FIX_BSPM_PYTHON:-true}" STUB_LOG="${r}/stub.log" \
+      FIX_BSPM_PYTHON="${FIX_BSPM_PYTHON:-true}" FIX_BSPM_OWNER_WAIT="${FIX_BSPM_OWNER_WAIT:-1}" STUB_LOG="${r}/stub.log" \
       bash "$SCRIPT" "$@" > "${r}/out" 2>&1
 }
 
@@ -215,6 +226,32 @@ if [[ -n "$sect" ]] && ! grep -q 'bspm\.sudo = TRUE' <<<"$sect" \
    && ! grep -q 'bspm\.sudo = TRUE' "$TEMPLATE"; then
   ok "T15 template: bspm.sudo = FALSE (2 lines, hotfix-compatible), gated on the D-Bus service file"
 else bad "T15 template bspm section"; printf '%s\n' "$sect"; fi
+
+# T16 bus name still owned by a bspm from another path (calc04) -> not reported
+#     as success; waits, then rolls back with the owner named
+r="$(new_root 16)"; rc=0; STUB_OWNER_PID=4343 run "$r" --commit || rc=$?
+if [[ $rc -eq 1 && ! -e "${r}${POL}" && ! -e "${r}${SVC}" ]] && cmp -s "${r}/etc/R/Rprofile.site" "${r}/Rprofile.orig" \
+   && grep -q 'GetConnectionUnixProcessID' "${r}/stub.log" \
+   && grep -q 'still owned by pid 4343: .*/root/R/' "${r}/out"; then
+  ok "T16 foreign bspm owning the bus name fails verification and rolls back"
+else bad "T16 foreign owner (rc=$rc)"; cat "${r}/out"; fi
+
+# T17 a second run in the same second never reuses the first run's backup dir
+r="$(new_root 17)"; mkdir -p "${r}/bk/bspm-dbus-hotfix-SAME"; echo keep > "${r}/bk/bspm-dbus-hotfix-SAME/manifest"
+rc=0; STUB_DATE=SAME run "$r" --commit || rc=$?
+if [[ $rc -eq 1 && ! -e "${r}${POL}" ]] && grep -q 'cannot create backup dir' "${r}/out" \
+   && [[ "$(cat "${r}/bk/bspm-dbus-hotfix-SAME/manifest")" == keep ]]; then
+  ok "T17 existing backup dir refused, its manifest untouched"
+else bad "T17 backup dir collision (rc=$rc)"; cat "${r}/out"; fi
+
+# T18 50_setup_nodes.sh: the service's Python modules are installed, and bspm
+#     goes to the system library the service is registered from
+SETUP="${HERE}/../scripts/50_setup_nodes.sh"
+step1="$(awk '/STEP 1:/{f=1} /STEP 2:/{f=0} f' "$SETUP")"
+if grep -q 'python3-dbus' <<<"$step1" && grep -q 'python3-gi' <<<"$step1" && grep -q 'python3-apt' <<<"$step1" \
+   && grep -q 'lib *= *"/usr/lib/R/site-library"' "$SETUP"; then
+  ok "T18 setup installs python3-dbus/gi/apt and bspm into /usr/lib/R/site-library"
+else bad "T18 setup dependencies"; fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$failn"
 [[ $failn -eq 0 ]]

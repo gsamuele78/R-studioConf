@@ -47,7 +47,10 @@ set -euo pipefail
 #            -h|--help
 #   Env:     FIX_BSPM_ROOT        (default "", prefix for every path; tests only)
 #            FIX_BSPM_BACKUP_ROOT (default /root)
-#            FIX_BSPM_PYTHON      (default python3)
+#            FIX_BSPM_PYTHON      (default /usr/bin/python3, the interpreter
+#                                  bus activation runs bspm.py with)
+#            FIX_BSPM_OWNER_WAIT  seconds to wait for a bspm service started
+#                                  from another path to exit (default 30)
 #
 # Verify as a researcher afterwards (RStudio web, or no terminal):
 #   setsid -w Rscript -e 'install.packages("praise"); cat(find.package("praise"), "\n")' < /dev/null
@@ -72,7 +75,8 @@ log_head()  { printf '\n%b== %s ==%b\n' "$C_BOLD" "$*" "$C_RESET"; }
 
 R="${FIX_BSPM_ROOT:-}"
 BACKUP_ROOT="${FIX_BSPM_BACKUP_ROOT:-/root}"
-PYTHON="${FIX_BSPM_PYTHON:-python3}"
+PYTHON="${FIX_BSPM_PYTHON:-/usr/bin/python3}"
+OWNER_WAIT="${FIX_BSPM_OWNER_WAIT:-30}"
 
 readonly BUS_NAME="org.r_project.linux1"
 readonly IFACE="org.r_project.linux1.PackageManager"
@@ -87,7 +91,7 @@ ROLLBACK_DIR=""
 GROUP="domain_users"
 SKIP_PROFILE=0
 
-usage() { sed -n '3,58p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,61p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -116,6 +120,34 @@ DBUS_ERR=""
 service_answers() {
   DBUS_ERR="$(dbus-send --system --print-reply --reply-timeout=10000 --dest="$BUS_NAME" "$OPATH" \
     org.freedesktop.DBus.Introspectable.Introspect 2>&1 >/dev/null)" && return 0
+  return 1
+}
+
+# The bus name may still be owned by a bspm service started from another copy
+# (calc04: /root/R/.../4.5). Introspect then answers from that process, not
+# from ours, so check who owns the name; wait for a foreign owner to exit
+# (bspm.py quits 10 s after its last call), then activate ours and re-check.
+SYSTEM_BSPM_PY="/usr/lib/R/site-library/bspm/service/bspm.py"
+OWNER_INFO=""
+owner_is_ours() {
+  local pid cmd
+  pid="$(dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+    org.freedesktop.DBus.GetConnectionUnixProcessID "string:${BUS_NAME}" 2>/dev/null | awk '/uint32/ {print $2}')"
+  [[ -n "$pid" ]] || { OWNER_INFO="no owner pid"; return 1; }
+  cmd="$(tr '\0' ' ' < "${R}/proc/${pid}/cmdline" 2>/dev/null || true)"
+  OWNER_INFO="pid ${pid}: ${cmd:-unknown}"
+  [[ "$cmd" == *"$SYSTEM_BSPM_PY"* ]]
+}
+service_verified() {
+  local i
+  service_answers || return 1
+  owner_is_ours && return 0
+  log_warn "bus name owned by another bspm service (${OWNER_INFO}); waiting up to ${OWNER_WAIT}s for it to exit"
+  for ((i = 0; i < OWNER_WAIT; i++)); do
+    sleep 1
+    service_answers && owner_is_ours && return 0
+  done
+  DBUS_ERR="the bus name is still owned by ${OWNER_INFO}; stop it (sudo kill <PID>) when no install runs, then re-run"
   return 1
 }
 
@@ -257,7 +289,7 @@ else
 fi
 
 if [[ "$changes" -eq 0 ]]; then
-  if service_answers; then log_ok "already applied and the service answers"; exit 0; fi
+  if service_verified; then log_ok "already applied and the service answers"; exit 0; fi
   log_warn "files are in place but the service does not answer (try: sudo systemctl reload dbus)"
   exit 1
 fi
@@ -272,7 +304,9 @@ fi
 log_head "Commit"
 is_root || { log_error "--commit needs root"; exit 1; }
 BK="${BACKUP_ROOT}/bspm-dbus-hotfix-$(date -u +%Y%m%dT%H%M%SZ)"
-if ! { mkdir -p "${BK}/files" && chmod 700 "$BK"; }; then log_error "cannot create backup dir ${BK}"; exit 1; fi
+# plain mkdir (no -p): a second run in the same second fails instead of
+# sharing, and truncating, the first run's manifest
+if ! { mkdir "$BK" && chmod 700 "$BK" && mkdir "${BK}/files"; }; then log_error "cannot create backup dir ${BK}"; exit 1; fi
 : > "${BK}/manifest"
 backup() {
   local path="$1" rel="${1#"$R"}"
@@ -305,7 +339,7 @@ if [[ $applied -ne 1 ]]; then
   fail_stage="writing the files failed"
 elif ! reload_dbus; then
   fail_stage="systemctl reload dbus failed"
-elif ! service_answers; then
+elif ! service_verified; then
   fail_stage="the D-Bus service did not answer Introspect: ${DBUS_ERR:-no error text}"
 fi
 if [[ -n "$fail_stage" ]]; then
@@ -315,17 +349,7 @@ if [[ -n "$fail_stage" ]]; then
   exit 1
 fi
 
-log_ok "bspm D-Bus service registered and answering; Rprofile.site no longer uses sudo for bspm"
-# A service process started from another bspm copy keeps the bus name until it
-# exits (bspm.py quits 10 s after its last install/available call).
-if command -v pgrep >/dev/null 2>&1; then
-  stale="$(pgrep -af 'bspm/service/bspm\.py' | grep -vF '/usr/lib/R/site-library/bspm/service/bspm.py' || true)"
-  if [[ -n "$stale" ]]; then
-    log_warn "a bspm service from another path is still running and answers until it exits:"
-    printf '         %s\n' "$stale" >&2
-    log_warn "stop it when no install is running: sudo kill <PID> (the next call starts the new one)"
-  fi
-fi
+log_ok "bspm D-Bus service registered and answering from ${SYSTEM_BSPM_PY}; Rprofile.site no longer uses sudo for bspm"
 log_info "New R sessions pick this up; running sessions keep the old setting."
 log_info "Rollback: sudo bash $0 --rollback ${BK}"
 log_warn "Sudoers is unchanged. Remove the bspm sudo lines only after a researcher install works (ADR-0005)."

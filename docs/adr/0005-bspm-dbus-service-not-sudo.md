@@ -1,7 +1,7 @@
 <!-- docs/adr/0005-bspm-dbus-service-not-sudo.md -->
 # ADR-0005: Researchers install R packages through bspm's D-Bus service, not sudo
 
-Status: Proposed
+Status: Accepted (applied on biome-calc01-04, 2026-10-19)
 Date: 2026-10-15
 
 ## Context
@@ -60,8 +60,8 @@ Checked on the hosts on 2026-10-15:
    (`fix_bspm_dbus_inplace.sh --commit --skip-profile`) and no longer writes the
    sudoers rule. An existing rule is left in place with a warning.
 5. Live hosts get the same change in place with `scripts/fix_bspm_dbus_inplace.sh`
-   (dry-run by default, backup, automatic rollback if the service does not answer,
-   `--rollback DIR`).
+   (dry-run by default, backup, automatic rollback if the service does not answer
+   or the bus name stays owned by a bspm from another path, `--rollback DIR`).
 6. Removing the two sudo lines is a separate, manual step taken by the operator
    after a researcher install works through the service on that host.
 
