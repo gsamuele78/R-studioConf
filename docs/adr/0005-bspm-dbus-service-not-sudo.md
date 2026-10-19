@@ -112,3 +112,18 @@ zero. It should be reported upstream.
 4. Rollback at any point: `sudo bash scripts/fix_bspm_dbus_inplace.sh --rollback DIR`
    (restores `Rprofile.site`, removes both D-Bus files, reloads dbus). The sudo
    lines are untouched by the script, so rollback needs nothing else.
+
+## Rollout log
+
+| Host | Applied (UTC) | State before | Backup |
+|---|---|---|---|
+| biome-calc04 (test) | 2026-10-19 14:07 | hand-made service + open policy (bspm from `/root/R/.../4.5`) | `/root/bspm-dbus-hotfix-20261019T140704Z` |
+| biome-calc03 | 2026-10-19 14:26 | nothing registered | `/root/bspm-dbus-hotfix-20261019T142633Z` |
+| biome-calc02 | 2026-10-19 14:31 | nothing registered | `/root/bspm-dbus-hotfix-20261019T143113Z` |
+| biome-calc01 | 2026-10-19 14:35 | open policy file, no service file | `/root/bspm-dbus-hotfix-20261019T143512Z` |
+
+calc04 validated end to end (shell and RStudio web, sudo lines commented,
+`remove_sys` denied). calc01-03: the script's own check passed (service
+answers Introspect); researcher-side install/remove check and sudo-line
+removal pending.
+
