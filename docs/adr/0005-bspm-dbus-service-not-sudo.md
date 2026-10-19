@@ -101,8 +101,14 @@ zero. It should be reported upstream.
    `setsid -w Rscript -e 'install.packages("praise"); cat(find.package("praise"), "\n")' < /dev/null`
    must print `/usr/lib/R/site-library/praise`. Then
    `Rscript -e 'bspm::remove_sys("praise")'` must fail with an access-denied error.
-3. Production hosts one at a time, same checks; then the operator removes the two
-   sudo lines (`visudo -c` after each edit).
+3. Production hosts one at a time, same checks. Sessions started before the
+   hotfix keep `bspm.sudo = TRUE` (the profile is read at session start) and go
+   through sudo; RStudio can resume a suspended session with the old option.
+   So remove the two sudo lines only after those sessions have ended
+   (`pgrep -a rsession`), and use `visudo -f /etc/sudoers.d/99-bspm-domain-users`
+   for the drop-in (plain `visudo` edits only `/etc/sudoers`); `visudo -c` after
+   each edit. Seen on the test host 2026-10-19: `Rscript` in a new shell
+   installed over D-Bus, an already-open RStudio session failed in `sudo_call`.
 4. Rollback at any point: `sudo bash scripts/fix_bspm_dbus_inplace.sh --rollback DIR`
    (restores `Rprofile.site`, removes both D-Bus files, reloads dbus). The sudo
    lines are untouched by the script, so rollback needs nothing else.
