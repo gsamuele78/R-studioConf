@@ -565,7 +565,7 @@ was newer, so you got the old copy back.
 
 **What to do**
 
-- The server now ignores a parquet copy that is older than the CSV, and says
+- The server now ignores a parquet copy that is not newer than the CSV, and says
   so with `BIOME-IO: ignoring stale parquet sidecar`.
 - If you do not need the parquet copy, delete it:
   `file.remove("data.csv.parquet")`.

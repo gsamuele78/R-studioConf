@@ -8,6 +8,46 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.11-fix3 (2026-10-20) — "review fixes: sidecar ties, ranger guard idempotence"
+
+### Trigger
+
+Code review of PR #35 (v12.11-fix2), after its merge.
+
+### Fix
+
+- Fragment 50: the parquet sidecar is used only when it is strictly newer than
+  the text file. Equal mtimes are treated as stale: on a filesystem with
+  coarse timestamps a CSV rewritten in the same tick as its sidecar tied with
+  it and the old table came back. Cost: a sidecar written in the same tick as
+  its CSV is ignored and the CSV is read (slower, correct). Message is now
+  `BIOME-IO: ignoring stale parquet sidecar (not newer than <file>)`.
+- Dispatcher ranger guard: it recognises its own trace by the guard's message
+  text instead of treating any trace as its own. Profile sourced twice: still
+  one guard. A trace someone else put on `ranger::ranger` (a user debugging):
+  the guard is not installed, because `trace()` would replace and silently drop
+  that trace; the user's `untrace()` plus a new session restores the guard.
+- Not changed: the review also said data-only calls (no target) bypass the
+  guard. ranger 0.16.0 has no such interface: `ranger(data = X, mtry = 10)`
+  stops with ranger's own `Please give formula, dependent variable name or x/y.`
+  Test G12 records that.
+
+No `RPROFILE_VERSION` bump (same rule as fix / fix2).
+
+### Verification
+
+`tests/test_parquet_sidecar_gate.sh` P9 (equal mtime rejected) and
+`tests/test_ranger_mtry_guard.sh` G10 (idempotent), G11 (foreign trace kept),
+G12 (data-only call). Negative test: with `t_pq < t_src` P9 fails; with the
+old any-trace check G11 fails.
+
+### Deploy
+
+Same as v12.11-fix2: `sudo ./scripts/50_setup_nodes.sh`, option 3. New R
+sessions only.
+
+---
+
 ## v12.11-fix2 (2026-10-15) — "Smart I/O never returns a stale parquet sidecar"
 
 ### Trigger

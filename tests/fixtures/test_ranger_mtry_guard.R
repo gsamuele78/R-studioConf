@@ -11,6 +11,9 @@
 #   G7 — options(biome.ranger_mtry_guard = FALSE)       -> guard not installed
 #   G8 — PSOCK worker (no profile, block sourced)        -> clear error crosses the worker
 #   G9 — mlr3 shape: 9 predictors + target, mtry 11      -> clear error naming 11 and 9
+#   G10 — profile sourced again                           -> guard kept, still one trace
+#   G11 — someone else's trace already on ranger          -> left alone, guard reports FALSE
+#   G12 — data only, no target (no unsupervised mode)     -> ranger's own clear error
 if (!requireNamespace("ranger", quietly = TRUE)) {
   cat("  FAIL  G0  package 'ranger' not installed (CI installs it; install it locally)\n")
   quit(status = 2)
@@ -65,6 +68,26 @@ d9 <- data.frame(medianRarity = rnorm(n), matrix(rnorm(n * 9), n, 9))
 msg <- run(ranger::ranger(dependent.variable.name = "medianRarity", data = d9,
                           mtry = 11, num.trees = 10, importance = "permutation"))
 check("G9", is_guard_err(msg) && grepl("mtry = 11", msg) && grepl("only 9 predictor", msg))
+
+ns <- asNamespace("ranger")
+v10 <- source(guard_file)$value
+msg <- run(ranger::ranger(dependent.variable.name = "y", data = d, mtry = 4, num.trees = 10))
+check("G10", isTRUE(v10) && is_guard_err(msg) &&
+             sum(grepl("BIOME-CALC: ranger mtry", deparse(body(get("ranger", ns))),
+                       fixed = TRUE)) == 1L, "(idempotent)")
+
+invisible(capture.output(suppressMessages(untrace("ranger", where = ns))))
+invisible(capture.output(suppressMessages(trace("ranger", tracer = quote(.user_trace <- 1), where = ns, print = FALSE))))
+v11 <- source(guard_file)$value
+body11 <- deparse(body(get("ranger", ns)))
+check("G11", identical(v11, FALSE) && any(grepl(".user_trace", body11, fixed = TRUE)) &&
+             !any(grepl("BIOME-CALC", body11, fixed = TRUE)), "(foreign trace kept)")
+invisible(capture.output(suppressMessages(untrace("ranger", where = ns))))
+source(guard_file)
+
+msg <- run(ranger::ranger(data = d[, -1], mtry = 10, num.trees = 10))
+check("G12", grepl("Please give formula, dependent variable name or x/y", msg, fixed = TRUE),
+      "(ranger has no data-only interface)")
 
 unlink(guard_file)
 if (fails > 0L) { cat(sprintf("  %d test(s) FAILED\n", fails)); quit(status = 1) }

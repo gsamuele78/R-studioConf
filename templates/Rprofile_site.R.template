@@ -286,7 +286,13 @@ local({
     tryCatch({
       ns <- asNamespace("ranger")
       if (!exists("ranger", envir = ns, inherits = FALSE)) return(invisible(FALSE))
-      if (inherits(get("ranger", envir = ns), "functionWithTrace")) return(invisible(TRUE))
+      fn <- get("ranger", envir = ns)
+      if (inherits(fn, "functionWithTrace")) {
+        # Ours already (profile sourced twice): nothing to do. Someone else's
+        # trace (a user's debugging trace): leave it, re-tracing would drop it.
+        return(invisible(any(grepl("BIOME-CALC: ranger mtry",
+                                   deparse(body(fn)), fixed = TRUE))))
+      }
       tracer <- quote({
         if (is.numeric(mtry) && length(mtry) == 1L && !is.na(mtry)) {
           .bg_nvar <- if (!is.null(x)) {

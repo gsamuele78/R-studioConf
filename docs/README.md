@@ -79,6 +79,7 @@ Descriptions state each file's role. They do not imply that every document has p
 
 - [`OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md) — day-2 quick reference.
 - [`MAINTENANCE.md`](operations/MAINTENANCE.md) — periodic maintenance schedule and procedures.
+- [`HOTFIX_REGISTER.md`](operations/HOTFIX_REGISTER.md) — in-place hotfixes, the release that absorbs each, and what each host runs (ADR-0006).
 - [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed troubleshooting.
 - [`DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md) — diagnostic and repair-tool index.
 - [`USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) — HC-13 diagnostic ladder for unchanged user R scripts.

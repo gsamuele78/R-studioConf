@@ -5,6 +5,35 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+Nothing yet. New entries go here; they move into a release section when the
+release is tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
+
+## [2026.10.0] - 2026-10-20 — Rprofile v12.11-fix3
+
+First tagged release. It holds every change recorded in this file since it was
+started, so it is long; later releases cover one batch of merges each.
+
+- **R profile shipped:** v12.11-fix3 (`RPROFILE_VERSION="12.11"`: the `-fix`,
+  `-fix2` and `-fix3` steps do not change the banner, so the banner alone cannot tell
+  them apart; the release tag can).
+- **Deploy on a host:** checkout on `main` at tag `v2026.10.0`, then
+  `sudo ./scripts/50_setup_nodes.sh`, option 3 (Step 8, R config files only).
+- **In-place hotfixes this release absorbs:** `fix_bspm_dbus_inplace.sh`
+  (applied on biome-calc01-04 on 2026-10-19). Per-host state lives in
+  [`docs/operations/HOTFIX_REGISTER.md`](docs/operations/HOTFIX_REGISTER.md).
+- **Tested on:** biome-calc04 (test host), 2026-10-20: v12.11-fix2 researcher
+  checks, then the v12.11-fix3 redeploy (option 3, syntax validated, 14
+  fragments).
+
+### Fixed (Rprofile v12.11-fix3 — review fixes on v12.11-fix2)
+
+- Parquet sidecar: equal mtimes count as stale (coarse-timestamp filesystems
+  could tie a rewritten CSV with its old sidecar). Message now reads
+  `ignoring stale parquet sidecar (not newer than <file>)`. Test P9.
+- ranger guard recognises its own trace; it no longer mistakes another trace
+  for itself, and leaves a user's trace in place instead of dropping it.
+  Tests G10-G12.
+
 ### Fixed (Rprofile v12.11-fix2 — `read.csv()` returned a stale `.parquet` sidecar)
 
 - Fragment 50 Smart I/O: `read.csv(f)` / `fread(f)` used `f.parquet` whenever it
