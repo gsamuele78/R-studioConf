@@ -26,12 +26,18 @@ recorded in the ADR-0005 rollout log.
 
 | Host | Role | Checkout (branch @ commit) | Local modified files | R profile deployed | Last Step 8 deploy |
 |---|---|---|---|---|---|
-| biome-calc01 | production | `main` @ 6157e27 | 13: site values in 4 `config/*.vars.conf`, mode-only changes on 8 scripts, untracked `rstudio_download_page.html` | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
-| biome-calc02 | production | `main` @ 6157e27 | 13: same as calc01 | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
-| biome-calc03 | production | `main` @ 6157e27 | 15: same as calc01, plus untracked `src/biome_core_rust/Cargo.lock` and `target/` (dormant, left alone) | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
-| biome-calc04 | test | `main` @ 6157e27 | 16: same as calc01, plus untracked `patch.sh`, `scripts/999_postmortem_forensics.sh` and its `.bak` (local files, not in the repo) | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
+| biome-calc01 | production | `main` @ af3324d (`v2026.10.1`) | 13: site values in 4 `config/*.vars.conf`, mode-only changes on 8 scripts, untracked `rstudio_download_page.html` | v12.11-fix3 (`v2026.10.1`) | 2026-10-20, stamp written |
+| biome-calc02 | production | `main` @ af3324d (`v2026.10.1`) | 13: same as calc01 | v12.11-fix3 (`v2026.10.1`) | 2026-10-20, stamp written |
+| biome-calc03 | production | `main` @ af3324d (`v2026.10.1`) | 15: same as calc01, plus untracked `src/biome_core_rust/Cargo.lock` and `target/` (dormant, left alone) | v12.11-fix3 (`v2026.10.1`) | 2026-10-20, stamp written |
+| biome-calc04 | test | `main` @ af3324d (`v2026.10.1`) | 16: same as calc01, plus untracked `patch.sh`, `scripts/999_postmortem_forensics.sh` and its `.bak` (local files, not in the repo) | v12.11-fix3 (`v2026.10.1`) | 2026-10-20, stamp written |
 
-Deploy check used on 2026-10-20 (each host): `grep -c 'not newer than'
+`v2026.10.1` deploy, 2026-10-20 13:39-13:42 CEST, option 3 on calc04 then calc03,
+02, 01: `/etc/biome-calc/deployed_release` on each host reads
+`release=v2026.10.1-dirty` (site values in `config/`), `commit=af3324d`,
+`branch=main`, `templates_clean=true`, `override=false`, `previous_commit=none`
+(first stamped deploy). R files are the same as `v2026.10.0`.
+
+Deploy check used for `v2026.10.0` on 2026-10-20 (each host): `grep -c 'not newer than'
 /etc/R/Rprofile_site.d/50_pkg_hooks.R` = 1, `grep -c biome_ranger_mtry_guard
 /etc/R/Rprofile.site` = 5, `grep -c 'bspm.sudo = FALSE' /etc/R/Rprofile.site` = 2.
 Backup before deploy: `/root/etc-R-before-v2026.10.0-<ts>.tgz`.
