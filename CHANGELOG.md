@@ -27,6 +27,19 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   packages or touches `r-base*` (R pin), refuses while R/RStudio sessions run,
   and saves every old `.deb` before upgrading; `--rollback DIR` reinstalls them.
   Tested by `tests/test_fix_r_pkg_versions.sh` (stubbed apt, `t1-static`).
+  Exit `3` means refused before any change (used by the nightly sync).
+- `scripts/biome_pkg_sync.sh` (ADR-0004 step 4): nightly R package sync across
+  hosts. Each host writes a JSON manifest of its `r-cran-*` packages to a shared
+  directory on biome-store03; from 01:30 it installs the union of all hosts'
+  packages it lacks, at the repository version, after aligning versions with
+  `fix_r_pkg_versions_inplace.sh`. systemd timer every 30 minutes 01:00-05:00, idle
+  CPU/IO priority; changes only when no `rsession`/`R` process runs (else exit 75,
+  next slot retries; after 05:00 the next night). Never removes packages, never
+  touches `r-base*`, refuses a host whose R is not the pinned version, at most 50
+  installs per night, `dry-run` by default. `--status` is the fleet view,
+  `--rollback DIR` removes what a run installed. Runbook
+  `docs/operations/PKG_SYNC.md`; test `tests/test_biome_pkg_sync.sh` (S1-S18) in
+  `t1-static`.
 
 ## [2026.10.1] - 2026-10-20 — Rprofile v12.11-fix3
 

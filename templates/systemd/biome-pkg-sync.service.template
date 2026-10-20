@@ -1,0 +1,18 @@
+# templates/systemd/biome-pkg-sync.service.template
+# Rendered by scripts/biome_pkg_sync.sh --install-timer (ADR-0004 step 4).
+[Unit]
+Description=BIOME nightly R package sync across hosts (ADR-0004)
+Wants=network-online.target
+After=network-online.target remote-fs.target
+RequiresMountsFor=%%SYNC_DIR%%
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash %%SCRIPT%%
+# Low priority: never compete with a late researcher job.
+Nice=19
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
+# 75 = deferred because R sessions are active; the next timer slot retries.
+SuccessExitStatus=75
+TimeoutStartSec=2h

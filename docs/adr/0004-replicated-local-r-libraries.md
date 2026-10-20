@@ -64,18 +64,36 @@ R packages stay on **local disk** on every host; what is installed is made the
    start, no profile, no NFS) and compares snapshots. Exit `1` on any missing
    package, version mismatch or R version mismatch.
 2. **Declare.** The base set stays in `config/r_env_manager.conf`
-   (`R_USER_PACKAGES_CRAN`, the single source of truth, HARD RULE 19). Packages
-   installed later on any host are appended to a small shared request list (one
-   line per install; a tiny NFS write, not a lookup storm). Format and location are
-   decided in step 4, not here.
+   (`R_USER_PACKAGES_CRAN`, the single source of truth, HARD RULE 19). What each
+   host has installed since is declared by that host's manifest in a shared
+   directory on biome-store03 (step 4): one small JSON file per host, written
+   once per night, never read by R sessions.
 3. **Align versions now.** `scripts/fix_r_pkg_versions_inplace.sh` upgrades the
    `r-cran-*` already installed on a host to the repository version (dry-run
    default, old `.deb` saved before each upgrade, `--rollback`). It never installs
    a missing package, removes one, or touches `r-base*`.
-4. **Reconcile (later, test host first).** A per-host job (systemd timer or
-   `update_host.sh`, ADR-0003) installs, through apt, whatever in the base set or
-   the request list is missing on that host, and aligns versions, not only names.
-   The drift check runs after it and is the acceptance test.
+4. **Reconcile nightly (`scripts/biome_pkg_sync.sh`, decided 2026-10-20).**
+   A systemd timer on each host runs every 30 minutes from 01:00 to 05:00:
+   - every run writes the host's manifest (`<dir>/hosts/<host>.json`: `r-cran-*`
+     from dpkg, R version, and packages apt does not manage);
+   - from 01:30, once per night, the host installs the **union** of the
+     `r-cran-*` packages in the fresh manifests (≤ 36 h old), minus
+     `<dir>/policy.json` exclusions, at the repository version; first it aligns
+     the versions of what it has with step 3 (old `.deb` saved);
+   - it only changes anything when no `rsession` or `R` process runs; otherwise
+     it exits 75 and the next slot retries; after 05:00 it waits for the next
+     night; sessions are never killed;
+   - it never removes a package, never touches `r-base*`/`r-recommended`, refuses
+     a host whose R is not the pinned version, caps installs per night
+     (`PKG_SYNC_MAX_NEW`, default 50) and runs at idle CPU/IO priority;
+   - each run with changes keeps `/var/backups/biome-calc/r-pkg-sync-<ts>/`
+     (`--rollback DIR` removes what it installed);
+   - default mode is `dry-run`; the test host goes to `apply` first.
+
+   **Format: JSON**, not YAML: the hard rules require `jq` for structured data
+   (HARD RULE 16); the hosts have `jq` and no YAML parser, and YAML would need
+   `yq` or text tools on a structured format. The files are machine-written and
+   read; `--status` prints them as a table for people.
 
 Metric: number of drifting packages between hosts from step 1. Target: `0` after
 each reconcile run; the current value is measured on every host before step 4.
@@ -85,9 +103,16 @@ each reconcile run; the current value is measured on every host before step 4.
 - Package loading stays local: no return of the v12.4 NFS storm.
 - A researcher's install appears on the other hosts after the next reconcile run,
   not immediately. Until then the drift check reports it.
-- Versions: apt/r2u serve "latest at install time". Two hosts installing on
-  different days can differ in patch level unless the reconciler pins versions.
-  This is the main open design question of step 4.
+- Versions: the target is the repository's current version, not a pinned one
+  (r2u keeps only the latest build). If the repository publishes a new version
+  between two hosts' runs, those hosts differ until the next night. Exact version
+  pinning would need a local apt snapshot; not adopted.
+- Packages not managed by apt (built from source, GitHub) are listed in the
+  manifests and in `--status`, and never synced.
+- Anyone who can write the shared directory can make every host install any
+  `r-cran-*` package from the configured repositories (names are validated and
+  capped). The directory must be writable only by the hosts' root
+  (`docs/operations/PKG_SYNC.md`).
 - Per-user local libraries (`/var/lib/biome-Rlibs/<user>/<ver>`) are also host-local
   and are **not** covered by step 1, which reads only the system libraries. If they
   turn out to hold real research dependencies they need the same treatment.
@@ -108,5 +133,5 @@ each reconcile run; the current value is measured on every host before step 4.
 
 Step 1 is read-only: delete the script. Step 3 is undone per host with
 `fix_r_pkg_versions_inplace.sh --rollback DIR` (old `.deb` files saved before each
-upgrade). Steps 2 and 4 add a list and a job; disabling the job stops replication
-and leaves every host exactly as it is.
+upgrade). Step 4: `biome_pkg_sync.sh --remove-timer` stops the job and leaves every host
+as it is; `--rollback DIR` removes what one run installed.

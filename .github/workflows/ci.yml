@@ -118,6 +118,10 @@ jobs:
         # apt-get/dpkg-query/pgrep/id stubbed on PATH; never touches apt or /var.
         run: bash tests/test_fix_r_pkg_versions.sh
 
+      - name: Nightly R package sync across hosts (ADR-0004 step 4)
+        # apt/dpkg/pgrep/systemctl stubbed; shared dir and fix script are fakes under mktemp.
+        run: bash tests/test_biome_pkg_sync.sh
+
       - name: Root-guard contract (non-root must refuse, not silently run)
         run: |
           set -euo pipefail

@@ -45,8 +45,10 @@ set -euo pipefail
 #
 # Exit codes:
 #   0 applied, nothing to do, or dry-run
-#   1 refused or failed
+#   1 failed (or --commit/--rollback without root)
 #   2 usage error
+#   3 refused before any change (removal or r-base in the plan, active
+#     sessions, rollback not fully possible): host unchanged
 
 readonly C_RED='\033[0;31m'
 readonly C_GREEN='\033[0;32m'
@@ -155,11 +157,11 @@ UPG="$(awk -F'\t' '$1=="UPG" && $2 ~ /^r-cran-/' <<<"$PLAN")"
 OTHER="$(awk -F'\t' '!($1=="UPG" && $2 ~ /^r-cran-/) && NF' <<<"$PLAN")"
 
 if grep -qE '^REMV' <<<"$OTHER"; then
-  log_error "the plan removes packages — refused:"; awk -F'\t' '$1=="REMV"{print "  " $2}' <<<"$OTHER" >&2; exit 1
+  log_error "the plan removes packages — refused:"; awk -F'\t' '$1=="REMV"{print "  " $2}' <<<"$OTHER" >&2; exit 3
 fi
 if awk -F'\t' '{print $2}' <<<"$OTHER" | grep -qE '^r-base|^r-recommended'; then
   log_error "the plan touches r-base*/r-recommended (R version pin, HARD RULE 19) — refused:"
-  awk -F'\t' '$2 ~ /^r-base|^r-recommended/ {print "  " $1 " " $2 " " $4}' <<<"$OTHER" >&2; exit 1
+  awk -F'\t' '$2 ~ /^r-base|^r-recommended/ {print "  " $1 " " $2 " " $4}' <<<"$OTHER" >&2; exit 3
 fi
 
 n_upg=0; [[ -n "$UPG" ]] && n_upg="$(wc -l <<<"$UPG")"
@@ -206,11 +208,11 @@ rprocs="$(pgrep -c -x R 2>/dev/null || true)"; rprocs="${rprocs:-0}"
 if [[ $((sessions + rprocs)) -gt 0 && "$ALLOW_SESSIONS" != true ]]; then
   log_error "${sessions} RStudio session(s) and ${rprocs} R process(es) running: packages loaded in them may break."
   log_error "Run when idle, or pass --allow-active-sessions."
-  exit 1
+  exit 3
 fi
 if [[ "$n_none" -gt 0 && "$ACCEPT_PARTIAL" != true ]]; then
   log_error "${n_none} upgrade(s) cannot be rolled back — refused (see list above). --accept-partial-rollback overrides."
-  exit 1
+  exit 3
 fi
 
 BK="${BACKUP_ROOT}/r-pkg-align-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -234,7 +236,7 @@ done <<<"$COVER"
 log_info "saved ${saved}/${n_upg} old package(s) in ${BK}/debs"
 if [[ "$saved" -lt "$n_upg" && "$ACCEPT_PARTIAL" != true ]]; then
   log_error "could not save every old package — refused before any change. Backup dir: ${BK}"
-  exit 1
+  exit 3
 fi
 
 mapfile -t TO_UPG < <(awk -F'\t' '{print $2}' <<<"$UPG")
