@@ -144,7 +144,12 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 - WS-1.2 **v12.11-fix2 (Smart I/O stale parquet sidecar).** Reported 2026-10-15 on
   biome-calc01: `read.csv()` returned a stale `<file>.parquet`. Fixed in fragment 50
   with a freshness / no-extra-args gate and `tests/test_parquet_sidecar_gate.sh`.
-  Same redeploy as WS-1.1.
+  Same redeploy as WS-1.1. Test host calc04 passed 2026-10-20 (sidecar, ranger
+  guard, bspm install from RStudio Web).
+- Hosts' checkouts are not on `main` (calc04 was on `setwd_safe_regression`,
+  v12.10, with local config edits). A Step 8 redeploy from a stale checkout
+  regresses fixes. **Open:** check each host's branch before any redeploy; move
+  local values to `config/site/setup_nodes.site.vars.conf`.
 - Triage, not a defect: `ranger` "User interrupt or internal error" under mlr3
   (same report) is `mtry` above `task$n_features` in the user's search space.
   Reproduced on ranger 0.16.0. Documented in COMMON_PROBLEMS §15. The dispatcher

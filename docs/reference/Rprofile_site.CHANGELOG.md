@@ -67,6 +67,17 @@ fails S1 and G0.
 `grep -c 'biome_parquet_sidecar' /etc/R/Rprofile_site.d/50_pkg_hooks.R` → `5`.
 New R sessions only. T2 is not affected by this change (TD-T2-01).
 
+Test host biome-calc04, 2026-10-20 (option 3 from this branch, v12.11): the
+deploy validated v12.11 and the three greps returned 5 / 5 / 2. As a domain
+user: `ranger(..., mtry = 10)` on iris stopped with
+`BIOME-CALC: ranger mtry = 10 but the data has only 4 predictor(s)` and
+`mtry = 2` ran. In RStudio Web: a stale sidecar was skipped (`"new"`), a fresh
+one was used and returned `data.frame`, `sep = ","` bypassed it, and
+`install.packages("praise")` went through bspm's D-Bus service.
+Caught on the way: calc04's checkout was on the July branch
+`setwd_safe_regression` (v12.10); option 3 from there re-deployed
+`bspm.sudo = TRUE` and broke installs until the bspm hotfix was re-applied.
+
 ---
 
 ## v12.11-fix (2026-10-15) — "bspm without sudo" (ADR-0005)
