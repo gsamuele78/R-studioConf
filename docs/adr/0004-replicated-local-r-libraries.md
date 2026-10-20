@@ -23,7 +23,8 @@ the researcher's NFS library holds one entry on both. So the difference is in
 How packages get there: the profile enables bspm
 (`templates/Rprofile_site.R.template`, section 0, `bspm.sudo = TRUE`), so
 `install.packages()` becomes an apt install of `r-cran-*` into the system library
-of the host the user is on. An admin running `sudo R` does the same. Nothing
+of the host the user is on. (Since ADR-0005, 2026-10-19, bspm installs through its D-Bus
+service instead of sudo; the package still lands on that one host only.) An admin running `sudo R` does the same. Nothing
 replicates that install to the other hosts and nothing reports the difference.
 `scripts/99_check_pkg_drift.sh` compares one host with its own past baseline, not
 hosts with each other.
