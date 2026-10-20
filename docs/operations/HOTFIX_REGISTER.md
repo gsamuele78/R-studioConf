@@ -17,6 +17,7 @@ Until then, redeploying an older release undoes the hotfix.
 | `scripts/fix_login_script_rlibs_inplace.sh` | login script stops writing `R_LIBS_USER` into `~/.Renviron` | before `v2026.10.0` | unknown, to check | see script `--help` |
 | `scripts/fix_pam_segfault_inplace.sh` | SIGSEGV from `libpam-krb5` / `biome-localguard` PAM profile | before `v2026.10.0` | unknown, to check | see script `--help` |
 | `scripts/tools/hotfix_smtp_site_overrides.sh` | deployed `setup_nodes.vars.conf` missing the site SMTP keys | before `v2026.10.0` | unknown, to check | see script `--help` |
+| `scripts/fix_r_pkg_versions_inplace.sh` | upgrades the host's installed `r-cran-*` packages to the repository version, so hosts converge (ADR-0004 step 3) | not absorbed: run per host (later the nightly reconciler, ADR-0004 step 4) | none yet | `/var/backups/biome-calc/r-pkg-align-<ts>/`, `--rollback DIR` |
 
 Manual changes on the hosts (the two `domain_users` sudo lines commented out on
 calc01-04, 2026-10-19) are not scripts, so no release absorbs them; they are
