@@ -85,6 +85,9 @@ jobs:
       - name: Release notes from CHANGELOG.md (ADR-0006, used by release.yml)
         run: bash tests/test_release_notes.sh
 
+      - name: Step 8 deployed-release stamp + downgrade guard (ADR-0006)
+        run: bash tests/test_deploy_release_guard.sh
+
       - name: T2/T3 self-contained contract (vendored by Infra-Iam-PKI)
         # docker-deploy/ and kubernetes-deploy/ are copied byte-for-byte by the
         # Infra-Iam-PKI sync; they must not reach into the repo root.

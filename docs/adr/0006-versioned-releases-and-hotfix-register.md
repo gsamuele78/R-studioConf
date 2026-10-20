@@ -52,13 +52,19 @@ Date: 2026-10-20
   roadmap's definition of done require the update.
 - Existing hotfix scripts other than the bspm one have no recorded host state.
   The register lists them as "unknown" until they are checked on the hosts.
-- Not done yet:
-  - Step 8 does not write the deployed tag on the host, so the ledger cannot be
-    checked automatically. Proposed follow-up: Step 8 writes
-    `git describe --tags --always --dirty` to a stamp file under `/etc/biome-calc/`,
-    and a read-only drift check compares the stamps across hosts.
-  - `50_setup_nodes.sh` does not refuse to deploy an older template over a newer
-    one (the calc04 incident). Proposed follow-up, separate PR.
+- Since `v2026.10.1`, Step 8 writes `/etc/biome-calc/deployed_release`
+  (release, commit, branch, Rprofile version, date, override) and refuses to
+  deploy an older or diverged checkout, or one with local changes under
+  `templates/`, unless `--allow-downgrade` is passed (`lib/deploy_release.sh`).
+  A production rollback therefore stays possible, but it is explicit and
+  recorded in the stamp and its `.history`.
+  - The guard compares commits, not file contents: a rollback of a single
+    template is done by checking out the older release, not by editing the
+    file on the host.
+  - The guard only sees what the stamp records. A host whose last Step 8 ran
+    before `v2026.10.1` has no stamp, so its first stamped deploy is not checked.
+- Not done yet: a read-only drift check that reads the stamps of all hosts and
+  compares them (the ledger is still updated by hand).
 
 ## Rollback
 

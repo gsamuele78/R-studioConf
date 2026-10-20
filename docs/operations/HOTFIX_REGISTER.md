@@ -43,3 +43,31 @@ git branch --show-current
 git describe --tags --always --dirty
 git status --short
 ```
+
+Since `v2026.10.1`, Step 8 checks this itself and records what it deployed in
+`/etc/biome-calc/deployed_release` (one line per deploy in
+`deployed_release.history`). To read it: `cat /etc/biome-calc/deployed_release`,
+or `sudo ./scripts/50_setup_nodes.sh --verify`.
+
+## Rolling back a release
+
+Step 8 refuses to deploy a checkout older than the deployed commit. To roll back
+on purpose, for example after a template problem in production:
+
+```bash
+cd /home/ladmin/configServices/R-studioConf
+sudo tar czf /root/etc-R-before-rollback-$(date +%s).tgz /etc/R /etc/biome-calc
+git fetch --tags
+git checkout v2026.10.0            # the release to go back to
+sudo ./scripts/50_setup_nodes.sh --allow-downgrade   # option 3
+cat /etc/biome-calc/deployed_release   # override=true, previous_commit=<newer>
+```
+
+Record the rollback in the ledger above. When the fix is on `main`:
+`git checkout main && git pull`, then option 3 without the flag (an upgrade).
+
+Faster alternative for one bad deploy, without git: restore the tarball taken
+before the deploy, or the `.bak` files Step 8 leaves (`/etc/R/Renviron.site.bak`,
+`/etc/R/Rprofile.site.bak`, `/etc/R/Rprofile_site.d.bak.<epoch>`). The stamp then
+still names the newer release; the next Step 8 from the older checkout needs
+`--allow-downgrade`, and from the newer one it is a plain redeploy.

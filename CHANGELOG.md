@@ -36,16 +36,45 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   It now probes `/api/v1/health` with the image's own Python. T1 (systemd) and
   T3 (`httpGet` probe) are not affected.
 
-### Added (release automation)
+## [2026.10.1] - 2026-10-20 — Rprofile v12.11-fix3
+
+- **R profile shipped:** v12.11-fix3, unchanged from `v2026.10.0`. No R file changes.
+- **Deploy on a host:** `git pull` on `main`, then `sudo ./scripts/50_setup_nodes.sh`,
+  option 3. The first deploy writes `/etc/biome-calc/deployed_release`.
+- **In-place hotfixes this release absorbs:** none new.
+- **Tested on:** CI (`tests/test_deploy_release_guard.sh`, D1-D24); biome-calc04
+  before calc01-03 (see the host ledger).
+
+### Added (Step 8 deployed-release stamp and downgrade guard)
+
+- Step 8 of `scripts/50_setup_nodes.sh` (options 1, 3, O) writes
+  `/etc/biome-calc/deployed_release` after a full deploy: release
+  (`git describe --tags --always --dirty`), commit, branch, Rprofile version,
+  date, user, whether the deploy was an override, and the commit it replaced.
+  Each deploy also appends one line to `deployed_release.history`. Option V and
+  `--verify` print the stamp and say whether the checkout matches it.
+- Before writing anything, Step 8 compares the checkout with the stamp and
+  **refuses** to deploy when the checkout is older than the deployed commit,
+  has diverged from it (the 2026-10-20 calc04 stale-branch incident), does not
+  contain it (`git fetch` needed), has local changes or untracked files under
+  `templates/`, or is not a git checkout. Local values in `config/*.vars.conf`
+  and mode-only changes are allowed. With no stamp yet, it warns and deploys.
+- `--allow-downgrade` overrides the refusal on purpose. Rollback procedure:
+  `git checkout v<old>`, then `sudo ./scripts/50_setup_nodes.sh --allow-downgrade`,
+  option 3; the stamp records `override=true`. Returning to `main` afterwards
+  is a normal upgrade. Documented in
+  [`docs/operations/HOTFIX_REGISTER.md`](docs/operations/HOTFIX_REGISTER.md#rolling-back-a-release).
+- New `lib/deploy_release.sh`; test `tests/test_deploy_release_guard.sh` runs in `t1-static`.
+
+### Added (release automation, already in the `v2026.10.0` commit)
 
 - `.github/workflows/release.yml`: when `main` gets a new release section in
   this file, it tags the commit `vYYYY.MM.N` and publishes a GitHub Release
   whose notes are that section. An existing release is never touched.
   `scripts/tools/release_notes.sh` extracts the section; regression test
   `tests/test_release_notes.sh` (R1-R7) runs in `t1-static` and before every
-  release.
-- The first run creates `v2026.10.0` (the tag could not be pushed from the
-  agent session: the git proxy accepts only branch pushes).
+  release. These entries were merged with `v2026.10.0` but written after its
+  notes, so they appear here.
 
 ## [2026.10.0] - 2026-10-20 — Rprofile v12.11-fix3
 
