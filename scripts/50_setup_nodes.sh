@@ -33,6 +33,15 @@ fi
 # shellcheck source=../lib/common_utils.sh disable=SC1091
 source "${COMMON_UTILS}"
 
+# ── Deployed-release stamp + downgrade guard (ADR-0006) ──
+DEPLOY_RELEASE_LIB="${WORKSPACE_ROOT}/lib/deploy_release.sh"
+if [[ ! -f "${DEPLOY_RELEASE_LIB}" ]]; then
+  echo "[ERROR] Missing: ${DEPLOY_RELEASE_LIB}" >&2
+  exit 1
+fi
+# shellcheck source=../lib/deploy_release.sh disable=SC1091
+source "${DEPLOY_RELEASE_LIB}"
+
 # ── Load configuration ──
 VARS_CONF="${WORKSPACE_ROOT}/config/setup_nodes.vars.conf"
 if [[ ! -f "${VARS_CONF}" ]]; then
@@ -67,6 +76,7 @@ SKIP_OLLAMA="${SKIP_OLLAMA:-false}"
 DRY_RUN=false
 DO_UNINSTALL=false
 DO_VERIFY=false
+ALLOW_DOWNGRADE=false
 
 for arg in "$@"; do
   case "$arg" in
@@ -74,9 +84,13 @@ for arg in "$@"; do
     --dry-run)     DRY_RUN=true ;;
     --uninstall)   DO_UNINSTALL=true ;;
     --verify)      DO_VERIFY=true ;;
+    --allow-downgrade) ALLOW_DOWNGRADE=true ;;
     --help|-h)
-      echo "Usage: sudo $0 [--skip-ollama] [--dry-run] [--uninstall] [--verify]"
-      echo "  --verify    Run 3-layer cgroup + Rprofile version check without deploying"
+      echo "Usage: sudo $0 [--skip-ollama] [--dry-run] [--uninstall] [--verify] [--allow-downgrade]"
+      echo "  --verify           Run 3-layer cgroup + Rprofile version check without deploying"
+      echo "  --allow-downgrade  Let Step 8 deploy a checkout older than (or diverged from) the"
+      echo "                     deployed release, or with local changes under templates/."
+      echo "                     Use it to roll back a release: git checkout <tag>, then this."
       exit 0
       ;;
   esac
@@ -1162,8 +1176,25 @@ setup_nodes_audit_nfs() {
 # ==============================================================================
 # STEP 8: DEPLOY SYSTEM CONFIGURATION FILES
 # ==============================================================================
+# ── Release guard (ADR-0006): runs once per invocation, before any write ──
+DEPLOY_STAMP="${BIOME_CONF}/deployed_release"
+RELEASE_GUARD_RC=""
+setup_nodes_release_guard() {
+  [[ -n "${RELEASE_GUARD_RC}" ]] && return 0
+  RELEASE_GUARD_RC=0
+  biome_release_guard "${WORKSPACE_ROOT}" "${DEPLOY_STAMP}" "${ALLOW_DOWNGRADE}" || RELEASE_GUARD_RC=$?
+  if [[ "${RELEASE_GUARD_RC}" == 1 ]]; then
+    if [[ "${DRY_RUN}" == true ]]; then
+      log_warn "[DRY-RUN] A real deploy would stop here (release check failed)."
+    else
+      exit 1
+    fi
+  fi
+}
+
 setup_nodes_config_files() {
   log_step "Step 8: Deploy System Configuration Files"
+  setup_nodes_release_guard
 
   local current_ct
   current_ct=$(cat "${BIOME_CONF}/coretype" 2>/dev/null || echo "auto")
@@ -1523,6 +1554,16 @@ tryCatch({
       fi
       rm -rf "${bundle_stage}"
     fi
+  fi
+
+  # ── Deployed-release stamp (ADR-0006): last, so it only records a full Step 8 ──
+  if [[ "${DRY_RUN}" == true ]]; then
+    log_info "[DRY-RUN] Would write ${DEPLOY_STAMP}"
+  else
+    local stamp_override=false
+    [[ "${RELEASE_GUARD_RC}" == 3 ]] && stamp_override=true
+    biome_release_write_stamp "${WORKSPACE_ROOT}" "${DEPLOY_STAMP}" "${RPROFILE_VERSION}" "${stamp_override}"
+    log_success "Deployed release recorded: $(biome_release_field "${DEPLOY_STAMP}" release) -> ${DEPLOY_STAMP}"
   fi
 }
 
@@ -2723,6 +2764,7 @@ fi
 # ── Handle --verify CLI flag (non-interactive cgroup + version check) ──
 if [[ "${DO_VERIFY}" == true ]]; then
   setup_nodes_preflight
+  biome_release_show "${WORKSPACE_ROOT}" "${DEPLOY_STAMP}"
   setup_nodes_verify_cgroups
   # Check deployed Rprofile version (grep -m1, not `grep | head -1`: see SIGPIPE note above)
   deployed_ver=$(grep -m1 -oP 'VERSION\s*<-\s*"\K[0-9.]+' /etc/R/Rprofile.site 2>/dev/null || true)
@@ -2821,6 +2863,7 @@ choice="${choice^^}"  # uppercase
 case "${choice}" in
   1)
     setup_nodes_preflight
+    setup_nodes_release_guard
     setup_nodes_dependencies
     setup_nodes_arrow
     setup_nodes_gcloud
@@ -2903,12 +2946,14 @@ case "${choice}" in
     ;;
   O)
     setup_nodes_preflight
+    setup_nodes_release_guard
     RPROFILE_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site_optimized.R.template"
     setup_nodes_rust_compile
     setup_nodes_config_files
     ;;
   V)
     setup_nodes_preflight
+    biome_release_show "${WORKSPACE_ROOT}" "${DEPLOY_STAMP}"
     setup_nodes_verify_cgroups
     ;;
   U)
