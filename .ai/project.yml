@@ -151,6 +151,11 @@ tier_deltas:
     delta: "admin_recipients.txt is bind-mounted from config/site/ into the telemetry container instead of being COPYed at build time."
     rationale: "The COPY pointed at a file that does not exist (build failure) and would have baked real e-mail addresses into the image."
     status: "PERMANENT"
+  - id: "TD-T2-07"
+    tier: "T2"
+    delta: "No deployed-release stamp or downgrade guard (T1 Step 8, lib/deploy_release.sh, ADR-0006). A container's release is its image tag (IMAGE_TAG)."
+    rationale: "T2 has no Step 8: the templates are baked into the image at build time, so the deployed version is the tag the operator chose and a rollback is a redeploy of the older tag. A stamp inside the container would not survive a recreate."
+    status: "PERMANENT"
 
 # ──────────────────────────────────────────────────────────────
 # ROADMAP — evaluation_pending

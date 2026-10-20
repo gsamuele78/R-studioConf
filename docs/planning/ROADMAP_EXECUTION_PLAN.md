@@ -117,8 +117,9 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 4. WS-0.4: Versioned releases (ADR-0006). `CHANGELOG.md` gets one section per
    `vYYYY.MM.N` tag; every in-place hotfix and every host redeploy is recorded in
    `docs/operations/HOTFIX_REGISTER.md`. First release `v2026.10.0` (Rprofile
-   v12.11-fix3). Follow-ups: Step 8 writes the deployed tag on the host so a
-   drift check can compare hosts; Step 8 refuses an older template than the deployed one.
+   v12.11-fix3). Release `v2026.10.1`: Step 8 writes `/etc/biome-calc/deployed_release`
+   and refuses an older or diverged checkout unless `--allow-downgrade` (rollback).
+   Next: a read-only drift check that compares the stamps across hosts.
 
 **Validate**
 - `make generate-check` and `.ai/validate.sh --ci` are green on `main`.
@@ -253,7 +254,8 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.2 v12.11-fix3 review fixes (sidecar ties, guard idempotence) | Done (PR #41) |
 | WS-1.1 + WS-1.2 host redeploy (Step 8, release `v2026.10.0`) | Done on calc01-04 2026-10-20 (all on `main` @ 6157e27; greps 1/5/2) |
 | WS-0.4 versioned releases + hotfix register (ADR-0006) | Done (PR #41); release workflow tags `v2026.10.0` on merge of its PR |
-| WS-0.4 Step 8 writes the deployed tag; refuse older template | Open (proposed, separate PR) |
+| WS-0.4 Step 8 writes the deployed tag; refuse older template | In review (release `v2026.10.1`); `--allow-downgrade` for rollback |
+| WS-0.4 drift check reading the stamps of all hosts | Open |
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |
