@@ -270,6 +270,51 @@ local({
 # Fallback: PSOCK workers always have MASTER= in commandArgs(trailingOnly=TRUE)
 # (OS-level --args flag, present before any -e runs). Bare parallel::makeCluster
 # workers are caught the same way. Both paths now correctly take the fast path.
+# ── v12.11-fix2: ranger mtry guard (BOTH worker fast path and full profile) ──
+# ranger stops on mtry > number of predictors, prints the reason with Rcout
+# (lost inside PSOCK/future workers) and raises only "User interrupt or
+# internal error." (biome-calc01, mlr3 tuning, 2026-10). This hook traces
+# ranger::ranger once its namespace loads and raises a clear error first.
+# It never changes mtry: results stay exactly what the user's code asks for
+# (HC-17). trace() keeps ranger's formals, environment and recorded call.
+# Formula calls are not checked (predictor count needs model.frame).
+# Opt-out: options(biome.ranger_mtry_guard = FALSE). Rollback: untrace(ranger::ranger).
+# >>> biome_ranger_mtry_guard
+local({
+  .biome_ranger_mtry_guard <- function(...) {
+    if (!isTRUE(getOption("biome.ranger_mtry_guard", TRUE))) return(invisible(FALSE))
+    tryCatch({
+      ns <- asNamespace("ranger")
+      if (!exists("ranger", envir = ns, inherits = FALSE)) return(invisible(FALSE))
+      if (inherits(get("ranger", envir = ns), "functionWithTrace")) return(invisible(TRUE))
+      tracer <- quote({
+        if (is.numeric(mtry) && length(mtry) == 1L && !is.na(mtry)) {
+          .bg_nvar <- if (!is.null(x)) {
+            NCOL(x)
+          } else if (!is.null(dependent.variable.name) && !is.null(data)) {
+            ncol(data) - length(intersect(names(data),
+                                          c(dependent.variable.name, status.variable.name)))
+          } else NA_integer_
+          if (!is.na(.bg_nvar) && mtry > .bg_nvar) {
+            stop(sprintf(paste0(
+              "BIOME-CALC: ranger mtry = %d but the data has only %d predictor(s).\n",
+              "  ranger would stop with the unhelpful 'User interrupt or internal error.'\n",
+              "  Fix: use mtry <= %d. With mlr3 tuning: ",
+              "mtry = p_int(1L, task$n_features), or tune mtry.ratio = p_dbl(0.1, 1)."),
+              as.integer(mtry), as.integer(.bg_nvar), as.integer(.bg_nvar)),
+              call. = FALSE)
+          }
+        }
+      })
+      suppressMessages(trace("ranger", tracer = tracer, where = ns, print = FALSE))
+      invisible(TRUE)
+    }, error = function(e) invisible(FALSE))
+  }
+  setHook(packageEvent("ranger", "onLoad"), .biome_ranger_mtry_guard)
+  if (isNamespaceLoaded("ranger")) .biome_ranger_mtry_guard()
+})
+# <<< biome_ranger_mtry_guard
+
 .biome_is_psock_worker <- any(grepl("^MASTER=", commandArgs(trailingOnly = TRUE)))
 if (nzchar(Sys.getenv("BIOME_WORKER_MODE", "")) || .biome_is_psock_worker) {
   # ════════════════════════════════════════════════════════════════════════════
