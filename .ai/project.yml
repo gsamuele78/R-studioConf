@@ -156,6 +156,11 @@ tier_deltas:
     delta: "No deployed-release stamp or downgrade guard (T1 Step 8, lib/deploy_release.sh, ADR-0006). A container's release is its image tag (IMAGE_TAG)."
     rationale: "T2 has no Step 8: the templates are baked into the image at build time, so the deployed version is the tag the operator chose and a rollback is a redeploy of the older tag. A stamp inside the container would not survive a recreate."
     status: "PERMANENT"
+  - id: "TD-T2-08"
+    tier: "T2"
+    delta: "telemetry-api runs on Python 3.14 with a pinned, hashed dependency lock (docker-deploy/scripts/telemetry/requirements.txt). T1 runs the same telemetry_api.py on the host Python (3.12 on Ubuntu 24.04) in /opt/botanical-telemetry with unpinned latest packages (scripts/40_install_telemetry.sh)."
+    rationale: "The image Python is not tied to the host, and Dependabot tracks python:*-slim. The lock makes the image reproducible. T1 being unpinned is a T1 reproducibility gap, recorded here rather than fixed silently: pinning T1 to the same lock changes the production venv and needs its own PR."
+    status: "OPEN — close by pinning T1's venv to the same lock (cp312 wheels exist for every pin)"
 
 # ──────────────────────────────────────────────────────────────
 # ROADMAP — evaluation_pending
