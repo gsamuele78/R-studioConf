@@ -88,6 +88,18 @@ jobs:
         # apt/systemd/AD needed. Guards T1 audit §1 items 1-4 against regression.
         run: bash tests/test_pr1_critical_fixes.sh
 
+      - name: bspm D-Bus hotfix (ADR-0005; policy, apply, idempotency, rollback, refusals)
+        run: bash tests/test_fix_bspm_dbus.sh
+
+      - name: bspm D-Bus policy on a real dbus-daemon (who may install/remove)
+        # Loads the rendered policy into a private dbus-daemon with the distro
+        # default policy; root needed to run calls as throwaway users.
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends dbus-daemon python3-gi
+          sudo bash tests/test_bspm_dbus_policy_live.sh
+
       - name: Root-guard contract (non-root must refuse, not silently run)
         run: |
           set -euo pipefail
