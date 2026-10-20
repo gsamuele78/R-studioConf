@@ -26,10 +26,10 @@ recorded in the ADR-0005 rollout log.
 
 | Host | Role | Checkout (branch @ commit) | Local modified files | R profile deployed | Last Step 8 deploy |
 |---|---|---|---|---|---|
-| biome-calc01 | production | `main` @ unknown | 13 | unknown (pre-`v2026.10.0`) + bspm hotfix | unknown |
-| biome-calc02 | production | `main` @ unknown | 13 | unknown (pre-`v2026.10.0`) + bspm hotfix | unknown |
-| biome-calc03 | production | `main` @ unknown | 15 | unknown (pre-`v2026.10.0`) + bspm hotfix | unknown |
-| biome-calc04 | test | `claude/project-thread-nb902e` @ a0eeda3 (PR #35; `v2026.10.0` adds the v12.11-fix3 review fixes) | 12 (config values, file modes) | v12.11-fix2 | 2026-10-20 |
+| biome-calc01 | production | `main` @ 3df2720 (PR #38) | 12: 4 config files with site values, 8 scripts with mode-only changes | v12.11 + bspm hotfix | unknown, before 2026-10-20 |
+| biome-calc02 | production | `main` @ 3df2720 (PR #38) | 12: same as calc01 | v12.11 + bspm hotfix | unknown, before 2026-10-20 |
+| biome-calc03 | production | `main` @ 3df2720 (PR #38) | 12: same as calc01; also untracked `src/biome_core_rust/target/` (dormant, left alone) | v12.11 + bspm hotfix | unknown, before 2026-10-20 |
+| biome-calc04 | test | `claude/project-thread-nb902e` @ e727888 (PR #41, the `v2026.10.0` content) | 12: config values, file modes | v12.11-fix3 | 2026-10-20 |
 
 Check before any redeploy, as ladmin in `/home/ladmin/configServices/R-studioConf`:
 

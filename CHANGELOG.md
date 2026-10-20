@@ -21,8 +21,9 @@ started, so it is long; later releases cover one batch of merges each.
 - **In-place hotfixes this release absorbs:** `fix_bspm_dbus_inplace.sh`
   (applied on biome-calc01-04 on 2026-10-19). Per-host state lives in
   [`docs/operations/HOTFIX_REGISTER.md`](docs/operations/HOTFIX_REGISTER.md).
-- **Tested on:** biome-calc04 (test host), 2026-10-20, with v12.11-fix2. The
-  v12.11-fix3 review fixes need the same calc04 check before the tag.
+- **Tested on:** biome-calc04 (test host), 2026-10-20: v12.11-fix2 researcher
+  checks, then the v12.11-fix3 redeploy (option 3, syntax validated, 14
+  fragments).
 
 ### Fixed (Rprofile v12.11-fix3 — review fixes on v12.11-fix2)
 
