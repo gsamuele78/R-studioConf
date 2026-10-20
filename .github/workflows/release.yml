@@ -1,0 +1,56 @@
+# .github/workflows/release.yml
+# ADR-0006: when main gets a new release section in CHANGELOG.md, tag the
+# merge commit vYYYY.MM.N and publish a GitHub Release with that section as
+# its notes. A release that already exists is left untouched, so re-runs and
+# CHANGELOG edits to old sections do nothing.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'CHANGELOG.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag + GitHub Release from CHANGELOG.md
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Release notes tool regression test
+        run: bash tests/test_release_notes.sh
+
+      - name: Newest release in CHANGELOG.md
+        id: ver
+        run: |
+          set -euo pipefail
+          v="$(bash scripts/tools/release_notes.sh --latest-version)"
+          echo "tag=v${v}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create tag and release if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "${TAG} already released; nothing to do"
+            exit 0
+          fi
+          bash scripts/tools/release_notes.sh "${TAG#v}" > "${RUNNER_TEMP}/notes.md"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            gh release create "${TAG}" --verify-tag --title "${TAG}" --notes-file "${RUNNER_TEMP}/notes.md"
+          else
+            gh release create "${TAG}" --target "${GITHUB_SHA}" --title "${TAG}" --notes-file "${RUNNER_TEMP}/notes.md"
+          fi

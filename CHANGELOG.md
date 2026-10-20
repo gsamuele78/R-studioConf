@@ -5,8 +5,19 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
-Nothing yet. New entries go here; they move into a release section when the
-release is tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
+New entries go here; they move into a release section when the release is
+tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
+
+### Added (release automation)
+
+- `.github/workflows/release.yml`: when `main` gets a new release section in
+  this file, it tags the commit `vYYYY.MM.N` and publishes a GitHub Release
+  whose notes are that section. An existing release is never touched.
+  `scripts/tools/release_notes.sh` extracts the section; regression test
+  `tests/test_release_notes.sh` (R1-R7) runs in `t1-static` and before every
+  release.
+- The first run creates `v2026.10.0` (the tag could not be pushed from the
+  agent session: the git proxy accepts only branch pushes).
 
 ## [2026.10.0] - 2026-10-20 — Rprofile v12.11-fix3
 

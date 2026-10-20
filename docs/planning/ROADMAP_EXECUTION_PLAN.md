@@ -250,9 +250,9 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.1 v12.11-fix code + CI guard | Done in this PR |
 | WS-1.1 host redeploy | **Open: operator** (needs M1) |
 | WS-1.2 v12.11-fix2 parquet sidecar gate + ranger guard + CI guard | Done (PR #35, merged 2026-10-20) |
-| WS-1.2 v12.11-fix3 review fixes (sidecar ties, guard idempotence) | In review (PR #41); deployed on calc04 2026-10-20 |
-| WS-1.1 + WS-1.2 host redeploy (Step 8, release `v2026.10.0`) | calc04 done 2026-10-20; **Open: operator** on calc01-03 (check local changes first, `HOTFIX_REGISTER.md`) |
-| WS-0.4 versioned releases + hotfix register (ADR-0006) | First release `v2026.10.0`; tag after this PR merges |
+| WS-1.2 v12.11-fix3 review fixes (sidecar ties, guard idempotence) | Done (PR #41) |
+| WS-1.1 + WS-1.2 host redeploy (Step 8, release `v2026.10.0`) | Done on calc01-04 2026-10-20 (all on `main` @ 6157e27; greps 1/5/2) |
+| WS-0.4 versioned releases + hotfix register (ADR-0006) | Done (PR #41); release workflow tags `v2026.10.0` on merge of its PR |
 | WS-0.4 Step 8 writes the deployed tag; refuse older template | Open (proposed, separate PR) |
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |

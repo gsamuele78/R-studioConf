@@ -36,7 +36,12 @@ Date: 2026-10-20
    date. A host deploys only from a release tag or from `main`, never from a
    feature branch except the test host during a PR test.
 5. **A GitHub Release is created from each tag.** Its body is the release's
-   `CHANGELOG.md` section.
+   `CHANGELOG.md` section. `.github/workflows/release.yml` does both on every
+   push to `main` that changes `CHANGELOG.md`: it reads the newest release
+   section, and if no release with that tag exists, tags the pushed commit and
+   publishes the release. Nobody tags by hand.
+   `v2026.10.0` points at the commit that merged this workflow; its R and
+   script content equals `6157e27`, which the hosts deployed on 2026-10-20.
 
 ## Consequences
 

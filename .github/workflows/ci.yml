@@ -27,6 +27,8 @@ on:
       - 'docker-deploy/**'
       - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
+      - 'CHANGELOG.md'
   pull_request:
     paths:
       - 'scripts/**'
@@ -41,6 +43,8 @@ on:
       - 'docker-deploy/**'
       - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
+      - 'CHANGELOG.md'
   workflow_dispatch:
   schedule:
     - cron: '0 1 * * *'   # 01:00 UTC — only trigger that runs t2-build-monsters
@@ -77,6 +81,9 @@ jobs:
 
       - name: Exec-bit guard (launcher visibility)
         run: bash tests/check_exec_bits.sh
+
+      - name: Release notes from CHANGELOG.md (ADR-0006, used by release.yml)
+        run: bash tests/test_release_notes.sh
 
       - name: T2/T3 self-contained contract (vendored by Infra-Iam-PKI)
         # docker-deploy/ and kubernetes-deploy/ are copied byte-for-byte by the
