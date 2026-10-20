@@ -151,6 +151,11 @@ tier_deltas:
     delta: "admin_recipients.txt is bind-mounted from config/site/ into the telemetry container instead of being COPYed at build time."
     rationale: "The COPY pointed at a file that does not exist (build failure) and would have baked real e-mail addresses into the image."
     status: "PERMANENT"
+  - id: "TD-T2-07"
+    tier: "T2"
+    delta: "telemetry-api runs on Python 3.14 with a pinned, hashed dependency lock (docker-deploy/scripts/telemetry/requirements.txt). T1 runs the same telemetry_api.py on the host Python (3.12 on Ubuntu 24.04) in /opt/botanical-telemetry with unpinned latest packages (scripts/40_install_telemetry.sh)."
+    rationale: "The image Python is not tied to the host, and Dependabot tracks python:*-slim. The lock makes the image reproducible. T1 being unpinned is a T1 reproducibility gap, recorded here rather than fixed silently: pinning T1 to the same lock changes the production venv and needs its own PR."
+    status: "OPEN — close by pinning T1's venv to the same lock (cp312 wheels exist for every pin)"
 
 # ──────────────────────────────────────────────────────────────
 # ROADMAP — evaluation_pending

@@ -260,6 +260,8 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.4 bspm D-Bus service + profile + Step 7 (ADR-0005) | Done (PR #38) |
 | WS-1.4 hotfix on test host, then production hosts | **Applied** on calc01-04 2026-10-19; install/remove check passed on all four |
 | WS-1.4 remove both domain_users sudo lines | **Applied** on calc01-04 2026-10-19 (`sudo -l -U` confirms) |
+| T2 telemetry-api on Python 3.14 + hashed lock + healthcheck fix (TD-T2-07) | In PR (unblocks Dependabot #40) |
+| TD-T2-07 pin T1 telemetry venv to the same lock | Open |
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |
 | WS-4 T3 | Deferred (gated) |
