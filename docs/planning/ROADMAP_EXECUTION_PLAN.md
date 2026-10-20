@@ -117,7 +117,7 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 4. WS-0.4: Versioned releases (ADR-0006). `CHANGELOG.md` gets one section per
    `vYYYY.MM.N` tag; every in-place hotfix and every host redeploy is recorded in
    `docs/operations/HOTFIX_REGISTER.md`. First release `v2026.10.0` (Rprofile
-   v12.11-fix2). Follow-ups: Step 8 writes the deployed tag on the host so a
+   v12.11-fix3). Follow-ups: Step 8 writes the deployed tag on the host so a
    drift check can compare hosts; Step 8 refuses an older template than the deployed one.
 
 **Validate**
@@ -250,6 +250,7 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.1 v12.11-fix code + CI guard | Done in this PR |
 | WS-1.1 host redeploy | **Open: operator** (needs M1) |
 | WS-1.2 v12.11-fix2 parquet sidecar gate + ranger guard + CI guard | Done (PR #35, merged 2026-10-20) |
+| WS-1.2 v12.11-fix3 review fixes (sidecar ties, guard idempotence) | In review (release PR); calc04 check before the tag |
 | WS-1.1 + WS-1.2 host redeploy (Step 8, release `v2026.10.0`) | calc04 done 2026-10-20; **Open: operator** on calc01-03 (check local changes first, `HOTFIX_REGISTER.md`) |
 | WS-0.4 versioned releases + hotfix register (ADR-0006) | First release `v2026.10.0`; tag after this PR merges |
 | WS-0.4 Step 8 writes the deployed tag; refuse older template | Open (proposed, separate PR) |

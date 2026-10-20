@@ -635,8 +635,10 @@
       if (!file.exists(pq) || !file.exists(path)) return(NULL)
       t_pq  <- file.mtime(pq)
       t_src <- file.mtime(path)
-      if (is.na(t_pq) || is.na(t_src) || t_pq < t_src) {
-        message("BIOME-IO: ignoring stale parquet sidecar (older than ",
+      # Equal mtimes are not proof of freshness: on a filesystem with coarse
+      # timestamps a CSV rewritten after its sidecar can tie with it.
+      if (is.na(t_pq) || is.na(t_src) || t_pq <= t_src) {
+        message("BIOME-IO: ignoring stale parquet sidecar (not newer than ",
                 basename(path), "): ", pq)
         return(NULL)
       }

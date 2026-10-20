@@ -29,7 +29,7 @@ recorded in the ADR-0005 rollout log.
 | biome-calc01 | production | `main` @ unknown | 13 | unknown (pre-`v2026.10.0`) + bspm hotfix | unknown |
 | biome-calc02 | production | `main` @ unknown | 13 | unknown (pre-`v2026.10.0`) + bspm hotfix | unknown |
 | biome-calc03 | production | `main` @ unknown | 15 | unknown (pre-`v2026.10.0`) + bspm hotfix | unknown |
-| biome-calc04 | test | `claude/project-thread-nb902e` @ a0eeda3 (PR #35, same R files as `v2026.10.0`) | 12 (config values, file modes) | v12.11-fix2 | 2026-10-20 |
+| biome-calc04 | test | `claude/project-thread-nb902e` @ a0eeda3 (PR #35; `v2026.10.0` adds the v12.11-fix3 review fixes) | 12 (config values, file modes) | v12.11-fix2 | 2026-10-20 |
 
 Check before any redeploy, as ladmin in `/home/ladmin/configServices/R-studioConf`:
 

@@ -10,6 +10,7 @@
 #   P6 — non-interactive (Rscript, workers)  -> CSV path
 #   P7 — bad path types (NA, vector, "")     -> CSV path, no error
 #   P8 — write.csv after read restores CSV   -> researcher scenario end to end
+#   P9 — sidecar and CSV with equal mtime    -> CSV path (a tie is not proof)
 tpl <- "templates/Rprofile_site.d/50_pkg_hooks.R.template"
 src <- readLines(tpl)
 a <- grep("# >>> biome_parquet_sidecar", src, fixed = TRUE)
@@ -61,6 +62,13 @@ first <- gate(csv)
 write.csv(data.frame(a = 9, b = 8), csv, row.names = FALSE)
 second <- suppressMessages(gate(csv))
 check("P8", identical(first, pq) && is.null(second), "(write.csv invalidates sidecar)")
+
+# P9: coarse-timestamp filesystem, CSV rewritten in the same tick as the sidecar.
+Sys.setFileTime(pq, now); Sys.setFileTime(csv, now)
+msg <- NULL
+r9 <- withCallingHandlers(gate(csv), message = function(m) {
+  msg <<- conditionMessage(m); invokeRestart("muffleMessage") })
+check("P9", is.null(r9) && !is.null(msg) && grepl("stale", msg), "(equal mtime rejected)")
 
 unlink(d, recursive = TRUE)
 if (fails > 0L) { cat(sprintf("  %d test(s) FAILED\n", fails)); quit(status = 1) }

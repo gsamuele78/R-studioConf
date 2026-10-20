@@ -9,7 +9,7 @@ Date: 2026-10-20
 - `CHANGELOG.md` had a single `[Unreleased]` section covering months of work.
   Nothing said which changes a host runs, and the repo had no git tags.
 - The R banner does not identify the code either: `RPROFILE_VERSION` stays
-  `12.11` across v12.11, v12.11-fix and v12.11-fix2 (the fixes do not bump it).
+  `12.11` across v12.11, v12.11-fix, -fix2 and -fix3 (the fixes do not bump it).
   On 2026-10-20, calc04 and a fixed host would have shown the same banner.
 - Hosts are patched in place (`scripts/fix_*_inplace.sh`, `scripts/tools/hotfix_*.sh`)
   before a release absorbs the fix. Which host got which hotfix was recorded only
