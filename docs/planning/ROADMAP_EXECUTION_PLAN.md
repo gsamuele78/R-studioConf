@@ -177,8 +177,9 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 3. `scripts/fix_r_pkg_versions_inplace.sh`: align versions in place, one host at a
    time, test host first (closes most of the 180 version mismatches). calc03 must
    first move to R 4.6.0 (`scripts/pin_r_version.sh`).
-4. Nightly per-host reconciler, run only when no R session is active; test host first
-   (ADR-0004 step 4).
+4. Nightly per-host sync `scripts/biome_pkg_sync.sh` (manifests on biome-store03,
+   JSON, timer 01:00-05:00, only without R sessions); test host first (ADR-0004 step 4,
+   runbook `docs/operations/PKG_SYNC.md`).
 
 **Validate**
 - CI: `tests/test_pkg_host_drift.sh` reproduces the calc01-vs-calc04 case.
@@ -282,7 +283,8 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.3 cross-host drift check (ADR-0004 step 1) | Done in PR (tool + CI test) |
 | WS-1.3 drift baseline on every host | Done 2026-10-15: 426/690 packages drift; calc03 on R 4.5.3 (ADR-0004) |
 | WS-1.3 version alignment tool (`fix_r_pkg_versions_inplace.sh`) | Done in PR; run per host: **Open: operator** |
-| WS-1.3 nightly reconciler (ADR-0004 step 4) | Open (design questions to Jfs 2026-10-20; test host first) |
+| WS-1.3 nightly sync `biome_pkg_sync.sh` (ADR-0004 step 4) | Done in PR (CI S1-S18); setup on biome-store03 + dry-run nights: **Open: operator** |
+| WS-1.3 calc03 to the pinned R 4.6.0 | Open (needed before the sync applies on calc03) |
 | WS-1.4 bspm D-Bus service + profile + Step 7 (ADR-0005) | Done (PR #38) |
 | WS-1.4 hotfix on test host, then production hosts | **Applied** on calc01-04 2026-10-19; install/remove check passed on all four |
 | WS-1.4 remove both domain_users sudo lines | **Applied** on calc01-04 2026-10-19 (`sudo -l -U` confirms) |
