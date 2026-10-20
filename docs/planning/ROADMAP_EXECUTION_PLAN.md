@@ -114,6 +114,11 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 3. WS-0.3: CI `setup-r` reads its R version from the single source of truth
    (`scripts/pin_r_version.sh DEFAULT_R_VERSION`) instead of a literal. Expect fallout:
    some fixtures may behave differently on 4.6. Fix them in T1 tests, never by pinning CI back.
+4. WS-0.4: Versioned releases (ADR-0006). `CHANGELOG.md` gets one section per
+   `vYYYY.MM.N` tag; every in-place hotfix and every host redeploy is recorded in
+   `docs/operations/HOTFIX_REGISTER.md`. First release `v2026.10.0` (Rprofile
+   v12.11-fix2). Follow-ups: Step 8 writes the deployed tag on the host so a
+   drift check can compare hosts; Step 8 refuses an older template than the deployed one.
 
 **Validate**
 - `make generate-check` and `.ai/validate.sh --ci` are green on `main`.
@@ -244,8 +249,10 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | Open-PR triage (#12, #13, #14, #23) | Done in this PR |
 | WS-1.1 v12.11-fix code + CI guard | Done in this PR |
 | WS-1.1 host redeploy | **Open: operator** (needs M1) |
-| WS-1.2 v12.11-fix2 parquet sidecar gate + CI guard | In review (draft PR) |
-| WS-1.2 host redeploy | **Open: operator** (with WS-1.1) |
+| WS-1.2 v12.11-fix2 parquet sidecar gate + ranger guard + CI guard | Done (PR #35, merged 2026-10-20) |
+| WS-1.1 + WS-1.2 host redeploy (Step 8, release `v2026.10.0`) | calc04 done 2026-10-20; **Open: operator** on calc01-03 (check local changes first, `HOTFIX_REGISTER.md`) |
+| WS-0.4 versioned releases + hotfix register (ADR-0006) | First release `v2026.10.0`; tag after this PR merges |
+| WS-0.4 Step 8 writes the deployed tag; refuse older template | Open (proposed, separate PR) |
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |
