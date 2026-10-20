@@ -26,10 +26,15 @@ recorded in the ADR-0005 rollout log.
 
 | Host | Role | Checkout (branch @ commit) | Local modified files | R profile deployed | Last Step 8 deploy |
 |---|---|---|---|---|---|
-| biome-calc01 | production | `main` @ 3df2720 (PR #38) | 12: 4 config files with site values, 8 scripts with mode-only changes | v12.11 + bspm hotfix | unknown, before 2026-10-20 |
-| biome-calc02 | production | `main` @ 3df2720 (PR #38) | 12: same as calc01 | v12.11 + bspm hotfix | unknown, before 2026-10-20 |
-| biome-calc03 | production | `main` @ 3df2720 (PR #38) | 12: same as calc01; also untracked `src/biome_core_rust/target/` (dormant, left alone) | v12.11 + bspm hotfix | unknown, before 2026-10-20 |
-| biome-calc04 | test | `claude/project-thread-nb902e` @ e727888 (PR #41, the `v2026.10.0` content) | 12: config values, file modes | v12.11-fix3 | 2026-10-20 |
+| biome-calc01 | production | `main` @ 6157e27 | 13: site values in 4 `config/*.vars.conf`, mode-only changes on 8 scripts, untracked `rstudio_download_page.html` | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
+| biome-calc02 | production | `main` @ 6157e27 | 13: same as calc01 | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
+| biome-calc03 | production | `main` @ 6157e27 | 15: same as calc01, plus untracked `src/biome_core_rust/Cargo.lock` and `target/` (dormant, left alone) | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
+| biome-calc04 | test | `main` @ 6157e27 | 16: same as calc01, plus untracked `patch.sh`, `scripts/999_postmortem_forensics.sh` and its `.bak` (local files, not in the repo) | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
+
+Deploy check used on 2026-10-20 (each host): `grep -c 'not newer than'
+/etc/R/Rprofile_site.d/50_pkg_hooks.R` = 1, `grep -c biome_ranger_mtry_guard
+/etc/R/Rprofile.site` = 5, `grep -c 'bspm.sudo = FALSE' /etc/R/Rprofile.site` = 2.
+Backup before deploy: `/root/etc-R-before-v2026.10.0-<ts>.tgz`.
 
 Check before any redeploy, as ladmin in `/home/ladmin/configServices/R-studioConf`:
 
