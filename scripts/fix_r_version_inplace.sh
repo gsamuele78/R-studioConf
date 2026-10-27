@@ -9,16 +9,24 @@ set -euo pipefail
 # Why: on 2026-10-27 biome-calc03 ran R 4.5.3 while the pin
 # (config/pin_r_version.vars.conf, DEFAULT_R_VERSION) and calc01/02/04 are on
 # 4.6.0. scripts/pin_r_version.sh only writes the apt pin; it installs
-# nothing. And the CRAN repository no longer offers 4.6.0 (apt shows 4.6.1 as
-# candidate), so the .debs come from a host that has them: --export-debs on
-# calc01, --debs DIR on calc03.
+# nothing.
+#
+# Lesson from calc03 (2026-10-27): R 4.6 removed SETLENGTH from the C API, and
+# the r-cran-rlang and r-cran-data.table builds installed under 4.5 called it.
+# After the core upgrade 136 packages stopped loading (rlang and everything
+# that imports it). Upgrading the r-cran-* packages to the repository builds
+# fixed all 133 apt-installed ones. So on a minor-version change (4.5 -> 4.6)
+# the plan now upgrades, in the same apt transaction, every installed
+# r-cran-* package the repository has a newer build of. --core-only skips
+# that (not recommended across a minor version).
 #
 # Steps:
-#   calc01: sudo bash scripts/fix_r_version_inplace.sh --export-debs /root/r-4.6.0-debs
-#           (copy the directory to calc03, e.g. scp -r)
-#   calc03: sudo bash scripts/fix_r_version_inplace.sh --debs /root/r-4.6.0-debs           # plan
-#           sudo bash scripts/fix_r_version_inplace.sh --debs /root/r-4.6.0-debs --commit  # apply
-#   Without --debs the target version is taken from the apt repositories.
+#   sudo bash scripts/fix_r_version_inplace.sh            # plan
+#   sudo bash scripts/fix_r_version_inplace.sh --commit   # apply
+#   If the repository no longer offers the pinned version, take the .debs
+#   from a host that runs it: --export-debs DIR there, --debs DIR here. When
+#   the repository offers the same version, apt may download it from there
+#   instead of using DIR (same version, signed repository); the plan says so.
 #
 # Safety:
 #   * dry-run by default (plan, apt-get -s). --commit applies.
@@ -36,7 +44,9 @@ set -euo pipefail
 #     unless --no-restart.
 #   * user libraries (~/R/x86_64-pc-linux-gnu-library/X.Y) are never touched
 #     (HARD RULE 17); a minor-version change only reports how many users
-#     have packages for the old X.Y alone.
+#     have packages (a non-empty library) for the old X.Y alone.
+#   * the load test refuses the change (exit 3) when it cannot list or load
+#     any package before it: without a baseline nothing can be measured.
 #   * --rollback DIR reinstalls the saved .debs (apt-get --allow-downgrades)
 #     and restarts rstudio-server. The pin would bring R back to the target
 #     on the next apt upgrade: hold the packages if the rollback must stay.
@@ -47,7 +57,7 @@ set -euo pipefail
 #   sudo bash scripts/fix_r_version_inplace.sh --rollback DIR
 #   sudo bash scripts/fix_r_version_inplace.sh --export-debs DIR
 #   Options: --no-update  --no-load-test  --no-restart  --allow-downgrade
-#            --accept-partial-rollback  -h|--help
+#            --accept-partial-rollback  --core-only  -h|--help
 #   Env:     FIX_R_BACKUP_ROOT  (default /var/backups/biome-calc)
 #            FIX_R_APT_ARCHIVES (default /var/cache/apt/archives)
 #            FIX_R_USER_LIB_ROOT (default /nfs/home)
@@ -93,9 +103,9 @@ LOAD_BATCH="${FIX_R_LOAD_BATCH:-40}"
 APT_OPTS=(-q -o DPkg::Lock::Timeout=600)
 
 MODE="dry-run"; DIR_ARG=""; DEBS_DIR=""
-DO_UPDATE=true; LOAD_TEST=true; RESTART=true; ALLOW_DOWNGRADE=false; ACCEPT_PARTIAL=false
+DO_UPDATE=true; LOAD_TEST=true; RESTART=true; ALLOW_DOWNGRADE=false; ACCEPT_PARTIAL=false; CORE_ONLY=false
 
-usage() { sed -n '2,62p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^# *5 applied/p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -111,6 +121,7 @@ while [[ $# -gt 0 ]]; do
     --no-restart)      RESTART=false; shift ;;
     --allow-downgrade) ALLOW_DOWNGRADE=true; shift ;;
     --accept-partial-rollback) ACCEPT_PARTIAL=true; shift ;;
+    --core-only)       CORE_ONLY=true; shift ;;
     -h|--help)         usage; exit 0 ;;
     *) log_error "unknown argument: $1 (see --help)"; exit 2 ;;
   esac
@@ -165,9 +176,9 @@ can_save_deb() {
 }
 
 # Load every installed R package in a fresh Rscript per batch; writes
-# "pkg<TAB>OK|FAIL" to OUT.
+# "pkg<TAB>OK|FAIL" to OUT and prints one progress line per batch.
 load_test() {
-  local out="$1" rs="$2"
+  local out="$1" rs="$2" i n nb pk=()
   cat > "$rs" <<'REOF'
 for (p in commandArgs(trailingOnly = TRUE)) {
   ok <- tryCatch({ suppressMessages(suppressWarnings(loadNamespace(p))); "OK" },
@@ -175,10 +186,15 @@ for (p in commandArgs(trailingOnly = TRUE)) {
   cat(p, "\t", ok, "\n", sep = "")
 }
 REOF
-  Rscript --vanilla -e 'cat(unique(rownames(installed.packages(lib.loc = .libPaths()))), sep = "\n")' 2>/dev/null \
-    | LC_ALL=C sort -u \
-    | xargs -r -n "$LOAD_BATCH" timeout 900 Rscript --vanilla "$rs" 2>/dev/null \
-    | LC_ALL=C sort > "$out" || true
+  mapfile -t pk < <(Rscript --vanilla -e 'cat(unique(rownames(installed.packages(lib.loc = .libPaths()))), sep = "\n")' 2>/dev/null \
+    | LC_ALL=C sort -u)
+  n=${#pk[@]}; nb=$(( (n + LOAD_BATCH - 1) / LOAD_BATCH ))
+  : > "${out}.tmp"
+  for (( i = 0; i < n; i += LOAD_BATCH )); do
+    log_info "  load test batch $(( i / LOAD_BATCH + 1 ))/${nb} (${pk[i]} ...)"
+    timeout 900 Rscript --vanilla "$rs" "${pk[@]:i:LOAD_BATCH}" 2>/dev/null >> "${out}.tmp" || true
+  done
+  LC_ALL=C sort "${out}.tmp" > "$out"; rm -f "${out}.tmp"
 }
 
 # ── export: write the installed core .debs for another host ────────────────
@@ -238,7 +254,7 @@ if [[ "$(upstream "$CUR")" == "$TARGET" ]]; then
   log_ok "R is already at the pinned ${TARGET}: nothing to do"; exit 0
 fi
 
-if [[ "$DO_UPDATE" == true && -z "$DEBS_DIR" ]]; then
+if [[ "$DO_UPDATE" == true ]]; then
   if is_root; then apt-get update "${APT_OPTS[@]}" >/dev/null || { log_error "apt-get update failed"; exit 1; }
   else log_warn "not root: using the existing apt index"; fi
 fi
@@ -249,6 +265,7 @@ if [[ -n "$held" ]]; then
 fi
 
 INSTALL=()
+IN_REPO=()
 PLAN=""
 for p in "${CORE_PKGS[@]}"; do
   old="$(pkg_version "$p")"; [[ -n "$old" ]] || continue
@@ -257,6 +274,9 @@ for p in "${CORE_PKGS[@]}"; do
     if [[ ${#f[@]} -ne 1 ]]; then log_error "${DEBS_DIR}: expected one ${p}_${TARGET}-*.deb, found ${#f[@]} — refused"; exit 3; fi
     new="$(dpkg-deb -f "${f[0]}" Version)"
     INSTALL+=("$(cd "$(dirname "${f[0]}")" && pwd)/$(basename "${f[0]}")")
+    if apt-cache madison "$p" 2>/dev/null | awk -F'|' -v v="$new" '{gsub(/ /,"",$2)} $2==v {f=1} END{exit !f}'; then
+      IN_REPO+=("$p")
+    fi
   else
     new="$(apt-cache madison "$p" 2>/dev/null | awk -F'|' '{gsub(/ /,"",$2); print $2}' \
            | grep -E "^([0-9]+:)?${TARGET//./\\.}-" | sort -V | tail -1 || true)"
@@ -275,6 +295,33 @@ if [[ -n "$DEBS_DIR" && -f "${DEBS_DIR}/SHA256SUMS" ]]; then
   log_ok "checksums of ${DEBS_DIR} verified"
 fi
 awk -F'\t' 'NF {printf "  %-16s %s -> %s\n", $1, $2, $3}' <<<"$PLAN"
+if [[ ${#IN_REPO[@]} -gt 0 ]]; then
+  log_info "the repository offers the same version of ${IN_REPO[*]}: apt may download it from there instead of ${DEBS_DIR} (same version)"
+fi
+
+# A minor-version change needs r-cran-* builds for the new R: compiled
+# packages built for the old one can call C entry points the new R removed
+# (calc03: SETLENGTH, rlang and data.table). Upgrade them in the same apt
+# transaction.
+RCRAN_UPG=""
+if [[ "$(minor "$CUR")" != "$(minor "$TARGET")" ]]; then
+  mapfile -t RCRAN < <(dpkg-query -W -f='${db:Status-Abbrev}\t${Package}\n' 'r-cran-*' 2>/dev/null | awk -F'\t' '$1 ~ /^ii/ {print $2}' | LC_ALL=C sort)
+  if [[ ${#RCRAN[@]} -gt 0 ]]; then
+    RSIM="$(apt-get -s "${APT_OPTS[@]}" install --only-upgrade "${RCRAN[@]}" 2>&1)" \
+      || { log_error "apt-get simulation of the r-cran-* upgrade failed:"; printf '%s\n' "$RSIM" >&2; exit 1; }
+    RCRAN_UPG="$(awk '$1=="Inst" && $2 ~ /^r-cran-/ && $3 ~ /^\[/ {print $2}' <<<"$RSIM")"
+  fi
+  n_rc=0; [[ -n "$RCRAN_UPG" ]] && n_rc="$(wc -l <<<"$RCRAN_UPG")"
+  if [[ "$CORE_ONLY" == true ]]; then
+    log_warn "--core-only: ${n_rc} installed r-cran-* package(s) have a newer build and stay as they are; compiled ones built for R $(minor "$CUR") may not load under $(minor "$TARGET")"
+    RCRAN_UPG=""
+  elif (( n_rc > 0 )); then
+    log_info "R $(minor "$CUR") -> $(minor "$TARGET"): ${n_rc} installed r-cran-* package(s) are upgraded to the repository build in the same transaction"
+    mapfile -t -O "${#INSTALL[@]}" INSTALL <<<"$RCRAN_UPG"
+  else
+    log_info "R $(minor "$CUR") -> $(minor "$TARGET"): every installed r-cran-* package is already at the repository build"
+  fi
+fi
 
 DOWN=false
 dpkg --compare-versions "$CUR" gt "$(awk -F'\t' '$1=="r-base-core"{print $3}' <<<"$PLAN")" && DOWN=true
@@ -315,11 +362,16 @@ if [[ "$(minor "$CUR")" != "$(minor "$TARGET")" ]]; then
   old_m="$(minor "$CUR")"; new_m="$(minor "$TARGET")"; only_old=0; total=0
   shopt -s nullglob
   for d in "${USER_LIB_ROOT}"/*/R/x86_64-pc-linux-gnu-library/"${old_m}"; do
-    total=$((total + 1)); [[ -d "${d%/*}/${new_m}" ]] || only_old=$((only_old + 1))
+    [[ -n "$(ls -A "$d" 2>/dev/null)" ]] || continue   # empty library: nothing to lose
+    total=$((total + 1)); [[ -n "$(ls -A "${d%/*}/${new_m}" 2>/dev/null)" ]] || only_old=$((only_old + 1))
   done
   shopt -u nullglob
-  log_warn "R ${old_m} -> ${new_m}: user libraries are per X.Y. ${total} user(s) have packages for ${old_m}, ${only_old} of them none for ${new_m}."
-  log_warn "R ${new_m} will not see their ${old_m} packages; they reinstall them (bspm installs binaries). User libraries are not touched."
+  if (( only_old > 0 )); then
+    log_warn "R ${old_m} -> ${new_m}: user libraries are per X.Y. ${total} user(s) have packages for ${old_m}, ${only_old} of them none for ${new_m}."
+    log_warn "R ${new_m} will not see their ${old_m} packages; they reinstall them (bspm installs binaries). User libraries are not touched."
+  else
+    log_info "R ${old_m} -> ${new_m}: no user has packages for ${old_m} alone (${total} non-empty ${old_m} user libraries)"
+  fi
 fi
 
 read -r s r <<<"$(sessions_active)"
@@ -356,7 +408,11 @@ fi
 if [[ "$LOAD_TEST" == true ]]; then
   log_info "load test before the change (every installed R package; this takes a few minutes)"
   load_test "${BK}/load_before.tsv" "${BK}/load_test.R"
-  log_info "before: $(grep -c $'\tOK$' "${BK}/load_before.tsv" || true) load, $(grep -c $'\tFAIL$' "${BK}/load_before.tsv" || true) fail"
+  n_ok_before="$(grep -c $'\tOK$' "${BK}/load_before.tsv" || true)"
+  log_info "before: ${n_ok_before} load, $(grep -c $'\tFAIL$' "${BK}/load_before.tsv" || true) fail"
+  if (( n_ok_before == 0 )); then
+    log_error "the load test loaded no package (Rscript broken?): nothing to measure against — refused, host unchanged. Backup dir: ${BK}"; exit 3
+  fi
 fi
 
 read -r s r <<<"$(sessions_active)"
