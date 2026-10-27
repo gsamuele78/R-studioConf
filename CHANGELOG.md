@@ -8,6 +8,27 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Added (in-place R core upgrade to the pin)
+
+- `scripts/fix_r_version_inplace.sh`: brings one host's `r-base`, `r-base-core`,
+  `r-base-dev` and `r-recommended` to `DEFAULT_R_VERSION`
+  (`config/pin_r_version.vars.conf`, HARD RULE 19). For biome-calc03, which ran
+  R 4.5.3 while calc01/02/04 run 4.6.0. `scripts/pin_r_version.sh` only writes the
+  apt pin. The CRAN repository no longer offers 4.6.0 (apt's candidate is
+  4.6.1), so `--export-debs DIR` on a host that runs the pinned R writes its
+  `.deb` files plus `SHA256SUMS` (apt cache, repository, or `dpkg-repack`), and
+  `--debs DIR` installs them on the target host. Dry-run by default. Refuses with
+  host unchanged (exit 3) on running R sessions, held packages, a removal in the
+  plan, a downgrade without `--allow-downgrade`, a checksum mismatch, or an old
+  `.deb` that cannot be saved. Saves the old `.deb` files, loads every installed R
+  package before and after (exit 5 when one stops loading), restarts
+  rstudio-server, reports users whose personal library exists only for the old
+  R X.Y (never touched). `--rollback DIR` reinstalls the old version. Tested by
+  `tests/test_fix_r_version.sh` (R1-R14, stubbed apt/dpkg/R) in `t1-static`.
+  Decision (Jfs, 2026-10-27): 4.6.0 from calc01 to calc03 only; moving the pin to
+  4.6.1 is a later, separate change (a newly built host cannot install 4.6.0
+  from the repository).
+
 ## [2026.10.1] - 2026-10-20 — Rprofile v12.11-fix3
 
 - **R profile shipped:** v12.11-fix3, unchanged from `v2026.10.0`. No R file changes.
