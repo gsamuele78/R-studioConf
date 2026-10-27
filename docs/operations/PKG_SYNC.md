@@ -132,6 +132,20 @@ Metric: `--status` prints packages that differ in version, the sum of missing
 packages and the number of R versions. Target 0 / 0 / 1. Baseline 2026-10-15
 (`99_check_pkg_host_drift.sh`): 426 of 690 packages drift.
 
+Baseline from `--status`, 2026-10-27 14:28 UTC, all hosts in dry-run, after the
+calc03 R upgrade: 162 packages differ in version, 725 missing (sum over hosts),
+1 R version (4.6.0).
+
+| Host | r-cran-* | missing | not apt |
+|---|---|---|---|
+| biome-calc01 | 667 | 26 | 9 |
+| biome-calc02 | 513 | 180 | 11 |
+| biome-calc03 | 427 | 266 | 12 |
+| biome-calc04 | 440 | 253 | 12 |
+
+With `PKG_SYNC_MAX_NEW=50`, calc03 needs about six nights in `apply` to close
+its gap.
+
 ## Manual run and rollback
 
 ```bash
