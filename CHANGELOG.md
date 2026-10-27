@@ -51,6 +51,9 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   others read, sets mode 755 without setgid, writes the site config in dry-run
   if it does not exist, then runs `--check-dir`. Idempotent. Tests S20a-c.
   Applied by hand on 2026-10-27; `--check-dir` passed on calc01-04.
+- `docs/operations/PKG_SYNC.md` Rollout: the commands for the morning checks,
+  switching a host to `apply`, the researcher test and the way back to `dry-run`.
+  Timer installed on calc01-04 on 2026-10-27, in `dry-run`.
 
 ### Added (operations — cross-host package drift, ADR-0004)
 

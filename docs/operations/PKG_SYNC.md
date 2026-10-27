@@ -120,13 +120,57 @@ else does.
 
 ## Rollout
 
-1. All four hosts in `dry-run` for at least two nights. Check each morning:
-   `bash scripts/biome_pkg_sync.sh --status` and
-   `journalctl -u biome-pkg-sync --since yesterday`.
-2. calc03 must be on the pinned R first; until then it is refused (it still
-   publishes its manifest).
-3. calc04 to `apply`. Next morning: `--status`, then a researcher test on calc04.
-4. calc01-03 to `apply`, one per night.
+State on 2026-10-27: shared directory ready, `--check-dir` passed on calc01-04,
+timer installed on all four in `dry-run` (first run 2026-10-28 03:00 CET).
+calc03 is on the pinned R since the same day.
+
+1. **Two nights in `dry-run` on all four hosts.** Each morning, on any host:
+
+   ```bash
+   cd /home/ladmin/configServices/R-studioConf
+   bash scripts/biome_pkg_sync.sh --status                         # fleet view, MODE column
+   sudo journalctl -u biome-pkg-sync --since yesterday | tail -40  # this host's runs
+   sudo jq '{finished_at, mode, status, note, n: (.installed_or_planned | length)}' /var/lib/biome-pkg-sync/last_report.json
+   jq -r '.host + ": " + .status + " " + (.note // "")' /nfs/home/.biome-pkg-sync/reports/*.json
+   ```
+
+   Check: every host has a manifest from last night (MANIFEST column), status
+   `dry-run` (or `deferred` when sessions ran past 04:45), and the planned
+   packages make sense (no package you would not want on every host; exclude
+   it in `policy.json` otherwise, see below).
+2. **calc04 (test host) to `apply`**, the evening before:
+
+   ```bash
+   sudo sed -i 's/^PKG_SYNC_MODE=.*/PKG_SYNC_MODE="apply"/' config/site/pkg_sync.site.vars.conf
+   sudo bash scripts/biome_pkg_sync.sh --plan    # what tonight will do, changes nothing
+   ```
+
+   The next morning on calc04:
+
+   ```bash
+   sudo jq '{status, note, version_alignment, backup}' /var/lib/biome-pkg-sync/last_report.json
+   sudo cat "$(sudo jq -r .backup /var/lib/biome-pkg-sync/last_report.json)/align_backup"  # alignment backup dir
+   bash scripts/biome_pkg_sync.sh --status       # calc04 MISSING should have dropped
+   ```
+
+   Then a researcher test on calc04: log in to RStudio and load a few packages
+   that arrived overnight (`library(<pkg>)`) plus `library(tidyverse)`. Also run
+   `Rscript --vanilla -e 'for (p in rownames(installed.packages())) tryCatch(loadNamespace(p), error = function(e) cat("FAIL", p, conditionMessage(e), "\n"))'`
+   and compare with the previous day (only already-failing packages such as
+   `loadeR` may appear).
+   If something broke:
+
+   ```bash
+   sudo sed -i 's/^PKG_SYNC_MODE=.*/PKG_SYNC_MODE="dry-run"/' config/site/pkg_sync.site.vars.conf
+   sudo bash scripts/biome_pkg_sync.sh --rollback /var/backups/biome-calc/r-pkg-sync-<ts>
+   sudo bash scripts/fix_r_pkg_versions_inplace.sh --rollback /var/backups/biome-calc/r-pkg-align-<ts>
+   ```
+
+3. **calc01-03 to `apply`, one host per night**, same commands and checks.
+   calc03 first: it is the furthest behind (266 missing).
+4. **Done** when `--status` reads 0 versions differing, 0 missing, 1 R version,
+   for several nights in a row. To stop the job at any time:
+   `sudo bash scripts/biome_pkg_sync.sh --remove-timer`.
 
 Metric: `--status` prints packages that differ in version, the sum of missing
 packages and the number of R versions. Target 0 / 0 / 1. Baseline 2026-10-15
