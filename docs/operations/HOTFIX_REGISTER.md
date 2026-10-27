@@ -13,10 +13,12 @@ Until then, redeploying an older release undoes the hotfix.
 
 | Hotfix script | What it fixes | Absorbed in | Applied on | Backup / rollback |
 |---|---|---|---|---|
+| `scripts/fix_r_version_inplace.sh` | biome-calc03 on R 4.5.3 while the pin and calc01/02/04 are on 4.6.0 | not absorbed: a new host installs R from the pin, an existing host needs this script | not applied yet (planned: calc03, with `.deb` files exported from calc01) | `/var/backups/biome-calc/r-version-<ts>/`, `--rollback DIR` |
 | `scripts/fix_bspm_dbus_inplace.sh` | `install.packages()` through bspm's D-Bus service instead of sudo; removes the root escalation (ADR-0005) | `v2026.10.0` (Step 7 + template section 0) | biome-calc01, 02, 03, 04 on 2026-10-19; calc04 again on 2026-10-20 after the stale-checkout redeploy | `/root/bspm-dbus-hotfix-<ts>/`, `--rollback DIR` |
 | `scripts/fix_login_script_rlibs_inplace.sh` | login script stops writing `R_LIBS_USER` into `~/.Renviron` | before `v2026.10.0` | unknown, to check | see script `--help` |
 | `scripts/fix_pam_segfault_inplace.sh` | SIGSEGV from `libpam-krb5` / `biome-localguard` PAM profile | before `v2026.10.0` | unknown, to check | see script `--help` |
 | `scripts/tools/hotfix_smtp_site_overrides.sh` | deployed `setup_nodes.vars.conf` missing the site SMTP keys | before `v2026.10.0` | unknown, to check | see script `--help` |
+| `scripts/fix_r_pkg_versions_inplace.sh` | upgrades the host's installed `r-cran-*` packages to the repository version, so hosts converge (ADR-0004 step 3) | not absorbed: run per host (later the nightly reconciler, ADR-0004 step 4) | none yet | `/var/backups/biome-calc/r-pkg-align-<ts>/`, `--rollback DIR` |
 
 Manual changes on the hosts (the two `domain_users` sudo lines commented out on
 calc01-04, 2026-10-19) are not scripts, so no release absorbs them; they are
@@ -26,12 +28,18 @@ recorded in the ADR-0005 rollout log.
 
 | Host | Role | Checkout (branch @ commit) | Local modified files | R profile deployed | Last Step 8 deploy |
 |---|---|---|---|---|---|
-| biome-calc01 | production | `main` @ 6157e27 | 13: site values in 4 `config/*.vars.conf`, mode-only changes on 8 scripts, untracked `rstudio_download_page.html` | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
-| biome-calc02 | production | `main` @ 6157e27 | 13: same as calc01 | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
-| biome-calc03 | production | `main` @ 6157e27 | 15: same as calc01, plus untracked `src/biome_core_rust/Cargo.lock` and `target/` (dormant, left alone) | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
-| biome-calc04 | test | `main` @ 6157e27 | 16: same as calc01, plus untracked `patch.sh`, `scripts/999_postmortem_forensics.sh` and its `.bak` (local files, not in the repo) | v12.11-fix3 (`v2026.10.0`) | 2026-10-20 |
+| biome-calc01 | production | `main` @ af3324d (`v2026.10.1`) | 13: site values in 4 `config/*.vars.conf`, mode-only changes on 8 scripts, untracked `rstudio_download_page.html` | v12.11-fix3 (`v2026.10.1`) | 2026-10-20, stamp written |
+| biome-calc02 | production | `main` @ af3324d (`v2026.10.1`) | 13: same as calc01 | v12.11-fix3 (`v2026.10.1`) | 2026-10-20, stamp written |
+| biome-calc03 | production | `main` @ af3324d (`v2026.10.1`) | 15: same as calc01, plus untracked `src/biome_core_rust/Cargo.lock` and `target/` (dormant, left alone) | v12.11-fix3 (`v2026.10.1`) | 2026-10-20, stamp written |
+| biome-calc04 | test | `main` @ af3324d (`v2026.10.1`) | 16: same as calc01, plus untracked `patch.sh`, `scripts/999_postmortem_forensics.sh` and its `.bak` (local files, not in the repo) | v12.11-fix3 (`v2026.10.1`) | 2026-10-20, stamp written |
 
-Deploy check used on 2026-10-20 (each host): `grep -c 'not newer than'
+`v2026.10.1` deploy, 2026-10-20 13:39-13:42 CEST, option 3 on calc04 then calc03,
+02, 01: `/etc/biome-calc/deployed_release` on each host reads
+`release=v2026.10.1-dirty` (site values in `config/`), `commit=af3324d`,
+`branch=main`, `templates_clean=true`, `override=false`, `previous_commit=none`
+(first stamped deploy). R files are the same as `v2026.10.0`.
+
+Deploy check used for `v2026.10.0` on 2026-10-20 (each host): `grep -c 'not newer than'
 /etc/R/Rprofile_site.d/50_pkg_hooks.R` = 1, `grep -c biome_ranger_mtry_guard
 /etc/R/Rprofile.site` = 5, `grep -c 'bspm.sudo = FALSE' /etc/R/Rprofile.site` = 2.
 Backup before deploy: `/root/etc-R-before-v2026.10.0-<ts>.tgz`.

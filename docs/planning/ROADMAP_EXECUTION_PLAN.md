@@ -163,6 +163,27 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
   it never changes `mtry` (HC-17, decision by Jfs 2026-10-15). Open: package
   versions on the researcher's other server, to explain why it ran there.
 
+### WS-1.3: Cross-host R package drift (ADR-0004)
+
+**Audit**
+- 2026-10-15: `biome-calc01` has mlr3 1.8.0 / mlr3spatiotempcv 2.3.5 in
+  `/usr/lib/R/site-library`, `biome-calc04` has neither; future 1.76.0 vs 1.70.0.
+  Cause: bspm installs into the local system library of one host only.
+
+**Implement**
+1. `scripts/99_check_pkg_host_drift.sh` (read-only snapshot + compare). Done.
+2. Run it on every host; record the drift count as the baseline metric. Done 2026-10-15:
+   426 of 690 packages drift (246 missing, 180 version); calc03 runs R 4.5.3, not the 4.6.0 pin.
+3. `scripts/fix_r_pkg_versions_inplace.sh`: align versions in place, one host at a
+   time, test host first (closes most of the 180 version mismatches). calc03 must
+   first move to R 4.6.0 (`scripts/pin_r_version.sh`).
+4. Nightly per-host sync `scripts/biome_pkg_sync.sh` (manifests on biome-store03,
+   JSON, timer every 15 min, changes 03:30-05:00, only without R sessions); test host first (ADR-0004 step 4,
+   runbook `docs/operations/PKG_SYNC.md`).
+
+**Validate**
+- CI: `tests/test_pkg_host_drift.sh` reproduces the calc01-vs-calc04 case.
+- Hosts: drift count `0` after each reconcile run.
 
 ### WS-1.4: bspm installs without sudo (ADR-0005)
 
@@ -254,15 +275,20 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.2 v12.11-fix3 review fixes (sidecar ties, guard idempotence) | Done (PR #41) |
 | WS-1.1 + WS-1.2 host redeploy (Step 8, release `v2026.10.0`) | Done on calc01-04 2026-10-20 (all on `main` @ 6157e27; greps 1/5/2) |
 | WS-0.4 versioned releases + hotfix register (ADR-0006) | Done (PR #41); release workflow tags `v2026.10.0` on merge of its PR |
-| WS-0.4 Step 8 writes the deployed tag; refuse older template | In review (release `v2026.10.1`); `--allow-downgrade` for rollback |
+| WS-0.4 Step 8 writes the deployed tag; refuse older template | Done (PR #43, release `v2026.10.1`, deployed on calc01-04 2026-10-20); `--allow-downgrade` for rollback |
 | WS-0.4 drift check reading the stamps of all hosts | Open |
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |
+| WS-1.3 cross-host drift check (ADR-0004 step 1) | Done in PR (tool + CI test) |
+| WS-1.3 drift baseline on every host | Done 2026-10-15: 426/690 packages drift; calc03 on R 4.5.3 (ADR-0004) |
+| WS-1.3 version alignment tool (`fix_r_pkg_versions_inplace.sh`) | Done in PR; run per host: **Open: operator** |
+| WS-1.3 nightly sync `biome_pkg_sync.sh` (ADR-0004 step 4) | Done in PR (CI S1-S18); setup on biome-store03 + dry-run nights: **Open: operator** |
+| WS-1.3 calc03 to the pinned R 4.6.0 | Open (needed before the sync applies on calc03) |
 | WS-1.4 bspm D-Bus service + profile + Step 7 (ADR-0005) | Done (PR #38) |
 | WS-1.4 hotfix on test host, then production hosts | **Applied** on calc01-04 2026-10-19; install/remove check passed on all four |
 | WS-1.4 remove both domain_users sudo lines | **Applied** on calc01-04 2026-10-19 (`sudo -l -U` confirms) |
-| T2 telemetry-api on Python 3.14 + hashed lock + healthcheck fix (TD-T2-08) | In PR (unblocks Dependabot #40) |
+| T2 telemetry-api on Python 3.14 + hashed lock + healthcheck fix (TD-T2-08) | Done (PR #44); unblocks Dependabot #47 |
 | TD-T2-08 pin T1 telemetry venv to the same lock | Open |
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |

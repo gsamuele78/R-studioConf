@@ -101,6 +101,9 @@ jobs:
       - name: bspm D-Bus hotfix (ADR-0005; policy, apply, idempotency, rollback, refusals)
         run: bash tests/test_fix_bspm_dbus.sh
 
+      - name: In-place R core upgrade to the pinned version (export, plan, commit, load test, rollback)
+        run: bash tests/test_fix_r_version.sh
+
       - name: bspm D-Bus policy on a real dbus-daemon (who may install/remove)
         # Loads the rendered policy into a private dbus-daemon with the distro
         # default policy; root needed to run calls as throwaway users.
@@ -109,6 +112,18 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends dbus-daemon python3-gi
           sudo bash tests/test_bspm_dbus_policy_live.sh
+
+      - name: Cross-host package drift check (ADR-0004)
+        # Fake library trees under mktemp; reproduces calc01-vs-calc04 drift.
+        run: bash tests/test_pkg_host_drift.sh
+
+      - name: In-place r-cran-* version alignment (ADR-0004 step 3)
+        # apt-get/dpkg-query/pgrep/id stubbed on PATH; never touches apt or /var.
+        run: bash tests/test_fix_r_pkg_versions.sh
+
+      - name: Nightly R package sync across hosts (ADR-0004 step 4)
+        # apt/dpkg/pgrep/systemctl stubbed; shared dir and fix script are fakes under mktemp.
+        run: bash tests/test_biome_pkg_sync.sh
 
       - name: Root-guard contract (non-root must refuse, not silently run)
         run: |

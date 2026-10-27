@@ -36,6 +36,60 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   It now probes `/api/v1/health` with the image's own Python. T1 (systemd) and
   T3 (`httpGet` probe) are not affected.
 
+### Added (operations — cross-host package drift, ADR-0004)
+
+- `scripts/99_check_pkg_host_drift.sh`: read-only check that R hosts have the same
+  packages. `--snapshot` lists the system libraries of one host from their
+  `DESCRIPTION` files (no R start, no profile, no NFS); `--compare` diffs two or
+  more snapshots and exits `1` on a missing package, version or R version
+  difference. Found case: mlr3 on biome-calc01 only, future 1.76.0 vs 1.70.0,
+  because bspm installs into one host's local library.
+- `docs/adr/0004-replicated-local-r-libraries.md`: libraries stay on local disk
+  (no return of the v12.4 NFS storm) and their contents are replicated; this
+  check is the first, measurable step. Baseline 2026-10-15: 426 of 690 packages
+  drift across calc01-04.
+- CI: `tests/test_pkg_host_drift.sh` in `t1-static`.
+- `scripts/fix_r_pkg_versions_inplace.sh` (ADR-0004 step 3): upgrades the
+  `r-cran-*` packages already installed on one host to the repository version,
+  so hosts converge. Dry-run by default; `--commit` refuses a plan that removes
+  packages or touches `r-base*` (R pin), refuses while R/RStudio sessions run,
+  and saves every old `.deb` before upgrading; `--rollback DIR` reinstalls them.
+  Tested by `tests/test_fix_r_pkg_versions.sh` (stubbed apt, `t1-static`).
+  Exit `3` means refused before any change (used by the nightly sync).
+- `scripts/biome_pkg_sync.sh` (ADR-0004 step 4): nightly R package sync across
+  hosts. Each host writes a JSON manifest of its `r-cran-*` packages to a shared
+  directory on biome-store03; from 03:30 it installs the union of all hosts'
+  packages it lacks, at the repository version, after aligning versions with
+  `fix_r_pkg_versions_inplace.sh`. systemd timer every 15 minutes 03:00-05:00 (03:00/03:15 publish only), idle
+  CPU/IO priority; changes only when no `rsession`/`R` process runs (else exit 75,
+  next slot retries; busy at the last slot 04:45 → the next night). Never removes packages, never
+  touches `r-base*`, refuses a host whose R is not the pinned version, at most 50
+  installs per night, `dry-run` by default. `--status` is the fleet view,
+  `--rollback DIR` removes what a run installed, `--check-dir` checks the shared directory (root writes, nobody else). Runbook
+  `docs/operations/PKG_SYNC.md`; test `tests/test_biome_pkg_sync.sh` (S1-S18) in
+  `t1-static`.
+
+### Added (in-place R core upgrade to the pin)
+
+- `scripts/fix_r_version_inplace.sh`: brings one host's `r-base`, `r-base-core`,
+  `r-base-dev` and `r-recommended` to `DEFAULT_R_VERSION`
+  (`config/pin_r_version.vars.conf`, HARD RULE 19). For biome-calc03, which ran
+  R 4.5.3 while calc01/02/04 run 4.6.0. `scripts/pin_r_version.sh` only writes the
+  apt pin. The CRAN repository no longer offers 4.6.0 (apt's candidate is
+  4.6.1), so `--export-debs DIR` on a host that runs the pinned R writes its
+  `.deb` files plus `SHA256SUMS` (apt cache, repository, or `dpkg-repack`), and
+  `--debs DIR` installs them on the target host. Dry-run by default. Refuses with
+  host unchanged (exit 3) on running R sessions, held packages, a removal in the
+  plan, a downgrade without `--allow-downgrade`, a checksum mismatch, or an old
+  `.deb` that cannot be saved. Saves the old `.deb` files, loads every installed R
+  package before and after (exit 5 when one stops loading), restarts
+  rstudio-server, reports users whose personal library exists only for the old
+  R X.Y (never touched). `--rollback DIR` reinstalls the old version. Tested by
+  `tests/test_fix_r_version.sh` (R1-R14, stubbed apt/dpkg/R) in `t1-static`.
+  Decision (Jfs, 2026-10-27): 4.6.0 from calc01 to calc03 only; moving the pin to
+  4.6.1 is a later, separate change (a newly built host cannot install 4.6.0
+  from the repository).
+
 ## [2026.10.1] - 2026-10-20 — Rprofile v12.11-fix3
 
 - **R profile shipped:** v12.11-fix3, unchanged from `v2026.10.0`. No R file changes.
