@@ -101,6 +101,9 @@ jobs:
       - name: bspm D-Bus hotfix (ADR-0005; policy, apply, idempotency, rollback, refusals)
         run: bash tests/test_fix_bspm_dbus.sh
 
+      - name: In-place R core upgrade to the pinned version (export, plan, commit, load test, rollback)
+        run: bash tests/test_fix_r_version.sh
+
       - name: bspm D-Bus policy on a real dbus-daemon (who may install/remove)
         # Loads the rendered policy into a private dbus-daemon with the distro
         # default policy; root needed to run calls as throwaway users.
