@@ -106,11 +106,11 @@ else fail "T1 (rc=$RC): $OUT"; fi
 
 # T2 plan touching r-base-core → refused even in dry-run
 setup; printf 'Inst r-base-core [4.6.0-1] (4.6.1-1 CRAN:noble [amd64])\n' >> "$T/s/sim.txt"; run --commit
-if [[ $RC -eq 1 ]] && grep -q 'HARD RULE 19' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then pass "T2 r-base-core in plan → refused"; else fail "T2 (rc=$RC): $OUT"; fi
+if [[ $RC -eq 3 ]] && grep -q 'HARD RULE 19' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then pass "T2 r-base-core in plan → refused"; else fail "T2 (rc=$RC): $OUT"; fi
 
 # T3 plan removing a package → refused
 setup; printf 'Remv r-cran-old [1.0-1]\n' >> "$T/s/sim.txt"; run --commit
-if [[ $RC -eq 1 ]] && grep -q 'removes packages' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then pass "T3 removal in plan → refused"; else fail "T3 (rc=$RC): $OUT"; fi
+if [[ $RC -eq 3 ]] && grep -q 'removes packages' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then pass "T3 removal in plan → refused"; else fail "T3 (rc=$RC): $OUT"; fi
 
 # T4 commit as non-root → refused
 setup; export STUB_UID=1000; run --commit
@@ -118,7 +118,7 @@ if [[ $RC -eq 1 ]] && grep -q 'needs root' <<<"$OUT" && [[ "$(installs)" -eq 0 ]
 
 # T5 active sessions → refused; override proceeds
 setup; export STUB_SESSIONS=3; run --commit
-if [[ $RC -eq 1 ]] && grep -q '3 RStudio session' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then pass "T5a active sessions → refused"; else fail "T5a (rc=$RC): $OUT"; fi
+if [[ $RC -eq 3 ]] && grep -q '3 RStudio session' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then pass "T5a active sessions → refused"; else fail "T5a (rc=$RC): $OUT"; fi
 run --commit --allow-active-sessions
 if [[ $RC -eq 0 ]]; then pass "T5b --allow-active-sessions proceeds"; else fail "T5b (rc=$RC): $OUT"; fi
 
@@ -139,7 +139,7 @@ if [[ $RC -eq 0 && "$(ver r-cran-future)" == 1.70.0-1.ca2404.1 && "$(ver r-cran-
 
 # T8 partial rollback coverage → refused before any change; override proceeds
 setup; : > "$T/s/repo.tsv"; run --commit
-if [[ $RC -eq 1 ]] && grep -q 'rollback possible for 1/2' <<<"$OUT" && grep -q 'cannot be rolled back' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then
+if [[ $RC -eq 3 ]] && grep -q 'rollback possible for 1/2' <<<"$OUT" && grep -q 'cannot be rolled back' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then
   pass "T8a partial rollback → refused, nothing installed"
 else fail "T8a (rc=$RC): $OUT"; fi
 run --commit --accept-partial-rollback
