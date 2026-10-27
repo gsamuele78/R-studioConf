@@ -20,9 +20,9 @@ Il codice sorgente delle immagini è diviso modularmente:
 
 ### `Dockerfile.telemetry`
 
-- **Base Image**: `python:3.11-slim`
+- **Base Image**: `python:3.14-slim`
 - **Ruolo**: API Asincrona.
-- **Sysadmin Specifics**: Esegue il version-pinning stretto di FastAPI e Pydantic. Gira senza root (PID/Network = Host) per interrogare le metriche disco senza privilegi esponenziali.
+- **Sysadmin Specifics**: Installa le dipendenze dal lock con hash `scripts/telemetry/requirements.txt` (`--require-hashes --only-binary=:all:`, nessun compilatore nell'immagine; rigenerazione nell'header del file). Gira senza root (PID/Network = Host) per interrogare le metriche disco senza privilegi esponenziali.
 
 ## 2. Architettura degli Entrypoint Scripts
 

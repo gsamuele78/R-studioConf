@@ -40,10 +40,10 @@ import uvicorn  # type: ignore[import]
 
 class CpuStatus(BaseModel):
     """CPU status and utilization metrics."""
-    pct: float = Field(..., description="Utilisation %", example=42.1)
-    cores: int = Field(..., description="Logical CPU cores", example=32)
-    load_1m: float = Field(..., example=1.2)
-    load_5m: float = Field(..., example=0.9)
+    pct: float = Field(..., description="Utilisation %", examples=[42.1])
+    cores: int = Field(..., description="Logical CPU cores", examples=[32])
+    load_1m: float = Field(..., examples=[1.2])
+    load_5m: float = Field(..., examples=[0.9])
 
 class RamStatus(BaseModel):
     """RAM usage metrics."""
@@ -101,8 +101,8 @@ class StatusResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Basic structural health check response."""
-    status: str = Field(..., example="ok")
-    cache_age_s: float = Field(..., example=3.1)
+    status: str = Field(..., examples=["ok"])
+    cache_age_s: float = Field(..., examples=[3.1])
 
 class ProblemReport(BaseModel):
     """Payload for submitting a problem report."""

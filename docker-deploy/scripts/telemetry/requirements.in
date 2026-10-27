@@ -1,0 +1,11 @@
+# docker-deploy/scripts/telemetry/requirements.in
+# Direct dependencies of telemetry_api.py (T2 image). The pinned, hashed lock is
+# requirements.txt, regenerated with the command in its header.
+fastapi
+uvicorn
+psutil
+prometheus-client
+pydantic
+anyio
+dnspython
+email-validator

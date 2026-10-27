@@ -8,6 +8,34 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Changed (T2 telemetry-api on Python 3.14)
+
+- `docker-deploy/Dockerfile.telemetry`: base image `python:3.11-slim` →
+  `python:3.14-slim`. The 2024 pins (FastAPI 0.111, pydantic 2.7.4) cannot build
+  on 3.14 (`pydantic-core` 2.7.4 has no cp314 wheel and fails to compile), which
+  kept Dependabot PRs #33/#40 red. Dependencies now come from a pinned, hashed
+  lock `docker-deploy/scripts/telemetry/requirements.txt` (FastAPI 0.142.2,
+  pydantic 2.13.5, Starlette 1.7.0, uvicorn 0.54.0; no release younger than two
+  weeks), installed with `--require-hashes --only-binary=:all:`. gcc and
+  python3-dev are gone from the image: there is no apt step left.
+- `telemetry_api.py` (T1 and T2 copies, identical change): `Field(example=...)`
+  → `Field(examples=[...])`. The old form is deprecated in pydantic 2 and is removed
+  in v3. T1 hosts install unpinned latest packages, so they already emitted these
+  warnings. The new form works on every pydantic 2.x.
+- Measured in a local container, main (3.11, old pins) → this change (3.14, lock):
+  the `/api/v1/status` key set and `/metrics` series are identical; `/api/v1/health`
+  p50 0.90 → 1.02 ms (200 calls); startup to first healthy 1.55 → 1.40 s; RSS
+  46.1 → 46.3 MiB; the invalid `report-problem` payload is still rejected with 422;
+  startup warnings 12 → 0 lines. Image 289 → 225 MB (the baseline was built without
+  its gcc layer, so main's real image is bigger than 289 MB).
+
+### Fixed (T2 telemetry-api healthcheck)
+
+- The compose healthcheck called `curl`, which `python:*-slim` does not ship
+  (`sh: curl: not found`, exit 127), so `telemetry_api` could never be healthy.
+  It now probes `/api/v1/health` with the image's own Python. T1 (systemd) and
+  T3 (`httpGet` probe) are not affected.
+
 ### Added (operations — cross-host package drift, ADR-0004)
 
 - `scripts/99_check_pkg_host_drift.sh`: read-only check that R hosts have the same
