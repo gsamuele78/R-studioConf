@@ -9,7 +9,8 @@ set -euo pipefail
 # This job brings every host to the same set: the union of the r-cran-*
 # packages installed on any host, at the repository's current version.
 #
-# Each run, from the systemd timer (every 30 min, 01:00-05:00 by default):
+# Each run, from the systemd timer (every 15 min, 03:00-05:00 by default;
+# changes from 03:30):
 #   1. publish   write this host's manifest (JSON) to the shared directory on
 #                biome-store03: r-cran-* packages from dpkg, R version, and
 #                packages apt does not manage (reported, never synced)
@@ -22,14 +23,17 @@ set -euo pipefail
 #                the missing packages; never removes a package, never touches
 #                r-base*/r-recommended
 #   5. report    JSON report locally and in the shared directory
-# A deferred run (sessions active) exits 75 and the next slot retries. After
-# the window ends nothing starts until the next night. Sessions are never
+# A deferred run (sessions active) exits 75 and the next slot retries. If the
+# last slot before the window end is still busy, the sync moves to the next
+# night: nothing starts after the window end. Sessions are never
 # killed.
 #
 # Usage:
 #   sudo bash scripts/biome_pkg_sync.sh                   # one run (what the timer does)
 #   sudo bash scripts/biome_pkg_sync.sh --plan            # publish + plan, never change
 #   bash scripts/biome_pkg_sync.sh --status               # fleet view from the manifests
+#   sudo bash scripts/biome_pkg_sync.sh --check-dir       # shared dir: mounted, root
+#                                                         # writes, nobody else can
 #   sudo bash scripts/biome_pkg_sync.sh --rollback DIR    # remove what a run installed
 #   sudo bash scripts/biome_pkg_sync.sh --install-timer | --remove-timer
 #   Options: --force-window (ignore the window and tonight's done-marker; for a
@@ -77,6 +81,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --plan)          ACTION="plan"; shift ;;
     --status)        ACTION="status"; shift ;;
+    --check-dir)     ACTION="check-dir"; shift ;;
     --install-timer) ACTION="install-timer"; shift ;;
     --remove-timer)  ACTION="remove-timer"; shift ;;
     --rollback)
@@ -222,8 +227,38 @@ write_report() {
 finish() {  # STATUS NOTE EXIT
   REPORT_STATUS="$1"; REPORT_NOTE="$2"
   write_report
+  log_info "result: $1: $2"
   exit "$3"
 }
+
+# ── check-dir: is the shared directory usable and safe? (one-time setup) ────
+# Writes only a probe file it removes again, then publishes this host's
+# manifest so --status shows which hosts reach the directory.
+if [[ "$ACTION" == "check-dir" ]]; then
+  is_root || { log_error "--check-dir needs root (it tests that root can write)"; exit 1; }
+  require_sync_dir
+  bad=0
+  fs="$(findmnt -n -o FSTYPE,SOURCE -T "${PKG_SYNC_DIR}" 2>/dev/null || echo "unknown")"
+  log_info "${PKG_SYNC_DIR} is on: ${fs}"
+  [[ "$fs" == nfs* ]] || log_warn "not an NFS mount: the other hosts will not see this host's manifest"
+  probe="${PKG_SYNC_DIR}/hosts/.probe-${HOST}"
+  if : > "$probe" 2>/dev/null && rm -f "$probe"; then log_ok "root on ${HOST} can write"
+  else log_error "root on ${HOST} cannot write (root_squash? see docs/operations/PKG_SYNC.md)"; bad=1; fi
+  for d in "${PKG_SYNC_DIR}" "${PKG_SYNC_DIR}/hosts" "${PKG_SYNC_DIR}/reports"; do
+    mode="$(stat -c '%a' "$d")"
+    if (( 8#$mode & 8#022 )); then log_error "$d is writable by group/others (mode $mode): chmod 755"; bad=1
+    else log_ok "$d mode $mode (only the owner writes)"; fi
+  done
+  if command -v runuser >/dev/null 2>&1; then
+    if runuser -u nobody -- touch "$probe" 2>/dev/null; then
+      rm -f "$probe"; log_error "user 'nobody' can write ${PKG_SYNC_DIR}/hosts: researchers could choose what every host installs"; bad=1
+    else log_ok "a non-root user cannot write"; fi
+  else log_warn "runuser not found: non-root write test skipped"; fi
+  (( bad == 0 )) || exit 1
+  publish
+  log_ok "hosts that reached the directory: $(find "${PKG_SYNC_DIR}/hosts" -maxdepth 1 -name '*.json' -printf '%f ' | sed 's/\.json//g')"
+  exit 0
+fi
 
 # ── status: fleet view from the shared manifests (read-only) ────────────────
 if [[ "$ACTION" == "status" ]]; then
@@ -292,6 +327,19 @@ if [[ "$ACTION" == "rollback" ]]; then
 fi
 
 # ── run / plan ───────────────────────────────────────────────────────────────
+# Where a deferred run goes next: the next 15-minute slot, or the next night
+# when that slot is at or after the window end.
+next_slot_note() {
+  local n m
+  n="$(now_hhmm)"; m=$(( 10#${n:0:2} * 60 + 10#${n:2:2} ))
+  m=$(( (m / 15 + 1) * 15 ))
+  if (( m >= 10#${PKG_SYNC_WINDOW_END:0:2} * 60 + 10#${PKG_SYNC_WINDOW_END:2:2} )); then
+    echo "last slot tonight, the sync moves to the next night"
+  else
+    printf 'retry at %02d:%02d' $(( m / 60 )) $(( m % 60 ))
+  fi
+}
+
 mkdir -p "${PKG_SYNC_STATE_DIR}" || { log_error "cannot create ${PKG_SYNC_STATE_DIR}"; exit 1; }
 exec 9>"${LOCK_FILE}"
 flock -n 9 || { log_warn "another sync run is active: exiting"; exit 0; }
@@ -341,7 +389,7 @@ fi
 is_root || { log_error "applying needs root"; exit 1; }
 read -r s r <<<"$(sessions_active)"
 if (( s + r > 0 )); then
-  finish deferred "${s} RStudio session(s), ${r} R process(es) running: retry at the next slot" 75
+  finish deferred "${s} RStudio session(s), ${r} R process(es) running: $(next_slot_note)" 75
 fi
 
 BK="${PKG_SYNC_BACKUP_ROOT}/r-pkg-sync-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -388,7 +436,7 @@ if [[ -n "$upg_in_plan" ]]; then
   finish refused "installing would upgrade already-installed packages without a saved .deb: $(tr '\n' ' ' <<<"$upg_in_plan")" 3
 fi
 read -r s r <<<"$(sessions_active)"
-(( s + r == 0 )) || finish deferred "a session started during the run: retry at the next slot" 75
+(( s + r == 0 )) || finish deferred "a session started during the run: $(next_slot_note)" 75
 if ! apt-get install -y "${APT_OPTS[@]}" --no-remove "${TO_NEW[@]}" > "${BK}/install.log" 2>&1; then
   installed_rcran > "${BK}/after.tsv"
   LC_ALL=C comm -13 <(cut -f1 "${BK}/before.tsv") <(cut -f1 "${BK}/after.tsv") > "${BK}/new.tsv"

@@ -73,16 +73,17 @@ R packages stay on **local disk** on every host; what is installed is made the
    default, old `.deb` saved before each upgrade, `--rollback`). It never installs
    a missing package, removes one, or touches `r-base*`.
 4. **Reconcile nightly (`scripts/biome_pkg_sync.sh`, decided 2026-10-20).**
-   A systemd timer on each host runs every 30 minutes from 01:00 to 05:00:
+   A systemd timer on each host runs every 15 minutes from 03:00 to 05:00
+   (window 03:30-05:00 set by Jfs on 2026-10-27):
    - every run writes the host's manifest (`<dir>/hosts/<host>.json`: `r-cran-*`
      from dpkg, R version, and packages apt does not manage);
-   - from 01:30, once per night, the host installs the **union** of the
+   - from 03:30, once per night, the host installs the **union** of the
      `r-cran-*` packages in the fresh manifests (≤ 36 h old), minus
      `<dir>/policy.json` exclusions, at the repository version; first it aligns
      the versions of what it has with step 3 (old `.deb` saved);
    - it only changes anything when no `rsession` or `R` process runs; otherwise
-     it exits 75 and the next slot retries; after 05:00 it waits for the next
-     night; sessions are never killed;
+     it exits 75 and the next slot retries; if the last slot (04:45) is still
+     busy it waits for the next night; sessions are never killed;
    - it never removes a package, never touches `r-base*`/`r-recommended`, refuses
      a host whose R is not the pinned version, caps installs per night
      (`PKG_SYNC_MAX_NEW`, default 50) and runs at idle CPU/IO priority;

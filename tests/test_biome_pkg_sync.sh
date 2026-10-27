@@ -67,6 +67,11 @@ cat > "$T/bin/id" <<'EOF'
 #!/usr/bin/env bash
 echo "${STUB_UID:-0}"
 EOF
+cat > "$T/bin/runuser" <<'EOF'
+#!/usr/bin/env bash
+[[ "${STUB_NOBODY_WRITES:-0}" == 1 ]] || exit 1
+shift 3; "$@"
+EOF
 cat > "$T/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 echo "systemctl $*" >> "$STUB_LOG"
@@ -104,7 +109,7 @@ run() {
   OUT="$(env PATH="$T/bin:$PATH" STUB_STATE="$T/state.tsv" STUB_REPO="$T/repo.tsv" STUB_LOG="$T/log" \
     PKG_SYNC_DIR="${SYNC_DIR-$T/sync}" PKG_SYNC_HOST=biome-calc04 PKG_SYNC_STATE_DIR="$T/state" \
     PKG_SYNC_BACKUP_ROOT="$T/backup" PKG_SYNC_FIX_SCRIPT="$T/fix.sh" PKG_SYNC_LOCK="$T/lock" \
-    PKG_SYNC_OTHER_LIBS="$T/lib" PKG_SYNC_SYSTEMD_DIR="$T/systemd" PKG_SYNC_NOW="${NOW:-0200}" \
+    PKG_SYNC_OTHER_LIBS="$T/lib" PKG_SYNC_SYSTEMD_DIR="$T/systemd" PKG_SYNC_NOW="${NOW:-0400}" \
     PKG_SYNC_TODAY=2026-10-21 PKG_SYNC_MODE="${MODE:-apply}" PKG_SYNC_MAX_NEW="${MAX_NEW:-50}" \
     bash "$SUT" "$@" 2>&1)"
   RC=$?
@@ -128,7 +133,7 @@ if [[ $RC -eq 0 ]] && grep -q 'outside the window' <<<"$OUT" && [[ "$(installs)"
 else fail "S2/S3 (rc=$RC): $OUT $(cat "$m" 2>/dev/null)"; fi
 
 # S4 first slot publishes only
-setup; NOW=0100 run
+setup; NOW=0315 run
 if [[ $RC -eq 0 ]] && grep -q 'manifest only, so every host publishes first' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then
   pass "S4 before APPLY_FROM → publish only"; else fail "S4 (rc=$RC): $OUT"; fi
 
@@ -145,9 +150,14 @@ if [[ $RC -eq 0 ]] && grep -q 'already synced tonight' <<<"$OUT"; then pass "S6 
 # S7 sessions active → deferred, nothing changed
 setup; STUB_SESSIONS=2; export STUB_SESSIONS; run; unset STUB_SESSIONS
 if [[ $RC -eq 75 ]] && [[ "$(installs)" -eq 0 ]] && ! grep -q '^fix' "$T/log" && [[ "$(rep .status)" == deferred ]] \
-   && [[ ! -f "$T/state/done_date" ]] && [[ -f "$T/sync/reports/biome-calc04.json" ]]; then
+   && [[ ! -f "$T/state/done_date" ]] && [[ -f "$T/sync/reports/biome-calc04.json" ]] \
+   && grep -q 'retry at 04:15' <<<"$OUT"; then
   pass "S7 active sessions → deferred (75), no change, retried next slot"
 else fail "S7 (rc=$RC): $OUT"; fi
+setup; STUB_SESSIONS=2; export STUB_SESSIONS; NOW=0445 run; unset STUB_SESSIONS
+if [[ $RC -eq 75 ]] && [[ "$(installs)" -eq 0 ]] && grep -q 'last slot tonight, the sync moves to the next night' <<<"$OUT"; then
+  pass "S7b busy at the last slot (04:45) → moves to the next night"
+else fail "S7b (rc=$RC): $OUT"; fi
 
 # S8 apply: align, then install missing (capped), report
 setup; printf '{"exclude":["r-cran-secret"]}\n' > "$T/sync/policy.json"; MAX_NEW=1 run
@@ -216,13 +226,25 @@ if [[ $RC -eq 0 ]] && grep -q 'same R packages' <<<"$OUT"; then pass "S16b statu
 
 # S17 timer install / remove
 setup; run --install-timer
-if [[ $RC -eq 0 ]] && grep -q 'OnCalendar=\*-\*-\* 01..04:00,30:00' "$T/systemd/biome-pkg-sync.timer" \
+if [[ $RC -eq 0 ]] && grep -q 'OnCalendar=\*-\*-\* 03..04:00/15:00' "$T/systemd/biome-pkg-sync.timer" \
    && grep -q "ExecStart=/usr/bin/env bash .*/scripts/biome_pkg_sync.sh" "$T/systemd/biome-pkg-sync.service" \
    && grep -q "RequiresMountsFor=$T/sync" "$T/systemd/biome-pkg-sync.service" \
    && grep -q 'systemctl enable --now biome-pkg-sync.timer' "$T/log"; then
-  pass "S17a timer rendered for 01:00-04:30 and enabled"; else fail "S17a (rc=$RC): $OUT"; fi
+  pass "S17a timer rendered every 15 min 03:00-04:45 and enabled"; else fail "S17a (rc=$RC): $OUT"; fi
 run --remove-timer
 if [[ $RC -eq 0 ]] && [[ ! -f "$T/systemd/biome-pkg-sync.timer" ]]; then pass "S17b timer removed"; else fail "S17b (rc=$RC): $OUT"; fi
+
+# S19 shared directory check
+setup; run --check-dir
+if [[ $RC -eq 0 ]] && grep -q 'root on biome-calc04 can write' <<<"$OUT" && grep -q 'a non-root user cannot write' <<<"$OUT" \
+   && grep -q 'hosts that reached the directory:.*biome-calc04' <<<"$OUT" && [[ ! -e "$T/sync/hosts/.probe-biome-calc04" ]]; then
+  pass "S19a check-dir: root writes, others cannot, host listed, probe removed"; else fail "S19a (rc=$RC): $OUT"; fi
+setup; chmod 777 "$T/sync/hosts"; run --check-dir
+if [[ $RC -eq 1 ]] && grep -q 'writable by group/others (mode 777)' <<<"$OUT"; then
+  pass "S19b check-dir: world-writable hosts/ → fail"; else fail "S19b (rc=$RC): $OUT"; fi
+setup; STUB_NOBODY_WRITES=1; export STUB_NOBODY_WRITES; run --check-dir; unset STUB_NOBODY_WRITES
+if [[ $RC -eq 1 ]] && grep -q "user 'nobody' can write" <<<"$OUT" && [[ ! -e "$T/sync/hosts/.probe-biome-calc04" ]]; then
+  pass "S19c check-dir: non-root can write → fail"; else fail "S19c (rc=$RC): $OUT"; fi
 
 # S18 usage errors
 setup; run --bogus

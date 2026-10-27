@@ -1,10 +1,10 @@
 # templates/systemd/biome-pkg-sync.timer.template
 # Rendered by scripts/biome_pkg_sync.sh --install-timer (ADR-0004 step 4).
 [Unit]
-Description=BIOME nightly R package sync, every 30 minutes inside the night window
+Description=BIOME nightly R package sync, every 15 minutes inside the night window
 
 [Timer]
-OnCalendar=*-*-* %%HOURS%%:00,30:00
+OnCalendar=*-*-* %%HOURS%%:00/15:00
 AccuracySec=1min
 # A missed night is not caught up at boot: the next night runs instead.
 Persistent=false

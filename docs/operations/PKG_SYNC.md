@@ -10,15 +10,20 @@ directory on biome-store03. When no R session is running, it installs the packag
 the other hosts have and it lacks, after aligning the versions of what it has. It
 never removes a package and never changes R itself.
 
-## What it does, per timer slot (01:00, 01:30 … 04:30)
+## What it does, per timer slot (every 15 minutes, 03:00 … 04:45)
 
 | Time | Action |
 |---|---|
 | any slot | write `hosts/<host>.json` (manifest) |
-| 01:00 | manifest only, so every host has published before any host reads |
-| 01:30 – 04:30 | once per night: plan, then (mode `apply`) align versions + install missing |
-| sessions running | exit 75 ("deferred"), the next slot retries |
+| 03:00, 03:15 | manifest only, so every host has published before any host reads |
+| 03:30 – 04:45 | once per night: plan, then (mode `apply`) align versions + install missing |
+| sessions running | exit 75 ("deferred"), the next slot retries (log: `retry at HH:MM`) |
+| still busy at 04:45 | exit 75, log `last slot tonight, the sync moves to the next night` |
 | after 05:00 | nothing starts; the next night runs (a missed night is not caught up) |
+
+The window is in `config/pkg_sync.vars.conf` (`PKG_SYNC_WINDOW_START=0300`,
+`PKG_SYNC_APPLY_FROM=0330`, `PKG_SYNC_WINDOW_END=0500`). A run started at 04:45
+can end after 05:00; at most 50 binary installs keep it short.
 
 Refusals (exit 3, host unchanged): R not at the pinned version
 (`config/pin_r_version.vars.conf`), a plan that removes packages, touches
@@ -26,16 +31,33 @@ Refusals (exit 3, host unchanged): R not at the pinned version
 
 ## One-time setup
 
-1. **Shared directory on biome-store03.** Create a directory used only for this,
-   for example `/mnt/zpool/biome-pkg-sync`, and export it to the four calc hosts
-   so that **root on the hosts can write it** and nobody else can:
-   - either `no_root_squash` on this export only, restricted to the hosts' IPs;
-   - or `all_squash,anonuid=<uid>,anongid=<gid>` with the directory owned `0755`
-     by that dedicated account.
+Whoever can write the shared directory decides what every host installs (from the
+configured apt repositories only). So root on the four hosts writes it, and nobody
+else does.
 
-   Researchers must not be able to write it: whoever can write a manifest decides
-   what every host installs (from the configured apt repositories only).
-2. **Mount it** on every host at the same path (fstab, `_netdev`).
+1. **On biome-store03, as root**: create a directory used only for this and
+   export it to the four hosts only. Replace the path and the addresses with the
+   real ones.
+
+   ```bash
+   install -d -o root -g root -m 0755 /srv/biome-pkg-sync
+   install -d -o root -g root -m 0755 /srv/biome-pkg-sync/hosts /srv/biome-pkg-sync/reports
+   # /etc/exports: root of the hosts stays root on this export only
+   echo '/srv/biome-pkg-sync <calc01-ip>(rw,sync,no_subtree_check,no_root_squash) <calc02-ip>(rw,sync,no_subtree_check,no_root_squash) <calc03-ip>(rw,sync,no_subtree_check,no_root_squash) <calc04-ip>(rw,sync,no_subtree_check,no_root_squash)' >> /etc/exports
+   exportfs -ra && exportfs -v | grep biome-pkg-sync
+   ```
+
+   If `no_root_squash` is not acceptable, use `all_squash,anonuid=<uid>,anongid=<gid>`
+   with a dedicated account that owns the directory (`0755`): only these four
+   hosts can reach the export, and on them only root runs the job.
+2. **On every host, as root**: mount it at the same path.
+
+   ```bash
+   install -d -m 0755 /mnt/biome-pkg-sync
+   echo 'biome-store03:/srv/biome-pkg-sync /mnt/biome-pkg-sync nfs defaults,_netdev,nofail,hard,timeo=600 0 0' >> /etc/fstab
+   mount /mnt/biome-pkg-sync
+   ```
+
 3. **Site config** on every host, in `config/site/pkg_sync.site.vars.conf`:
 
    ```bash
@@ -43,7 +65,13 @@ Refusals (exit 3, host unchanged): R not at the pinned version
    PKG_SYNC_MODE="dry-run"
    ```
 
-4. **Timer**: `sudo bash scripts/biome_pkg_sync.sh --install-timer`, then
+4. **Check access from every host** (calc01, calc02, calc03, calc04):
+   `sudo bash scripts/biome_pkg_sync.sh --check-dir`. It checks that the
+   directory is an NFS mount, that root can write it, that it is not writable by
+   group/others, and that user `nobody` cannot write it. Then it publishes the
+   host's manifest and lists the hosts that reached the directory: after the
+   fourth host the list must show all four. Exit 1 means fix the export first.
+5. **Timer**: `sudo bash scripts/biome_pkg_sync.sh --install-timer`, then
    `systemctl list-timers biome-pkg-sync.timer`.
 
 ## Rollout

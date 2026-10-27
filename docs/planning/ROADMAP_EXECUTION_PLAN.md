@@ -178,7 +178,7 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
    time, test host first (closes most of the 180 version mismatches). calc03 must
    first move to R 4.6.0 (`scripts/pin_r_version.sh`).
 4. Nightly per-host sync `scripts/biome_pkg_sync.sh` (manifests on biome-store03,
-   JSON, timer 01:00-05:00, only without R sessions); test host first (ADR-0004 step 4,
+   JSON, timer every 15 min, changes 03:30-05:00, only without R sessions); test host first (ADR-0004 step 4,
    runbook `docs/operations/PKG_SYNC.md`).
 
 **Validate**
