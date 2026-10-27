@@ -32,6 +32,10 @@ set -euo pipefail
 #   sudo bash scripts/biome_pkg_sync.sh                   # one run (what the timer does)
 #   sudo bash scripts/biome_pkg_sync.sh --plan            # publish + plan, never change
 #   bash scripts/biome_pkg_sync.sh --status               # fleet view from the manifests
+#   sudo bash scripts/biome_pkg_sync.sh --init-dir DIR [--test-user USER]
+#                                                         # one-time: create the shared
+#                                                         # dir (ACL, mode), write the
+#                                                         # site config, then --check-dir
 #   sudo bash scripts/biome_pkg_sync.sh --check-dir       # shared dir: mounted, root
 #                                                         # writes, nobody else can
 #   sudo bash scripts/biome_pkg_sync.sh --rollback DIR    # remove what a run installed
@@ -75,13 +79,19 @@ SYSTEMD_DIR="${PKG_SYNC_SYSTEMD_DIR:-/etc/systemd/system}"
 LOCK_FILE="${PKG_SYNC_LOCK:-/run/lock/biome-pkg-sync.lock}"
 APT_OPTS=(-q -o DPkg::Lock::Timeout=600)
 
-ACTION="run"; ROLLBACK_DIR=""; FORCE_WINDOW=false
-usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; }
+ACTION="run"; ROLLBACK_DIR=""; FORCE_WINDOW=false; INIT_DIR=""; TEST_USER_ARG=""
+usage() { sed -n '2,/^# Exit:/p' "$0" | sed 's/^# \{0,1\}//'; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --plan)          ACTION="plan"; shift ;;
     --status)        ACTION="status"; shift ;;
     --check-dir)     ACTION="check-dir"; shift ;;
+    --init-dir)
+      [[ $# -ge 2 ]] || { log_error "--init-dir needs a directory"; exit 2; }
+      ACTION="init-dir"; INIT_DIR="$2"; shift 2 ;;
+    --test-user)
+      [[ $# -ge 2 ]] || { log_error "--test-user needs a user name"; exit 2; }
+      TEST_USER_ARG="$2"; shift 2 ;;
     --install-timer) ACTION="install-timer"; shift ;;
     --remove-timer)  ACTION="remove-timer"; shift ;;
     --rollback)
@@ -230,6 +240,44 @@ finish() {  # STATUS NOTE EXIT
   log_info "result: $1: $2"
   exit "$3"
 }
+
+# ── init-dir: create the shared directory (one-time setup, one host) ───────
+# Idempotent: re-running re-applies the ACL and the mode, never deletes
+# content. Undo: rm -rf DIR and config/site/pkg_sync.site.vars.conf.
+# A directory created inside a TrueNAS share inherits the share's NFSv4 ACL
+# (calc04, 2026-10-27: write for AD groups, mode 2775) and TrueNAS ignores
+# chmod while that ACL is set, so the ACL is replaced first.
+if [[ "$ACTION" == "init-dir" ]]; then
+  is_root || { log_error "--init-dir needs root"; exit 1; }
+  [[ "$INIT_DIR" == /* ]] || { log_error "--init-dir needs an absolute path: ${INIT_DIR}"; exit 2; }
+  INIT_DIR="${INIT_DIR%/}"
+  [[ -d "$(dirname "$INIT_DIR")" ]] || { log_error "parent directory not found: $(dirname "$INIT_DIR") (is the share mounted?)"; exit 1; }
+  mkdir -p "${INIT_DIR}/hosts" "${INIT_DIR}/reports" || { log_error "cannot create ${INIT_DIR} (root_squash on the share?)"; exit 1; }
+  for d in "$INIT_DIR" "${INIT_DIR}/hosts" "${INIT_DIR}/reports"; do
+    if command -v nfs4_getfacl >/dev/null 2>&1 && nfs4_getfacl "$d" >/dev/null 2>&1; then
+      command -v nfs4_setfacl >/dev/null 2>&1 \
+        || { log_error "$d has an NFSv4 ACL but nfs4_setfacl is missing: apt-get install nfs4-acl-tools"; exit 1; }
+      nfs4_setfacl -s 'A::OWNER@:rwaDxtTnNcCy,A::GROUP@:rxtncy,A::EVERYONE@:rxtncy' "$d" \
+        || { log_error "nfs4_setfacl failed on $d: strip the ACL from the TrueNAS UI (owner root, mode 755)"; exit 1; }
+      log_ok "$d: NFSv4 ACL set to owner write, others read"
+    fi
+    chmod 0755 "$d" && chmod g-s "$d" || { log_error "chmod failed on $d"; exit 1; }
+  done
+  if [[ -f "$SITE_CONF" ]]; then
+    cur="$(grep -m1 '^PKG_SYNC_DIR=' "$SITE_CONF" | cut -d= -f2- | tr -d '"' || true)"
+    [[ "$cur" == "$INIT_DIR" ]] || log_warn "${SITE_CONF} exists with PKG_SYNC_DIR=${cur:-unset}: left as it is, edit it by hand"
+  else
+    mkdir -p "$(dirname "$SITE_CONF")"
+    { printf '# %s — written by biome_pkg_sync.sh --init-dir on %s\n' "${SITE_CONF#"${WORKSPACE_ROOT}"/}" "$(utc_now)"
+      printf 'PKG_SYNC_DIR="%s"\nPKG_SYNC_MODE="dry-run"\n' "$INIT_DIR"
+      [[ -n "$TEST_USER_ARG" ]] && printf 'PKG_SYNC_TEST_USER="%s"\n' "$TEST_USER_ARG"
+    } > "$SITE_CONF" || { log_error "cannot write ${SITE_CONF}"; exit 1; }
+    log_ok "site config written: ${SITE_CONF} (mode dry-run)"
+  fi
+  PKG_SYNC_DIR="$INIT_DIR"
+  [[ -n "$TEST_USER_ARG" ]] && PKG_SYNC_TEST_USER="$TEST_USER_ARG"
+  ACTION="check-dir"
+fi
 
 # ── check-dir: is the shared directory usable and safe? (one-time setup) ────
 # Writes only a probe file it removes again, then publishes this host's

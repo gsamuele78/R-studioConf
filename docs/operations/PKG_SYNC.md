@@ -58,8 +58,24 @@ else does.
    because no account has that name. A directory created there inherits the
    share's NFSv4 ACL: on 2026-10-27 calc04 got mode `2775 root:domain_users`
    and six inherited entries (`fd`) giving write to AD groups, gid 33 and uid
-   568. TrueNAS ignores `chmod` while such an ACL is set. Replace the ACL first,
-   then set the mode, from one host as root:
+   568. TrueNAS ignores `chmod` while such an ACL is set. `--init-dir` replaces
+   the ACL first, then sets the mode. Run it once, on one host (calc04 first):
+
+   ```bash
+   cd /home/ladmin/configServices/R-studioConf
+   sudo bash scripts/biome_pkg_sync.sh --init-dir /nfs/home/.biome-pkg-sync --test-user <researcher>
+   ```
+
+   It creates `hosts/` and `reports/`. It sets the NFSv4 ACL of the three
+   directories to owner write and others read (`nfs4_setfacl`, from
+   `nfs4-acl-tools`), then mode 755 without setgid. It writes
+   `config/site/pkg_sync.site.vars.conf` (dry-run) if that file does not exist,
+   then runs `--check-dir`. It is idempotent: a second run re-applies ACL and mode
+   and keeps the manifests. To undo it, remove the directory and the site config.
+   Without `nfs4-acl-tools`, use the TrueNAS UI instead: Edit Permissions on the
+   directory, Strip ACL, owner root, mode 755, applied recursively.
+
+   The same steps by hand, as done on 2026-10-27:
 
    ```bash
    D=/nfs/home/.biome-pkg-sync
@@ -70,10 +86,10 @@ else does.
    sudo -u <researcher> touch $D/hosts/probe   # must fail: Permission denied
    ```
 
-   `nfs4_getfacl`/`nfs4_setfacl` come from `nfs4-acl-tools`. The same result
-   from the TrueNAS UI: Edit Permissions on the directory, Strip ACL, owner
-   root, mode 755, applied recursively. Skip step 2 below: the share is already
-   mounted.
+   On the other three hosts the directory already exists: write the site config
+   (step 3) and run `--check-dir` (step 4). Running `--init-dir` there also works:
+   it only re-applies the same ACL and mode. Skip step 2: the share is already
+   mounted. Result on 2026-10-27: all four hosts passed `--check-dir`.
 2. **On every host, as root**: mount it at the same path.
 
    ```bash

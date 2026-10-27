@@ -78,6 +78,10 @@ cat > "$T/bin/nfs4_getfacl" <<'EOF'
 if [[ -n "${STUB_ACL:-}" ]]; then printf '%s\n' "$STUB_ACL"
 else printf '%s\n' "# file: $1" 'A::OWNER@:rwaDxtTnNcCy' 'A:g:GROUP@:rxtncy' 'A::EVERYONE@:rxtncy'; fi
 EOF
+cat > "$T/bin/nfs4_setfacl" <<'EOF'
+#!/usr/bin/env bash
+echo "nfs4_setfacl $*" >> "$STUB_LOG"
+EOF
 cat > "$T/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 echo "systemctl $*" >> "$STUB_LOG"
@@ -117,7 +121,7 @@ run() {
     PKG_SYNC_BACKUP_ROOT="$T/backup" PKG_SYNC_FIX_SCRIPT="$T/fix.sh" PKG_SYNC_LOCK="$T/lock" \
     PKG_SYNC_OTHER_LIBS="$T/lib" PKG_SYNC_SYSTEMD_DIR="$T/systemd" PKG_SYNC_NOW="${NOW:-0400}" \
     PKG_SYNC_TODAY=2026-10-21 PKG_SYNC_MODE="${MODE:-apply}" PKG_SYNC_MAX_NEW="${MAX_NEW:-50}" \
-    bash "$SUT" "$@" 2>&1)"
+    bash "${RUN_SUT:-$SUT}" "$@" 2>&1)"
   RC=$?
   set -e
 }
@@ -265,6 +269,27 @@ if [[ $RC -eq 1 ]] && grep -q "user 'alice' can write" <<<"$OUT" && grep -q "use
 STUB_WRITERS=""; run --check-dir; unset STUB_WRITERS PKG_SYNC_TEST_USER
 if [[ $RC -eq 0 ]] && grep -q "user 'alice' cannot write" <<<"$OUT" && ! grep -q 'PKG_SYNC_TEST_USER is not set' <<<"$OUT"; then
   pass "S19f check-dir: researcher account cannot write → pass"; else fail "S19f (rc=$RC): $OUT"; fi
+
+# S20 init-dir: creates the directory, sets ACL and mode, writes the site
+# config, then runs the check
+setup; WS="$T/ws"; rm -rf "$WS"; mkdir -p "$WS/scripts" "$WS/config"
+cp "$SUT" "$WS/scripts/"; cp "$SCRIPT_DIR/../config/pkg_sync.vars.conf" "$SCRIPT_DIR/../config/pin_r_version.vars.conf" "$WS/config/"
+mkdir -p "$T/share"; ND="$T/share/.biome-pkg-sync"
+RUN_SUT="$WS/scripts/biome_pkg_sync.sh"
+SYNC_DIR="" run --init-dir "$ND" --test-user alice
+if [[ $RC -eq 0 ]] && [[ -d "$ND/hosts" && -d "$ND/reports" ]] && [[ "$(stat -c %a "$ND/hosts")" == 755 ]] \
+   && [[ "$(grep -c "^nfs4_setfacl -s A::OWNER@" "$T/log")" -eq 3 ]] \
+   && grep -qx "PKG_SYNC_DIR=\"$ND\"" "$WS/config/site/pkg_sync.site.vars.conf" \
+   && grep -qx 'PKG_SYNC_TEST_USER="alice"' "$WS/config/site/pkg_sync.site.vars.conf" \
+   && grep -q "user 'alice' cannot write" <<<"$OUT" && [[ -f "$ND/hosts/biome-calc04.json" ]]; then
+  pass "S20a init-dir: dir + ACL + 755 + site config, check passes, manifest published"; else fail "S20a (rc=$RC): $OUT"; fi
+chmod 2775 "$ND/hosts"; : > "$T/log"; SYNC_DIR="" run --init-dir "$ND/"
+if [[ $RC -eq 0 ]] && [[ "$(stat -c %a "$ND/hosts")" == 755 ]] && [[ -f "$ND/hosts/biome-calc04.json" ]] \
+   && ! grep -q 'exists with PKG_SYNC_DIR' <<<"$OUT"; then
+  pass "S20b init-dir again: mode 2775 back to 755, content kept, site config left"; else fail "S20b (rc=$RC): $OUT"; fi
+SYNC_DIR="" run --init-dir relative/path
+if [[ $RC -eq 2 ]]; then pass "S20c init-dir with a relative path → 2"; else fail "S20c (rc=$RC): $OUT"; fi
+unset RUN_SUT; rm -rf "$WS"
 
 # S18 usage errors
 setup; run --bogus
