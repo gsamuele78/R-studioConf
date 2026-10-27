@@ -69,8 +69,18 @@ echo "${STUB_UID:-0}"
 EOF
 cat > "$T/bin/runuser" <<'EOF'
 #!/usr/bin/env bash
-[[ "${STUB_NOBODY_WRITES:-0}" == 1 ]] || exit 1
+# runuser -u USER -- cmd...: USER can write only when listed in STUB_WRITERS
+[[ " ${STUB_WRITERS:-} " == *" $2 "* ]] || exit 1
 shift 3; "$@"
+EOF
+cat > "$T/bin/nfs4_getfacl" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${STUB_ACL:-}" ]]; then printf '%s\n' "$STUB_ACL"
+else printf '%s\n' "# file: $1" 'A::OWNER@:rwaDxtTnNcCy' 'A:g:GROUP@:rxtncy' 'A::EVERYONE@:rxtncy'; fi
+EOF
+cat > "$T/bin/nfs4_setfacl" <<'EOF'
+#!/usr/bin/env bash
+echo "nfs4_setfacl $*" >> "$STUB_LOG"
 EOF
 cat > "$T/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -111,7 +121,7 @@ run() {
     PKG_SYNC_BACKUP_ROOT="$T/backup" PKG_SYNC_FIX_SCRIPT="$T/fix.sh" PKG_SYNC_LOCK="$T/lock" \
     PKG_SYNC_OTHER_LIBS="$T/lib" PKG_SYNC_SYSTEMD_DIR="$T/systemd" PKG_SYNC_NOW="${NOW:-0400}" \
     PKG_SYNC_TODAY=2026-10-21 PKG_SYNC_MODE="${MODE:-apply}" PKG_SYNC_MAX_NEW="${MAX_NEW:-50}" \
-    bash "$SUT" "$@" 2>&1)"
+    bash "${RUN_SUT:-$SUT}" "$@" 2>&1)"
   RC=$?
   set -e
 }
@@ -236,15 +246,50 @@ if [[ $RC -eq 0 ]] && [[ ! -f "$T/systemd/biome-pkg-sync.timer" ]]; then pass "S
 
 # S19 shared directory check
 setup; run --check-dir
-if [[ $RC -eq 0 ]] && grep -q 'root on biome-calc04 can write' <<<"$OUT" && grep -q 'a non-root user cannot write' <<<"$OUT" \
+if [[ $RC -eq 0 ]] && grep -q 'root on biome-calc04 can write' <<<"$OUT" && grep -q "user 'nobody' cannot write" <<<"$OUT" \
+   && grep -q 'PKG_SYNC_TEST_USER is not set' <<<"$OUT" && grep -q 'no NFSv4 ACL entry gives write' <<<"$OUT" \
    && grep -q 'hosts that reached the directory:.*biome-calc04' <<<"$OUT" && [[ ! -e "$T/sync/hosts/.probe-biome-calc04" ]]; then
   pass "S19a check-dir: root writes, others cannot, host listed, probe removed"; else fail "S19a (rc=$RC): $OUT"; fi
 setup; chmod 777 "$T/sync/hosts"; run --check-dir
 if [[ $RC -eq 1 ]] && grep -q 'writable by group/others (mode 777)' <<<"$OUT"; then
   pass "S19b check-dir: world-writable hosts/ → fail"; else fail "S19b (rc=$RC): $OUT"; fi
-setup; STUB_NOBODY_WRITES=1; export STUB_NOBODY_WRITES; run --check-dir; unset STUB_NOBODY_WRITES
+setup; STUB_WRITERS=nobody; export STUB_WRITERS; run --check-dir; unset STUB_WRITERS
 if [[ $RC -eq 1 ]] && grep -q "user 'nobody' can write" <<<"$OUT" && [[ ! -e "$T/sync/hosts/.probe-biome-calc04" ]]; then
   pass "S19c check-dir: non-root can write → fail"; else fail "S19c (rc=$RC): $OUT"; fi
+# S19d an inherited ACL (TrueNAS home share) giving an AD group write → fail with the fix
+setup; STUB_ACL=$'# file: x\nA:fdg:164159874:rwaDdxtTnNcy\nA::OWNER@:rwaDxtTnNcCoy\nA:g:GROUP@:rxtncy\nA::EVERYONE@:rxtncy'
+export STUB_ACL; run --check-dir; unset STUB_ACL
+if [[ $RC -eq 1 ]] && grep -q 'NFSv4 ACL entries give write' <<<"$OUT" && grep -q 'A:fdg:164159874' <<<"$OUT" \
+   && grep -q 'nfs4_setfacl -s' <<<"$OUT"; then
+  pass "S19d check-dir: ACL entry granting a group write → fail, fix printed"; else fail "S19d (rc=$RC): $OUT"; fi
+# S19e a configured researcher account that can write → fail; one that cannot → pass, no warning
+setup; STUB_WRITERS=alice; export STUB_WRITERS; PKG_SYNC_TEST_USER=alice; export PKG_SYNC_TEST_USER; run --check-dir
+if [[ $RC -eq 1 ]] && grep -q "user 'alice' can write" <<<"$OUT" && grep -q "user 'nobody' cannot write" <<<"$OUT"; then
+  pass "S19e check-dir: researcher account can write → fail (nobody alone would pass)"; else fail "S19e (rc=$RC): $OUT"; fi
+STUB_WRITERS=""; run --check-dir; unset STUB_WRITERS PKG_SYNC_TEST_USER
+if [[ $RC -eq 0 ]] && grep -q "user 'alice' cannot write" <<<"$OUT" && ! grep -q 'PKG_SYNC_TEST_USER is not set' <<<"$OUT"; then
+  pass "S19f check-dir: researcher account cannot write → pass"; else fail "S19f (rc=$RC): $OUT"; fi
+
+# S20 init-dir: creates the directory, sets ACL and mode, writes the site
+# config, then runs the check
+setup; WS="$T/ws"; rm -rf "$WS"; mkdir -p "$WS/scripts" "$WS/config"
+cp "$SUT" "$WS/scripts/"; cp "$SCRIPT_DIR/../config/pkg_sync.vars.conf" "$SCRIPT_DIR/../config/pin_r_version.vars.conf" "$WS/config/"
+mkdir -p "$T/share"; ND="$T/share/.biome-pkg-sync"
+RUN_SUT="$WS/scripts/biome_pkg_sync.sh"
+SYNC_DIR="" run --init-dir "$ND" --test-user alice
+if [[ $RC -eq 0 ]] && [[ -d "$ND/hosts" && -d "$ND/reports" ]] && [[ "$(stat -c %a "$ND/hosts")" == 755 ]] \
+   && [[ "$(grep -c "^nfs4_setfacl -s A::OWNER@" "$T/log")" -eq 3 ]] \
+   && grep -qx "PKG_SYNC_DIR=\"$ND\"" "$WS/config/site/pkg_sync.site.vars.conf" \
+   && grep -qx 'PKG_SYNC_TEST_USER="alice"' "$WS/config/site/pkg_sync.site.vars.conf" \
+   && grep -q "user 'alice' cannot write" <<<"$OUT" && [[ -f "$ND/hosts/biome-calc04.json" ]]; then
+  pass "S20a init-dir: dir + ACL + 755 + site config, check passes, manifest published"; else fail "S20a (rc=$RC): $OUT"; fi
+chmod 2775 "$ND/hosts"; : > "$T/log"; SYNC_DIR="" run --init-dir "$ND/"
+if [[ $RC -eq 0 ]] && [[ "$(stat -c %a "$ND/hosts")" == 755 ]] && [[ -f "$ND/hosts/biome-calc04.json" ]] \
+   && ! grep -q 'exists with PKG_SYNC_DIR' <<<"$OUT"; then
+  pass "S20b init-dir again: mode 2775 back to 755, content kept, site config left"; else fail "S20b (rc=$RC): $OUT"; fi
+SYNC_DIR="" run --init-dir relative/path
+if [[ $RC -eq 2 ]]; then pass "S20c init-dir with a relative path → 2"; else fail "S20c (rc=$RC): $OUT"; fi
+unset RUN_SUT; rm -rf "$WS"
 
 # S18 usage errors
 setup; run --bogus
