@@ -249,10 +249,31 @@ if [[ "$ACTION" == "check-dir" ]]; then
     if (( 8#$mode & 8#022 )); then log_error "$d is writable by group/others (mode $mode): chmod 755"; bad=1
     else log_ok "$d mode $mode (only the owner writes)"; fi
   done
+  # NFSv4 ACLs (TrueNAS) can grant write to AD groups whatever the mode bits
+  # say, and a directory created inside a share inherits the share's entries.
+  if command -v nfs4_getfacl >/dev/null 2>&1; then
+    for d in "${PKG_SYNC_DIR}" "${PKG_SYNC_DIR}/hosts" "${PKG_SYNC_DIR}/reports"; do
+      acl="$(nfs4_getfacl "$d" 2>/dev/null || true)"
+      [[ -n "$acl" ]] || continue
+      w="$(awk -F: '/^[AU]:/ && $3 != "OWNER@" && $4 ~ /[wa]/ {print "  " $0}' <<<"$acl")"
+      if [[ -n "$w" ]]; then
+        log_error "$d: NFSv4 ACL entries give write to someone other than the owner:"; printf '%s\n' "$w" >&2
+        log_error "  fix: nfs4_setfacl -s 'A::OWNER@:rwaDxtTnNcCy,A::GROUP@:rxtncy,A::EVERYONE@:rxtncy' $d (see docs/operations/PKG_SYNC.md)"
+        bad=1
+      else log_ok "$d: no NFSv4 ACL entry gives write to anyone but the owner"; fi
+    done
+  fi
   if command -v runuser >/dev/null 2>&1; then
-    if runuser -u nobody -- touch "$probe" 2>/dev/null; then
-      rm -f "$probe"; log_error "user 'nobody' can write ${PKG_SYNC_DIR}/hosts: researchers could choose what every host installs"; bad=1
-    else log_ok "a non-root user cannot write"; fi
+    # nobody is in no AD group, so it misses a group ACL: also try a real
+    # researcher account when one is configured.
+    users=(nobody); [[ -n "${PKG_SYNC_TEST_USER:-}" ]] && users+=("$PKG_SYNC_TEST_USER")
+    for u in "${users[@]}"; do
+      if runuser -u "$u" -- touch "$probe" 2>/dev/null; then
+        rm -f "$probe"; log_error "user '$u' can write ${PKG_SYNC_DIR}/hosts: researchers could choose what every host installs"; bad=1
+      else log_ok "user '$u' cannot write"; fi
+    done
+    [[ -n "${PKG_SYNC_TEST_USER:-}" ]] \
+      || log_warn "PKG_SYNC_TEST_USER is not set: only 'nobody' was tried. Set it to a researcher account to test AD group permissions"
   else log_warn "runuser not found: non-root write test skipped"; fi
   (( bad == 0 )) || exit 1
   publish

@@ -36,6 +36,17 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   It now probes `/api/v1/health` with the image's own Python. T1 (systemd) and
   T3 (`httpGet` probe) are not affected.
 
+### Fixed (package sync: shared directory check on TrueNAS)
+
+- `biome_pkg_sync.sh --check-dir` now fails when an NFSv4 ACL entry gives write
+  to anyone but the owner (needs `nfs4_getfacl`), and also tries to write as
+  `PKG_SYNC_TEST_USER`, a researcher account (new key in
+  `config/pkg_sync.vars.conf`). Found on calc04, 2026-10-27: a directory created
+  inside the TrueNAS home share inherited write for AD groups, and `nobody` (in
+  no AD group) could not have shown it. `docs/operations/PKG_SYNC.md` documents
+  the TrueNAS home-share variant (`/nfs/home/.biome-pkg-sync`, ACL replaced, mode
+  755). Tests S19d-S19f.
+
 ### Added (operations — cross-host package drift, ADR-0004)
 
 - `scripts/99_check_pkg_host_drift.sh`: read-only check that R hosts have the same

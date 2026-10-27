@@ -50,6 +50,30 @@ else does.
    If `no_root_squash` is not acceptable, use `all_squash,anonuid=<uid>,anongid=<gid>`
    with a dedicated account that owns the directory (`0755`): only these four
    hosts can reach the export, and on them only root runs the job.
+
+   **Variant used on BIOME (TrueNAS, inside the home share):** biome-store03
+   exports `/mnt/zpool/home` (mounted at `/nfs/home`, NFS 4.2, root not
+   squashed), so the directory is `/nfs/home/.biome-pkg-sync`. The leading dot
+   keeps it out of the user list, and Step 7c of `50_setup_nodes.sh` skips it
+   because no account has that name. A directory created there inherits the
+   share's NFSv4 ACL: on 2026-10-27 calc04 got mode `2775 root:domain_users`
+   and six inherited entries (`fd`) giving write to AD groups, gid 33 and uid
+   568. TrueNAS ignores `chmod` while such an ACL is set. Replace the ACL first,
+   then set the mode, from one host as root:
+
+   ```bash
+   D=/nfs/home/.biome-pkg-sync
+   mkdir -p $D/hosts $D/reports
+   for d in $D $D/hosts $D/reports; do nfs4_setfacl -s 'A::OWNER@:rwaDxtTnNcCy,A::GROUP@:rxtncy,A::EVERYONE@:rxtncy' $d; done
+   chmod 0755 $D $D/hosts $D/reports
+   nfs4_getfacl $D/hosts                       # 3 entries, none with w/a except OWNER@
+   sudo -u <researcher> touch $D/hosts/probe   # must fail: Permission denied
+   ```
+
+   `nfs4_getfacl`/`nfs4_setfacl` come from `nfs4-acl-tools`. The same result
+   from the TrueNAS UI: Edit Permissions on the directory, Strip ACL, owner
+   root, mode 755, applied recursively. Skip step 2 below: the share is already
+   mounted.
 2. **On every host, as root**: mount it at the same path.
 
    ```bash
@@ -61,14 +85,18 @@ else does.
 3. **Site config** on every host, in `config/site/pkg_sync.site.vars.conf`:
 
    ```bash
-   PKG_SYNC_DIR="/mnt/biome-pkg-sync"
+   PKG_SYNC_DIR="/mnt/biome-pkg-sync"        # BIOME: /nfs/home/.biome-pkg-sync
    PKG_SYNC_MODE="dry-run"
+   PKG_SYNC_TEST_USER="<a researcher account>"
    ```
 
 4. **Check access from every host** (calc01, calc02, calc03, calc04):
    `sudo bash scripts/biome_pkg_sync.sh --check-dir`. It checks that the
    directory is an NFS mount, that root can write it, that it is not writable by
-   group/others, and that user `nobody` cannot write it. Then it publishes the
+   group/others, that no NFSv4 ACL entry gives write to anyone but the owner
+   (when `nfs4_getfacl` is installed), and that `nobody` and
+   `PKG_SYNC_TEST_USER` cannot write it. `nobody` is in no AD group, so without
+   `PKG_SYNC_TEST_USER` a group ACL would go unnoticed: the check warns. Then it publishes the
    host's manifest and lists the hosts that reached the directory: after the
    fourth host the list must show all four. Exit 1 means fix the export first.
 5. **Timer**: `sudo bash scripts/biome_pkg_sync.sh --install-timer`, then
