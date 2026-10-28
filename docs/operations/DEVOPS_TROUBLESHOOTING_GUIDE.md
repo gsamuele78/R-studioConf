@@ -39,7 +39,7 @@ Walk the layers top-down. Stop at the first layer that is not healthy and open t
 | # | Layer | Question | Command (read-only) | Healthy | Not healthy → |
 |---|---|---|---|---|---|
 | 1 | Identity | Does the account resolve? | `getent passwd <user>; id <user>` | uid/gid printed | [Runbook §3.1](TROUBLESHOOTING.md#31-ad-user-no-longer-resolves-or-authenticates) |
-| 2 | Authentication | Did PAM/winbind accept the login? | `sudo journalctl -u rstudio-server --since '-1 hour' --no-pager \| grep -i <user>`; `sudo grep -i <user> /var/log/auth.log \| tail` | `granted access` / `session opened` | [Runbook §2](TROUBLESHOOTING.md#2-pam-and-password-operations), §3 |
+| 2 | Authentication | Did PAM/winbind accept the login? | `sudo journalctl -u rstudio-server --since '-1 hour' --no-pager \| grep -i <user>`; `sudo grep -i <user> /var/log/auth.log \| tail` | `granted access` / `session opened`; no `Error converting userIdentifier to username` (that line with a value like `name@domain` means the user typed an e-mail address instead of the username) | [Runbook §2](TROUBLESHOOTING.md#2-pam-and-password-operations), §3 |
 | 3 | Home storage | Is the home mounted, writable, under quota? | `findmnt -T /nfs/home/<user>`; `sudo bash scripts/99_troubleshoot_env.sh --storage --test-user <user>` | nfs4 mount, 1 MiB+fsync write OK | [Runbook §4.2](TROUBLESHOOTING.md#42-nfs-home-is-unavailable-stale-or-slow), [§4.4](TROUBLESHOOTING.md#44-writes-to--fail-with-disk-quota-exceeded-but-df-shows-free-space) |
 | 4 | rsession process | Is there an `rsession`, and what is it doing? | `pgrep -u <user> -a rsession`; `ps -o pid,etime,stat,%cpu,rss -p <pid>` | none (fresh login) or `S`, low CPU | §4 of this guide |
 | 5 | Session state | Is RStudio trying to resume a large/corrupt suspended session? | `sudo bash scripts/99_check_rprofile_health.sh --user <user>` (section 7); `sudo -u <user> sh -c 'find ~/.local/share/rstudio/sessions/active -path "*suspended-session-data*" -type f -printf "%s %p\n" \| sort -n \| tail'` | small state, no suspended payload | [Runbook §1.8](TROUBLESHOOTING.md#18-rstudio-stays-on-loading-after-a-suspended-session) |
@@ -89,7 +89,7 @@ Use these to judge what a command prints. "Source" says where the number comes f
 | `R` or `D`, high CPU or rising RSS | still deserializing the suspended environment (`D` = waiting on I/O, usually NFS) | wait; do not kill yet |
 | `S`/`Sl`, CPU < 1%, RSS stable | resume finished, waiting for the browser | user opens **one** tab and waits 2–3 min |
 | process gone, user still on "Loading…" | rsession crashed or was terminated | check the journal and the health check again |
-| still alive minutes after `kill` (SIGTERM), `Sl`, same RSS | rsession did not act on SIGTERM. On 2026-10-28 it was still alive 1 h later | decide: keep it (step 2b below) or `kill -9` (SIGKILL; the process cannot write anything more) |
+| still alive minutes after `kill` (SIGTERM), `Sl`, same RSS | rsession did not act on SIGTERM. On 2026-10-28 it was still alive hours later. RStudio Server OSS runs **one rsession per user** and sends every new login to it, so while it lives the user cannot get a fresh session | `kill -9` (SIGKILL; the process cannot write anything more). Keeping it (step 2b) is only an option if the user can actually get in |
 
 Rule of thumb from the 2026-10-28 incident: an 802 MB (765 MiB) suspended environment gave an `rsession` of about 1.6 GB RSS after resume (about 2×), plus a child R process for RStudio's package indexing.
 
@@ -102,7 +102,10 @@ U=<user>; P=$(pgrep -u "$U" -x rsession)
 ps -o etime,stat,%cpu,rss -p "$P"     # etime keeps growing (same pid) or a new pid; Sl/S; RSS stable
 sudo journalctl -u rstudio-server --since '-10 min' --no-pager | grep -iE "$U|error|abnormal"   # no "terminated abnormally"
 sudo -u "$U" find "/nfs/home/$U/.local/share/rstudio/sessions/active" -maxdepth 2 -newermt '-10 min'   # files touched by the live session
+sudo -u "$U" sh -c 'grep "Reading rsession configuration" ~/.local/share/rstudio/log/rsession-*.log | tail -3'   # one new line per rsession start
 ```
+
+**Login accepted but no new rsession.** If the journal shows `granted access` for a login and the per-user rsession log gets no new `Reading rsession configuration` line, rserver attached the login to the rsession that already exists. When that rsession is the stuck one (alive for hours, `Sl`, CPU ≈ 0), every login lands on it: `sudo kill -9 <pid>`, then the next login starts a new rsession (and a new line appears in the log).
 
 Ask the user to confirm that the IDE shows the Console prompt. CPU at 100% for minutes or a new "terminated abnormally" means the resume failed again: go to the next ladder step.
 
@@ -150,7 +153,7 @@ Known limits (2026-10-28):
 
    If `suspended-session-data` reappears after the move, check that no rsession is running and move it again under another name (`.bak-$(date +%F)-2`).
 
-   **2b. rsession ignores SIGTERM and the resume is already finished** (`Sl`, CPU ≈ 0, RSS stable; what happened on 2026-10-28). Moving the payload while the process stays alive is safe: the objects are already in the process memory, and the payload is only read at the *next* resume. The user logs in with one tab and finds the live session with their objects. They must then save the large objects with `saveRDS()` and clear them (`rm(list = ls())` or Session → Restart R): otherwise the next suspend writes the same payload again. If the IDE still does not load, `sudo kill -9 <pid>` and the next login starts an empty session.
+   **2b. rsession ignores SIGTERM and the resume is already finished** (`Sl`, CPU ≈ 0, RSS stable; what happened on 2026-10-28). Moving the payload while the process stays alive is safe: the objects are already in the process memory, and the payload is only read at the *next* resume. The user logs in with one tab and finds the live session with their objects. They must then save the large objects with `saveRDS()` and clear them (`rm(list = ls())` or Session → Restart R): otherwise the next suspend writes the same payload again. If the IDE still does not load, the live rsession is now the blocker (one rsession per user, see §3.3): `sudo kill -9 <pid>` and the next login starts an empty session. On 2026-10-28 this variant did **not** work: the user could not get in until the old rsession was killed. Prefer step 2 with `kill -9`.
 
    **Check the backup as the user.** Shell globs are expanded by the operator's shell, which cannot read the home, so `sudo -u $U du ~/x.bak-*` fails with "No such file". Run the whole command as the user:
 
@@ -239,6 +242,8 @@ A researcher (called *user A* here) reported that RStudio no longer opened on bi
 | 10:17 | ladder step 2: `kill` (SIGTERM) sent; `suspended-session-data` moved to `~/suspended-session-data.bak-2026-10-28` while `pgrep` still showed the rsession | operator shell |
 | 10:20 | payload gone from the session dir; health check 63/63 PASS, session state 1.3 MiB; backup checked as the user: `environment` 802068873 bytes (`du` 296M, ZFS compression) | health check, `sudo -u <u> sh -c 'ls; du'` |
 | 10:23 | rsession still alive 1 h 09 min after SIGTERM: `Sl`, 0.4% CPU, RSS 1.6 GB unchanged; no `abnormal` in the journal. Resume finished, session waiting for a browser (step 2b) | `ps`, `journalctl` |
+| afternoon | user A still cannot get in: logins accepted (`granted access`) but no new `Reading rsession configuration` line in the rsession log, because rserver kept routing them to the old, idle rsession | journal, `~/.local/share/rstudio/log/rsession-<user>.log` |
+| evening | old rsession stopped with `kill -9` | operator shell |
 | pending | user A logs in with one tab | §3.4 |
 
 ### 6.2 What each check showed
@@ -257,7 +262,8 @@ A researcher (called *user A* here) reported that RStudio no longer opened on bi
 
 ### 6.3 Lessons
 
-- `pgrep` still printed the rsession pid 5 s after `kill`, and the `mv` ran anyway. The process then stayed alive for over an hour: rsession did not act on SIGTERM. Here it did no harm (the resume was finished and the payload did not come back), but always read `pgrep` before moving anything and choose 2 or 2b on purpose (§4.1).
+- `pgrep` still printed the rsession pid 5 s after `kill`, and the `mv` ran anyway. The process then stayed alive for over an hour: rsession did not act on SIGTERM. The payload did not come back, but the live rsession then absorbed every new login of the user for hours (one rsession per user on RStudio Server OSS). Use `kill -9` and confirm with `pgrep` before moving anything (§4.1 step 2).
+- "Login works" in the journal does not mean a session started: check the per-user rsession log for a new `Reading rsession configuration` line (§3.4).
 - `sudo -u $U du ~/x.bak-*` failed with "No such file" although the backup existed: the glob was expanded by the operator's shell. Run globs inside `sudo -u $U sh -c '...'`.
 - `du` showed 296M for an 802 MB file: ZFS compression on TrueNAS. Use `ls -l` or `du --apparent-size` for file sizes.
 
@@ -275,6 +281,6 @@ A researcher (called *user A* here) reported that RStudio no longer opened on bi
 
 ## 7. Unverified
 
-- Observed on 2026-10-28: rsession did not exit on SIGTERM for over an hour. Whether it would write a new suspended state on a later exit is not verified; the ladder checks for it.
+- Observed on 2026-10-28: rsession did not exit on SIGTERM for hours. Whether it would write a new suspended state on a later exit is not verified; the ladder checks for it.
 - `load()` of the suspended `environment` file is expected to work but not verified (§4.2).
 - Live session-timeout values, package versions and timers on calc02–calc04 were not captured during this incident. Check them per host with the §5 commands.

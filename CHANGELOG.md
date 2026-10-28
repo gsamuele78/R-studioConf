@@ -18,7 +18,9 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   worked example (unattended-upgrades + needrestart restarted rstudio-server at
   06:26; an 802 MB suspended environment kept a researcher on "Loading…"), how to
   check the user is back in, rsession ignoring SIGTERM, checking the backup as
-  the user, and reloading objects from a moved payload with `load()`.
+  the user, reloading objects from a moved payload with `load()`, and the
+  one-rsession-per-user trap (a stuck rsession absorbs every new login: check the
+  rsession log for `Reading rsession configuration`, then `kill -9`).
 - `TROUBLESHOOTING.md` §1.8 (new: RStudio stays on "Loading…" after a suspended
   session), §0/§1.1/§8.1 linked to it; `DIAGNOSTICS_INDEX.md` postmortem values,
   known gaps and two quick-table rows; `diagnostic_logs.md` RStudio per-user state

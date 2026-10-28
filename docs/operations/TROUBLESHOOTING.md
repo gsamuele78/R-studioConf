@@ -238,14 +238,14 @@ Then find what suspended the session (idle timeout or service restart): [`DEVOPS
 
 1. rsession in `S` with low CPU: the resume is done. The user opens **one** tab and waits 2–3 minutes without Terminate/Reload, then saves big objects with `saveRDS()` and removes them with `rm()`.
 2. Otherwise stop **only** the user's rsession (not their tmux/ssh R) with `sudo kill -9 <pid>` (SIGTERM did not stop it on 2026-10-28), check that `pgrep -u "$U" -x rsession` prints nothing, then move `suspended-session-data` aside as the user (`D=$S/sessions/active/session-<id>`): `sudo -u "$U" mv "$D/suspended-session-data" "/nfs/home/$U/suspended-session-data.bak-$(date +%F)"`.
-   If the rsession ignores SIGTERM but its resume is finished (`Sl`, CPU ≈ 0, RSS stable), moving the payload while it stays alive is safe: the user logs in to the live session, then saves and clears the large objects (guide §4.1 step 2b). Check the backup as the user: `sudo -u "$U" sh -c 'ls -la ~/suspended-session-data.bak-*'` (`du` under-reports on compressed ZFS).
+   Do not leave an old rsession alive after moving the payload: RStudio Server OSS runs one rsession per user and routes every new login to it, so a stuck one keeps the user out (journal says `granted access`, but the per-user `~/.local/share/rstudio/log/rsession-<user>.log` gets no new `Reading rsession configuration` line). `kill -9` it (guide §3.3–§3.4). Check the backup as the user: `sudo -u "$U" sh -c 'ls -la ~/suspended-session-data.bak-*'` (`du` under-reports on compressed ZFS).
 3. Last resort: `sudo bash scripts/99_check_rprofile_health.sh --user "$U" --reset-profile --commit` (reversible with `--undo-reset`).
 
 Objects from a moved payload can be reloaded with `load()` into a `new.env()`, on a copy (guide §4.2; not yet verified on this format).
 
 Do not run the `FIX: mv ~/.local/share/rstudio ...` line printed by `99_postmortem_forensics.sh` as root on NFS or while the rsession is alive.
 
-**Verification.** `sudo -u "$U" ls "$D"` no longer lists `suspended-session-data`; the health check shows no session-state warning; at the next login (one tab) the rsession is in state `S` with stable RSS, the journal has no new "terminated abnormally", and the user sees the Console prompt (guide §3.4). Prevention of forced suspends by unattended upgrades: ADR-0007 in PR #53.
+**Verification.** `sudo -u "$U" ls "$D"` no longer lists `suspended-session-data`; the health check shows no session-state warning; at the next login (one tab) the rsession is in state `S` with stable RSS, the journal has no new "terminated abnormally", the rsession log has a new `Reading rsession configuration` line for this login, and the user sees the Console prompt (guide §3.4). A journal line `Error converting userIdentifier to username` with an e-mail-like value means the user typed an e-mail address instead of the username. Prevention of forced suspends by unattended upgrades: ADR-0007 in PR #53.
 
 ## 2. PAM and password operations
 
