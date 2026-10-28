@@ -8,6 +8,10 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Added (docs — large RStudio sessions, ADR-0008 Proposed)
+
+- `docs/adr/0008-large-rstudio-sessions-local-state-and-early-warning.md`: plan to keep RStudio session state on local disk, warn in R when a session grows large, and mail a nightly report of large suspended sessions. Design only; no code or host change yet.
+
 ### Added (T1 operations — OS updates only on a free node, ADR-0007)
 
 - `scripts/biome_node_maintenance.sh` with `config/node_maintenance.vars.conf` and
