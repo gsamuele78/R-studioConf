@@ -269,6 +269,11 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
           df -h /
       - name: Build ${{ matrix.service }}
+        # Authenticated GitHub API calls for the R GitHub package installs: the
+        # shared runner IP hit the 60/hour unauthenticated limit (run 328,
+        # rstudio-sssd, HTTP 403). Passed as a BuildKit secret, not a build arg.
+        env:
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
         run: docker compose -f docker-deploy/docker-compose.yml --env-file docker-deploy/.env.ci build ${{ matrix.service }}
 
   # ── R package manifest shape (cheap drift guard) ───────────────────────────

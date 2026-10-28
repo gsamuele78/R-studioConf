@@ -86,6 +86,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.sssd
+      secrets: [ github_pat ]
     image: ${RSTUDIO_SSSD_IMAGE:-rstudio-botanical-sssd}:${IMAGE_TAG}
     container_name: rstudio_pet
     restart: unless-stopped
@@ -139,6 +140,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.samba
+      secrets: [ github_pat ]
     image: ${RSTUDIO_SAMBA_IMAGE:-rstudio-botanical-samba}:${IMAGE_TAG}
     container_name: rstudio_pet
     restart: unless-stopped
@@ -328,6 +330,15 @@ services:
       retries: 5
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+
+# Build-time only: an optional GitHub token for the R GitHub package installs in
+# the rstudio-* images (unauthenticated API calls are capped at 60/hour per IP).
+# Read from the GITHUB_PAT environment variable of the shell running the build;
+# unset means an empty secret and unauthenticated installs, as before. Never put
+# the token in .env files committed to git.
+secrets:
+  github_pat:
+    environment: GITHUB_PAT
 
 # No named volumes — all bind mounts (HC-02)
 # No version: key — Compose v2 does not need it (HC-09)
