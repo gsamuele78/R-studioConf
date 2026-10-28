@@ -5,7 +5,7 @@ audience: operator
 status: current
 tier: T1
 source_path: docs/operations/TROUBLESHOOTING.md
-last_verified: 2026-10-06
+last_verified: 2026-10-28
 ---
 
 # Troubleshooting Runbook
@@ -21,6 +21,8 @@ sudo bash scripts/99_check_rprofile_health.sh --user <user>
 ```
 
 Use only the configured identity backend when reading service state. Do not run both SSSD and Samba/Winbind join paths.
+
+If you do not yet know which layer is failing, start from the layered triage and the reference values in [`DEVOPS_TROUBLESHOOTING_GUIDE.md`](DEVOPS_TROUBLESHOOTING_GUIDE.md). On NFS homes, read user files as the user (`sudo -u <user> ...`): root may be squashed.
 
 ## 1. RStudio and R runtime
 
@@ -38,6 +40,8 @@ sudo bash scripts/99_check_rprofile_health.sh --user <user>
 getent passwd <user>
 findmnt -T "$(getent passwd <user> | cut -d: -f6)"
 ```
+
+If the journal shows `granted access` for the user and the IDE then stays on "Loading…" or loops through Terminate/Reload with "previous R session terminated abnormally", the login is fine and the resume of a suspended session is the problem: go to §1.8.
 
 **Fix.** Repair the failing layer: identity (§3), NFS home (§4.2), PAM (§2), or the user's startup state. For personal startup files, preview and then explicitly commit a reversible repair:
 
@@ -212,6 +216,36 @@ Exit `1` means medium/unknown drift, `2` high-risk drift, `3` detector failure.
 **Fix.** Reconcile packages through `config/r_env_manager.conf` and the manager. Do not update the drift baseline until the difference is reviewed.
 
 **Verification.** Rerun the detector; exit must be `0`. Then rerun the unchanged script under the same profile and inputs.
+
+### 1.8 RStudio stays on "Loading…" after a suspended session
+
+**Symptom.** Login succeeds, but the IDE never finishes loading. The user presses Terminate or reloads, a new session starts, and the journal shows "previous R session terminated abnormally" again. Often all users of a node were suspended at the same time.
+
+**Diagnosis.** RStudio Server suspends a session on idle timeout and on every `rstudio-server` stop/restart. It writes the whole R environment to `~/.local/share/rstudio/sessions/active/session-*/suspended-session-data/environment` on NFS and reads it back at the next login. A payload of hundreds of MB keeps the IDE loading for minutes.
+
+```bash
+U=<user>; S=/nfs/home/$U/.local/share/rstudio
+sudo bash scripts/99_check_rprofile_health.sh --user "$U"            # section 7: RStudio session state
+sudo -u "$U" sh -c 'du -sh --apparent-size ~/.local/share/rstudio/sessions/active/*/'   # globs inside sh -c
+sudo -u "$U" find "$S" -size +20M -exec ls -lh {} +
+pgrep -u "$U" -a rsession; ps -o pid,etime,stat,%cpu,rss -p "$(pgrep -u "$U" -x rsession)"
+sudo journalctl -u rstudio-server --since '-1 day' --no-pager | grep -iE "$U|abnormal|ENOLCK|Stopping|Started"
+```
+
+Then find what suspended the session (idle timeout or service restart): [`DEVOPS_TROUBLESHOOTING_GUIDE.md`](DEVOPS_TROUBLESHOOTING_GUIDE.md) §5. Values to judge the outputs (sizes, `ps` states, timeouts) are in §3 of the same guide. Health 2.0 does not flag a large payload by itself; health 2.1 ([PR #53](https://github.com/gsamuele78/R-studioConf/pull/53), open) warns at ≥256 MiB.
+
+**Fix.** Use the escalation ladder, least invasive first ([guide §4.1](DEVOPS_TROUBLESHOOTING_GUIDE.md#41-escalation-ladder-least-invasive-first)):
+
+1. rsession in `S` with low CPU: the resume is done. The user opens **one** tab and waits 2–3 minutes without Terminate/Reload, then saves big objects with `saveRDS()` and removes them with `rm()`.
+2. Otherwise stop **only** the user's rsession (not their tmux/ssh R) with `sudo kill -9 <pid>` (SIGTERM did not stop it on 2026-10-28), check that `pgrep -u "$U" -x rsession` prints nothing, then move `suspended-session-data` aside as the user (`D=$S/sessions/active/session-<id>`): `sudo -u "$U" mv "$D/suspended-session-data" "/nfs/home/$U/suspended-session-data.bak-$(date +%F)"`.
+   Do not leave an old rsession alive after moving the payload: RStudio Server OSS runs one rsession per user and routes every new login to it, so a stuck one keeps the user out (journal says `granted access`, but the per-user `~/.local/share/rstudio/log/rsession-<user>.log` gets no new `Reading rsession configuration` line). `kill -9` it (guide §3.3–§3.4). Check the backup as the user: `sudo -u "$U" sh -c 'ls -la ~/suspended-session-data.bak-*'` (`du` under-reports on compressed ZFS).
+3. Last resort: `sudo bash scripts/99_check_rprofile_health.sh --user "$U" --reset-profile --commit` (reversible with `--undo-reset`).
+
+Objects from a moved payload can be reloaded with `load()` into a `new.env()`, on a copy (guide §4.2; not yet verified on this format).
+
+Do not run the `FIX: mv ~/.local/share/rstudio ...` line printed by `99_postmortem_forensics.sh` as root on NFS or while the rsession is alive.
+
+**Verification.** `sudo -u "$U" ls "$D"` no longer lists `suspended-session-data`; the health check shows no session-state warning; at the next login (one tab) the rsession is in state `S` with stable RSS, the journal has no new "terminated abnormally", the rsession log has a new `Reading rsession configuration` line for this login, and the user sees the Console prompt (guide §3.4). A journal line `Error converting userIdentifier to username` with an e-mail-like value means the user typed an e-mail address instead of the username. Prevention of forced suspends by unattended upgrades: ADR-0007 in PR #53.
 
 ## 2. PAM and password operations
 
@@ -557,7 +591,7 @@ sudo bash scripts/99_check_rprofile_health.sh --user <user>
 sudo bash scripts/50_setup_nodes.sh --verify
 ```
 
-Health 2.0 checks dispatcher, 14 fragments, byte-compiled bundle, guards, BLAS, Renviron, personal startup, worker survival, runtime load and minimal tools.
+Health 2.0 (on main) checks dispatcher, 14 fragments, byte-compiled bundle, guards, BLAS, Renviron, personal startup (including RStudio session state ≥1 GiB), worker survival, runtime load and minimal tools. Health 2.1 ([PR #53](https://github.com/gsamuele78/R-studioConf/pull/53), open) adds a WARN for any single suspended-session payload ≥256 MiB (§1.8). Threshold values: [`DEVOPS_TROUBLESHOOTING_GUIDE.md`](DEVOPS_TROUBLESHOOTING_GUIDE.md) §3.2.
 
 **Fix.** Follow the exact finding. System drift is usually corrected by option 3. Personal startup repair uses `--fix`/`--reset-profile` with explicit `--commit`.
 

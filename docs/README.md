@@ -18,7 +18,7 @@ Fixes originate in T1 and are ported forward T1 -> T2 -> T3. `RPROFILE_VERSION` 
 | Researcher/end user | [`user_guides/BOTANIST_CHEATSHEET.md`](user_guides/BOTANIST_CHEATSHEET.md), then [`user_guides/COMMON_PROBLEMS.md`](user_guides/COMMON_PROBLEMS.md) and [`user_guides/User_guide.md`](user_guides/User_guide.md) |
 | Host deployer | [`deployment/INSTALLATION_GUIDE.md`](deployment/INSTALLATION_GUIDE.md), [`deployment/CONFIGURATION_REFERENCE.md`](deployment/CONFIGURATION_REFERENCE.md) |
 | Day-2 operator | [`operations/OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md), [`operations/MAINTENANCE.md`](operations/MAINTENANCE.md) |
-| Incident responder | [`operations/DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md), [`operations/TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md), [`operations/USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) |
+| Incident responder | [`operations/DEVOPS_TROUBLESHOOTING_GUIDE.md`](operations/DEVOPS_TROUBLESHOOTING_GUIDE.md), [`operations/DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md), [`operations/TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md), [`operations/USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) |
 | Developer | [`developer/README.md`](developer/README.md), [`reference/SCRIPT_CATALOG.md`](reference/SCRIPT_CATALOG.md) |
 | Architect | [`architecture/SYSTEM_OVERVIEW.md`](architecture/SYSTEM_OVERVIEW.md), [`architecture/SECURITY_MODEL.md`](architecture/SECURITY_MODEL.md), [`FUTURE_MIGRATION.md`](FUTURE_MIGRATION.md) |
 | Documentation/wiki publisher | [`SHAREPOINT_PUBLICATION.md`](SHAREPOINT_PUBLICATION.md), then generated output under `wiki/` |
@@ -80,6 +80,7 @@ Descriptions state each file's role. They do not imply that every document has p
 - [`OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md) — day-2 quick reference.
 - [`MAINTENANCE.md`](operations/MAINTENANCE.md) — periodic maintenance schedule and procedures.
 - [`HOTFIX_REGISTER.md`](operations/HOTFIX_REGISTER.md) — in-place hotfixes, the release that absorbs each, and what each host runs (ADR-0006).
+- [`DEVOPS_TROUBLESHOOTING_GUIDE.md`](operations/DEVOPS_TROUBLESHOOTING_GUIDE.md) — troubleshooting method: layered triage, reference values and thresholds, tool kit, worked example (suspended-session incident, 2026-10-28).
 - [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed troubleshooting.
 - [`DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md) — diagnostic and repair-tool index.
 - [`USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) — HC-13 diagnostic ladder for unchanged user R scripts.
@@ -92,7 +93,7 @@ Descriptions state each file's role. They do not imply that every document has p
 - [`UPGRADE_TO_v12.4.md`](operations/UPGRADE_TO_v12.4.md) — historical v12.4 upgrade runbook; current Rprofile version is 12.11.
 - [`add_storage_no_reboot.md`](operations/add_storage_no_reboot.md) — storage hot-add procedure.
 - [`diagnostic_logs.md`](operations/diagnostic_logs.md) — log-location reference.
-- [`sysadmin_troubleshooting_guide.md`](operations/sysadmin_troubleshooting_guide.md) — long-form sysadmin troubleshooting guide.
+- [`sysadmin_troubleshooting_guide.md`](operations/sysadmin_troubleshooting_guide.md) — legacy v10.0 long-form guide (superseded by the three documents above where they disagree).
 - [`NGINX_AUTH_PAM_REGRESSION_2026-06.md`](operations/NGINX_AUTH_PAM_REGRESSION_2026-06.md) — June 2026 Nginx/PAM regression record.
 
 ### Orphan cleanup (`orphan_cleanup/`)

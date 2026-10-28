@@ -5,13 +5,13 @@ audience: operator
 status: current
 tier: T1
 source_path: docs/operations/diagnostic_logs.md
-last_verified: 2026-10-07
+last_verified: 2026-10-28
 sharepoint_section: Operations Hub
 ---
 # BIOME-CALC Diagnostic and Forensic Logs
 
 **Audience:** sysadmin / on-call  
-**Last verified:** 2026-10-06
+**Last verified:** 2026-10-28
 
 ## R runtime
 
@@ -25,6 +25,16 @@ sharepoint_section: Operations Hub
 | `/Rtmp/biome_<user>/cluster_logs/` | `biome_make_cluster()` / PSOCK factory | Worker stdout/stderr files. |
 | `/Rtmp/biome_thread_guard/` | fragments 05/55 | Per-user thread/options guard audit files. |
 | `~/biome_audit.log` | deployed `00_audit_v28.R` | Per-user audit run log. |
+
+## RStudio per-user state (NFS home — read as the user with `sudo -u <user>`)
+
+| Path | Producer | Condition |
+|---|---|---|
+| `~/.local/share/rstudio/sessions/active/session-<id>/` | rsession | One directory per live or suspended session. |
+| `.../session-<id>/suspended-session-data/environment` | rsession at suspend | The whole R environment, written on idle timeout or `rstudio-server` stop/restart and read back at the next login. Hundreds of MB here keep the IDE on "Loading…" (`TROUBLESHOOTING.md` §1.8). |
+| `~/.local/share/rstudio/sources/session-<id>/` | rsession | Open editor tabs and unsaved buffers; `lock_file` is the NFS session lock (`ENOLCK` in the journal when it cannot be taken). |
+| `~/.local/share/rstudio/log/` | rsession | Per-user RStudio log (may be absent). |
+| `~/.biome-profile-quarantine/<STAMP>/` | `99_check_rprofile_health.sh --reset-profile --commit` | Moved RStudio state and startup files; `--undo-reset <STAMP>` restores them. |
 
 ## Diagnostic tools
 
@@ -51,6 +61,19 @@ sharepoint_section: Operations Hub
 | `journalctl -u smbd -u winbind` and `/var/log/samba/` | Samba/Winbind backend. |
 | `/var/log/r_orphan_cleanup/` | Orphan cleanup/notification/report templates deployed by `50_setup_nodes.sh`. |
 | `/var/log/biome-log/biome_archive/` | Project archiver (`ARCHIVE_LOG_DIR`). |
+
+## Host events (what changed on the node, and when)
+
+| Path / command | Use |
+|---|---|
+| `/var/log/dpkg.log`, `/var/log/apt/history.log*` | Packages upgraded/installed, with timestamps. |
+| `/var/log/unattended-upgrades/unattended-upgrades*.log*` | Unattended upgrades; "Restarting services..." lines come from needrestart. |
+| `journalctl -u apt-daily-upgrade.service`, `systemctl list-timers 'apt-daily*'` | When the daily upgrade ran and is scheduled. |
+| `/etc/needrestart/needrestart.conf`, `/etc/needrestart/conf.d/` | Which services needrestart may restart automatically. |
+| `journalctl -u rstudio-server` (`Stopping`/`Started`/`Consumed ... memory peak`) | A service stop/restart suspends every session on the node. |
+| `dmesg -T \| grep -iE 'nfs\|lockd\|lease'` | NFS outages (`server ... not responding`, `check lease failed`). |
+
+How to read them together: [`DEVOPS_TROUBLESHOOTING_GUIDE.md`](DEVOPS_TROUBLESHOOTING_GUIDE.md) §5.
 
 ## Collection rule
 

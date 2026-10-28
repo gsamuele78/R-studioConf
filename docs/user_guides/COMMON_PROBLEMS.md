@@ -480,6 +480,8 @@ It is local to each server and has no backup.
 - The login page rejects your university credentials, or shows an error.
 - RStudio opens but the session never finishes starting, or you get a new
   empty session instead of your previous one.
+- RStudio stays on "Loading…" for minutes, and pressing Terminate or
+  reloading the page only starts the wait again.
 
 **Why it happens**
 
@@ -488,10 +490,19 @@ It is local to each server and has no backup.
   common cause.
 - Your previous R session is kept for about 48 hours after you close the
   browser. After that it is closed and a new one starts. That is normal.
+- When the server is restarted, or your session has been idle for a long
+  time, RStudio saves everything in your Environment to disk and loads it
+  back when you return. With several GB of objects this takes minutes.
 
 **What you can do**
 
 - Log out completely and log in again.
+- If it stays on "Loading…": close every RStudio tab, open **one**, and
+  wait 3 minutes without pressing Terminate or reloading. Two tabs at once
+  make the problem worse.
+- Keep big objects in files, not only in the Environment: save them with
+  `saveRDS()` in your project folder and remove them with `rm()` when you
+  stop working. Your next login will then be fast.
 - Try a private/incognito browser window (old cookies can break the login).
 - If R starts but behaves strangely, open the portal's **Terminal** and
   run:
