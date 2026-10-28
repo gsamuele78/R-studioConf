@@ -8,6 +8,16 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Fixed (T1 diagnostics — large suspended RStudio session)
+
+- `scripts/99_check_rprofile_health.sh` 2.0 → 2.1: section 7e only compared the
+  total `~/.local/share/rstudio/sessions` size with 1 GiB, so a 765 MB
+  `suspended-session-data/environment` (769 MiB in total) was reported PASS on
+  biome-calc01 on 2026-10-28. That file kept the user's login on "Loading…" in a
+  Terminate/resume loop. Now any single suspended payload ≥256 MiB is a WARN, and
+  the action plan offers the reversible `--reset-profile --commit`. Regression
+  cases are in `tests/rprofile_health_test.sh`. Docs: `docs/operations/DIAGNOSTICS_INDEX.md`.
+
 ### Changed (T2 telemetry-api on Python 3.14)
 
 - `docker-deploy/Dockerfile.telemetry`: base image `python:3.11-slim` →

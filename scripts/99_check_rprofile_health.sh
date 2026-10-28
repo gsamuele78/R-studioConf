@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # scripts/99_check_rprofile_health.sh — RPROFILE HEALTH CHECK + PER-USER REPAIR
-# HEALTH_VERSION="2.0"  (script-level only — does NOT bump RPROFILE_VERSION)
+# HEALTH_VERSION="2.1"  (script-level only — does NOT bump RPROFILE_VERSION)
 # ==============================================================================
 # Sysadmin tool for the startup chain every RStudio OSS web session runs:
 #
@@ -102,6 +102,7 @@ FAILED_CHECKS=()
 # Thresholds (bytes / ms)
 RDATA_FAIL_BYTES=$((1024 * 1024 * 1024))     # ≥1 GiB workspace restored at login
 RSTATE_WARN_BYTES=$((1024 * 1024 * 1024))    # ≥1 GiB of RStudio session state
+RSUSPEND_WARN_BYTES=$((256 * 1024 * 1024))   # ≥256 MiB single suspended-session payload
 SLOW_START_WARN_MS=5000
 SLOW_START_FAIL_MS=30000
 
@@ -945,7 +946,7 @@ do_undo() {
 
 write_r_programs
 
-printf "%s\n" "${BOLD}Rprofile health check v2.0${NC}"
+printf "%s\n" "${BOLD}Rprofile health check v2.1${NC}"
 printf "  host=%s  uid=%s  R=%s  mode=%s%s\n" "$(hostname)" "$EUID_NOW" "${R_VER_MM:-unknown}" \
     "$MODE" "$( [[ "$COMMIT" == true ]] && printf ' (COMMIT)' || printf '' )"
 if [[ -n "$BIOME_HEALTH_ROOT" ]]; then
@@ -1810,14 +1811,29 @@ else
         if user_is -d "$U_RS_SESSIONS"; then
             rs_size="$(u_run timeout 20 du -sb -- "$U_RS_SESSIONS" 2>/dev/null | awk '{print $1}' || true)"
             rs_n="$(u_run find "${U_RS_SESSIONS}/active" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l || true)"
+            rs_quarantine_hint=false
             if is_num "$rs_size" && [[ "$rs_size" -ge "$RSTATE_WARN_BYTES" ]]; then
                 report WARN "RStudio session state is $(human_bytes "$rs_size") (${rs_n} session dir(s))" \
                     "RStudio resumes suspended sessions at login — a huge or corrupted one keeps the browser on 'Loading…'"
-                add_manual "Quarantine ${U_NAME}'s RStudio state (reversible): sudo bash ${SELF} --user ${U_NAME} --reset-profile --commit"
+                rs_quarantine_hint=true
             elif is_num "$rs_size"; then
                 report PASS "RStudio session state: $(human_bytes "$rs_size") in ${rs_n} session dir(s)"
             else
                 report WARN "RStudio session state size unknown (du timed out or failed)" "${U_RS_SESSIONS}"
+            fi
+            # v2.1: one large suspended payload blocks the resume even when the
+            # total stays under RSTATE_WARN_BYTES (calc01, 2026-10-28: a 765 MB
+            # suspended-session-data/environment, total 769 MiB, reported PASS).
+            rs_big="$(u_run timeout 20 find "${U_RS_SESSIONS}/active" -path '*/suspended-session-data/*' -type f -printf '%s %p\n' 2>/dev/null \
+                | sort -n | tail -n 1 || true)"
+            rs_big_size="${rs_big%% *}"
+            if is_num "$rs_big_size" && [[ "$rs_big_size" -ge "$RSUSPEND_WARN_BYTES" ]]; then
+                report WARN "Suspended RStudio session payload is $(human_bytes "$rs_big_size"): ${rs_big#* }" \
+                    "rsession reads and deserializes it from NFS at every login before the IDE loads — the browser stays on 'Loading…', the user hits Terminate and the resume starts again"
+                rs_quarantine_hint=true
+            fi
+            if [[ "$rs_quarantine_hint" == true ]]; then
+                add_manual "Quarantine ${U_NAME}'s RStudio state (reversible): sudo bash ${SELF} --user ${U_NAME} --reset-profile --commit"
             fi
         else
             report PASS "No RStudio session state yet"
