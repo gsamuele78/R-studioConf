@@ -42,7 +42,7 @@ Walk the layers top-down. Stop at the first layer that is not healthy and open t
 | 2 | Authentication | Did PAM/winbind accept the login? | `sudo journalctl -u rstudio-server --since '-1 hour' --no-pager \| grep -i <user>`; `sudo grep -i <user> /var/log/auth.log \| tail` | `granted access` / `session opened` | [Runbook §2](TROUBLESHOOTING.md#2-pam-and-password-operations), §3 |
 | 3 | Home storage | Is the home mounted, writable, under quota? | `findmnt -T /nfs/home/<user>`; `sudo bash scripts/99_troubleshoot_env.sh --storage --test-user <user>` | nfs4 mount, 1 MiB+fsync write OK | [Runbook §4.2](TROUBLESHOOTING.md#42-nfs-home-is-unavailable-stale-or-slow), [§4.4](TROUBLESHOOTING.md#44-writes-to--fail-with-disk-quota-exceeded-but-df-shows-free-space) |
 | 4 | rsession process | Is there an `rsession`, and what is it doing? | `pgrep -u <user> -a rsession`; `ps -o pid,etime,stat,%cpu,rss -p <pid>` | none (fresh login) or `S`, low CPU | §4 of this guide |
-| 5 | Session state | Is RStudio trying to resume a large/corrupt suspended session? | `sudo bash scripts/99_check_rprofile_health.sh --user <user>` (section 7); `sudo -u <user> du -sh /nfs/home/<user>/.local/share/rstudio/sessions/active/*/` | small state, no suspended payload | [Runbook §1.8](TROUBLESHOOTING.md#18-rstudio-stays-on-loading-after-a-suspended-session) |
+| 5 | Session state | Is RStudio trying to resume a large/corrupt suspended session? | `sudo bash scripts/99_check_rprofile_health.sh --user <user>` (section 7); `sudo -u <user> sh -c 'find ~/.local/share/rstudio/sessions/active -path "*suspended-session-data*" -type f -printf "%s %p\n" \| sort -n \| tail'` | small state, no suspended payload | [Runbook §1.8](TROUBLESHOOTING.md#18-rstudio-stays-on-loading-after-a-suspended-session) |
 | 6 | R profile | Does the system/user R startup load cleanly? | same health check, sections 1–9 | `VERDICT` clear | [Runbook §1.1](TROUBLESHOOTING.md#11-rstudio-login-loops-or-session-failed-to-start), [§8.1](TROUBLESHOOTING.md#81-welcome-bannerguardstools-are-missing) |
 | 7 | Crash history | Did the session crash (OOM, SIGSEGV) rather than hang? | `sudo bash scripts/99_postmortem_forensics.sh --user <user> --hours 72 --output /tmp/pm_<user>.txt` | no OOM/signal entries | [Runbook §1.2](TROUBLESHOOTING.md#12-r-session-exits-with-sigsegv-during-matrix-work), [§1.3](TROUBLESHOOTING.md#13-r-session-is-oom-killed-or-exits-137) |
 | 8 | Host event | What happened on the host at the time the problem started? | §5 of this guide | no service stop, no NFS errors | §5 |
@@ -89,10 +89,24 @@ Use these to judge what a command prints. "Source" says where the number comes f
 | `R` or `D`, high CPU or rising RSS | still deserializing the suspended environment (`D` = waiting on I/O, usually NFS) | wait; do not kill yet |
 | `S`/`Sl`, CPU < 1%, RSS stable | resume finished, waiting for the browser | user opens **one** tab and waits 2–3 min |
 | process gone, user still on "Loading…" | rsession crashed or was terminated | check the journal and the health check again |
+| still alive minutes after `kill` (SIGTERM), `Sl`, same RSS | rsession did not act on SIGTERM. On 2026-10-28 it was still alive 1 h later | decide: keep it (step 2b below) or `kill -9` (SIGKILL; the process cannot write anything more) |
 
-Rule of thumb from the 2026-10-28 incident: a 765 MB suspended environment gave an `rsession` of about 1.6 GB RSS after resume (about 2×), plus a child R process for RStudio's package indexing.
+Rule of thumb from the 2026-10-28 incident: an 802 MB (765 MiB) suspended environment gave an `rsession` of about 1.6 GB RSS after resume (about 2×), plus a child R process for RStudio's package indexing.
 
-### 3.4 Storage signals
+### 3.4 Is the user back in?
+
+After the user logs in with one tab, all of these must hold:
+
+```bash
+U=<user>; P=$(pgrep -u "$U" -x rsession)
+ps -o etime,stat,%cpu,rss -p "$P"     # etime keeps growing (same pid) or a new pid; Sl/S; RSS stable
+sudo journalctl -u rstudio-server --since '-10 min' --no-pager | grep -iE "$U|error|abnormal"   # no "terminated abnormally"
+sudo -u "$U" find "/nfs/home/$U/.local/share/rstudio/sessions/active" -maxdepth 2 -newermt '-10 min'   # files touched by the live session
+```
+
+Ask the user to confirm that the IDE shows the Console prompt. CPU at 100% for minutes or a new "terminated abnormally" means the resume failed again: go to the next ladder step.
+
+### 3.5 Storage signals
 
 | Signal | Meaning |
 |---|---|
@@ -125,17 +139,26 @@ Known limits (2026-10-28):
    ```bash
    U=<user>; D=/nfs/home/$U/.local/share/rstudio/sessions/active/session-<id>
    P=$(pgrep -u "$U" -x rsession); echo "rsession: ${P:-none}"
-   [ -n "$P" ] && sudo kill "$P"
-   # wait until it is really gone; SIGTERM is not instant on a large session
-   for i in $(seq 1 12); do pgrep -u "$U" -x rsession >/dev/null || break; sleep 5; done
-   pgrep -u "$U" -x rsession && sudo kill -9 "$P"   # only if still alive after 60 s
-   pgrep -u "$U" -a rsession || echo "no rsession"   # must print "no rsession"
+   # SIGKILL: on 2026-10-28 SIGTERM left the rsession alive for over an hour,
+   # and SIGKILL gives it no chance to write a new suspended state
+   [ -n "$P" ] && sudo kill -9 "$P"
+   sleep 2; pgrep -u "$U" -a rsession || echo "no rsession"   # must print "no rsession"
    sudo -u "$U" ls -la "$D"                           # suspended-session-data still there?
    sudo -u "$U" mv "$D/suspended-session-data" "/nfs/home/$U/suspended-session-data.bak-$(date +%F)"
    sudo -u "$U" ls -la "$D"                           # must NOT list suspended-session-data
    ```
 
-   Do not move the directory while the rsession is still alive: an exiting rsession may write session state again. If `suspended-session-data` reappears after the move, stop the process with `kill -9` and move it again under another name (`.bak-$(date +%F)-2`).
+   If `suspended-session-data` reappears after the move, check that no rsession is running and move it again under another name (`.bak-$(date +%F)-2`).
+
+   **2b. rsession ignores SIGTERM and the resume is already finished** (`Sl`, CPU ≈ 0, RSS stable; what happened on 2026-10-28). Moving the payload while the process stays alive is safe: the objects are already in the process memory, and the payload is only read at the *next* resume. The user logs in with one tab and finds the live session with their objects. They must then save the large objects with `saveRDS()` and clear them (`rm(list = ls())` or Session → Restart R): otherwise the next suspend writes the same payload again. If the IDE still does not load, `sudo kill -9 <pid>` and the next login starts an empty session.
+
+   **Check the backup as the user.** Shell globs are expanded by the operator's shell, which cannot read the home, so `sudo -u $U du ~/x.bak-*` fails with "No such file". Run the whole command as the user:
+
+   ```bash
+   sudo -u "$U" sh -c 'ls -la ~/suspended-session-data.bak-*; du -sh --apparent-size ~/suspended-session-data.bak-*'
+   ```
+
+   Without `--apparent-size`, `du` reports the space used on the compressed ZFS dataset (296M for an 802 MB file on 2026-10-28). Trust the `ls -l` size of `environment`.
 3. **Reset the RStudio profile** (reversible quarantine):
 
    ```bash
@@ -156,7 +179,24 @@ sudo journalctl -u rstudio-server --since '-10 min' --no-pager | grep -iE "$U|er
 ps -o etime,stat,%cpu,rss -p "$(pgrep -u "$U" -x rsession)"
 ```
 
-Healthy: an rsession of a few hundred MB, state `S`, and no "terminated abnormally" in the journal. The user gets an empty environment; their files and scripts are unchanged. The objects are still in the `.bak` directory or the quarantine; restoring them is a separate, supervised step (not yet a documented procedure).
+Healthy: §3.4 holds. After step 2 or 3 the rsession is a few hundred MB; after 2b it keeps the size of the restored objects until the user clears them. With a new session the user gets an empty environment; their files and scripts are unchanged.
+
+### 4.2 Recovering objects from a moved payload
+
+The objects stay in `suspended-session-data.bak-<date>/environment` (or in the quarantine). The file is written by rsession; loading it with `load()` is expected to work but **was not verified** on this format. Try it on a copy, in a fresh session, as the user (in their RStudio or via `sudo -u <user> R`), with enough free memory for about twice the file size:
+
+```r
+f <- "~/suspended-session-data.bak-<date>/environment"
+file.copy(f, "/Rtmp/biome_<user>/environment.copy")       # never work on the only copy
+e <- new.env()
+load("/Rtmp/biome_<user>/environment.copy", envir = e)
+ls(e)
+sort(sapply(ls(e), function(n) object.size(get(n, envir = e))), decreasing = TRUE) / 2^20   # MiB
+saveRDS(e$<big_object>, "~/<project>/<big_object>.rds")   # keep only what is needed
+rm(e); gc()
+```
+
+If `load()` fails ("bad restore file magic number" or similar), stop and keep the backup; record the error in the incident note. Delete the `.bak` directory only after the user confirms they have what they need.
 
 ## 5. Finding the host event
 
@@ -192,11 +232,14 @@ A researcher (called *user A* here) reported that RStudio no longer opened on bi
 | 2026-10-28 06:26:25 | `apt-daily-upgrade.service` starts | `journalctl` |
 | 06:26:32 | unattended-upgrades upgrades `libbrotli1`, `libbrotli-dev` | `/var/log/dpkg.log` |
 | 06:26:34 → 06:26:51 | needrestart restarts `rstudio-server`; "Consumed 1d 54min CPU, 140.8G memory peak" | `journalctl -u rstudio-server` |
-| 06:26 | every session suspended; user A's environment written to NFS: `suspended-session-data/environment`, **765 MB** | `sudo -u <u> find ... -size +20M` |
+| 06:26 | every session suspended; user A's environment written to NFS: `suspended-session-data/environment`, **802 MB (765 MiB)** | `sudo -u <u> find ... -size +20M` |
 | 08:02 | two rsessions start in the same second (two browser tabs); one gets `ENOLCK` on the session lock | `journalctl -u rstudio-server` |
 | 08:02 → ~09:15 | loop: the IDE stays on "Loading…", the user presses Terminate/Reload, a new resume starts; "previous R session terminated abnormally" four times | `journalctl -u rstudio-server` |
 | 09:58 | the current rsession (started 09:17) alive for 41 min, `Sl`, 0.6% CPU, 1.6 GB RSS: the resume had finished | `ps -o etime,stat,%cpu,rss` |
-| 10:17 | ladder step 2: rsession stopped, `suspended-session-data` moved to `~/suspended-session-data.bak-2026-10-28` | operator shell |
+| 10:17 | ladder step 2: `kill` (SIGTERM) sent; `suspended-session-data` moved to `~/suspended-session-data.bak-2026-10-28` while `pgrep` still showed the rsession | operator shell |
+| 10:20 | payload gone from the session dir; health check 63/63 PASS, session state 1.3 MiB; backup checked as the user: `environment` 802068873 bytes (`du` 296M, ZFS compression) | health check, `sudo -u <u> sh -c 'ls; du'` |
+| 10:23 | rsession still alive 1 h 09 min after SIGTERM: `Sl`, 0.4% CPU, RSS 1.6 GB unchanged; no `abnormal` in the journal. Resume finished, session waiting for a browser (step 2b) | `ps`, `journalctl` |
+| pending | user A logs in with one tab | §3.4 |
 
 ### 6.2 What each check showed
 
@@ -205,16 +248,18 @@ A researcher (called *user A* here) reported that RStudio no longer opened on bi
 | Authentication (journal) | `granted access` at every login | not an identity problem |
 | Home (health check §7, `df`) | writable, 22% used, no `~/.RData` | not storage or quota |
 | Health check (v2.0) | 62 PASS, 1 WARN (profile load 2.1 s); §7 "RStudio session state: 769.1 MiB" **PASS** | tool gap → health 2.1 in PR #53 |
-| Session dir sizes (`du`, `find -size +20M`) | one 765 MB `suspended-session-data/environment` | **cause** |
+| Session dir sizes (`du`, `find -size +20M`) | one 765 MiB `suspended-session-data/environment` | **cause** |
 | `--reset-profile` dry-run | would move 770 MB; `BLOCKED: rsession running` | the guard worked as designed |
 | Child process of the rsession | `R --vanilla ... .rs.getPackageInformation('DALEXtra','data.table',...,'tidyverse')` | RStudio package indexing after resume; extra load, not the cause |
 | `dmesg` | NFS outage on 2026-10-05 only | `ENOLCK` was the two-tab race, not an outage |
 | Host event (§5 commands) | dpkg upgrade + rstudio-server restart at 06:26 | **trigger** |
 | `rsession.conf` | `session-timeout-minutes=10080` | idle timeout excluded; drift from repo (2880) found |
 
-### 6.3 Mistake to avoid
+### 6.3 Lessons
 
-In the first fix attempt, `pgrep` still printed the rsession pid 5 s after `kill`, and the `mv` ran anyway. On a large session `SIGTERM` is not instant. The ladder in §4.1 now waits for the process to exit and checks that `suspended-session-data` did not come back.
+- `pgrep` still printed the rsession pid 5 s after `kill`, and the `mv` ran anyway. The process then stayed alive for over an hour: rsession did not act on SIGTERM. Here it did no harm (the resume was finished and the payload did not come back), but always read `pgrep` before moving anything and choose 2 or 2b on purpose (§4.1).
+- `sudo -u $U du ~/x.bak-*` failed with "No such file" although the backup existed: the glob was expanded by the operator's shell. Run globs inside `sudo -u $U sh -c '...'`.
+- `du` showed 296M for an 802 MB file: ZFS compression on TrueNAS. Use `ls -l` or `du --apparent-size` for file sizes.
 
 ### 6.4 Follow-ups opened by this incident
 
@@ -225,10 +270,11 @@ In the first fix attempt, `pgrep` still printed the rsession pid 5 s after `kill
 | Large sessions: session state on local disk, in-session RSS warning, nightly report (ADR-0008) | Proposed, not yet a PR; point 1 (state on local disk) **not verified**. An earlier test found that `XDG_*` variables exported in `rsession-profile` did not move RStudio state on OSS ([`rstudio_session_isolation.md`](rstudio_session_isolation.md) §2); the ADR now tests a `rsession-path` wrapper on calc04 and drops point 1 if that fails |
 | Align `session-timeout-minutes` on the hosts (10080) with the repo (2880) | decision pending |
 | `99_postmortem_forensics.sh` §4 `FIX:` hint (root `mv`, no rsession stop) | open; use §4.1 instead |
-| Restoring objects from a moved `suspended-session-data` | not yet documented or tested |
+| Restoring objects from a moved `suspended-session-data` | procedure in §4.2, `load()` on this format not yet verified |
 | Home-directory ACLs on TrueNAS | under review separately |
 
 ## 7. Unverified
 
-- Whether `SIGTERM` makes `rsession` write a new suspended state on these RStudio versions is not verified. The ladder is written so that it is safe either way.
+- Observed on 2026-10-28: rsession did not exit on SIGTERM for over an hour. Whether it would write a new suspended state on a later exit is not verified; the ladder checks for it.
+- `load()` of the suspended `environment` file is expected to work but not verified (§4.2).
 - Live session-timeout values, package versions and timers on calc02–calc04 were not captured during this incident. Check them per host with the §5 commands.
