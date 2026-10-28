@@ -287,7 +287,6 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.3 calc03 to the pinned R 4.6.0 | Open (needed before the sync applies on calc03) |
 | WS-1.5 OS updates only on a free node, no needrestart restart of rstudio-server (ADR-0007) | Done in PR #53; install on calc04, then calc01-03: **Open: operator** |
 | WS-1.5 align `session-timeout-minutes` (hosts 10080 vs repo 2880) | Open (decision) |
-| WS-1.6 large RStudio sessions: state on local disk, RSS warning, nightly report (ADR-0008, Proposed) | Audit on calc04: **Open: operator**; PRs A/B/C not started |
 | WS-1.4 bspm D-Bus service + profile + Step 7 (ADR-0005) | Done (PR #38) |
 | WS-1.4 hotfix on test host, then production hosts | **Applied** on calc01-04 2026-10-19; install/remove check passed on all four |
 | WS-1.4 remove both domain_users sudo lines | **Applied** on calc01-04 2026-10-19 (`sudo -l -U` confirms) |
