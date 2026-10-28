@@ -222,4 +222,4 @@ that those controls are active in T1.
 
 ---
 
-*Authoritative source: [`docs/architecture/SECURITY_MODEL.md`](https://github.com/gsamuele78/R-studioConf/blob/main/docs/architecture/SECURITY_MODEL.md) — last verified 2026-10-06. The Markdown file in git is the source of truth.*
+*Authoritative source: [`docs/architecture/SECURITY_MODEL.md`](https://github.com/BIOME-Biodiversity-Macroecology/R-studioConf/blob/main/docs/architecture/SECURITY_MODEL.md) — last verified 2026-10-06. The Markdown file in git is the source of truth.*

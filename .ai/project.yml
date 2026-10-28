@@ -206,7 +206,7 @@ submodules: {}
 # scripts/infra-rstudio/sync_rstudioconf.sh. Fix RStudio code HERE, never there.
 consumers:
   infra_iam_pki:
-    repo: "https://github.com/gsamuele78/Infra-Iam-PKI"
+    repo: "https://github.com/BIOME-Biodiversity-Macroecology/Infra-Iam-PKI"
     vendors: ["docker-deploy/", "kubernetes-deploy/"]
     rule: "docker-deploy/ and kubernetes-deploy/ must stay self-contained (no ../ paths, no reads of root config/ or templates/); the consumer copies only these directories."
 
