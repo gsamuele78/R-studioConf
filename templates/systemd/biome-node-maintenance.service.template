@@ -1,0 +1,15 @@
+# templates/systemd/biome-node-maintenance.service.template
+# Rendered by scripts/biome_node_maintenance.sh --install-timer (ADR-0007).
+[Unit]
+Description=BIOME OS updates in the night window, only on a free node (ADR-0007)
+Wants=network-online.target
+After=network-online.target apt-daily.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash %%SCRIPT%%
+# 75 = deferred (sessions, package sync or apt busy); the next slot retries.
+SuccessExitStatus=75
+TimeoutStartSec=90min
+# Same settings as apt-daily-upgrade.service: never kill dpkg halfway.
+KillMode=process
