@@ -290,6 +290,7 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.4 remove both domain_users sudo lines | **Applied** on calc01-04 2026-10-19 (`sudo -l -U` confirms) |
 | T2 telemetry-api on Python 3.14 + hashed lock + healthcheck fix (TD-T2-08) | Done (PR #44); unblocks Dependabot #47 |
 | TD-T2-08 pin T1 telemetry venv to the same lock | Open |
+| Ops docs: DevOps troubleshooting guide + runbook §1.8 (suspended-session incident 2026-10-28) | Done in PR (docs only); follow-ups listed in the guide §6.4 |
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |
 | WS-4 T3 | Deferred (gated) |

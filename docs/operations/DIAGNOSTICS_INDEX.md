@@ -106,6 +106,8 @@ sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh --timeout 600 /pa
 - **Flags:** `--user NAME`, `--hours N`, `--output FILE`, `--all-recent`, `--quick`, `--incident`, `--help`.
 - **Mutation:** read-only unless `--incident`, which appends `/var/log/biome-log/incident_log.txt`; `--output` writes the requested report.
 - **Requirement:** either `--user` or `--all-recent`.
+- **Values:** section 4 marks any file >50 MB under `~/.local/share/rstudio/sessions/active/` as HIGH; section 1 marks RAM >75% HIGH and >90% CRITICAL. Full table: [`DEVOPS_TROUBLESHOOTING_GUIDE.md`](DEVOPS_TROUBLESHOOTING_GUIDE.md) §3.
+- **Known gaps (2026-10-28):** no journal filter by user, no home quota/writability check. The section-4 `FIX: mv ~/.local/share/rstudio ...` hint must not be run as root on an NFS home or while the user's rsession is alive; use the ladder in [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) §1.8.
 
 ### `99_troubleshoot_env.sh` — version 1.5.0
 
@@ -233,6 +235,8 @@ sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh --timeout 600 /pa
 | Reproducible `.R` failure | `99_diagnose_user_script.sh` as user |
 | terra/mclapply/NFS pattern | `99_diagnose_lussu_hang.sh` as user |
 | Unwitnessed crash | `99_postmortem_forensics.sh --user <user>` |
+| Login OK, IDE stuck on "Loading…" / Terminate loop | `99_check_rprofile_health.sh --user <user>` section 7, then `TROUBLESHOOTING.md` §1.8 |
+| Not sure which layer fails | layered triage in `DEVOPS_TROUBLESHOOTING_GUIDE.md` §2 |
 | Home write `EDQUOT` | `99_troubleshoot_env.sh --storage --test-user <user>` |
 | Blank Plots pane | source `99_diagnose_rstudio_plot_pane.R` in RStudio |
 | Package divergence (one host over time) | `99_check_pkg_drift.sh` |

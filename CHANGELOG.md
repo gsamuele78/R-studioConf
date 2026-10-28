@@ -8,6 +8,22 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Added (docs — DevOps troubleshooting guide)
+
+- `docs/operations/DEVOPS_TROUBLESHOOTING_GUIDE.md`: troubleshooting method for
+  operators. Layered triage for "a user cannot use RStudio", reference values
+  (session timeouts, tool thresholds, `ps` states of a resuming rsession, NFS
+  signals), the escalation ladder for a session that will not resume, how to find
+  the host event that suspended it, and the 2026-10-28 biome-calc01 incident as a
+  worked example (unattended-upgrades + needrestart restarted rstudio-server at
+  06:26; a 765 MB suspended environment kept a researcher on "Loading…").
+- `TROUBLESHOOTING.md` §1.8 (new: RStudio stays on "Loading…" after a suspended
+  session), §0/§1.1/§8.1 linked to it; `DIAGNOSTICS_INDEX.md` postmortem values,
+  known gaps and two quick-table rows; `diagnostic_logs.md` RStudio per-user state
+  and host-event logs; researcher-side advice in `COMMON_PROBLEMS.md` §12; wiki
+  manifest and the `ops-troubleshooting` / `user-common-problems` docx rebuilt.
+  Documentation only: no script or host change.
+
 ### Changed (T2 telemetry-api on Python 3.14)
 
 - `docker-deploy/Dockerfile.telemetry`: base image `python:3.11-slim` →
