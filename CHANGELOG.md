@@ -34,6 +34,30 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   the action plan offers the reversible `--reset-profile --commit`. Regression
   cases are in `tests/rprofile_health_test.sh`. Docs: `docs/operations/DIAGNOSTICS_INDEX.md`.
 
+### Fixed (T2 nightly build: GitHub API rate limit)
+
+- The nightly canary build of `rstudio-sssd` failed on 2026-10-28 (CI run 328)
+  with `HTTP error 403 ... API rate limit exceeded` from
+  `remotes::install_github()`: unauthenticated GitHub API calls are capped at 60
+  per hour per IP, and GitHub-hosted runners share IPs. The same commit had built
+  fine on 2026-10-27. Nothing in the code changed; the failure depends on who
+  else used the runner IP.
+- `docker-deploy/Dockerfile.sssd` and `Dockerfile.samba`: the package install
+  step reads an optional BuildKit secret `github_pat` and exports it as
+  `GITHUB_PAT` for that step only. `docker-compose.yml` declares the secret from
+  the `GITHUB_PAT` environment variable of the shell running the build. Unset or
+  empty, the build runs unauthenticated exactly as before.
+- `.github/workflows/ci.yml`: the nightly monster build passes the workflow's
+  `GITHUB_TOKEN` as `GITHUB_PAT` (authenticated limit).
+- Checked with a local BuildKit build in three cases (variable unset, empty,
+  set): all three build, the step sees the token only when set, and the token is
+  absent from `docker history` and from the final image (`/run/secrets` does not
+  exist after the step).
+- T1 note, not changed here: `config/r_env_manager.conf` defines `GITHUB_PAT=""`
+  but `r_env_manager.sh` never exports it to the `Rscript` that runs
+  `install_github()`, so setting it on a host has no effect. Hosts have their own
+  IPs, so the limit is much less likely there.
+
 ### Changed (T2 telemetry-api on Python 3.14)
 
 - `docker-deploy/Dockerfile.telemetry`: base image `python:3.11-slim` →
