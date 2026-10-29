@@ -100,8 +100,35 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   R X.Y (never touched). `--rollback DIR` reinstalls the old version. Tested by
   `tests/test_fix_r_version.sh` (R1-R14, stubbed apt/dpkg/R) in `t1-static`.
   Decision (Jfs, 2026-10-27): 4.6.0 from calc01 to calc03 only; moving the pin to
-  4.6.1 is a later, separate change (a newly built host cannot install 4.6.0
-  from the repository).
+  4.6.1 is a later, separate change.
+
+### Fixed (R core upgrade breaks compiled packages; applied on biome-calc03)
+
+- Applied on biome-calc03, 2026-10-27: R 4.5.3 → 4.6.0. The load test caught
+  136 of 446 packages that stopped loading: R 4.6 removed `SETLENGTH` from the C
+  API, and the installed `r-cran-rlang` 1.1.7 and `r-cran-data.table` 1.18.2.1
+  builds called it; everything importing rlang failed with them. Fixed on the
+  host with `scripts/fix_r_pkg_versions_inplace.sh --commit
+  --accept-partial-rollback` (174 `r-cran-*` upgrades, rlang 1.3.0, data.table
+  1.18.6.1; only 19 old builds were still downloadable, the others were the
+  broken ones). Measured after: 449/450 packages load; the one failure
+  (`loadeR`) failed before the upgrade too. Researchers were not affected: no
+  session ran during the change.
+- `scripts/fix_r_version_inplace.sh`: on a minor-version change (4.5 → 4.6) the
+  plan now upgrades every installed `r-cran-*` package that has a newer
+  repository build in the same apt transaction as R, so this cannot happen
+  again on another host. `--core-only` keeps the old behaviour, with a warning.
+- The load test prints one progress line per batch (the first run looked hung
+  for minutes), and the commit is refused (exit 3, host unchanged) when the
+  baseline loads no package, because then nothing can be measured.
+- The user-library warning counts only non-empty libraries. On calc03 it
+  reported "11 users with packages for 4.5 only"; all 11 directories were empty.
+- `--debs DIR` now says when the repository offers the same version: on
+  calc03 apt installed 4.6.0-2.2404.0 from cloud.r-project.org rather than from
+  DIR. The morning's reading of `apt-cache policy` (4.6.0 no longer offered) was
+  wrong; the runbook is corrected. The apt index is refreshed with `--debs` too.
+- Tests: `tests/test_fix_r_version.sh` R1-R17 (new: the r-cran rebuild in the
+  plan and its rollback, `--core-only`, empty baseline, patch-level change).
 
 ## [2026.10.1] - 2026-10-20 — Rprofile v12.11-fix3
 
