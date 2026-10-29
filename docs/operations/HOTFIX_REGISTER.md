@@ -13,12 +13,12 @@ Until then, redeploying an older release undoes the hotfix.
 
 | Hotfix script | What it fixes | Absorbed in | Applied on | Backup / rollback |
 |---|---|---|---|---|
-| `scripts/fix_r_version_inplace.sh` | biome-calc03 on R 4.5.3 while the pin and calc01/02/04 are on 4.6.0 | not absorbed: a new host installs R from the pin, an existing host needs this script | not applied yet (planned: calc03, with `.deb` files exported from calc01) | `/var/backups/biome-calc/r-version-<ts>/`, `--rollback DIR` |
+| `scripts/fix_r_version_inplace.sh` | biome-calc03 on R 4.5.3 while the pin and calc01/02/04 are on 4.6.0 | not absorbed: a new host installs R from the pin, an existing host needs this script | biome-calc03 on 2026-10-27 (4.5.3 → 4.6.0), then `fix_r_pkg_versions_inplace.sh` on the same host for the 136 packages that stopped loading; 449/450 load after | `/var/backups/biome-calc/r-version-20261027T113253Z/` (R core); rolling back R is not clean any more, the old r-cran builds are gone |
 | `scripts/fix_bspm_dbus_inplace.sh` | `install.packages()` through bspm's D-Bus service instead of sudo; removes the root escalation (ADR-0005) | `v2026.10.0` (Step 7 + template section 0) | biome-calc01, 02, 03, 04 on 2026-10-19; calc04 again on 2026-10-20 after the stale-checkout redeploy | `/root/bspm-dbus-hotfix-<ts>/`, `--rollback DIR` |
 | `scripts/fix_login_script_rlibs_inplace.sh` | login script stops writing `R_LIBS_USER` into `~/.Renviron` | before `v2026.10.0` | unknown, to check | see script `--help` |
 | `scripts/fix_pam_segfault_inplace.sh` | SIGSEGV from `libpam-krb5` / `biome-localguard` PAM profile | before `v2026.10.0` | unknown, to check | see script `--help` |
 | `scripts/tools/hotfix_smtp_site_overrides.sh` | deployed `setup_nodes.vars.conf` missing the site SMTP keys | before `v2026.10.0` | unknown, to check | see script `--help` |
-| `scripts/fix_r_pkg_versions_inplace.sh` | upgrades the host's installed `r-cran-*` packages to the repository version, so hosts converge (ADR-0004 step 3) | not absorbed: run per host (later the nightly reconciler, ADR-0004 step 4) | none yet | `/var/backups/biome-calc/r-pkg-align-<ts>/`, `--rollback DIR` |
+| `scripts/fix_r_pkg_versions_inplace.sh` | upgrades the host's installed `r-cran-*` packages to the repository version, so hosts converge (ADR-0004 step 3) | not absorbed: run per host (later the nightly reconciler, ADR-0004 step 4) | biome-calc03 on 2026-10-27 (174 upgrades, after the R 4.6.0 upgrade) | `/var/backups/biome-calc/r-pkg-align-20261027T134141Z/` (19/174 old builds saved) |
 
 Manual changes on the hosts (the two `domain_users` sudo lines commented out on
 calc01-04, 2026-10-19) are not scripts, so no release absorbs them; they are

@@ -57,7 +57,7 @@ The intended T1 ordering is `01..03 -> 10 or 11 -> 12 -> 13 -> 15 -> 20/21 -> 30
 | `fix_r_pkg_versions_inplace.sh` | In-place `r-cran-*` version alignment across hosts (ADR-0004), with rollback. |
 | `biome_pkg_sync.sh` | Nightly R package sync across hosts (ADR-0004 step 4); runbook `docs/operations/PKG_SYNC.md`. |
 | `fix_login_script_rlibs_inplace.sh` | Controlled in-place repair of login-script R library handling. |
-| `fix_r_version_inplace.sh` | In-place upgrade of one host's R core packages to the pinned version, with exported `.deb` files when the repository no longer has it. |
+| `fix_r_version_inplace.sh` | In-place upgrade of one host's R core packages to the pinned version; on a minor-version change also the installed `r-cran-*` builds, in the same apt transaction. Exported `.deb` files when the repository no longer has the version. |
 | `fix_bspm_dbus_inplace.sh` | In-place registration of bspm's D-Bus service; researchers install R packages without sudo (ADR-0005). |
 | `fix_pam_segfault_inplace.sh` | Standalone PAM segfault repair; overlaps `13_harden_pam_password.sh`. |
 | `pin_r_version.sh` | Manages apt pinning for R packages using `config/pin_r_version.vars.conf`. The current hardcoded default `4.6.0` is an open SSOT finding. |
