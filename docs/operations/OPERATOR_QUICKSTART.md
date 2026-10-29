@@ -119,6 +119,23 @@ sudo bash scripts/99_check_rprofile_health.sh --static-only
 
 Restarting `rstudio-server` terminates sessions. Use a maintenance window.
 
+## Repository location
+
+Since 2026-10-28 the repository lives at
+`https://github.com/BIOME-Biodiversity-Macroecology/R-studioConf` (moved from
+`gsamuele78/R-studioConf`). GitHub redirects the old URL, but the redirect
+breaks if a repository with the old name is ever created under the old owner.
+Point every host checkout at the new URL once (idempotent, no restart):
+
+```bash
+cd /home/ladmin/configServices/R-studioConf
+git remote -v                       # before
+git remote set-url origin https://github.com/BIOME-Biodiversity-Macroecology/R-studioConf.git
+git fetch origin && git status -sb  # same branch, same commit: nothing else changes
+```
+
+Rollback: `git remote set-url origin https://github.com/gsamuele78/R-studioConf.git`.
+
 ## Do not
 
 - do not reference the broken sandbox as validation;

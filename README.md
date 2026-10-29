@@ -51,7 +51,7 @@ A T2/T3 workaround must never mask a T1 defect. Full ethos: `.ai/agents.md`,
 ## Quickstart (T1 host)
 
 ```bash
-git clone https://github.com/gsamuele78/R-studioConf.git
+git clone https://github.com/BIOME-Biodiversity-Macroecology/R-studioConf.git
 cd R-studioConf
 bash init.sh        # chmods scripts/*, sudo-execs the orchestrator
 ```

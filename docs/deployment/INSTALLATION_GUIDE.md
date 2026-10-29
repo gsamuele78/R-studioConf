@@ -53,7 +53,7 @@ The full inventory is in [`../reference/SCRIPT_CATALOG.md`](../reference/SCRIPT_
 ## 3. Bootstrap
 
 ```bash
-git clone https://github.com/gsamuele78/R-studioConf.git
+git clone https://github.com/BIOME-Biodiversity-Macroecology/R-studioConf.git
 cd R-studioConf
 bash init.sh
 ```

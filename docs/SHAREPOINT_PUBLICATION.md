@@ -111,7 +111,7 @@ authoritative Markdown source:
 
 ```markdown
 ---
-*Authoritative source: [`docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md`](https://github.com/gsamuele78/R-studioConf/blob/main/docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md) — last verified 2026-06-08. This SharePoint page is a published copy; the Markdown file in git is the source of truth.*
+*Authoritative source: [`docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md`](https://github.com/BIOME-Biodiversity-Macroecology/R-studioConf/blob/main/docs/user_guides/PARALLEL_R_DOS_AND_DONTS.md) — last verified 2026-06-08. This SharePoint page is a published copy; the Markdown file in git is the source of truth.*
 ```
 
 ### 2.3 Internal Links
