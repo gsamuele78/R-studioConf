@@ -116,7 +116,7 @@ setup_service() {
     cat > "${service_file}" <<EOF
 [Unit]
 Description=Botanical Big Data Telemetry API
-Documentation=https://github.com/gsamuele78/R-studioConf
+Documentation=https://github.com/BIOME-Biodiversity-Macroecology/R-studioConf
 After=network.target
 Wants=network.target
 

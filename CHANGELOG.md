@@ -34,6 +34,19 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   the action plan offers the reversible `--reset-profile --commit`. Regression
   cases are in `tests/rprofile_health_test.sh`. Docs: `docs/operations/DIAGNOSTICS_INDEX.md`.
 
+### Changed (repository moved to the BIOME organisation)
+
+- The repository moved from `gsamuele78/R-studioConf` to
+  `BIOME-Biodiversity-Macroecology/R-studioConf` on 2026-10-28. Clone URLs
+  (README, installation guide), the telemetry systemd unit `Documentation=`
+  link, "authoritative source" links in architecture/SharePoint docs and the
+  Infra-Iam-PKI consumer URL in `.ai/project.yml` now use the new owner.
+  Workflows and Dependabot need no change: they hard-code no owner.
+- Hosts: run `git remote set-url` once per checkout
+  ([operator quickstart](docs/operations/OPERATOR_QUICKSTART.md#repository-location)).
+  `40_install_telemetry.sh` already installed units keep the old link until
+  the script is re-run; that link only feeds `systemctl status` and redirects.
+
 ### Fixed (T2 nightly build: GitHub API rate limit)
 
 - The nightly canary build of `rstudio-sssd` failed on 2026-10-28 (CI run 328)

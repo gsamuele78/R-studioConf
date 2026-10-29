@@ -234,4 +234,4 @@ Reject or rework a change when it:
 
 ---
 
-*Authoritative source: [`docs/architecture/USER_CONTRACT.md`](https://github.com/gsamuele78/R-studioConf/blob/main/docs/architecture/USER_CONTRACT.md) — last verified 2026-10-06. The Markdown file in git is the source of truth.*
+*Authoritative source: [`docs/architecture/USER_CONTRACT.md`](https://github.com/BIOME-Biodiversity-Macroecology/R-studioConf/blob/main/docs/architecture/USER_CONTRACT.md) — last verified 2026-10-06. The Markdown file in git is the source of truth.*
