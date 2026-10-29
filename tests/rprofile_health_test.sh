@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 # tests/rprofile_health_test.sh
-# Regression gate for scripts/99_check_rprofile_health.sh (v2.0).
+# Regression gate for scripts/99_check_rprofile_health.sh (v2.1).
 #
 # The Vagrant sandbox is BROKEN, so this is the validation path: build deployed
 # trees under mktemp, point the real script at them via BIOME_HEALTH_ROOT, and
@@ -347,8 +347,19 @@ check 'saw_sev WARN "~/.Rprofile calls setwd() at startup"' ".Rprofile setwd →
 check 'saw_sev FAIL "~/.RData (2.0 GiB) is restored at every RStudio login"' "2 GiB .RData + load_workspace default → FAIL"
 check 'saw_sev FAIL "No per-user R library for R ${R_VER_MM}; only: 3.9"' "stale-only per-user lib → FAIL"
 check 'saw "RStudio session state:"' "RStudio state size reported"
+check '! saw "Suspended RStudio session payload"' "tiny session state → no suspended-payload warning"
 check 'saw "[auto]   " && saw "comment out lines " && saw "set load_workspace=false"' "action plan lists automatic repairs"
 check 'printf "%s\n" "$OUT" | grep "comment out lines" | grep -q "lines 9 2 3 4 5 7 of"' "auto comment-out covers lines 9 2 3 4 5 7 — never R_LIBS_USER (line 6)"
+
+# v2.1 regression (calc01, 2026-10-28): one 765 MB suspended environment, total
+# under the 1 GiB state threshold, was reported PASS while it blocked every login.
+FIX="$TMPROOT/suspended_big"; ( unset "${!FX_@}"; mk_fixture "$FIX" )
+mkdir -p "$(UH)/.local/share/rstudio/sessions/active/session-536a7d53/suspended-session-data"
+truncate -s 300M "$(UH)/.local/share/rstudio/sessions/active/session-536a7d53/suspended-session-data/environment"
+run_check --static-only --user "$ME"
+check 'saw_sev PASS "RStudio session state: 300"' "300 MiB total stays under the 1 GiB state threshold"
+check 'saw_sev WARN "Suspended RStudio session payload is 300.0 MiB"' "300 MiB suspended environment → WARN"
+check 'saw "[manual]" && saw "--reset-profile --commit"' "suspended payload → quarantine command in the action plan"
 
 FIX="$TMPROOT/rlibs_default"; ( unset "${!FX_@}"; FX_LIBS_LOCAL_OFF=1 FX_LOGIN_SCRIPT=1 mk_fixture "$FIX" )
 printf 'R_LIBS_USER="${HOME}/R/x86_64-pc-linux-gnu-library/%%v"\nXDG_DATA_HOME=/x\n' > "$(UH)/.Renviron"

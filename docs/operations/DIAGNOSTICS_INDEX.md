@@ -53,7 +53,7 @@ This index covers every current `scripts/99_*`, `scripts/fix_*`, and `scripts/to
 - **Collect:** `for h in biome-calc01 biome-calc04; do ssh "$h" /home/ladmin/configServices/R-studioConf/scripts/99_check_pkg_host_drift.sh > "/tmp/pkg_$h.tsv"; done`, then `--compare /tmp/pkg_*.tsv`.
 - **Exit:** `0` same, `1` drift, `2` usage, `3` unreadable or invalid snapshot.
 
-### `99_check_rprofile_health.sh` — health version 2.0
+### `99_check_rprofile_health.sh` — health version 2.1
 
 - **Use:** dispatcher/fragments/bundle/BLAS/Renviron/runtime/worker health and one user's startup state.
 - **Flags:** `--user NAME`, `--static-only`, `--allow-root-probes`, `--fix`, `--reset-profile`, `--undo-reset STAMP|list`, `--commit`, `-y|--yes`, `--help`.
@@ -70,6 +70,7 @@ sudo bash scripts/99_check_rprofile_health.sh --user <user> --undo-reset list
 ```
 
 - **Exit:** `0` clear, `1` FAIL/CRIT, `2` warnings or skipped runtime tier, `3` invocation/refusal, `4` requested change not fully applied.
+- **Stuck on "Loading…" after login (v2.1):** section 7e warns when the total RStudio state is ≥1 GiB **or** when one file under `sessions/active/*/suspended-session-data/` is ≥256 MiB. rsession deserializes that payload from NFS before the IDE loads, so the user sees an endless load, presses Terminate, and the resume starts again ("previous R session terminated abnormally" in the journal). Fix: stop the user's rsession only (not their tmux/ssh R), then `--reset-profile --commit`. The payload stays in the quarantine copy. Also find out what suspended the session: an idle timeout (`session-timeout-minutes`) or a restart of `rstudio-server`.
 
 ### `99_check_user_renviron_overrides.sh`
 

@@ -125,6 +125,10 @@ jobs:
         # apt/dpkg/pgrep/systemctl stubbed; shared dir and fix script are fakes under mktemp.
         run: bash tests/test_biome_pkg_sync.sh
 
+      - name: OS updates only on a free node (ADR-0007)
+        # pgrep/systemctl/unattended-upgrade/needrestart/apt stubbed; real flock and perl.
+        run: bash tests/test_biome_node_maintenance.sh
+
       - name: Root-guard contract (non-root must refuse, not silently run)
         run: |
           set -euo pipefail

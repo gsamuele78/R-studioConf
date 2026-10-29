@@ -13,6 +13,7 @@ Until then, redeploying an older release undoes the hotfix.
 
 | Hotfix script | What it fixes | Absorbed in | Applied on | Backup / rollback |
 |---|---|---|---|---|
+| `scripts/biome_node_maintenance.sh --install-timer` | needrestart restarted rstudio-server after an unattended upgrade at 06:26 (calc01, 2026-10-28), suspending every session; OS updates now only 03:30-05:00 on a free node (ADR-0007) | not absorbed: run per host | not applied yet (plan: calc04 first) | `--remove-timer` (stock timer state saved in `/var/lib/biome-node-maintenance/`) |
 | `scripts/fix_r_version_inplace.sh` | biome-calc03 on R 4.5.3 while the pin and calc01/02/04 are on 4.6.0 | not absorbed: a new host installs R from the pin, an existing host needs this script | biome-calc03 on 2026-10-27 (4.5.3 → 4.6.0), then `fix_r_pkg_versions_inplace.sh` on the same host for the 136 packages that stopped loading; 449/450 load after | `/var/backups/biome-calc/r-version-20261027T113253Z/` (R core); rolling back R is not clean any more, the old r-cran builds are gone |
 | `scripts/fix_bspm_dbus_inplace.sh` | `install.packages()` through bspm's D-Bus service instead of sudo; removes the root escalation (ADR-0005) | `v2026.10.0` (Step 7 + template section 0) | biome-calc01, 02, 03, 04 on 2026-10-19; calc04 again on 2026-10-20 after the stale-checkout redeploy | `/root/bspm-dbus-hotfix-<ts>/`, `--rollback DIR` |
 | `scripts/fix_login_script_rlibs_inplace.sh` | login script stops writing `R_LIBS_USER` into `~/.Renviron` | before `v2026.10.0` | unknown, to check | see script `--help` |

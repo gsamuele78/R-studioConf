@@ -8,6 +8,32 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Added (T1 operations — OS updates only on a free node, ADR-0007)
+
+- `scripts/biome_node_maintenance.sh` with `config/node_maintenance.vars.conf` and
+  systemd/needrestart templates. On biome-calc01 on 2026-10-28 at 06:26 the stock
+  `apt-daily-upgrade.timer` upgraded libbrotli, and needrestart restarted
+  rstudio-server. That suspended every session and wrote each session's R
+  environment to NFS; one 765 MB environment locked a researcher out.
+  `--install-timer`, in place and idempotent, does three things: needrestart
+  never restarts rstudio-server; `apt-daily-upgrade.timer` is replaced by a
+  15-minute timer that upgrades only 03:30-05:00 and only with no
+  `rsession`/`R` process, the package sync idle and apt idle; rserver is restarted
+  only on a still-free node. After 3 deferred nights it logs a journal warning
+  (`overdue`). Rollback: `--remove-timer`. Runbook:
+  `docs/operations/NODE_MAINTENANCE.md`; tests: `tests/test_biome_node_maintenance.sh`
+  (29 checks, real `flock` and `perl`).
+
+### Fixed (T1 diagnostics — large suspended RStudio session)
+
+- `scripts/99_check_rprofile_health.sh` 2.0 → 2.1: section 7e only compared the
+  total `~/.local/share/rstudio/sessions` size with 1 GiB, so a 765 MB
+  `suspended-session-data/environment` (769 MiB in total) was reported PASS on
+  biome-calc01 on 2026-10-28. That file kept the user's login on "Loading…" in a
+  Terminate/resume loop. Now any single suspended payload ≥256 MiB is a WARN, and
+  the action plan offers the reversible `--reset-profile --commit`. Regression
+  cases are in `tests/rprofile_health_test.sh`. Docs: `docs/operations/DIAGNOSTICS_INDEX.md`.
+
 ### Changed (repository moved to the BIOME organisation)
 
 - The repository moved from `gsamuele78/R-studioConf` to

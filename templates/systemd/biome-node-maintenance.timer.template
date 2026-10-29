@@ -1,0 +1,16 @@
+# templates/systemd/biome-node-maintenance.timer.template
+# Rendered by scripts/biome_node_maintenance.sh --install-timer (ADR-0007).
+# Replaces apt-daily-upgrade.timer (stock: 06:00 + up to 60 min random, so
+# 06:26 on calc01 on 2026-10-28), which the installer disables.
+[Unit]
+Description=BIOME OS updates, every 15 minutes inside the night window
+
+[Timer]
+OnCalendar=*-*-* %%HOURS%%:00/15:00
+AccuracySec=1min
+# A missed night is not caught up at boot (a catch-up would run in working
+# hours): the next night runs instead.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

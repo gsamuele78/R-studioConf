@@ -1,0 +1,10 @@
+# /etc/needrestart/conf.d/biome-rstudio.conf
+# Installed by scripts/biome_node_maintenance.sh --install-timer (ADR-0007).
+# Do not edit on the host: re-run the installer.
+#
+# needrestart must never restart rstudio-server on its own: stopping the
+# service suspends every RStudio session and writes each session's whole R
+# environment to NFS (biome-calc01, 2026-10-28 06:26: libbrotli upgrade,
+# 765 MB environment, user locked out at the next login).
+# biome-node-maintenance restarts it later, only when no session runs.
+$nrconf{override_rc}{qr(^rstudio-server)} = 0;
