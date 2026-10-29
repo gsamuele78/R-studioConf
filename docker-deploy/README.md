@@ -70,6 +70,22 @@ docker compose --profile sssd --profile portal up -d --build
 docker compose --profile samba --profile portal up -d --build
 ```
 
+**Optional: GitHub token for the R package build.** The `rstudio-*` images install
+R packages from GitHub, and unauthenticated GitHub API calls are capped at 60 per
+hour per IP. A shared or NATed IP can exhaust that and fail the build with
+`HTTP error 403 ... API rate limit exceeded`. To build authenticated, export a
+token in the shell that runs the build (a fine-grained token with public read
+access is enough):
+
+```bash
+read -rs GITHUB_PAT && export GITHUB_PAT
+docker compose --profile sssd --profile portal up -d --build
+```
+
+Compose passes it as the BuildKit secret `github_pat`, mounted only for the
+package install step and never stored in an image layer. Unset, the build runs
+unauthenticated as before. Do not write the token into `.env`.
+
 ### 3. Access
 
 * **Web Portal**: `https://<host-domain>` (Requires SSL certs mounted as defined in `.env`)
