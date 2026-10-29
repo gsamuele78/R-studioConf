@@ -32,7 +32,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends default-jdk net
 
 # 3. Install Botanical Packages
 COPY scripts/install_botanical_packages.R /rocker_scripts/install_botanical_packages.R
-RUN Rscript /rocker_scripts/install_botanical_packages.R
+# GitHub installs go through the GitHub API (60 requests/hour per IP without a
+# token; shared CI runner IPs exhaust it). An optional BuildKit secret
+# `github_pat` (compose: from the GITHUB_PAT env var) raises that to the
+# authenticated limit. It is mounted only for this RUN and is not stored in any
+# layer. Without it, the empty or missing secret leaves GITHUB_PAT unset.
+RUN --mount=type=secret,id=github_pat \
+    if [ -s /run/secrets/github_pat ]; then GITHUB_PAT="$(cat /run/secrets/github_pat)"; export GITHUB_PAT; fi \
+    && Rscript /rocker_scripts/install_botanical_packages.R
 
 # 4. Copy Scripts & Configs
 COPY scripts /scripts
